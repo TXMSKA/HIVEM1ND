@@ -49,14 +49,20 @@ initialize its default consent window; retry, attach, and expiry do not renew an
 existing window. Supported hooks use the shared controller and retain the native
 prompt whenever a verified approval cannot be obtained.
 
-Claude Code and Cursor cannot be confined on Windows, so they start as they
-are, supervised: each native file change and command asks the person first,
-unless that agent was granted automatic work in Settings, Permissions. Even
-then native Git, `.git` folders and the M1ND folders stay denied. Every plan
-launch and every supervised launch is owned by a process handle
-(`process-handle.mjs`) that ends the whole process tree and proves it closed.
-Stop the step interrupts only the running turn, through each client's own
-protocol.
+Claude Code and Cursor run supervised under decision 25. Choosing either in
+Runs in shows a warning banner with one Work automatically checkbox, unticked
+by default. Unticked, every native file change and command asks the person first.
+Ticking it accepts the risk and grants that agent automatic work, revocable in
+Settings, Permissions. Automatic native work requires in-root targets and a
+current matching grant; outside-root access still asks and revocation applies
+to the next operation. Native Git, `.git` folders, the M1ND folder and the
+owner-local directory stay denied in both modes. Native callbacks do not prove
+OS confinement; real OS confinement remains future work, not a launch blocker.
+Every external plan launch and every supervised or automatic launch needs an
+owned process handle (`process-handle.mjs`). Windows cleanup
+requires a successful tree-termination witness while the root is live; natural
+root exit or uncertain cleanup stays open. Stop the step interrupts the owned
+turn through the client's protocol and retains the session.
 
 Native protocol fixtures prove protocol handling and local service integration.
 They do not prove signed-in submission to Claude, Codex, or Cursor. Full release

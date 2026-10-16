@@ -74,7 +74,7 @@ export const START_COPY=Object.freeze({
   workAutomatically:["Work automatically: it changes files and runs commands without asking, and can write outside its cluster's folder. You can turn this off in Settings, Permissions.",'Trabajar de forma automática: modifica archivos y ejecuta comandos sin consultar, y puede escribir fuera de la carpeta de su clúster. Se puede desactivar en Configuración, Permisos.'],
   asksFirst:['Asks first','Consulta antes'],automaticNotConfined:['Automatic, not confined','Automático, sin confinamiento'],
   automaticPermission:['Works automatically in {client}, not confined','Trabaja de forma automática en {client}, sin confinamiento'],
-  automaticRevokeHint:['Revoking makes the agent ask first again from its next launch. A session that is already running keeps working automatically until it ends.','Al revocarlo, el agente vuelve a consultar antes desde su próximo inicio. Una sesión que ya está en ejecución sigue trabajando de forma automática hasta que termina.'],
+  automaticRevokeHint:['Revoking makes the agent ask before its next file change or command, including in a session that is already running.','Al revocarlo, el agente consulta antes del siguiente cambio de archivos o comando, incluso en una sesión que ya está en ejecución.'],
   stepStopped:['The step was stopped. The session stays open.','El paso se detuvo. La sesión sigue abierta.'],stepIdle:['Nothing was running, so there was no step to stop.','No había nada en ejecución, por lo que no había ningún paso que detener.'],
   stepNotStopped:['The agent did not confirm that the step stopped. It may still be working.','El agente no confirmó que el paso se detuviera. Puede seguir trabajando.'],stoppingStep:['Stopping the step','Deteniendo el paso'],
 });

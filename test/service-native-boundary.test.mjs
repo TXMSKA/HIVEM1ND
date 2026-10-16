@@ -212,7 +212,10 @@ test('the boundary authorizes one exact approval once, and automatic work only f
   assert.equal(automatic.mode, 'automatic');
   assert.deepEqual(await automatic.authorize({ once: true, automatic: true, approvalId: null }), { authorized: true });
   assert.deepEqual(await automatic.authorize({ once: true, automatic: true, approvalId: null }), { authorized: true });
-  for (const input of [{ once: true, approvalId: 'approved' }, { automatic: true }]) assert.deepEqual(await automatic.authorize(input), { authorized: false });
+  assert.equal(automatic.confined, false, 'automatic work does not claim confinement');
+  assert.deepEqual(await automatic.authorize({ once: true, approvalId: 'approved-outside' }), { authorized: true }, 'an exact approval still works in automatic mode');
+  assert.deepEqual(await automatic.authorize({ once: true, approvalId: 'approved-outside' }), { authorized: false }, 'that approval is consumed once');
+  for (const input of [{ once: true }, { automatic: true }]) assert.deepEqual(await automatic.authorize(input), { authorized: false });
 });
 
 test('only the launch\'s own HIVEM1ND tools skip the question; every other tool and a Read outside the folder stay denied', async t => {
@@ -249,7 +252,7 @@ test('a supervised launch without a verified process handle fails closed and lea
   assert.equal(w.spawned.length, 0, 'nothing was spawned');
 });
 
-test('the automatic grant lets the same Edit through without a question while Git, .git and M1ND writes stay denied', async t => {
+test('supervised automatic work keeps exact outside-root asks and next-operation revocation', async t => {
   const w = await world(t);
   const first = await w.launch();
   const target = path.join(w.repository, 'task.txt');
@@ -275,14 +278,27 @@ test('the automatic grant lets the same Edit through without a question while Gi
   assert.equal(await w.ask(second.native, 'Edit', { file_path: path.join(w.repository, '.git', 'config') }), 'deny');
   assert.equal(await w.ask(second.native, 'Write', { file_path: path.join(w.fixture.paths.mind, 'user', 'note.md') }), 'deny');
   assert.equal(await w.ask(second.native, 'Write', { file_path: path.join(w.fixture.paths.localDirectory, 'note.json') }), 'deny');
-  assert.equal(await w.ask(second.native, 'Write', { file_path: path.join(w.fixture.root, 'outside-the-cluster.txt') }), 'allow', 'automatic work is not confined');
-  assert.equal(w.asked.length, 0, 'not one question was asked');
-  // Revoking makes the next launch supervised; the running session keeps its mode until it ends.
+  assert.equal(w.asked.length, 0, 'inside the cluster no question was asked');
+  assert.equal(await w.ask(second.native, 'Write', { file_path: path.join(w.fixture.root, 'outside-the-cluster.txt') }), 'deny', 'outside the cluster needs its exact approval');
+  assert.equal(w.asked.length, 1, 'outside access asked once');
+  w.decide('approve');
+  assert.equal(await w.ask(second.native, 'Write', { file_path: path.join(w.fixture.root, 'outside-the-cluster.txt') }), 'allow', 'the exact outside-root approval works without restarting');
+  assert.equal(w.asked.length, 2);
+  assert.notEqual(w.asked[0].id, w.asked[1].id, 'a new operation has a new exact approval');
+  // Revoking applies to the next operation, including this running session.
   const current = await readMachineSettings(w.context, 'DESKTOP', 'permissions');
   await mutateMachineSettings(w.context, 'revoke', { machine: 'DESKTOP', expectedRevision: current.revision }, granted.body.permission.id);
   assert.deepEqual(await readAgentPermissions(w.context), []);
-  assert.equal(await w.ask(second.native, 'Edit', { file_path: target }), 'allow', 'the running session stays automatic');
-  assert.equal(w.asked.length, 0);
+  w.decide('deny');
+  assert.equal(await w.ask(second.native, 'Edit', { file_path: target }), 'deny', 'the revoked running session asks again');
+  assert.equal(w.asked.length, 3);
+  w.decide('approve');
+  assert.equal(await w.ask(second.native, 'Edit', { file_path: target }), 'allow', 'the exact approval works after revocation in the same session');
+  assert.equal(w.asked.length, 4);
+  w.decide('deny');
+  assert.equal(await w.ask(second.native, 'Edit', { file_path: target }), 'deny', 'one approved operation does not authorize the next one');
+  assert.equal(w.asked.length, 5);
+  w.asked.length = 0;
   await stopSession(w.context, second.started.result.sessionId, { confirmed: true });
   const third = await w.launch();
   w.decide('approve');

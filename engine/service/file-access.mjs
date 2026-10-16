@@ -40,8 +40,12 @@ export async function requestNativeOperation(context, operation, boundary) {
     verified.push({ path: target.path, identity: target.identity, ancestor: target.ancestor,
       modified: String(target.state.mtimeNs), changed: String(target.state.ctimeNs), exists: target.exists });
   }
-  // Automatic work is the person's standing grant for this agent: the same denials above still hold, but no question is asked.
-  if (boundary.mode === 'automatic') {
+  // Only a current scoped grant removes the question; a revoked grant or an outside path asks again.
+  const automatic = boundary.mode === 'automatic'
+    && verified.every(item => scope.writeRoots.some(root => withinClusterRoot(root.realPath, item.path, process.platform)))
+    && (await import('./settings.mjs').then(module => module.readAgentPermissions(context))).some(permission => permission.unitId === scope.unitId
+      && permission.client === scope.client && permission.machine === scope.machine && permission.actions.includes('native.automatic'));
+  if (automatic) {
     const result = await boundary.authorize({ scopeId: scope.id, sessionId: scope.sessionId, operation,
       paths: verified.map(item => item.path), approvalId: null, automatic: true, once: true });
     return result?.authorized === true;

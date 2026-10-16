@@ -4388,42 +4388,56 @@ test('an explicit unit Runs in change survives picker redraws and persists only 
   assert.equal(desktop.launches.length, 0);
 });
 
-// A real core with a supervised Claude Code beside Codex, and a log of every request the shell makes.
+// A real core with supervised Claude Code and Cursor beside Codex, and a log of every request the shell makes.
 async function supervisedDesktop(t) {
   const calls = [];
-  const claude = createNativeAdapter('claude', { fixture: true, models: ['observed'], efforts: ['high', 'xhigh'],
-    describe: async () => ({ id: 'claude', title: 'Claude Code', connected: true, scopeEnforced: false, boundary: 'supervised',
-      models: [{ id: 'observed', title: 'Observed', efforts: ['high', 'xhigh'], modes: [] }], quota: { remainingPercent: null, period: null, known: false }, context: { known: false, compact: false } }) });
+  const supervised = Object.fromEntries([['claude', 'Claude Code'], ['cursor', 'Cursor']].map(([id, title]) => [id,
+    createNativeAdapter(id, { fixture: true, models: ['observed'], efforts: ['high', 'xhigh'],
+      describe: async () => ({ id, title, connected: true, scopeEnforced: false, boundary: 'supervised',
+        models: [{ id: 'observed', title: 'Observed', efforts: ['high', 'xhigh'], modes: [] }], quota: { remainingPercent: null, period: null, known: false }, context: { known: false, compact: false } }) })]));
   const codex = createNativeAdapter('codex', { fixture: true, models: ['observed'], efforts: ['high', 'xhigh'], transcript: ['{"id":1,"result":{"thread":{"id":"owned"}}}'] });
-  const desktop = await startCoreDesktop(t, { prepare: async () => ({ adapters: { codex, claude } }),
+  const desktop = await startCoreDesktop(t, { prepare: async () => ({ adapters: { codex, ...supervised } }),
     afterFetch: async (input, init, result) => { calls.push({ method: init?.method ?? 'GET', path: new URL(String(input)).pathname, body: init?.body ? JSON.parse(init.body) : null }); return result; } });
-  t.after(() => claude.close());
+  t.after(() => Promise.all(Object.values(supervised).map(adapter => adapter.close())));
   return { ...desktop, calls };
 }
 const nodeText = node => [node.textContent, ...(node.children ?? []).map(nodeText)].filter(Boolean).join(' ');
 const permissionWrites = calls => calls.filter(call => call.method === 'POST' && call.path.endsWith('/settings/permissions'));
-async function chooseClaude(desktop, { automatic }) {
+const SUPERVISED_COPY = {
+  en: ['HIVEM1ND cannot confine this agent on Windows. By default it asks you before every file change and command.',
+    "Work automatically: it changes files and runs commands without asking, and can write outside its cluster's folder. You can turn this off in Settings, Permissions."],
+  es: ['HIVEM1ND no puede confinar a este agente en Windows. De forma predeterminada, consulta antes de cada cambio de archivos y de cada comando.',
+    'Trabajar de forma automática: modifica archivos y ejecuta comandos sin consultar, y puede escribir fuera de la carpeta de su clúster. Se puede desactivar en Configuración, Permisos.'],
+};
+async function chooseSupervised(desktop, { automatic, client = 'claude', language = 'en' }) {
+  desktop.app.language = language;
+  desktop.app.startDialog.model.language = language;
+  desktop.app.startDialog.paint();
   const dialog = desktop.document.querySelector("[data-start-dialog='overseer']");
   click(dialog.querySelector("[data-action='open-runs-picker']"));
   const picker = desktop.document.querySelector("[data-start-dialog='picker']");
   assert.equal(picker.querySelector('[data-native-warning]'), null, 'Codex is chosen first and shows no warning');
-  click(picker.querySelector('[data-action="runs-client-claude"]'));
+  const choice = picker.querySelector(`[data-action="runs-client-${client}"]`);
+  assert.equal(choice.disabled, false, 'the connected supervised client is selectable');
+  click(choice);
   const banner = picker.querySelector('[data-native-warning]');
-  assert.ok(banner, 'the warning appears when Claude Code is chosen');
-  assert.equal(banner.getAttribute('data-native-warning'), 'claude');
-  assert.ok(nodeText(banner).includes('HIVEM1ND cannot confine this agent on Windows. By default it asks you before every file change and command.'));
+  assert.ok(banner, 'the warning appears when the supervised client is chosen');
+  assert.equal(banner.getAttribute('data-native-warning'), client);
+  assert.ok(nodeText(banner).includes(SUPERVISED_COPY[language][0]));
   const box = picker.querySelector('[data-work-automatically]');
   assert.equal(box.checked, false, 'unchecked by default');
-  assert.ok(nodeText(banner).includes("Work automatically: it changes files and runs commands without asking, and can write outside its cluster's folder. You can turn this off in Settings, Permissions."));
+  assert.ok(nodeText(banner).includes(SUPERVISED_COPY[language][1]));
   if (automatic) changeControl(box, true);
   assert.equal(desktop.document.querySelectorAll('.dialog').length, 0, 'no confirmation dialog opens');
   click(picker.querySelector('[data-action="close-runs-picker"]'));
+  desktop.app.language = 'en'; renderShell(desktop.app);
   return dialog;
 }
 
-test('Claude Code in the picker shows the warning; Work automatically creates its grant only once the agent exists and the inspector says so', async t => {
+test('Claude Code and Cursor show the bilingual warning; Work automatically creates the exact grant after Create and Settings can revoke it', async t => {
+  for (const client of ['claude', 'cursor']) for (const language of ['en', 'es']) await t.test(`${client} ${language}`, async t => {
   const desktop = await supervisedDesktop(t);
-  const dialog = await chooseClaude(desktop, { automatic: true });
+  const dialog = await chooseSupervised(desktop, { automatic: true, client, language });
   assert.equal(permissionWrites(desktop.calls).length, 0, 'choosing the box changes nothing until the agent is saved');
   click(dialog.querySelector("[data-action='create-agent']"));
   await patient(() => desktop.app.unitList.catalog.some(unit => unit.id === 'root:overseer'), 'The agent was not created.');
@@ -4431,33 +4445,38 @@ test('Claude Code in the picker shows the warning; Work automatically creates it
   const writes = desktop.calls.filter(call => call.method !== 'GET');
   assert.ok(writes.findIndex(call => call.path.endsWith('/overseer')) < writes.findIndex(call => call.path.endsWith('/settings/permissions')), 'the grant follows the agent');
   const body = permissionWrites(desktop.calls)[0].body;
-  assert.deepEqual({ ...body, expectedRevision: undefined }, { machine: body.machine, unitId: 'root:overseer', client: 'claude', action: 'native.automatic', expectedRevision: undefined });
+  assert.deepEqual({ ...body, expectedRevision: undefined }, { machine: body.machine, unitId: 'root:overseer', client, action: 'native.automatic', expectedRevision: undefined });
   const listed = (await request(desktop.app.api, 'GET', '/settings/permissions')).data.agentPermissions;
-  assert.deepEqual(listed.map(item => [item.unitId, item.client, item.actions]), [['root:overseer', 'claude', ['native.automatic']]]);
+  assert.deepEqual(listed.map(item => [item.unitId, item.client, item.actions]), [['root:overseer', client, ['native.automatic']]]);
   await patient(() => desktop.root.querySelector('[data-native-mode="automatic"]'), 'The inspector did not say that the agent works automatically.');
   const mode = desktop.root.querySelector('[data-native-mode]');
   assert.equal(mode.getAttribute('data-native-mode'), 'automatic'); assert.equal(mode.textContent, 'Automatic, not confined');
   desktop.app.language = 'es'; renderShell(desktop.app);
   assert.equal(desktop.root.querySelector('[data-native-mode]').textContent, 'Automático, sin confinamiento');
   desktop.app.language = 'en'; renderShell(desktop.app);
-  // Settings, Permissions lists the grant with Revoke, and revoking makes the next launch ask first.
+  // Settings, Permissions lists the grant with Revoke, which applies to the next operation in a running session.
   navigate(desktop.app, 'settings'); await desktop.app.settingsState.pending; await patient(() => desktop.app.settingsState?.loaded && !desktop.app.settingsState.loading, 'Settings did not load.');
   click(desktop.root.querySelector('[data-action="settings-tab-permissions"]'));
   await patient(() => desktop.root.querySelector(`[data-permission="${listed[0].id}"]`), 'The grant is not listed in Permissions.');
   const row = desktop.root.querySelector(`[data-permission="${listed[0].id}"]`);
-  assert.ok(nodeText(row).includes('root:overseer')); assert.ok(nodeText(row).includes('Works automatically in Claude Code, not confined'));
-  assert.ok(nodeText(desktop.root).includes('A session that is already running keeps working automatically until it ends.'));
-  const revoke = row.querySelector('[data-action="settings-revoke-' + listed[0].id + '"]');
+  assert.ok(nodeText(row).includes('root:overseer')); assert.ok(nodeText(row).includes(`Works automatically in ${client === 'claude' ? 'Claude Code' : 'Cursor'}, not confined`));
+  assert.ok(nodeText(desktop.root).includes('Revoking makes the agent ask before its next file change or command, including in a session that is already running.'));
+  desktop.app.language = 'es'; renderShell(desktop.app);
+  assert.ok(nodeText(desktop.root).includes('Al revocarlo, el agente consulta antes del siguiente cambio de archivos o comando, incluso en una sesión que ya está en ejecución.'));
+  desktop.app.language = 'en'; renderShell(desktop.app);
+  const revoke = desktop.root.querySelector(`[data-permission="${listed[0].id}"]`).querySelector('[data-action="settings-revoke-' + listed[0].id + '"]');
   assert.ok(revoke, 'the grant has a Revoke button');
   click(revoke);
   await patient(() => desktop.calls.some(call => call.method === 'DELETE' && call.path.endsWith(`/settings/permissions/${listed[0].id}`)), 'Revoke was not requested.');
   await patient(() => desktop.app.settingsState.permissions?.agentPermissions.length === 0, 'The grant was not revoked.');
   assert.deepEqual((await request(desktop.app.api, 'GET', '/settings/permissions')).data.agentPermissions, []);
+  });
 });
 
 test('leaving Work automatically unchecked creates no grant, the inspector says Asks first, and a confined client shows nothing', async t => {
+  for (const client of ['claude', 'cursor']) await t.test(client, async t => {
   const desktop = await supervisedDesktop(t);
-  const dialog = await chooseClaude(desktop, { automatic: false });
+  const dialog = await chooseSupervised(desktop, { automatic: false, client });
   click(dialog.querySelector("[data-action='create-agent']"));
   await patient(() => desktop.app.unitList.catalog.some(unit => unit.id === 'root:overseer'), 'The agent was not created.');
   await patient(() => desktop.root.querySelector('[data-native-mode]'), 'The inspector did not say how the agent works.');
@@ -4478,11 +4497,12 @@ test('leaving Work automatically unchecked creates no grant, the inspector says 
   await patient(() => desktop.app.unitList.catalog.find(unit => unit.id === 'root:overseer')?.runsIn.client === 'codex', 'Codex was not stored.');
   await patient(() => !desktop.root.querySelector('[data-native-mode]'), 'A confined agent still shows a native line.');
   assert.equal(permissionWrites(desktop.calls).length, 0);
+  });
 });
 
 test('the change Runs in picker shows an existing grant checked and unchecking it revokes the grant on Save', async t => {
   const desktop = await supervisedDesktop(t);
-  const dialog = await chooseClaude(desktop, { automatic: true });
+  const dialog = await chooseSupervised(desktop, { automatic: true });
   click(dialog.querySelector("[data-action='create-agent']"));
   await patient(() => permissionWrites(desktop.calls).length === 1 && desktop.root.querySelector('[data-native-mode="automatic"]'), 'The grant was not created.');
   click(desktop.root.querySelector('[data-action="change-runs-in"]'));

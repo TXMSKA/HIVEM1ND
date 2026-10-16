@@ -5,9 +5,11 @@ export function connectedChoices(clients = []) {
   return clients.filter(client => client.connected === true);
 }
 
-// A client can be chosen when it is confined, or supervised (Claude Code and Cursor, which ask before every native change).
+// Claude Code and Cursor may run supervised under the person's explicit choice, without claiming confinement.
 export function launchable(client) {
-  return client?.scopeEnforced === true || client?.boundary === 'supervised';
+  return client?.connected === true && (client.scopeEnforced === true
+    && (client.boundary === undefined || client.boundary === 'confined')
+    || ['claude', 'cursor'].includes(client.id) && supervisedClient(client));
 }
 
 export function supervisedClient(client) {
@@ -152,7 +154,6 @@ export function renderRunsInPicker(document, model, actions) {
       !supported ? t('unavailable') : local ? t(`${value}Hint`) : '', (local ? model.choice?.mode : model.choice?.effort) === value,
       () => actions.onChoice({ ...model.choice, [local ? 'mode' : 'effort']: value }), !supported);
   })));
-  // Claude Code and Cursor cannot be confined on Windows: say so, and offer the per-agent choice to work without asking.
   const warning = supervisedClient(current) ? element(document, 'section', { class: 'runs-in-warning', role: 'note', 'data-native-warning': current.id },
     icon(document, 'alert'), element(document, 'p', { text: t('supervisedWarning') }),
     typeof model.automatic === 'boolean' ? tick(document, t('workAutomatically'), model.automatic === true, value => actions.onAutomatic?.(value), { 'data-work-automatically': 'true' }) : null) : null;

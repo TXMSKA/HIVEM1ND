@@ -1552,7 +1552,7 @@ export function supervisedBoundary({ mode, processHandle, signal }) {
   return Object.freeze({ verified: true, confined: false, mode, processHandle, signal,
     async authorize(input) {
       if (input?.once !== true) return { authorized: false };
-      if (mode === 'automatic') return input.automatic === true ? { authorized: true } : { authorized: false };
+      if (mode === 'automatic' && input.automatic === true) return { authorized: true };
       // One approval permits one operation, never a second.
       if (typeof input.approvalId !== 'string' || used.has(input.approvalId)) return { authorized: false };
       used.add(input.approvalId);

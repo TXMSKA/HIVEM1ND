@@ -143,6 +143,8 @@ test('Claude Code and Cursor are selectable and a client with no boundary stays 
   const mixed = [...clients.slice(0, 2), supervised('claude', 'Claude Code'), supervised('cursor', 'Cursor'),
     { id: 'invented', title: 'Invented', connected: true, scopeEnforced: false, models: [{ id: 'm', title: 'M', efforts: ['high'], modes: [] }] }];
   assert.equal(launchable(mixed[2]), true); assert.equal(launchable(mixed[4]), false); assert.equal(launchable({ ...mixed[2], boundary: 'invented' }), false);
+  assert.equal(launchable({ ...mixed[2], connected: false }), false);
+  assert.equal(launchable({ ...mixed[4], boundary: 'supervised' }), false, 'the supervised exception belongs only to Claude Code and Cursor');
   assert.equal(supervisedClient(mixed[2]), true); assert.equal(supervisedClient(mixed[0]), false);
   assert.equal(validRunsIn({ client: 'claude', model: 'observed', effort: 'high', mode: null }, mixed), true);
   assert.equal(validRunsIn({ client: 'invented', model: 'm', effort: 'high', mode: null }, mixed), false);
