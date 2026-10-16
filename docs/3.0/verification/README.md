@@ -6,8 +6,8 @@ The saved files come from three source revisions:
 
 | Source commit | Saved PNGs | Destinations |
 | --- | --- | --- |
-| 1fc19904d3582ee36e9ea915e61ff3a999214073 | 183 | Every destination except the ones below, recaptured after the second re-review fixes (inspector layout, asks in the conversation, Waiting). |
-| 5edc2ba8046e4f51199b5c452208d578aa04b282 | 6 | 2.18, start 2.4 and start 4.1, each in English and Spanish, recaptured once the More menu showed again inside Details. |
+| e8e6b40697bda1b6d76a599036956872ebfbe58a | 187 | Every destination except the ones below, recaptured after the QA fixes (3.1 es, 3.4 es and 6.12 en reached on a second run of the same revision). |
+| f9a553184d2a2ca3c61cb1bcdab0675fa6bfccca | 2 | 4.9 in English and Spanish, recaptured once the Attach agents picker listed agents that load after it opened. |
 | 09585c5e14563f97aec5a6a2574b00d315ac0dbd | 2 | 7.7 in English and Spanish, kept from the first run. |
 
 Chrome: Chrome/155.0.8059.80
