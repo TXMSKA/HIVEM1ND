@@ -7391,10 +7391,11 @@ function firstMessageComposer(app, t, unit) {
   const name = t("messageUnit", { unit: unit.alias || unit.unit });
   const hint = startText(app.language, 'readsNext');
   const key = `first:${unit.id}`;
-  const composer = element(document, "input", { class: "composer", "data-composer": "true", "data-first-message": unit.id, "data-keep": keepId("chat", key), "aria-label": name, placeholder: name });
+  // Not data-composer: that marks an open conversation, which this agent does not have yet.
+  const composer = element(document, "input", { class: "composer", "data-first-message": unit.id, "data-keep": keepId("chat", key), "aria-label": name, placeholder: name });
   composer.value = inputDrafts(app).chats.get(key)?.value ?? "";
   composer.addEventListener("input", () => { inputDrafts(app).chats.set(key, fieldDraft(composer)); syncViewerDirty(app); });
-  const send = element(document, "button", { type: "button", class: "composer-send", "data-action": "send", "aria-label": t("send"), title: t("send"),
+  const send = element(document, "button", { type: "button", class: "composer-send", "data-action": "send-first", "aria-label": t("send"), title: t("send"),
     onclick: () => sendFirstMessage(app, unit, composer) }, icon(document, "send"));
   const hintId = `composer-hint-${key}`;
   composer.setAttribute("aria-describedby", hintId);

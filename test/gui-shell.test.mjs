@@ -7362,8 +7362,9 @@ test("an agent with no conversation offers the composer and its first message op
   desktop.app.mapState.selection = new Set([quiet.id]);
   desktop.app.mapState.onSelection([quiet.id]);
   await waitFor(() => desktop.root.querySelector(`[data-first-message="${quiet.id}"]`), "The first-message composer did not appear.");
+  assert.equal(desktop.root.querySelector("[data-composer]"), null, "no open conversation is announced before the first message");
   typeInput(desktop.root.querySelector(`[data-first-message="${quiet.id}"]`), "Hello from the first message", 0, 0);
-  click(desktop.root.querySelector('[data-action="send"]'));
+  click(desktop.root.querySelector('[data-action="send-first"]'));
   await waitFor(() => desktop.app.thread?.chat?.kind === "direct" && desktop.app.thread.chat.members.includes(quiet.id), "The conversation did not open.");
   let posted = false;
   for (let attempt = 0; attempt < 100 && !posted; attempt += 1) {
