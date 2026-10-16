@@ -247,7 +247,8 @@ button, input { font: inherit; color: inherit; }
   gap: 7px;
   font-weight: 600;
 }
-.btn, .btn.secondary { background: var(--card); border-color: var(--line); }
+/* One step above the card, so a secondary button stays visible on a card as well as on a panel. */
+.btn, .btn.secondary { background: var(--card2); border-color: var(--line); }
 .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .btn.ghost { background: transparent; border-color: var(--line); }
 .btn.quiet { background: transparent; border-color: transparent; color: var(--body); }
@@ -1480,6 +1481,9 @@ button.plan-assignment { min-height: 32px; padding: 0; border: 0; background: tr
 .agent-inspector .agent-conversation > .field,
 .agent-inspector .agent-conversation > .action-row { margin-left: 16px; margin-right: 16px; }
 .agent-inspector .agent-conversation > .btn { margin: 0 16px 16px; }
+.agent-inspector .agent-conversation > .action-row { justify-content: flex-end; gap: 6px; margin-top: 6px; }
+.agent-inspector .agent-conversation > .action-row .btn { padding: 4px 10px; font-size: 12.5px; }
+.agent-controls > .agent-facts { margin: 8px 0 4px; padding: 10px 12px; border-radius: 12px; background: var(--card); }
 .agent-conversation[data-agent-tab="work"] > .field,
 .agent-conversation[data-agent-tab="work"] > .btn,
 .agent-conversation[data-agent-tab="work"] > .action-row { display: none; }

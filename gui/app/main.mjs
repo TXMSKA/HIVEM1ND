@@ -1249,13 +1249,15 @@ function renderWorkspace(app, t, view, counts) {
     if (agent) {
       inspectorBody.className += ' agent-inspector';
       inspectorBody.append(renderAgentHeader(document, agent, sessionForUnit(app, agent.id), app.language, () => openAgentMore(app, agent)));
-      inspectorBody.append(trackDisclosure(app, element(document, 'details', { class: 'agent-controls' }, element(document, 'summary', { text: t('details') }), actionControls(app, t, agent)), `agent-controls:${agent.id}`));
+      const controls = trackDisclosure(app, element(document, 'details', { class: 'agent-controls' }, element(document, 'summary', { text: t('details') }), actionControls(app, t, agent)), `agent-controls:${agent.id}`);
+      inspectorBody.append(controls);
       const review = renderInspector(app, t, agent);
       const facts = review.querySelector('[data-unit-facts]');
+      // The facts sit inside Details with the controls; the board keeps the conversation in front.
       if (facts) {
         facts.remove();
         facts.className += ' agent-facts';
-        inspectorBody.append(facts);
+        controls.append(facts);
       }
       const progress = review.querySelector('[data-session-progress]');
       if (progress) {
