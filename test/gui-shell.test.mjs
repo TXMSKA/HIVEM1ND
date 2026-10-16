@@ -5824,6 +5824,17 @@ test('R10 History replaces Comments and places the current version first with re
   assert.equal(desktop.root.querySelector('[data-action="editor-history"]').getAttribute('aria-pressed'), 'true');
 });
 
+test('a repository plan stalls ten minutes after its last confirmed step', async () => {
+  const { stallPast } = await import('./visual/cases/start-board.mjs');
+  const now = Date.parse('2026-10-16T12:00:00.000Z');
+  const at = new Date(now).toISOString();
+  assert.equal(stallPast({ phase: 'execution', lastStepAt: at }, now), 601000);
+  assert.equal(stallPast({ phase: 'planning', lastStepAt: at }, now), 1801000);
+  const source = await readFile(new URL('./visual/cases/start-board.mjs', import.meta.url), 'utf8');
+  assert.match(source, /mode: 'execution'/);
+  assert.match(source, /data-action="stop-step"/);
+});
+
 test('the Overseer subtitle stacks under the name inside the hierarchy row', async () => {
   const css = await readFile('gui/app/styles.css', 'utf8');
   assert.match(css, /\.list \.row-unit \.group-title:has\(\.hierarchy-sub\) \{[^}]*flex-direction:\s*column/);

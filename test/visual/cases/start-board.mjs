@@ -2,6 +2,7 @@
 // Repositories, agents, plans and context meters are prepared through the actual core; the screen is not.
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { readRunRecord, runIds } from '../../../engine/service/runs.mjs';
 import { acceptRepositories, agentCredential, choice, createOverseer } from '../seed.mjs';
 import { openMap, seedMap } from '../map-helpers.mjs';
 import { chatsBoot, noteWorkStep, openChats, openUnit, say, seedChats, startSession, unitToken } from '../chats-helpers.mjs';
@@ -64,7 +65,7 @@ async function writePlan(ctx) {
   const assignment = { kind: 'unit', unitId: unit.id, runsIn: choice };
   const current = await ctx.world.call('GET', `/chats/${ctx.shop.chatId}`);
   ctx.plan = await ctx.world.call('POST', '/plans', {
-    clusterId: ctx.shop.id, chatId: ctx.shop.chatId, machine: 'DESKTOP', title: 'Cart empty state', branch: 'cart-empty', mode: 'planning',
+    clusterId: ctx.shop.id, chatId: ctx.shop.chatId, machine: 'DESKTOP', title: 'Cart empty state', branch: 'cart-empty', mode: 'execution',
     tasks: titles.map(([number, title]) => ({ id: `root:${number}`, title, assignment })),
     roles: { coordinator: leadAssignment, planner: leadAssignment, builder: assignment, reviewer: leadAssignment },
     expectedChatRevision: current.revision,
@@ -75,6 +76,21 @@ async function showPlan(ctx) {
   await openMap(ctx, 4);
   await ctx.page.click('.map-group-label[aria-label="shop"]');
   await ctx.visible('.plan-card [data-action="run-plan"]', { timeout: 30000 });
+}
+
+export function stallPast(watch, now) {
+  const last = Date.parse(watch?.lastStepAt);
+  const limit = watch?.phase === 'planning' ? 1800000 : 600000;
+  if (!Number.isFinite(last) || !Number.isFinite(now)) return limit + 1000;
+  return Math.max(0, last + limit + 1000 - now);
+}
+
+async function confirmedRun(ctx) {
+  for (const id of await runIds(ctx.world.core)) {
+    const { record } = await readRunRecord(ctx.world.core, id);
+    if (record.planId === ctx.plan.id && record.watches?.some(watch => !watch.resolved)) return record;
+  }
+  return null;
 }
 
 async function runPlan(ctx) {
@@ -207,9 +223,18 @@ export const cases = {
     seed: writePlan,
     async reach(ctx) {
       await runPlan(ctx);
-      ctx.advance(10 * 60 * 1000);
+      const deadline = Date.now() + 30000;
+      let run = null;
+      while (Date.now() < deadline) {
+        run = await confirmedRun(ctx);
+        if (run) break;
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      if (!run) throw new Error('The plan run did not confirm a step.');
+      const watch = run.watches.find(item => !item.resolved);
+      ctx.advance(stallPast(watch, ctx.world.fx.fixture.clock.now));
       await ctx.world.core.runSupervisor.check();
-      await ctx.visible('.plan-card.is-warning', { timeout: 30000 });
+      await ctx.visible('.plan-card [data-action="stop-step"]', { timeout: 30000 });
     },
   },
 
