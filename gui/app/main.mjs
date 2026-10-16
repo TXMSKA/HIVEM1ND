@@ -1170,9 +1170,10 @@ function renderWorkspace(app, t, view, counts) {
     issues.append(element(document, "summary", { text: cardinal(app.language, "issueCount", issueItems.length) }));
     for (const issue of issueItems) issues.append(element(document, "p", { class: "issue", text: issue.message }));
     if (!issueItems.length) issues.append(emptyIssues(app, document, t));
+    // The issues line shows only when there is something to read.
     side = element(document, "aside", { class: "panel side" },
       element(document, "h2", { "data-phone-title": "true", text: phoneTitle }),
-      issues,
+      issueItems.length ? issues : null,
       collection,
     );
   } else {
@@ -1618,7 +1619,8 @@ function renderCollection(app, t) {
     },
   });
   const status = list.status === "error" ? t("listError") : list.status === "loading" ? t("loadingList") : list.status === "empty" ? (list.query ? t("emptySearch") : emptyCollectionText(t, list.name)) : t("listTotal", { count: formatNumber(app.language, list.total ?? 0) });
-  const total = element(document, "p", { class: "list-total", "data-total": String(list.total ?? ""), "data-list-status": list.status, text: status });
+  // A ready list says its count only to assistive technology; the board shows the rows, not a count.
+  const total = element(document, "p", { class: `list-total${list.status === "ready" ? " visually-hidden" : ""}`, "data-total": String(list.total ?? ""), "data-list-status": list.status, text: status });
   if (list.status === "loading") total.append(progressMark(document, t("loadingList"), { "data-list-progress": "true" }));
   if (list.status === "error") {
     total.append(element(document, "button", {
