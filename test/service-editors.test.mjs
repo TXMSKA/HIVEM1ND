@@ -1771,3 +1771,16 @@ test('Void replacement accepts omitted server fields and ignores forged revision
   assert.deepEqual(second.document.marker, { kept: true });
   assert.deepEqual(await readFile(originalPath), original);
 });
+
+test('History restores an earlier board version even after an edit added a known field', async (t) => {
+  const { context } = await shop(t);
+  let editor = await createBoard(context, { project: 'shop', document: sketch('restore-after-frame') });
+  const initial = (await listHistory(context, editor.id)).items[0];
+  // A frame added through the editor writes the page's start, which the first version never had.
+  const framed = structuredClone(editor.document);
+  framed.pages[0].start = framed.screens[0].id;
+  editor = await replaceBoard(context, editor.id, { document: framed, expectedRevision: editor.revision });
+  assert.equal(editor.document.pages[0].start, framed.screens[0].id);
+  const restored = await restoreHistory(context, editor.id, initial.id, { expectedRevision: editor.revision, expectedCommentsRevision: editor.commentsRevision });
+  assert.equal(Object.hasOwn(restored.document.pages[0], 'start'), false);
+});

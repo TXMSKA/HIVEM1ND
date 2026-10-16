@@ -228,12 +228,17 @@ async function projectEditor(context, entry, document, revision) {
   };
 }
 
-export function preserveUnknown(before, after) {
-  walk(before, after);
+export function preserveUnknown(before, after, known = NONE) {
+  walk(before, after, known);
   return true;
 }
 
-function walk(left, right) {
+const NONE = new Set();
+// Fields this product writes itself and may legitimately be absent from an earlier version, such as the start
+// screen a frame sets on its page. A restore may drop them; an unknown field from a newer client is still kept.
+const KNOWN_OPTIONAL = new Set(['start']);
+
+function walk(left, right, known = NONE) {
   if (Array.isArray(left)) {
     if (!Array.isArray(right)) fail(409, 'unsupported_fields_lost', 'A saved field was dropped.');
     for (const item of left) {
@@ -241,15 +246,18 @@ function walk(left, right) {
       const key = item.id != null ? 'id' : item.k != null ? 'k' : null;
       if (!key) continue;
       const match = right.find((entry) => entry && entry[key] === item[key]);
-      if (match) walk(item, match);
+      if (match) walk(item, match, known);
     }
     return;
   }
   if (!left || typeof left !== 'object') return;
   if (!right || typeof right !== 'object' || Array.isArray(right)) fail(409, 'unsupported_fields_lost', 'A saved field was dropped.');
   for (const key of Object.keys(left)) {
-    if (!Object.hasOwn(right, key)) fail(409, 'unsupported_fields_lost', 'A saved field was dropped.');
-    walk(left[key], right[key]);
+    if (!Object.hasOwn(right, key)) {
+      if (known.has(key)) continue;
+      fail(409, 'unsupported_fields_lost', 'A saved field was dropped.');
+    }
+    walk(left[key], right[key], known);
   }
 }
 
@@ -2153,7 +2161,7 @@ async function historySnapshot(context, found, historyId) {
 
 async function restoreDocument(context, found, document, commentBytes, operation, extraEntries = []) {
   const current = parseJson(found.loaded.bytes);
-  preserveUnknown(current, document);
+  preserveUnknown(current, document, KNOWN_OPTIONAL);
   if (document.id !== current.id) fail(422, 'invalid_document', 'The document identity cannot change.');
   const entries = [...extraEntries];
   if (found.entry.kind === 'void') {
