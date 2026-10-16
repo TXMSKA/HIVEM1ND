@@ -5522,8 +5522,10 @@ function activityNotices(records) {
 }
 
 // Loads and answers that already have their own progress are not slow requests.
-function quietActivity(key) {
-  return /^(?:chat-load:|inspector:|group-chat(?::|$)|mailboxes$|mailbox(?::|$)|catalog:|direct:|open-chat:|waiting:|read:|approval:|task:|grant:|undo:|cancel-start:|changes:|editor:|library:)/.test(String(key ?? ''));
+function quietActivity(key, records = []) {
+  const name = String(key ?? '');
+  if (name.startsWith('chat-load:') && records.some(record => record.phase === 'pending' && /^(?:open-chat:|direct:)/.test(record.key))) return false;
+  return /^(?:chat-load:|inspector:|group-chat(?::|$)|mailboxes$|mailbox(?::|$)|catalog:|direct:|open-chat:|waiting:|read:|approval:|task:|grant:|undo:|cancel-start:|changes:|editor:|library:)/.test(name);
 }
 
 function activityAnnouncement(app, record) {
@@ -5563,8 +5565,9 @@ function placeBefore(anchor, node) {
 
 function paintActivity(app, shell) {
   const here = noteScope(app);
-  const records = activityNotices([...(app.activity?.values() ?? [])].filter((record) => (record.scope ?? here) === here));
-  const pending = records.filter((record) => record.phase === "pending" && !quietActivity(record.key));
+  const scoped = [...(app.activity?.values() ?? [])].filter((record) => (record.scope ?? here) === here);
+  const records = activityNotices(scoped);
+  const pending = records.filter((record) => record.phase === "pending" && !quietActivity(record.key, scoped));
   const failed = records.filter((record) => record.phase === "error");
   if (!pending.length && !failed.length) return;
   const document = app.root.ownerDocument;
