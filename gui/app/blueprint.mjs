@@ -183,7 +183,11 @@ export async function replaceBoard(api, editor, document, retained = null) {
     path: "/blueprint/boards/:resourceId",
     params: { resourceId: editor.resourceId },
     body: { document, expectedRevision: editor.revision },
-  }, retained); } finally { editor.boardSaving = null; }
+  }, retained); } finally {
+    const saved = result?.data?.revision;
+    if (saved) { editor.savedRevisions ??= new Set(); editor.savedRevisions.add(saved); }
+    editor.boardSaving = null;
+  }
   if (editor.conflict?.remote && editor.conflict.remote.revision !== result.data.revision) return result;
   acceptBoard(editor, result.data);
   editor.baseRevision = result.data.revision;

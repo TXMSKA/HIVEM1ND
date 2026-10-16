@@ -1572,6 +1572,28 @@ test("whole-board acknowledgments retain later typing and a newer remote conflic
   assert.equal(editor.conflictCopies.length, 2);
 });
 
+test("an echo of this client's saved board is not a conflict while a later stroke is dirty", async () => {
+  const editors = createEditors(), board = fullBoard(), revision = "a".repeat(64);
+  const editor = { resourceId: "board", kind: "blueprint", revision, baseRevision: revision, authoritative: { id: "board", revision, document: board } };
+  editors.current = editor; editors.drafts.set("board", editor); editors.tickets.set("board", 1);
+  const saved = structuredClone(board); saved.screens[0].root.kids[0].value = "Saved";
+  const api = commentApi(async (_url, init) => jsonResponse({ id: "board", revision: "b".repeat(64), document: JSON.parse(init.body).document }));
+  setBoardDraft(editor, saved);
+  await replaceBoard(api, editor, saved);
+  const later = structuredClone(saved); later.screens[0].root.kids[0].value = "Next stroke";
+  setBoardDraft(editor, later);
+  const own = { id: "board", revision: "b".repeat(64), document: saved };
+  noteRemote(editors, { resourceId: "board", revision: own.revision });
+  assert.equal(editor.conflict, null);
+  assert.equal(reconcileEditor(editors, own, 1), true);
+  assert.equal(editor.conflict, null);
+  assert.equal(boardDocument(editor).screens[0].root.kids[0].value, "Next stroke");
+  const remote = { id: "board", revision: "c".repeat(64), document: { ...board, title: "Incoming" }, by: "project:shop:executor-shop" };
+  noteRemote(editors, { resourceId: "board", revision: remote.revision });
+  reconcileEditor(editors, remote, 1);
+  assert.equal(editor.conflict.remote.by, "project:shop:executor-shop");
+});
+
 test("group attachments expand canonical members once and bind the chooser's attachment revision", async () => {
   const units = [{ id: "project:shop:executor-shop" }, { id: "env:web:overlord-web" }];
   const groups = [{ id: "one", members: units.map((unit) => unit.id) }, { id: "two", members: [units[0].id] }];

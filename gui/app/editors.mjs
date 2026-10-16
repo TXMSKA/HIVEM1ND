@@ -522,7 +522,7 @@ function applyCommentThread(current, thread, commentsRevision) {
 export function noteRemote(editors, change) {
   const current = editors.drafts.get(change?.resourceId) ?? (editors.current?.resourceId === change?.resourceId ? editors.current : null);
   if (!current || !change?.revision || change.revision === current.revision) return;
-  if (current.boardSaving) return;
+  if (current.boardSaving || current.savedRevisions?.has(change.revision)) return;
   current.remoteStale = true;
   if (current.dirty && change.revision !== current.baseRevision) {
     current.conflict = { ...(current.conflict ?? {}), revision: change.revision };
@@ -547,7 +547,7 @@ export function reconcileEditor(editors, record, generation) {
   if (!id || editors.tickets.get(id) !== generation) return false;
   const current = editors.drafts.get(id) ?? (editors.current?.resourceId === id ? editors.current : null);
   if (!current) return false;
-  if (current.boardSaving && JSON.stringify(record.document) === JSON.stringify(current.boardSaving.document)) {
+  if (current.boardSaving && JSON.stringify(record.document) === JSON.stringify(current.boardSaving.document) || current.savedRevisions?.has(record.revision)) {
     current.authoritative = record;
     current.revision = record.revision;
     current.baseRevision = record.revision;
