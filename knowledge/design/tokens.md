@@ -20,6 +20,18 @@ The consequence that makes the split worth its cost: a new look is a new primiti
 - Contrast is a property of a semantic pair, so it is measured on the pair and recorded once per theme.
 - Layers stack on a short named scale: content, sticky regions, overlays, the modal, the toast. A stacking value outside that scale is a literal.
 - An imported component adopts the tokens before it lands. A component that carries its own colours, radii or fonts is a re-skin that will fail later.
+- A token is named by its function, never by how it looks: `color/action/primary`, not `blue`. The value changes with the brand; the function does not.
+- A third layer of component tokens (`button/background/default`) is worth adding only when components are themed apart from the semantic roles; otherwise components read the semantic layer directly.
+
+## Building a design system
+
+A design system that lasts is built in this order and kept like a product.
+
+- **Foundations first.** The primitive scales are decided before any screen: a colour ramp for the brand and one for the neutrals, four to six type sizes, spacing on a base of 4, three or four radii and three shadows. A value off the scale does not go in.
+- **Tokens before components.** Primitive and semantic layers exist, with the light and dark modes on the semantic layer, before the first component is drawn.
+- **Five components, not fifty.** Button, field, card, avatar and navigation come first, built only from tokens, each with its types (primary, secondary, quiet), sizes and every state (default, hover, pressed, focus, disabled, error where it applies). The rest follow when a screen needs them.
+- **One page per component.** When to use it and when not, one do and one don't (one primary action per view, never two competing), its properties, and its accessibility floors from [essentials.md](essentials.md).
+- **An owner and a change log.** Each component carries a version and a state; every change gets a note. Token names match the names in code from the first day, so design and code never translate.
 
 ## Type roles
 
