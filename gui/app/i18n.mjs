@@ -621,7 +621,7 @@ const COPY = {
   finalDeleteGroupTitle: ['Delete the group {title}?', '¿Eliminar el grupo {title}?'],
   finalDeleteGroupScope: ['Its folder and its zone go. Its chat moves to Archived in Chats. The {count} units, their chats and who they report to do not change.', 'Se eliminan la carpeta y la zona. El chat pasa a Archivados en Chats. Las {count} unidades, sus chats y sus relaciones de reporte no cambian.'],
   finalConnectTitle: ['Connect {unit}', 'Conectar {unit}'],
-  finalConnectScope: ['{unit} will report to {lead}. Groups and chats do not change.', '{unit} reportará a {lead}. Los grupos y los chats no cambian.'],
+  finalConnectScope: ['{unit} will report to {lead}. Clusters and chats do not change.', '{unit} reportará a {lead}. Los clústeres y los chats no cambian.'],
   finalNewUnitHint: ['It appears on the Map at once; start its session when you need it.', 'La unidad aparece de inmediato en el Mapa. Iniciar su sesión cuando sea necesario.'],
   finalStopTitle: ['Stop the session of {unit}?', '¿Detener la sesión de {unit}?'],
   finalStopScope: ['Its work in progress stops. The unit keeps its chat, mailbox, tasks and groups, and a new session can start later.', 'Se detiene el trabajo en curso. La unidad conserva su chat, buzón, tareas y grupos. Se puede iniciar una sesión nueva después.'],

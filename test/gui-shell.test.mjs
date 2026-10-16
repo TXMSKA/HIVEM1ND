@@ -4333,6 +4333,7 @@ test("R13 connection closes the dialog, draws immediately and Undo restores the 
   desktop.app.mapState.onConnect({ source: source.id, target: target.id });
   let dialog = desktop.document.querySelector("dialog");
   assert.match(dialog.querySelector("p").textContent, /executor-shop will report to overlord-web/);
+  assert.match(dialog.querySelector("p").textContent, /Clusters and chats do not change/);
   click(dialog.querySelector("button"));
   assert.equal(writes.length, 0);
   assert.equal(desktop.app.unitList.catalog.find((unit) => unit.id === target.id).leadId, target.leadId);
