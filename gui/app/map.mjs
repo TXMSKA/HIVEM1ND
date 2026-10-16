@@ -149,6 +149,8 @@ export function renderMap(document, host, map, labels = {}) {
     label.setAttribute("aria-pressed", String(map.selectedGroupId === zone.group.id));
     label.style.left = `${screen.x - rect.left}px`;
     label.style.top = `${screen.y - rect.top}px`;
+    // A mini cluster's name stays inside its chip; a long one ends with an ellipsis.
+    if (zone.compact) label.style.maxWidth = `${Math.max(24, zone.bounds.w * map.view.zoom - 12)}px`;
     const folder = icon(document, clusterGlyph(zone.folder ? "folder" : zone.group.link?.kind));
     const title = document.createElement("span");
     title.textContent = zone.group.title + (zone.count ? `, ${zone.count}` : '');

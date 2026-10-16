@@ -1582,3 +1582,5 @@ html { scrollbar-color: var(--line2) var(--panel); scrollbar-width: thin; }
 .list-block > .empty-clusters { margin: 4px var(--gap) 8px; }
 /* A list action keeps its own width instead of spanning the panel. */
 .list-block > .btn { align-self: flex-start; margin: 0 var(--gap) 8px; }
+.map-group-label.is-mini, .map-group-label.is-mini .map-group-caption { min-width: 0; max-width: 100%; }
+.map-group-label.is-mini .map-group-caption span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
