@@ -396,7 +396,9 @@ export async function commitTransaction(store, prepared) {
   if (source.length === 0) throw new CoreError(422, 'invalid_body', 'A transaction needs at least one record.');
   const resources = source.map((entry) => entry.resource);
   if (new Set(resources).size !== resources.length) throw new CoreError(422, 'invalid_body', 'A transaction cannot change one resource twice.');
-  return withLocks(store, resources, () => commitLocked(store, prepared));
+  // One lock order for every commit: local-observation, then the resources. Staging the journal needs
+  // local-observation, so taking it after the resources inverts the order of any caller that already holds it.
+  return withLocalChanges(store, () => withLocks(store, resources, () => commitLocked(store, prepared)));
 }
 
 async function commitLocked(store, prepared) {

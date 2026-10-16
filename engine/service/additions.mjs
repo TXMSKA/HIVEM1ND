@@ -522,12 +522,14 @@ async function publishCheckout(context, id, acquisition, files) {
 
 export async function applyAdditions(context, input) {
   await assertAdditionRequest(context, 'apply', input);
-  return withLocalChanges(context.store, () => withLocks(context.store, [`addition:${input.previewId}`, 'settings-content-edit'], async () => {
+  // Projects refresh after the local-observation lock is released: refreshing publishes the machine settings, whose
+  // publisher takes settings-report before local-observation. Holding both here in the other order deadlocks.
+  const applied = await withLocalChanges(context.store, () => withLocks(context.store, [`addition:${input.previewId}`, 'settings-content-edit'], async () => {
     const record = await load(context, 'previews', input.previewId);
     const requestHash = hashBytes(Buffer.from(canonicalJson(input)));
     if (record.preview.state === 'accepted') {
       if (record.acceptance?.hash !== requestHash) fail(409, 'preview_changed', 'This preview was already accepted with another selection.');
-      await refreshProjects(context); return structuredClone(record.preview.result);
+      return structuredClone(record.preview.result);
     }
     if (record.preview.state !== 'ready') fail(409, 'preview_changed', 'Wait for a completed source check.');
     const acquisition = await verifiedSource(context, record), scope = await choices(context);
@@ -608,9 +610,10 @@ export async function applyAdditions(context, input) {
     const previewPath = await location(context, 'previews', record.id), beforePreview = await readBytes(context.store, previewPath);
     await commitChange(context, { id: changeId, additionAcceptance: true, entries: [...entries, undo.entry, { resource: `addition-preview:${record.id}`, recordPath: previewPath, beforeRevision: revisionOf(beforePreview), afterBytes: jsonBytes(record), private: true }],
       events, response: { status: 201, body: result } });
-    await refreshProjects(context);
     return result;
   }));
+  await refreshProjects(context);
+  return applied;
 }
 async function refreshProjects(context) {
   const { refreshAdditionProjects } = await import('./service.mjs');
@@ -619,7 +622,8 @@ async function refreshProjects(context) {
 
 export async function removeAddition(context, id, input) {
   await assertAdditionRequest(context, 'remove', input, id);
-  return withLocalChanges(context.store, async () => {
+  // As in applyAdditions, projects refresh only once local-observation is released.
+  const removed = await withLocalChanges(context.store, async () => {
     const current = await acceptedRecord(context, id);
     if (current.revision !== input.expectedRevision || current.record.removed) fail(409, 'revision_conflict', 'The accepted addition changed.');
     const record = { ...current.record, removed: true, updatedAt: new Date(context.now()).toISOString() };
@@ -648,8 +652,10 @@ export async function removeAddition(context, id, input) {
     if (contentEntry) events.push({ name: 'settings.content.changed', data: { revision: revisionOf(contentEntry.afterBytes) } });
     await commitChange(context, { id: changeId, entries: [...entries, undo.entry], events, response: { status: 200, body: result } });
     await pruneAdditionDirectories(context, record);
-    await refreshProjects(context); return result;
+    return result;
   });
+  await refreshProjects(context);
+  return removed;
 }
 
 export async function pruneAdditionDirectories(context, record) {
