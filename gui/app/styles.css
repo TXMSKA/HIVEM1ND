@@ -630,7 +630,11 @@ button, input { font: inherit; color: inherit; }
   height: 16px;
   border-radius: var(--radius-pill);
   background: var(--ring);
+  opacity: 0;
+  transition: opacity 120ms ease;
 }
+/* The connect handle shows only where it can be used: on hover and on keyboard focus. */
+.map-node:hover + .map-handle::before, .map-handle:hover::before, .map-handle:focus-visible::before { opacity: 1; }
 .board-outline { display: flex; flex-wrap: wrap; gap: 8px; max-width: 100%; }
 .map-actions { position: absolute; z-index: 2; left: var(--gap); bottom: calc(var(--gap) + 48px); display: flex; gap: 8px; }
 .map-zoom { position: absolute; z-index: 2; left: var(--gap); bottom: var(--gap); display: flex; align-items: center; gap: 4px; padding: 4px; border-radius: 10px; background: var(--card); border: 1px solid var(--line); }
