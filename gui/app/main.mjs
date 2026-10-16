@@ -5476,6 +5476,17 @@ function activityAnnouncement(app, record) {
   return `${record.label}. ${sendText(app, 'takingLonger')}${waiting}`;
 }
 
+// The polite region announces a slow request once. A tick that only advances the seconds must not replace it,
+// or a screen reader speaks every second. The first reading can precede one second and has no count; the first
+// reading that includes a count is the one that stays. The visible notice keeps updating on its own.
+function stableActivityAnnouncement(app, record) {
+  const next = activityAnnouncement(app, record);
+  const frozen = record.announced;
+  if (typeof frozen === 'string' && (/\d+ s/.test(frozen) || !/\d+ s/.test(next))) return frozen;
+  record.announced = next;
+  return next;
+}
+
 function composerField(shell) {
   for (const panel of shell.querySelectorAll?.('.chat-panel') ?? []) {
     const field = [...(panel.children ?? [])].find(child => String(child.className ?? '').split(/\s+/).includes('field'));
@@ -5855,7 +5866,7 @@ function syncLiveRegions(app) {
   ensureLive(app);
   const visible = outcomeVisible(app);
   const pending = activityNotices([...(app.activity?.values() ?? [])].filter(record => record.phase === "pending" && (record.scope ?? noteScope(app)) === noteScope(app)));
-  const status = pending.length ? pending.map(record => activityAnnouncement(app, record)).join(" ")
+  const status = pending.length ? pending.map(record => stableActivityAnnouncement(app, record)).join(" ")
     : visible && app.actionTone !== "error" ? app.actionNote : "";
   const error = visible && app.actionTone === "error" ? app.actionNote : "";
   if (app.liveStatus.textContent !== status) app.liveStatus.textContent = status;
