@@ -3753,10 +3753,15 @@ function overseerExists(app) {
   return overseerListed(view?.units) || overseerListed(view?.allUnits) || overseerListed(app.unitList?.catalog) || overseerListed([...(app.store.indexes?.units?.values?.() ?? [])]);
 }
 
+function mindHasClusters(app) {
+  return [...(app.store.indexes?.groups?.values?.() ?? [])].some(group => group && group.deleted !== true);
+}
+
 export function maybeStartDiscovery(app) {
   if (app.disposed || app.startDialog || app.layout !== 'desktop' || !app.store.capabilities.includes('unit.create') || app.startError) return;
   const offer = app.startProjects?.discoveryOffer;
-  if (offer && !offer.dismissed && !app.answeredOffers?.has(offer.id) && repositorySelection(offer).size) {
+  // The import offer is the empty first run. A mind that already has a cluster keeps the map clear.
+  if (!mindHasClusters(app) && offer && !offer.dismissed && !app.answeredOffers?.has(offer.id) && repositorySelection(offer).size) {
     const model = { language: app.language, offer, query: '', selected: repositorySelection(offer), expanded: new Set(offer.groups.slice(0, 1).map(group => group.id)) };
     let retained = null, flow;
     const answer = confirmed => flow.run(confirmed ? 'import-repositories' : 'dismiss-discovery', async () => {

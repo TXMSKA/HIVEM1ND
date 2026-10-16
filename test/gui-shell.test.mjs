@@ -3893,6 +3893,25 @@ test("the owned folder handoff protects its authority and preserves the host and
   await viewer.arrayBuffer();
 });
 
+test('an undismissed discovery offer stays closed when a cluster already exists', () => {
+  const opened = [];
+  const app = {
+    disposed: false, startDialog: null, layout: 'desktop', language: 'en', overseerOffered: true,
+    root: { ownerDocument: { body: { append(node) { opened.push(node); } }, createElement() { return { className: '', children: [], append() {}, setAttribute() {}, addEventListener() {}, querySelector() { return null; }, querySelectorAll() { return []; }, replaceChildren() {}, style: {} }; } } },
+    store: {
+      capabilities: ['unit.create'],
+      indexes: {
+        groups: new Map([['shop', { id: 'shop', deleted: false, title: 'shop' }]]),
+        units: new Map([['root:overseer', { id: 'root:overseer', role: 'overseer', removed: false }]]),
+      },
+    },
+    startProjects: { discoveryOffer: { id: 'offer-1', dismissed: false, groups: [{ id: 'web', repositories: [{ id: 'shop', name: 'shop', worktrees: [] }] }] } },
+  };
+  maybeStartDiscovery(app);
+  assert.equal(opened.length, 0);
+  assert.equal(app.startDialog, null);
+});
+
 test('mounted first-open discovery filters canonical selections, imports explicitly and then offers the Overseer', async t => {
   let repository;
   const writes = [];
