@@ -5325,6 +5325,7 @@ test('Work keeps Stop apart from authored chat and retains the composer and thre
   const unit = desktop.app.unitList.catalog.find((item) => item.id === 'project:shop:executor-shop');
   desktop.app.activeHandlers.onActivate({ id: unit.id, kind: 'unit', unit }, 'double');
   await waitFor(() => desktop.root.querySelector('[data-action="session-work"]'), 'The session tabs did not open.');
+  await waitFor(() => desktop.app.thread?.chat?.kind === 'direct' && desktop.app.thread.chat.members.includes(unit.id), 'The agent chat did not open.');
   const chatId = desktop.app.thread.chat.id;
   assert.equal(desktop.root.querySelector('[data-action="stop-step"]'), null);
   typeInput(desktop.root.querySelector('[data-composer]'), 'Keep this draft', 2, 5);
