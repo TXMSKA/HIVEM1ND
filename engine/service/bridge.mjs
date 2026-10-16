@@ -147,8 +147,9 @@ export async function dispatchNative(endpoint, secret, operation, binding = {}) 
     let answered = false;
     let ownerPending = false;
     const silent = () => socket.destroy(new CoreError(503, 'service_unavailable', 'The native bridge did not answer.'));
-    // The handler may still be reading. The answer is the line; a silent socket still ends here.
-    let timer = setTimeout(silent, 30000);
+    // A host attach that never acknowledges ends at 3s. Any other call can still be reading, so its answer is waited on longer.
+    const firstWait = operation === 'attach' && binding.hostSessionId !== undefined ? 3000 : 30000;
+    let timer = setTimeout(silent, firstWait);
     socket.setEncoding('utf8');
     socket.once('connect', () => socket.write(`${JSON.stringify({ id, operation, secret, binding })}\n`));
     socket.on('data', (chunk) => {
