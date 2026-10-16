@@ -5562,7 +5562,8 @@ export async function createFinalCoreFixture({ language = "en", look = "modern",
     get headers() { return { Origin: api.origin, Authorization: `Bearer ${token}` }; },
     async request(method, target, { body, key = uuid(), credential = token } = {}) {
       const response = await fetch(`${api.origin}/api/v1${target}`, {
-        method, signal: AbortSignal.timeout(10000),
+        // The GUI waits 30s for a response. This client does too, and returns as soon as one arrives.
+        method, signal: AbortSignal.timeout(30000),
         headers: { origin: api.origin, authorization: `Bearer ${credential}`,
           ...(body === undefined ? {} : { "content-type": "application/json" }),
           ...(method === "GET" ? {} : { "idempotency-key": key }) },
