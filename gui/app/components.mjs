@@ -3,6 +3,8 @@ const ICONS = {
   hierarchy: "M12 5a2.5 2.5 0 1 0 0 .1M5 19a2.5 2.5 0 1 0 0 .1M19 19a2.5 2.5 0 1 0 0 .1M12 7.5V11M12 11.5 6 17M12 11.5l6 5.5",
   chats: "M5 6h14v9H8l-3 3z",
   waiting: "M8 13V5.5a1.5 1.5 0 0 1 3 0V12M11 11V4a1.5 1.5 0 0 1 3 0v8M14 12V6.5a1.5 1.5 0 0 1 3 0V15c0 4-2.5 6-6 6",
+  phone: "M7 3h10a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zM10 17h4",
+  bell: "M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4",
   blueprint: "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z",
   document: "M6 3h9l3 3v15H6zM15 3v4h4",
   focus: "M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5",

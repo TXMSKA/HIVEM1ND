@@ -94,6 +94,7 @@ import { addButton, addText } from './add-view.mjs';
 import { getAdditions, removeAddition } from './add-api.mjs';
 
 const DESKTOP_MODES = ["map", "blueprint", "document", "focus"];
+const BAR_MODES = ["map", "blueprint", "document"];
 const PHONE_MODES = PHONE_NAV;
 const RECOVERY_COPY = {
   reconnecting: ['Reconnecting to the service. What you do is kept and sent when it answers.', 'Reconectando con el servicio. Las acciones se conservan y se envían cuando responde.'],
@@ -1056,18 +1057,18 @@ function publish(app) {
   renderShell(app);
 }
 
-function renderBar(app, t, counts) {
+export function renderBar(app, t, counts) {
   const document = app.root.ownerDocument;
   const modes = element(document, "div", { class: "modes", role: "toolbar" });
   if (app.layout !== "phone") {
-    for (const mode of DESKTOP_MODES) {
+    for (const mode of BAR_MODES) {
       modes.append(element(document, "button", {
         type: "button",
         class: "mode",
         "data-action": `mode-${mode}`,
         "aria-pressed": String(app.mode === mode),
         onclick: () => navigate(app, mode),
-      }, icon(document, mode), t(mode)));
+      }, icon(document, mode), t(mode === "document" ? "voidMode" : mode)));
     }
   }
   const waiting = element(document, "button", {
@@ -1076,7 +1077,7 @@ function renderBar(app, t, counts) {
     "data-action": "waiting",
     "aria-pressed": String(app.mode === "map" && app.waitingOpen === true || app.mode === "waiting"),
     onclick: () => openWaiting(app),
-  }, icon(document, "waiting"), cardinal(app.language, "waitingCount", counts.waiting ?? 0));
+  }, icon(document, "waiting"), cardinal(app.language, "waitingOnYou", counts.waiting ?? 0));
   const settings = element(document, "button", {
     type: "button",
     class: "icon-button",
@@ -1095,7 +1096,15 @@ function renderBar(app, t, counts) {
       app.inspectorOpen = !app.inspectorOpen;
       renderShell(app);
     },
-  }, icon(document, "waiting"));
+  }, icon(document, "hierarchy"));
+  const phone = element(document, "button", {
+    type: "button", class: "icon-button", "data-action": "open-phone",
+    "aria-label": t("settingsOpenPhone"), onclick: () => openPhoneSettings(app),
+  }, icon(document, "phone"));
+  const notifications = element(document, "button", {
+    type: "button", class: "icon-button", "data-action": "open-notifications",
+    "aria-label": t("finalNotifications"), title: t("finalNotificationsUnavailable"), disabled: "",
+  }, icon(document, "bell"));
   const catalogToggle = element(document, "button", {
     type: "button",
     class: "btn panel-toggle",
@@ -1123,11 +1132,11 @@ function renderBar(app, t, counts) {
   if (app.layout !== 'phone' && !app.bootReading && !app.bootFailed && app.store.capabilities.includes('settings.write')) {
     bar.append(addButton(document, app.language, () => openSharedAdd(app)));
   }
-  if (counts.waiting || (!app.bootReading && !app.bootFailed)) bar.append(waiting);
+  if (counts.waiting) bar.append(waiting);
   if (app.layout !== "phone") {
     bar.append(catalogToggle);
     if (app.mode === "blueprint" || app.mode === "document") bar.append(commentsToggle);
-    bar.append(inspector, settings);
+    bar.append(phone, notifications, inspector, settings);
   }
   return bar;
 }
@@ -1428,6 +1437,14 @@ function openWaiting(app) {
   if (app.waitingOpen) app.mode = "map";
   if (app.waitingOpen && app.waitingList) reloadList(app.waitingList);
   if (!app.disposed) renderShell(app);
+}
+
+function openPhoneSettings(app) {
+  settingsState(app).tab = 'general';
+  navigate(app, 'settings');
+  const section = app.root.querySelector('[data-home]');
+  section?.scrollIntoView?.({ block: 'nearest' });
+  (section?.querySelector('[data-action="open-home"], [data-action="replace-home"], [data-addresses]') ?? section)?.focus?.();
 }
 
 function renderWaitingSurface(app, t) {
