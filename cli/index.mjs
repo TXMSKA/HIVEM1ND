@@ -1519,8 +1519,10 @@ async function runTask(options, dependencies, output, errorOutput) {
     guardPort: dependencies.guardPort,
   });
   const caller = { ...service, token: native ? service.token : dependencies.agentToken ?? service.token };
+  // A task read and its status write use the GUI request ceiling, so a slow answer is not reported as a failure while the service is still working.
+  const timeoutMs = 30000;
   try {
-    const current = await request(caller, { method: "GET", path: `/api/v1/tasks/${encodeURIComponent(options.taskId)}`, timeoutMs: 5000 });
+    const current = await request(caller, { method: "GET", path: `/api/v1/tasks/${encodeURIComponent(options.taskId)}`, timeoutMs });
     if (current.status !== 200 || !current.json?.data?.revision) {
       const code = current.json?.error?.code ?? "error";
       errorOutput.write(`${code}: The request failed.\n`);
@@ -1537,7 +1539,7 @@ async function runTask(options, dependencies, output, errorOutput) {
       path: target,
       body,
       headers: { "idempotency-key": randomUUID() },
-      timeoutMs: 5000,
+      timeoutMs,
     });
     if (result.status === 200) {
       output.write(`${JSON.stringify(result.json?.data ?? null)}\n`);
