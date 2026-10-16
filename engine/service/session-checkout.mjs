@@ -56,7 +56,14 @@ async function observe(context, sessionId) {
 async function checkout(context, { scope, directory }) {
   const root = scope.writeRoots[0] ?? null;
   const base = { repositoryId: null, branch: null, head: null, detached: false };
-  if (!root) return { path: directory, kind: 'private', ...base };
+  if (!root) {
+    const cwd = scope.launchCwd ?? (isUuid(scope.attemptId) ? directory : null);
+    if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) unavailable();
+    await assertNoLinks(cwd);
+    if (scope.launchCwd !== undefined && (pathKey(path.dirname(cwd)) !== pathKey(path.join(context.paths.localDirectory, 'sessions'))
+      || !isUuid(path.basename(cwd)) || canonicalJson(await directoryIdentity(cwd).catch(() => unavailable())) !== canonicalJson(scope.launchCwdIdentity))) unavailable();
+    return { path: cwd, kind: 'private', ...base };
+  }
   await assertNoLinks(root.realPath);
   if (canonicalJson(await directoryIdentity(root.realPath).catch(() => unavailable())) !== canonicalJson(root.identity)) unavailable();
   if (!root.gitCommonDir) return { path: root.realPath, kind: 'folder', ...base };

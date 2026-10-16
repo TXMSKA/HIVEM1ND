@@ -4,7 +4,9 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
-import { registerNative } from '../engine/service/adapters.mjs';
+import { createNativeAdapter, enqueueStart, registerNative, stopSession } from '../engine/service/adapters.mjs';
+import { createCluster } from '../engine/service/clusters.mjs';
+import { createUnit } from '../engine/service/units.mjs';
 import { directoryIdentity, readRepositoryIdentity } from '../engine/service/cluster-git.mjs';
 import { bindLaunchScope } from '../engine/service/file-access.mjs';
 import { readSessionCheckout } from '../engine/service/session-checkout.mjs';
@@ -34,6 +36,10 @@ async function world(t) {
         repositoryId: repository?.id ?? null, readScope: [unitId], contentScope: { additionIds: [], scopeRevision: null },
         writeRoots: directory ? [{ realPath: directory, identity: await directoryIdentity(directory), gitCommonDir: repository?.commonDir ?? null }] : [],
         git: { commit: false, push: false, intentId: null } };
+      if (!directory) {
+        const cwd = path.join(fixture.paths.localDirectory, 'sessions', randomUUID()); await mkdir(cwd, { recursive: true });
+        scope.launchCwd = cwd; scope.launchCwdIdentity = await directoryIdentity(cwd);
+      }
       await bindLaunchScope(context, scope, registration, ++pid);
       if (journal) {
         await mkdir(path.join(fixture.paths.localDirectory, 'session-starts'), { recursive: true });
@@ -59,6 +65,34 @@ test('two checkouts of one repository report two different folders and branches'
   assert.equal(one.repositoryId, two.repositoryId); assert.ok(one.repositoryId);
   assert.equal(one.observedAt, new Date(fixture.clock.now).toISOString());
   assert.deepEqual(Object.keys(one).sort(), ['branch', 'detached', 'head', 'kind', 'live', 'observedAt', 'path', 'repositoryId', 'sessionId']);
+});
+
+test('an unlinked launch reports its actual immutable cwd after registration changes the session id', async t => {
+  const fixture = await makeCoreFixture();
+  const adapter = createNativeAdapter('codex', { fixture: true, models: ['observed'], transcript: [JSON.stringify({ id: 1, result: { thread: { id: 'actual-private-session' } } })] });
+  const launches = [], create = adapter.create.bind(adapter);
+  adapter.create = async input => { launches.push(input); return create(input); };
+  const context = { paths: { ...fixture.paths, origin: path.join(fixture.root, 'origin') }, store: fixture.store,
+    now: () => fixture.clock.now, principal: { audience: 'desktop', unitId: 'root:master' },
+    projects: [], ownedPids: new Set(), adapters: { codex: adapter },
+    beat: { state: 'running', heartbeatAt: new Date(fixture.clock.now).toISOString() } };
+  let sessionId;
+  t.after(async () => { if (sessionId) await stopSession(context, sessionId, { confirmed: true }); await adapter.close(); await dispose(fixture); });
+  await mkdir(path.join(context.paths.origin, 'machines', fixture.machine), { recursive: true });
+  await writeFile(path.join(context.paths.origin, 'machines', fixture.machine, 'service.json'), JSON.stringify(context.beat));
+  const cluster = await createCluster(context, { title: 'Planning', parentId: null, link: { kind: 'none' }, members: [], machine: fixture.machine, confirmed: true });
+  const made = await createUnit(context, { clusterId: cluster.id, role: 'executor', machine: fixture.machine,
+    runsIn: { client: 'codex', model: 'observed', effort: 'high', mode: null }, useAsDefault: false, expectedRevision: cluster.revision });
+  const started = await enqueueStart(context, { unitId: made.unit.id, runMode: 'chat', stateRevision: made.unit.revision });
+  assert.equal(started.result.state, 'started');
+  sessionId = started.result.sessionId;
+  assert.equal(launches.length, 1);
+  assert.notEqual(path.basename(launches[0].cwd), sessionId, 'The start request and registration have different identities.');
+  const reading = await readSessionCheckout(context, sessionId);
+  assert.deepEqual([reading.path, reading.kind, reading.live], [launches[0].cwd, 'private', true]);
+  await rename(launches[0].cwd, `${launches[0].cwd}-old`); await mkdir(launches[0].cwd);
+  context.store.checkoutCache.clear();
+  assert.deepEqual(await readSessionCheckout(context, sessionId), { sessionId, known: false, reason: 'unverified' });
 });
 
 test('the answer is kept for 15 seconds and a detached head reports its commit', async t => {
@@ -112,7 +146,9 @@ test('a replaced folder is unverified, a broken repository is unavailable and a 
   const folder = await launch('folder', { directory: plain, kind: 'folder' }), priv = await launch('private', { kind: 'private' });
   const noted = await read(folder.sessionId), alone = await read(priv.sessionId);
   assert.deepEqual([noted.path, noted.kind, noted.repositoryId, noted.branch, noted.head, noted.detached], [plain, 'folder', null, null, null, false]);
-  assert.deepEqual([alone.path, alone.kind, alone.branch], [path.join(fixture.paths.localDirectory, 'sessions', priv.sessionId), 'private', null]);
+  assert.equal(path.dirname(alone.path), path.join(fixture.paths.localDirectory, 'sessions'));
+  assert.notEqual(path.basename(alone.path), priv.sessionId);
+  assert.deepEqual([alone.kind, alone.branch], ['private', null]);
   const replaced = await launch('replaced', { directory: plain, kind: 'folder' });
   await rename(plain, `${plain}-old`); await mkdir(plain);
   assert.deepEqual(await read(replaced.sessionId), { sessionId: replaced.sessionId, known: false, reason: 'unverified' });

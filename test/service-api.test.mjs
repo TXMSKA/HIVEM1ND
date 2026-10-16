@@ -1157,7 +1157,7 @@ test('every contract route has a success result and an authority or boundary fai
   expectStatus(sessionCheckout, 200, 'session checkout');
   assert.deepEqual([sessionCheckout.json.data.sessionId, sessionCheckout.json.data.kind, sessionCheckout.json.data.branch, sessionCheckout.json.data.live],
     [sessionId, 'private', null, true]);
-  assert.equal(sessionCheckout.json.data.path, path.join(paths.localDirectory, 'sessions', sessionId));
+  assert.equal(sessionCheckout.json.data.path, path.join(paths.localDirectory, 'sessions', requestId));
   hit('GET', '/sessions/:sessionId/checkout');
   for (const denied of [phoneCredential.token, settingsAgent.token]) expectStatus(await call(port, 'GET', checkoutTarget, { token: denied }), 403, 'session checkout authority');
   expectStatus(await call(port, 'GET', `${checkoutTarget}?branch=main`, { token }), 400, 'session checkout takes no query');

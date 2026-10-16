@@ -95,15 +95,17 @@ export async function prepareLaunchScope(context, request) {
   const repository = cluster?.link.kind === 'repository' ? await readRepositoryIdentity(mapping.localPath, context.settingsOwner ?? context) : null;
   if (repository && repository.id !== mapping.repositoryId) fail('scope_unavailable', 'The repository changed identity.');
   const permissions = repository ? (await import('./settings.mjs').then(module => module.readAgentPermissions(context))).filter(item => item.client === request.client) : [];
+  const launchCwd = mapping?.localPath ?? directory;
   const scope = { id: randomUUID(), sessionId: request.id, attemptId: null, unitId: request.unitId,
     clusterId: cluster?.id ?? null, clusterRevision: cluster?.revision ?? null, machine: context.paths.machine,
     repositoryId: repository?.id ?? null,
+    launchCwd, launchCwdIdentity: await directoryIdentity(launchCwd),
     readScope: [request.unitId], contentScope: { additionIds: additions.map(item => item.record.id), scopeRevision: null },
     writeRoots: mapping ? [{ realPath: mapping.localPath, identity: await directoryIdentity(mapping.localPath), gitCommonDir: repository?.commonDir ?? null }] : [],
     git: { commit: permissions.some(item => item.actions.includes('git.commit')), push: permissions.some(item => item.actions.includes('git.push')), intentId: null } };
   scope.revision = hashBytes(Buffer.from(canonicalJson(scope)));
   await saveScope(context, scope);
-  return { scope: freeze(scope), cwd: mapping?.localPath ?? directory, directory };
+  return { scope: freeze(scope), cwd: launchCwd, directory };
 }
 
 export async function bindLaunchScope(context, scope, registration, pid, executionId) {
