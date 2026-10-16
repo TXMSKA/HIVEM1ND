@@ -6289,7 +6289,7 @@ test("new folders open inline, nested contents keep counts and folder deletion n
   libraryMenu(desktop, state.folders.find((item) => item.id === folder.id), "delete");
   await waitFor(() => document.querySelector('[data-library-delete="folder"]'), "The folder delete confirmation did not open.");
   const dialog = document.querySelector('[data-library-delete="folder"]');
-  assert.match(dialog.querySelector("p").textContent, /1 texts/);
+  assert.match(dialog.querySelector("p").textContent, /1 text go/);
   assert.match(dialog.querySelector("p").textContent, /subfolders/);
   assert.match(dialog.querySelector("p").textContent, /10 seconds/);
   dialog.close();
