@@ -828,6 +828,7 @@ html[data-mode="focus"] body { background: #000000; color: #d8d4cc; }
 .action-cards { display: grid; gap: 8px; }
 .card { background: var(--card); border-radius: var(--radius-control); padding: 8px; }
 .comment-line { margin: 0 0 6px; }
+.comment-line time { display: block; margin: 2px 0 4px; color: var(--mute); font-size: 11.5px; }
 .void-suggestion { margin-left: 18px; padding: 11px 12px; display: flex; flex-direction: column; gap: 6px; border-radius: 16px; background: var(--card); color: var(--body); font-size: 13px; }
 .void-suggestion p { margin: 0; }
 .void-suggestion.is-stale { gap: 8px; background: var(--waiting-soft); }

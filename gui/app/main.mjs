@@ -72,7 +72,7 @@ import {
 } from "./editors.mjs";
 import { activateUnit, buildHierarchy, collapseNewClusters, flattenVisibleHierarchy, hierarchyDisclosure, hierarchyIcon, pathFolder, readableIdentity, revealGroup, toggleGroup, unitDisplayName, unitsForTree } from "./hierarchy.mjs";
 import { checkoutFacts, openTaskDetail, renderApproval, renderGrants, renderMachine, renderSession, renderTask, renderUnit, renderWaiting } from "./inspector.mjs";
-import { cardinal, DICTIONARIES, formatClock, formatNumber, formatWhen, text } from "./i18n.mjs";
+import { cardinal, DICTIONARIES, formatClock, formatNumber, formatShortTime, formatWhen, text } from "./i18n.mjs";
 import { collectPages, createPagedList, loadAll, reloadList, renderWindow, setQuery, windowRange } from "./lists.mjs";
 import { adoptInitialLayout, applyRemoteLayout, centerUnit, createMap, keepLocalPosition, renderMap, retrySavedLayout, settlePositions, useIncomingPosition } from "./map.mjs";
 import { dispose as disposeEmbed, publishDirty, publishReady, startEmbedChannel } from "./embed.mjs";
@@ -2952,8 +2952,8 @@ function renderEditorSurfaces(app, t) {
     const box = element(document, "article", { class: "comment-box", "data-thread": thread.id, "data-status": thread.status ?? "open" });
     for (const message of thread.messages ?? []) {
       const line = element(document, "p", { class: "comment-line", "data-comment-message": message.id ?? "" });
-      line.append(element(document, "span", { class: "comment-author", text: message.author || t("unknown") }));
-      if (message.at) line.append(element(document, "time", { datetime: message.at, text: formatWhen(app.language, message.at) }));
+      line.append(element(document, "span", { class: "comment-author", text: commentAuthor(app, message.author ?? message.authorId) }));
+      if (message.at) line.append(element(document, "time", { datetime: message.at, text: formatShortTime(app.language, message.at) }));
       line.append(element(document, "span", { class: "comment-text", text: message.text ?? "" }));
       if (current.kind === "void" && message.proposal && current.proposals?.some((item) => item.id === message.proposal.id)) appendProposals(app, document, box, current, t, message.proposal.id, line);
       else box.append(line);
@@ -3016,11 +3016,18 @@ function renderEditorSurfaces(app, t) {
     composer.append(reason);
   }
   commentsColumn.append(comments, composer);
-  const noticeCopy = { pending: "queued", queued: "queued", submitted: "submitted", ambiguous: "ambiguous", failed: "failed" };
-  for (const notice of current.notices ?? []) {
-    const key = noticeCopy[notice.state];
-    if (!key) continue;
-    commentsColumn.append(element(document, "p", { "data-notice": notice.state, text: t(key) }));
+  const notices = current.notices ?? [];
+  const submitted = notices.filter(notice => notice.state === "submitted");
+  if (submitted.length) {
+    const recipients = [...new Set(submitted.map(notice => {
+      const unit = unitById(app, notice.unitId);
+      return unit ? unitDisplayName(unit) : readableIdentity(notice.unitId, text(app.language, "person"));
+    }))];
+    const recipientText = recipients.length < 2 ? recipients[0] ?? "" : `${recipients.slice(0, -1).join(", ")} ${app.language === "es" ? "y" : "and"} ${recipients.at(-1)}`;
+    commentsColumn.append(element(document, "p", { "data-notice": "submitted", text: t("sentTo", { recipients: recipientText }) }));
+  }
+  for (const notice of notices.filter(item => ["ambiguous", "failed"].includes(item.state))) {
+    commentsColumn.append(element(document, "p", { "data-notice": notice.state, text: t(notice.state === "failed" ? "noticeFailed" : "noticeUnconfirmed") }));
   }
   return surfaces;
 }
@@ -6752,6 +6759,12 @@ function messageSender(app, message) {
   if (!message?.fromId) return text(app.language, "unknown");
   const unit = unitById(app, message.fromId);
   return unit ? unitDisplayName(unit) : readableIdentity(message.fromId, text(app.language, 'person'));
+}
+
+function commentAuthor(app, authorId) {
+  if (authorId === "root:master" || authorId === "root:person") return text(app.language, "person");
+  const unit = unitById(app, authorId);
+  return unit ? unitDisplayName(unit) : readableIdentity(authorId, text(app.language, "person"));
 }
 
 function frameAgentTabs(app, panel, subject) {

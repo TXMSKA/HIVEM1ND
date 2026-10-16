@@ -120,7 +120,10 @@ const COPY = {
   statusWaiting: ["Waiting", "En espera"],
   statusWorking: ["Working", "Trabajando"],
   statusIdle: ["Idle", "Inactivo"],
-  queued: ["The notice is queued. A reply has not been recorded.", "El aviso está en cola. No hay una respuesta registrada."],
+  queued: ["The notice is queued.", "El aviso está en cola."],
+  sentTo: ["Sent to {recipients}.", "Enviado a {recipients}."],
+  noticeFailed: ["The notice could not be sent.", "No se pudo enviar el aviso."],
+  noticeUnconfirmed: ["Delivery of the notice is unconfirmed.", "No se confirmó la entrega del aviso."],
   submitted: ["The notice was submitted. A reply has not been recorded.", "El aviso fue enviado. No hay una respuesta registrada."],
   ambiguous: ["The destination is ambiguous. Nothing was delivered.", "El destino es ambiguo. No se entregó nada."],
   failed: ["The notice failed. Nothing was delivered.", "El aviso falló. No se entregó nada."],
@@ -834,6 +837,14 @@ export function formatClock(language, value) {
     hourCycle: "h23",
     timeZone: "UTC",
     timeZoneName: "short",
+  }).format(date);
+}
+
+export function formatShortTime(language, value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat(locale(language), {
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: "UTC",
   }).format(date);
 }
 
