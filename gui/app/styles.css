@@ -540,6 +540,26 @@ button, input { font: inherit; color: inherit; }
 .list .row-cluster .group-count, .list .hierarchy-branch, .list .row-status, .list .hierarchy-unread { margin-left: 0; justify-self: end; }
 .hierarchy-disclosure { display: grid; place-items: center; width: 16px; height: 16px; padding: 0; }
 .hierarchy-sub { margin-left: auto; flex: none; color: var(--mute); font-size: 11.5px; font-weight: 400; white-space: nowrap; }
+.list .row-unit .group-title:has(.hierarchy-sub) {
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 0;
+  line-height: 1.05;
+  overflow: hidden;
+  min-width: 0;
+}
+.list .row-unit .group-title:has(.hierarchy-sub) .hierarchy-sub { margin-left: 0; }
+.list .row-unit .group-title:has(.hierarchy-sub) .unit-name,
+.list .row-unit .group-title:has(.hierarchy-sub) .hierarchy-sub {
+  display: block;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.05;
+}
 .hierarchy-tail { display: inline-flex; align-items: center; gap: 6px; }
 .row[aria-selected="true"], .row:focus-visible { background: var(--card); color: var(--text); }
 .row-heading, .row-issue { color: var(--mute); }

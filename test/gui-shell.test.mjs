@@ -5805,6 +5805,13 @@ test('R10 History replaces Comments and places the current version first with re
   assert.equal(desktop.root.querySelector('[data-action="editor-history"]').getAttribute('aria-pressed'), 'true');
 });
 
+test('the Overseer subtitle stacks under the name inside the hierarchy row', async () => {
+  const css = await readFile('gui/app/styles.css', 'utf8');
+  assert.match(css, /\.list \.row-unit \.group-title:has\(\.hierarchy-sub\) \{[^}]*flex-direction:\s*column/);
+  assert.match(css, /\.list \.row-unit \.group-title:has\(\.hierarchy-sub\) \.hierarchy-sub \{[^}]*margin-left:\s*0/);
+  assert.match(css, /\.list \.row-unit \.group-title:has\(\.hierarchy-sub\) \.unit-name,\s*\n\.list \.row-unit \.group-title:has\(\.hierarchy-sub\) \.hierarchy-sub \{[^}]*text-overflow:\s*ellipsis/);
+});
+
 test('R10 look controls and placeholders use themed contrast tokens', async () => {
   const css = await readFile('gui/app/styles.css', 'utf8');
   assert.match(css, /--focus: 2px solid var\(--accent\)/);
