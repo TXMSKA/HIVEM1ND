@@ -1152,9 +1152,12 @@ test('every contract route has a success result and an authority or boundary fai
     const page = await call(port, 'GET', target + '?limit=1', { token });
     expectStatus(page, 200, 'owned regular session ' + suffix); hit('GET', `/sessions/:sessionId/${suffix}`);
     assert.ok(page.json.data.items.length <= 1);
-    const beforeDenied = fixture.store.writes.length;
-    expectStatus(await call(port, 'GET', target, { token: phoneCredential.token }), 403, 'private session ' + suffix); hit('GET', `/sessions/:sessionId/${suffix}`);
-    assert.equal(fixture.store.writes.length, beforeDenied);
+    await withLocalChanges(fixture.store, async () => {
+      const beforeDenied = fixture.store.writes.length;
+      expectStatus(await call(port, 'GET', target, { token: phoneCredential.token }), 403, 'private session ' + suffix);
+      assert.equal(fixture.store.writes.length, beforeDenied);
+    });
+    hit('GET', `/sessions/:sessionId/${suffix}`);
   }
   const contextTarget = `/api/v1/sessions/${sessionId}/context`;
   const sessionContext = await call(port, 'GET', contextTarget, { token });
@@ -1172,12 +1175,14 @@ test('every contract route has a success result and an authority or boundary fai
   expectStatus(await call(port, 'GET', `${checkoutTarget}?branch=main`, { token }), 400, 'session checkout takes no query');
   expectStatus(await call(port, 'GET', `/api/v1/sessions/${randomUUID()}/checkout`, { token }), 404, 'session checkout of an unknown session');
   const contextBody = { action: 'clear', expectedRevision: sessionContext.json.data.revision };
-  const contextWrites = fixture.store.writes.length;
-  for (const denied of [phoneCredential.token, settingsAgent.token]) {
-    expectStatus(await call(port, 'GET', contextTarget, { token: denied }), 403, 'session context authority');
-    expectStatus(await call(port, 'POST', contextTarget, { token: denied, body: contextBody, headers: { 'idempotency-key': randomUUID() } }), 403, 'renew context authority');
-  }
-  assert.equal(fixture.store.writes.length, contextWrites);
+  await withLocalChanges(fixture.store, async () => {
+    const contextWrites = fixture.store.writes.length;
+    for (const denied of [phoneCredential.token, settingsAgent.token]) {
+      expectStatus(await call(port, 'GET', contextTarget, { token: denied }), 403, 'session context authority');
+      expectStatus(await call(port, 'POST', contextTarget, { token: denied, body: contextBody, headers: { 'idempotency-key': randomUUID() } }), 403, 'renew context authority');
+    }
+    assert.equal(fixture.store.writes.length, contextWrites);
+  });
   assert.equal(contextReplacements.size, 0);
   const renewedContext = await call(port, 'POST', contextTarget, {
     token,
@@ -1997,9 +2002,13 @@ test('every contract route has a success result and an authority or boundary fai
   const extensionAsk = await call(port, 'GET', `/api/v1/approvals/${extension.approvalId}`, { token });
   expectStatus(extensionAsk, 200, 'bound extension approval');
   const extensionTarget = `/api/v1/approvals/${extension.approvalId}/answer`, extensionBody = { decision: 'approve', expectedRevision: extensionAsk.json.data.revision };
-  const beforePhone = fixture.store.writes.length;
-  expectStatus(await call(port, 'POST', extensionTarget, { token: phone.token, body: extensionBody, headers: { 'idempotency-key': randomUUID() } }), 403, 'phone cannot extend a plan');
-  assert.equal(fixture.store.writes.length, beforePhone); hit('POST', '/approvals/:approvalId/answer');
+  // Hold prior local observation while proving the refused phone answer writes nothing, as the stop-step check does.
+  await withLocalChanges(fixture.store, async () => {
+    const beforePhone = fixture.store.writes.length;
+    expectStatus(await call(port, 'POST', extensionTarget, { token: phone.token, body: extensionBody, headers: { 'idempotency-key': randomUUID() } }), 403, 'phone cannot extend a plan');
+    assert.equal(fixture.store.writes.length, beforePhone);
+  });
+  hit('POST', '/approvals/:approvalId/answer');
   expectStatus(await call(port, 'POST', extensionTarget, { token, body: extensionBody, headers: { 'idempotency-key': randomUUID() } }), 200, 'person extends one bound plan'); hit('POST', '/approvals/:approvalId/answer');
   const sentPlanMessage = await callPlanTool(planActor, 'plan_send', { runId, recipientRoles: ['planner'], text: 'Read the preserved draft.', requestId: randomUUID() });
   const currentRun = await call(port, 'GET', `/api/v1/runs/${runId}`, { token });
