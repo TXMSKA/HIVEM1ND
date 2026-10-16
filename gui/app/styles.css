@@ -1568,3 +1568,5 @@ html { scrollbar-color: var(--line2) var(--panel); scrollbar-width: thin; }
 /* The More control's three dots read at a glance, as on the board. */
 [data-action="cluster-more"] .icon { stroke-width: 3.4; color: var(--body); }
 .agent-more { color: var(--body); font-size: 18px; letter-spacing: 1px; }
+/* Node names sit on their own plate, so an edge passing under a name never crosses its letters. */
+.map-label { background: var(--label-bg, var(--panel)); padding: 1px 6px; border-radius: 6px; z-index: 1; }
