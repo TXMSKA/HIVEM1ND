@@ -90,9 +90,15 @@ export function stallPast(watch, now) {
   return Math.max(0, last + limit + 1000 - now);
 }
 
+function runContext(ctx) {
+  const fixture = ctx.world.fx.fixture;
+  return { store: fixture.store, paths: fixture.paths, now: () => fixture.clock.now };
+}
+
 async function confirmedRun(ctx) {
-  for (const id of await runIds(ctx.world.core)) {
-    const { record } = await readRunRecord(ctx.world.core, id);
+  const context = runContext(ctx);
+  for (const id of await runIds(context)) {
+    const { record } = await readRunRecord(context, id);
     if (record.planId === ctx.plan.id && record.watches?.some(watch => !watch.resolved)) return record;
   }
   return null;
