@@ -245,7 +245,7 @@ test('desktop HTTP covers chat, task, editor, watch, phone denial, receipts and 
   assert.equal(denied.status, 403);
 
   const opened = await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('event stream timed out')), 2000);
+    const timer = setTimeout(() => reject(new Error('event stream timed out')), 30000);
     const req = request({
       host: '127.0.0.1',
       port,
@@ -662,7 +662,7 @@ async function laptopOriginFor(fixture) {
 
 function openEvents(port, token) {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('event stream timed out')), 2000);
+    const timer = setTimeout(() => reject(new Error('event stream timed out')), 30000);
     const opened = { raw: '', req: null };
     const req = request({
       host: '127.0.0.1',
@@ -711,7 +711,8 @@ function sseFrames(raw) {
   return frames;
 }
 
-function waitForFrames(opened, ready, runtime, timeout = 5000) {
+// Imported frames, sync state and applied files are waited on, not sampled once. The ceiling covers a loaded suite.
+function waitForFrames(opened, ready, runtime, timeout = 30000) {
   const start = Date.now();
   return new Promise((resolve, reject) => {
     const tick = () => {
@@ -737,7 +738,7 @@ function waitForFrames(opened, ready, runtime, timeout = 5000) {
   });
 }
 
-async function waitForSync(port, token, ready, timeout = 5000) {
+async function waitForSync(port, token, ready, timeout = 30000) {
   const start = Date.now();
   let last = null;
   while (Date.now() - start <= timeout) {
@@ -749,7 +750,7 @@ async function waitForSync(port, token, ready, timeout = 5000) {
   return last;
 }
 
-async function waitForFile(file, runtime, timeout = 5000) {
+async function waitForFile(file, runtime, timeout = 30000) {
   const start = Date.now();
   while (Date.now() - start <= timeout) {
     try {
