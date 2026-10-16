@@ -6835,8 +6835,9 @@ function messageSender(app, message) {
 }
 
 function commentAuthor(app, authorId) {
-  if (authorId === "root:master" || authorId === "root:person") return text(app.language, "person");
   const unit = unitById(app, authorId);
+  // The person signs as "You" ("Persona"), whether the record carries the root id or the root's name.
+  if (["root:master", "root:person", "master"].includes(authorId) || unit?.role === "master") return text(app.language, "person");
   return unit ? unitDisplayName(unit) : readableIdentity(authorId, text(app.language, "person"));
 }
 

@@ -3136,7 +3136,7 @@ test("editor forms, chats, and the inspector stay compact", async (t) => {
   const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
   renderShell(desktop.app);
   click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
-  await waitFor(() => desktop.root.querySelector("[data-editor-column='comments']")?.querySelector(".comment-author")?.textContent === "master", "The comment author was not shown.");
+  await waitFor(() => desktop.root.querySelector("[data-editor-column='comments']")?.querySelector(".comment-author")?.textContent === "You", "The comment author was not shown as the person.");
   const source = desktop.root.querySelector("[data-source]");
   assert.equal(source?.closest("[data-source-edit]") != null, true);
   assert.equal(desktop.root.querySelector(".reading-card") != null, true);
