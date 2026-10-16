@@ -1,14 +1,16 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { acceptedRepositoryCluster, clusterLead, connectedChoices, filterRepositories, initialRunsIn, launchable, renderAgentForm, renderRepositoryOffer, renderRunsInPicker, repositorySelection, supervisedClient, validRunsIn } from '../gui/app/clusters.mjs';
+import { acceptedRepositoryCluster, clusterLead, connectedChoices, filterRepositories, initialRunsIn, launchable, renderAgentForm, renderRepositoryOffer, renderRunsInPicker, repositorySelection, runsInLabel, supervisedClient, validRunsIn } from '../gui/app/clusters.mjs';
 import { renderApproval } from '../gui/app/inspector.mjs';
 import { renderSessionWork } from '../gui/app/session-work.mjs';
 import { startText } from '../gui/app/start-copy.mjs';
 import { clusterFrames, placeUnits } from '../gui/app/map-geometry.mjs';
-import { buildHierarchy, collapseNewClusters, flattenVisibleHierarchy, hierarchyDisclosure, revealGroup } from '../gui/app/hierarchy.mjs';
+import { buildHierarchy, collapseNewClusters, flattenVisibleHierarchy, hierarchyDisclosure, readableIdentity, revealGroup } from '../gui/app/hierarchy.mjs';
 import { createMap, fitMap, flyToCluster, graphBounds, paintNodes, pointerDown, pointerMove, pointerUp, wheelZoom } from '../gui/app/map.mjs';
 import { renderCluster } from '../gui/app/inspector.mjs';
+import { planCardModel } from '../gui/app/plan-controller.mjs';
+import { renderPlanCard } from '../gui/app/plan-view.mjs';
 import { applyEvent, createStore } from '../gui/app/state.mjs';
 import { document, nodes, copy } from './add-dom-fixture.mjs';
 
@@ -56,6 +58,29 @@ test('Runs in shows only connected capabilities, unknown quota and explicitly di
   assert.equal(selected, undefined, 'a disabled option cannot call the selection callback');
   nodes(external).find(node => node.attributes?.['data-action'] === 'runs-effort-xhigh').listeners.click();
   assert.equal(selected.effort, 'xhigh'); assert.equal(validRunsIn(selected, clients), true);
+});
+
+test('Runs in labels keep agent, model and effort readable instead of exposing picker ids', () => {
+  assert.equal(runsInLabel({ client: 'codex', model: 'observed', effort: 'high' }, clients), 'Codex, Observed, High');
+  assert.equal(runsInLabel({ client: 'codex', model: 'alternate-model', effort: 'xhigh' }, clients), 'Codex, Alternate Model, xhigh');
+  assert.equal(runsInLabel({ client: 'codex', model: 'observed', effort: 'high' }, clients, 'es'), 'Codex, Observed, Alto');
+  assert.equal(readableIdentity('root:master', 'Persona'), 'Persona');
+  assert.equal(readableIdentity('project:shop:executor-shop', 'Persona'), 'executor shop');
+});
+
+test('R5 plan cards show readable identities and Runs in copy in English and Spanish', () => {
+  const plan = { id: 'plan-1', title: 'Ship', branch: 'plan-ship', approved: false,
+    roles: { coordinator: { kind: 'unit', unitId: 'root:master' } },
+    tasks: [{ id: 'task-1', title: 'Build shop', state: 'pending', actorId: 'project:shop:executor-shop',
+      assignment: { kind: 'unit', unitId: 'project:shop:executor-shop', runsIn: { client: 'codex', model: 'observed', effort: 'high' } } }] };
+  const controller = { runs: new Map(), pending: new Map() };
+  for (const language of ['en', 'es']) {
+    const card = renderPlanCard(document, planCardModel(controller, plan, language, clients), {});
+    const visible = nodes(card).map(node => node.textContent).join(' ');
+    assert.doesNotMatch(visible, /root:master|project:shop:executor-shop/);
+    assert.match(visible, /executor shop/);
+    assert.match(visible, /Codex, Observed, (?:High|Alto)/);
+  }
 });
 
 test('Overseer and New agent forms contain only their choices, fresh is checked and no callback runs on render', () => {

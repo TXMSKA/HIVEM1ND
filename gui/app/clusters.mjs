@@ -36,10 +36,14 @@ export function initialRunsIn(clients, preferred = null, kind = null) {
   return null;
 }
 
-export function runsInLabel(choice, clients = []) {
+export function runsInLabel(choice, clients = [], language = 'en') {
   if (!choice) return '';
   const client = clients.find(item => item.id === choice.client);
-  return [client?.title ?? choice.client, client?.models.find(item => item.id === choice.model)?.title ?? choice.model, choice.mode ?? choice.effort].filter(Boolean).join(', ');
+  const readable = value => String(value ?? '').replace(/[_-]+/g, ' ').replace(/\b\w/g, letter => letter.toUpperCase());
+  const effort = choice.mode ?? choice.effort;
+  const effortLabel = effort === 'xhigh' ? effort : effort && ['low', 'medium', 'high', 'max', 'fast', 'normal', 'thinking'].includes(effort)
+    ? startText(language, effort) : readable(effort);
+  return [client?.title ?? readable(choice.client), client?.models.find(item => item.id === choice.model)?.title ?? readable(choice.model), effortLabel].filter(Boolean).join(', ');
 }
 
 export function repositorySelection(offer) {
@@ -164,7 +168,7 @@ export function renderRunsInPicker(document, model, actions) {
   if (warning) root.append(warning);
   root.append(element(document, 'footer', { class: 'runs-in-footer' },
     tick(document, t('defaultChoice'), model.useAsDefault === true, actions.onDefault, { 'data-use-default': 'true' }),
-    button(document, runsInLabel(model.choice, clients) || t('unavailable'), 'close-runs-picker', actions.onClose)));
+    button(document, runsInLabel(model.choice, clients, model.language) || t('unavailable'), 'close-runs-picker', actions.onClose)));
   return root;
 }
 
@@ -183,7 +187,7 @@ export function renderAgentForm(document, model, actions) {
       })));
   } else root.append(options(document, ['executor', 'overlord'].map(id => ({ id, label: t(id) })), model.role, actions.onRole));
   root.append(element(document, 'label', { class: 'start-runs-field' }, element(document, 'span', { text: t('runsIn') }),
-    button(document, runsInLabel(model.choice, model.clients) || t('unavailable'), 'open-runs-picker', actions.onPicker)));
+    button(document, runsInLabel(model.choice, model.clients, model.language) || t('unavailable'), 'open-runs-picker', actions.onPicker)));
   if (overseer) root.append(tick(document, t('fresh'), model.fresh, actions.onFresh, { 'data-start-fresh': 'true' }),
     element(document, 'p', { class: 'start-hint', text: t('freshHint') }));
   else root.append(element(document, 'p', { class: 'start-hint', text: t(model.cluster.link.kind === 'repository' ? 'agentScope' : model.cluster.link.kind === 'folder' ? 'folderScope' : 'unlinkedScope', { name: model.cluster.title }) }));

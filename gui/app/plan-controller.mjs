@@ -3,6 +3,8 @@ import { collectPages } from './lists.mjs';
 import { runsInLabel } from './clusters.mjs';
 import { renderPlanCard } from './plan-view.mjs';
 import { element } from './components.mjs';
+import { text } from './i18n.mjs';
+import { readableIdentity } from './hierarchy.mjs';
 import { startText } from './start-copy.mjs';
 
 export function createPlanController(api, notify = () => {}) {
@@ -103,17 +105,18 @@ export function planCardModel(controller, plan, language, clients = [], now = Da
   const attempt = run?.attempts?.find(attempt => attempt.id === alert?.attemptId);
   const lead = plan.roles.coordinator.kind === 'unit' ? plan.roles.coordinator.unitId : plan.roles.coordinator.client;
   const notified = alert?.told?.[0]?.target;
+  const person = text(language, 'person');
   const agent = alert?.recipientId ?? (attempt?.taskId ? plan.tasks.find(task => task.id === attempt.taskId)?.actorId : null)
     ?? (attempt ? plan.roles[attempt.role]?.unitId ?? plan.roles[attempt.role]?.client : null) ?? '';
   const watch = run?.watches?.find(watch => watch.attemptId === attempt?.id);
   return { language, title: plan.title, branch: plan.branch, phase: alert ? 'warning' : plan.approved ? 'running' : 'ready',
     busy: run?.state === 'stopping' || [...controller.pending.keys()].some(key => key.includes(plan.id) || run && key.includes(run.id)),
     problem: alert && { kind: alert.kind === 'no_start' ? 'noStart' : alert.kind === 'unread' ? 'unreadProblem' : 'stalled',
-      agent, lead: notified === 'coordinator' ? lead : notified === 'overseer' ? 'Overseer' : notified === 'person' ? (language === 'es' ? 'la persona' : 'the person') : '',
+      agent: readableIdentity(agent, person), lead: notified === 'coordinator' ? readableIdentity(lead, person) : notified === 'overseer' ? 'Overseer' : notified === 'person' ? readableIdentity('root:person', person) : '',
       minutes: watch?.phase === 'planning' ? 30 : 10 },
     budget: run?.budget, extensions: [], tasks: plan.tasks.map(task => ({ ...task,
-      actor: task.assignment.kind === 'unit' ? task.assignment.unitId : task.assignment.client,
-      runsInLabel: runsInLabel(task.assignment.runsIn, clients),
+      actor: readableIdentity(task.assignment.kind === 'unit' ? task.assignment.unitId : task.assignment.client, person),
+      runsInLabel: runsInLabel(task.assignment.runsIn, clients, language),
       state: task.id === attempt?.taskId && alert.kind === 'stalled' ? 'stuck' : task.state,
       elapsedMinutes: task.state === 'busy' && Number.isFinite(Date.parse(task.stepAt)) ? Math.max(0, Math.floor((now - Date.parse(task.stepAt)) / 60000)) : null,
     })) };

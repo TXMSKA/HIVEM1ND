@@ -7,6 +7,11 @@ export function pathFolder(value) {
   return parts.at(-1) ?? '';
 }
 
+export function readableIdentity(value, personLabel = 'You') {
+  if (value === 'root:master' || value === 'root:person') return personLabel;
+  return String(value ?? '').split(':').at(-1).replace(/[_-]+/g, ' ');
+}
+
 export function hierarchyIcon(unit) {
   return ROLE_ICON[unit?.role] ?? 'executor';
 }

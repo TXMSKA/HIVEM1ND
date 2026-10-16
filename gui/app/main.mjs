@@ -70,7 +70,7 @@ import {
   startWatch,
   stopWatch,
 } from "./editors.mjs";
-import { activateUnit, buildHierarchy, collapseNewClusters, flattenVisibleHierarchy, hierarchyDisclosure, hierarchyIcon, pathFolder, revealGroup, toggleGroup, unitDisplayName, unitsForTree } from "./hierarchy.mjs";
+import { activateUnit, buildHierarchy, collapseNewClusters, flattenVisibleHierarchy, hierarchyDisclosure, hierarchyIcon, pathFolder, readableIdentity, revealGroup, toggleGroup, unitDisplayName, unitsForTree } from "./hierarchy.mjs";
 import { checkoutFacts, openTaskDetail, renderApproval, renderGrants, renderMachine, renderSession, renderTask, renderUnit, renderWaiting } from "./inspector.mjs";
 import { cardinal, DICTIONARIES, formatClock, formatNumber, formatWhen, text } from "./i18n.mjs";
 import { collectPages, createPagedList, loadAll, reloadList, renderWindow, setQuery, windowRange } from "./lists.mjs";
@@ -4109,7 +4109,7 @@ function planCards(app, chat) {
 function confirmPlanRun(app, plan) {
   const snapshot = structuredClone(plan);
   const dialog = showDialog(app.root.ownerDocument, { title: startText(app.language, 'run'),
-    body: `${snapshot.branch}. ${startText(app.language, 'commitsHint', { branch: snapshot.branch })} ${snapshot.tasks.map(task => task.title + ': ' + (task.assignment.unitId ?? task.assignment.client) + ', ' + runsInLabel(task.runsIn)).join('; ')}`,
+    body: `${snapshot.branch}. ${startText(app.language, 'commitsHint', { branch: snapshot.branch })} ${snapshot.tasks.map(task => task.title + ': ' + readableIdentity(task.assignment.unitId ?? task.assignment.client, text(app.language, 'person')) + ', ' + runsInLabel(task.runsIn, app.startAgents?.connectedClients ?? [], app.language)).join('; ')}`,
     confirm: startText(app.language, 'run'), cancel: startText(app.language, 'cancel'),
     onConfirm: () => runPlan(plansForApp(app), snapshot) });
   dialog.setAttribute('data-confirm-plan', plan.id);
@@ -4178,7 +4178,7 @@ function renderPlanDraft(app) {
     for (const choice of choices) select.append(element(document, 'option', { value: choice.id, text: choice.label }));
     select.value = assignment.unitId ?? assignment.client;
     select.addEventListener('change', () => { changed(structuredClone(choices.find(choice => choice.id === select.value).value)); renderShell(app); });
-    const picker = mapButton(app, 'plan-runs-in', runsInLabel(assignment.runsIn, clients) || t('runsIn'), () => {
+    const picker = mapButton(app, 'plan-runs-in', runsInLabel(assignment.runsIn, clients, app.language) || t('runsIn'), () => {
       const model = { language: app.language, clients, choice: assignment.runsIn, useAsDefault: false };
       openRunsPicker(app, model, () => { assignment.runsIn = model.choice; renderShell(app); }, picker);
     });
@@ -6512,7 +6512,7 @@ function createOverseer(app) { return openStartAgent(app, null, true); }
 
 function openSessionForm(app, unit) {
   openChoiceForm(app, 'session', text(app.language, 'startSession'), (form, confirm) => {
-    form.append(element(form.ownerDocument, 'p', { class: 'start-hint', text: startText(app.language, 'runsIn') + ': ' + runsInLabel(unit.runsIn, app.startAgents?.connectedClients) }));
+    form.append(element(form.ownerDocument, 'p', { class: 'start-hint', text: startText(app.language, 'runsIn') + ': ' + runsInLabel(unit.runsIn, app.startAgents?.connectedClients, app.language) }));
     if (!unit.runsIn) { confirm.disabled = true; form.append(element(form.ownerDocument, 'p', { text: startText(app.language, 'unavailable') })); }
     const segment = element(form.ownerDocument, 'fieldset', { class: 'start-segment' }, element(form.ownerDocument, 'legend', { text: text(app.language, 'runsAs') }));
     for (const [value, key] of [['task', 'runTask'], ['chat', 'runChat']]) {
@@ -6733,7 +6733,7 @@ function cancelSessionStart(app) {
 function messageSender(app, message) {
   if (!message?.fromId) return text(app.language, "unknown");
   const unit = unitById(app, message.fromId);
-  return unit ? unitDisplayName(unit) : message.fromId;
+  return unit ? unitDisplayName(unit) : readableIdentity(message.fromId, text(app.language, 'person'));
 }
 
 function frameAgentTabs(app, panel, subject) {
@@ -6777,7 +6777,7 @@ function chatPanel(app, t) {
   let contextNotice = null;
   if (directUnit) heading.querySelector("h2").replaceChildren(unitNameNode(document, directUnit));
   if (members.length > 2) {
-    const names = members.map((id) => unitById(app, id) ? unitDisplayName(unitById(app, id)) : id).join(", ");
+    const names = members.map((id) => unitById(app, id) ? unitDisplayName(unitById(app, id)) : readableIdentity(id, text(app.language, 'person'))).join(", ");
     heading.append(element(document, "p", { class: "chat-members", "data-chat-members": String(members.length), text: names }));
   }
   panel.append(heading);
