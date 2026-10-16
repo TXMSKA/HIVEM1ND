@@ -70,7 +70,7 @@ import {
   startWatch,
   stopWatch,
 } from "./editors.mjs";
-import { activateUnit, buildHierarchy, collapseNewClusters, flattenVisibleHierarchy, hierarchyDisclosure, hierarchyIcon, pathFolder, readableIdentity, revealGroup, toggleGroup, unitDisplayName, unitsForTree } from "./hierarchy.mjs";
+import { activateUnit, buildHierarchy, collapseNewClusters, flattenVisibleHierarchy, hierarchyDisclosure, hierarchyIcon, listedWorktrees, pathFolder, readableIdentity, revealGroup, toggleGroup, unitDisplayName, unitsForTree } from "./hierarchy.mjs";
 import { checkoutFacts, openTaskDetail, renderApproval, renderGrants, renderMachine, renderSession, renderTask, renderUnit, renderWaiting } from "./inspector.mjs";
 import { cardinal, DICTIONARIES, formatClock, formatNumber, formatShortTime, formatWhen, text } from "./i18n.mjs";
 import { collectPages, createPagedList, loadAll, reloadList, renderWindow, setQuery, windowRange } from "./lists.mjs";
@@ -4444,7 +4444,7 @@ function collectionRows(app, t, list) {
   if (app.layout === 'desktop') for (const cluster of tree.clusters) {
     const link = app.startProjects?.clusterLinks?.find(item => item.clusterId === cluster.id);
     const offered = app.startProjects?.discoveryOffer?.groups.flatMap(group => group.repositories).find(repo => repo.worktrees.some(worktree => worktree.path && worktree.path === link?.localPath));
-    cluster.worktrees = offered?.worktrees ?? [];
+    cluster.worktrees = listedWorktrees(link?.localPath, offered?.worktrees ?? []);
   }
   collapseNewClusters(app.hierarchy, tree.clusters);
   const rows = flattenVisibleHierarchy(tree, app.hierarchy, list.query);

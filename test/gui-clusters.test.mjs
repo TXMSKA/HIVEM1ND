@@ -6,7 +6,7 @@ import { renderApproval } from '../gui/app/inspector.mjs';
 import { renderSessionWork } from '../gui/app/session-work.mjs';
 import { startText } from '../gui/app/start-copy.mjs';
 import { clusterFrames, placeUnits } from '../gui/app/map-geometry.mjs';
-import { buildHierarchy, collapseNewClusters, flattenVisibleHierarchy, hierarchyDisclosure, readableIdentity, revealGroup } from '../gui/app/hierarchy.mjs';
+import { buildHierarchy, collapseNewClusters, flattenVisibleHierarchy, hierarchyDisclosure, listedWorktrees, pathFolder, readableIdentity, revealGroup } from '../gui/app/hierarchy.mjs';
 import { createMap, fitMap, flyToCluster, graphBounds, paintNodes, pointerDown, pointerMove, pointerUp, wheelZoom } from '../gui/app/map.mjs';
 import { renderCluster } from '../gui/app/inspector.mjs';
 import { planCardModel } from '../gui/app/plan-controller.mjs';
@@ -111,6 +111,15 @@ test('canonical nested clusters keep aliases and exact lead links without a root
   revealGroup(state, 'cluster:Web', 13); assert.equal(flattenVisibleHierarchy(tree, state).filter(row => row.kind === 'cluster').length, 20);
   assert.ok(flattenVisibleHierarchy(tree, { shown: new Map(), collapsed: new Set(['cluster:Web']) }, 'repo-18').some(row => row.groupId === 'repo-18'));
   assert.equal(clusterLead(clusters[1], units).id, 'root:lead');
+});
+
+test('the cluster checkout is not listed again as a worktree row', () => {
+  const listed = listedWorktrees('C:\\temp\\hivem1nd\\shop', [
+    { id: 'main', path: 'C:\\temp\\hivem1nd\\shop', branch: 'main' },
+    { id: 'alt', path: 'C:\\temp\\hivem1nd\\shop-worktree', branch: 'alternate' },
+    { id: 'bare', path: '', branch: 'main' },
+  ]);
+  assert.deepEqual(listed.map(tree => [pathFolder(tree.path), tree.branch]), [['shop-worktree', 'alternate']]);
 });
 
 test('a worktree is named by its folder and folders start collapsed', () => {

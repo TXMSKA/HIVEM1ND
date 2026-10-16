@@ -7,6 +7,16 @@ export function pathFolder(value) {
   return parts.at(-1) ?? '';
 }
 
+// The cluster row already names its own checkout. A worktree row needs a folder that is not that checkout and not only the branch.
+export function listedWorktrees(linkPath, worktrees = []) {
+  const own = String(linkPath ?? '').replace(/[\\/]+$/, '').toLowerCase();
+  return worktrees.filter(tree => {
+    const folder = pathFolder(tree?.path);
+    if (!folder || folder === tree.branch) return false;
+    return String(tree.path).replace(/[\\/]+$/, '').toLowerCase() !== own;
+  });
+}
+
 export function readableIdentity(value, personLabel = 'You') {
   if (value === 'root:master' || value === 'root:person') return personLabel;
   return String(value ?? '').split(':').at(-1).replace(/[_-]+/g, ' ');
