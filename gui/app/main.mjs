@@ -6459,7 +6459,9 @@ function showMapToast(app, label, undo, until = null) {
 
 function mapToast(app, t) {
   const toast = app.mapToast;
-  const node = element(app.root.ownerDocument, "div", { class: "map-toast", role: "status", "data-map-toast": "true", text: toast.label });
+  // A notice floats over the bottom of the window, as the board draws it, with its Undo beside the text.
+  const node = element(app.root.ownerDocument, "div", { class: "map-toast", role: "status", "data-map-toast": "true", text: toast.label },
+    icon(app.root.ownerDocument, "check"));
   if (toast.undo && app.api.now() < toast.until) node.append(element(app.root.ownerDocument, "button", { type: "button", class: "btn ghost", "data-action": "map-undo", text: t("undo"), onclick: () => settle(app, toast.key, t("working"), async (record) => {
     await toast.undo(record);
     if (app.mapToast === toast) app.mapToast = null;

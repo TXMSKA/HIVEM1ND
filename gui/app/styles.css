@@ -1044,7 +1044,9 @@ html[data-mode="focus"] body { background: #000000; color: #d8d4cc; }
 .map-menu summary { cursor: pointer; min-height: 32px; display: flex; align-items: center; padding: 4px 8px; }
 .map-menu[open] { background: var(--card2); border-radius: 10px; padding: 4px; }
 .map-menu .btn { display: flex; width: 100%; min-height: 32px; }
-.map-toast { display: flex; align-items: center; justify-content: space-between; gap: 8px; background: var(--card2); padding: 10px 14px; border-radius: 12px; }
+.map-toast { position: fixed; z-index: 30; left: 50%; bottom: 46px; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; max-width: min(560px, calc(100vw - 32px)); background: var(--text); color: var(--bg); padding: 11px 16px; border-radius: 14px; font-size: 13px; font-weight: 700; box-shadow: 0 8px 28px rgba(0, 0, 0, .35); }
+.map-toast .icon { width: 15px; height: 15px; flex: none; order: -1; }
+.map-toast .btn { background: transparent; border: 0; color: inherit; text-decoration: underline; text-underline-offset: 3px; padding: 0 0 0 6px; min-height: 0; }
 .alias-edit { display: grid; gap: 4px; padding: 4px 8px 4px 24px; grid-template-columns: 1fr auto; }
 .alias-edit input { color: var(--text); background: var(--card); border: 1px solid var(--accent); border-radius: 9px; padding: 6px 10px; width: 100%; font-size: 13.5px; font-weight: 700; }
 .alias-edit .field-hint, .alias-edit > small, .alias-edit > p { grid-column: 1 / -1; }
