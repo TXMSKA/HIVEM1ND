@@ -5859,6 +5859,25 @@ test('R13 session progress names the failed client and offers Retry only after f
   assert.equal(progress.querySelector('[data-action="cancel-start"]'), null);
 });
 
+test('a session that never names its step says nothing was started', async t => {
+  const desktop = await openedBoardDesktop(t), selected = desktop.app.unitList.catalog.find(unit => unit.id === 'project:shop:executor-shop');
+  desktop.app.mode = 'map';
+  desktop.app.editors.current = null;
+  desktop.app.store.selected.unitId = selected.id;
+  desktop.app.sessionRequest = { requestId: 'start-unnamed', unitId: selected.id, state: 'failed', client: 'codex', machine: 'DESKTOP', error: { code: 'launch_failed', step: 'The session is starting.' } };
+  renderShell(desktop.app);
+  const alert = desktop.root.querySelector('[data-session-progress]').querySelector('[role="alert"]');
+  assert.equal(alert.textContent.includes('The session is starting'), false);
+  assert.match(alert.textContent, /Codex did not answer in 30 seconds\./);
+  assert.match(alert.textContent, /Nothing was started\. It may still be updating; try again, or choose another client\./);
+  desktop.app.language = 'es';
+  renderShell(desktop.app);
+  const spanish = desktop.root.querySelector('[data-session-progress]').querySelector('[role="alert"]').textContent;
+  assert.equal(spanish.includes('La sesión está iniciando'), false);
+  assert.match(spanish, /Codex no respondió en 30 segundos\./);
+  assert.match(spanish, /No se inició nada\./);
+});
+
 function boardEvent(host, type, target, x, y, more = {}) {
   for (const handler of host.listeners.get(type) ?? []) handler({ target, pointerId: 1, button: 0, offsetX: x, offsetY: y, clientX: x, clientY: y, preventDefault() {}, ...more });
 }

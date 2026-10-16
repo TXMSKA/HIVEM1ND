@@ -272,6 +272,8 @@ const COPY = {
   startStepStarting: ["Starting {client} on {machine}", "Iniciando {client} en {machine}"],
   startStepConnected: ["Session connected", "Sesión conectada"],
   startStepFailed: ["{client} could not start at {step}.", "No se pudo iniciar {client} en el paso {step}."],
+  startUnanswered: ["{client} did not answer in 30 seconds.", "{client} no respondió en 30 segundos."],
+  nothingStarted: ["Nothing was started. It may still be updating; try again, or choose another client.", "No se inició nada. Puede seguir actualizándose; volver a intentar o elegir otro cliente."],
   sessionStopping: ["The session is stopping.", "La sesión se está deteniendo."],
   sessionStopped: ["The session stopped.", "La sesión se detuvo."],
   machineUnavailable: ["{machine} is unavailable.", "{machine} no está disponible."],

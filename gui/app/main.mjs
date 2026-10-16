@@ -7348,6 +7348,18 @@ function noteAction(app, error, key = null) {
   if (!app.disposed) renderShell(app);
 }
 
+function namedStartStep(error) {
+  const step = typeof error?.step === 'string' ? error.step.trim() : '';
+  if (!step || step.length > 40 || /[.!?]/.test(step) || step.split(/\s+/).length > 3) return '';
+  return step;
+}
+
+function sessionFailureText(language, client, error) {
+  const step = namedStartStep(error);
+  if (step) return text(language, 'startStepFailed', { client, step });
+  return `${text(language, 'startUnanswered', { client })} ${text(language, 'nothingStarted')}`;
+}
+
 function renderInspector(app, t, selected) {
   const document = app.root.ownerDocument;
   const panel = element(document, "div", { class: "review-panel" });
@@ -7385,7 +7397,7 @@ function renderInspector(app, t, selected) {
         if (state === 'working') row.append(element(document, 'span', { class: 'spinner', 'aria-hidden': 'true' }));
         progress.append(row);
       }
-      if (failed) progress.append(element(document, 'p', { role: 'alert', text: t('startStepFailed', { client, step: tracked.error?.step || text(app.language, 'sessionStarting') }) }));
+      if (failed) progress.append(element(document, 'p', { role: 'alert', text: sessionFailureText(app.language, client, tracked.error) }));
       else progress.append(progressMark(document, t(SESSION_COPY[tracked.state])));
       if (['queued', 'starting', 'canceling'].includes(tracked.state)) progress.append(element(document, 'button', { type: 'button', class: 'btn ghost', 'data-action': 'cancel-start', text: t('cancelStart'), onclick: () => cancelSessionStart(app) }));
       if (failed) progress.append(element(document, 'button', { type: 'button', class: 'btn', 'data-action': 'retry-session', text: t('retry'), onclick: () => recheckTracked(app) }));
