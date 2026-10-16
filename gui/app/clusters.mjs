@@ -126,7 +126,7 @@ export function renderRunsInPicker(document, model, actions) {
   const column = (label, items) => element(document, 'div', { class: 'runs-in-column', role: 'group', 'aria-label': label },
     element(document, 'h3', { text: label }), ...items);
   const option = (id, title, note, selected, choose, disabled = false) => {
-    const node = button(document, '', id, choose);
+    const node = button(document, '', id, () => { if (!node.disabled) choose(); });
     node.className = 'runs-in-option'; node.disabled = disabled;
     node.setAttribute('aria-pressed', String(selected));
     node.append(element(document, 'span', {}, element(document, 'strong', { text: title }), note ? element(document, 'small', { text: note }) : null),

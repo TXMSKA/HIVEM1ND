@@ -52,6 +52,8 @@ test('Runs in shows only connected capabilities, unknown quota and explicitly di
   const local = renderRunsInPicker(document, { language: 'es', clients, choice: localChoice }, {});
   assert.match(copy(local), /sin cuota/);
   assert.equal(nodes(local).find(node => node.attributes?.['data-action'] === 'runs-mode-thinking').disabled, true);
+  nodes(local).find(node => node.attributes?.['data-action'] === 'runs-mode-thinking').listeners.click();
+  assert.equal(selected, undefined, 'a disabled option cannot call the selection callback');
   nodes(external).find(node => node.attributes?.['data-action'] === 'runs-effort-xhigh').listeners.click();
   assert.equal(selected.effort, 'xhigh'); assert.equal(validRunsIn(selected, clients), true);
 });
