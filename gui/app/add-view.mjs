@@ -30,7 +30,7 @@ export const ADD_COPY = Object.freeze({
   unknownRuntime: ['Runtime requirements could not be verified', 'No se pudieron verificar los requisitos de ejecución'],
   native: ['Native executable', 'Ejecutable nativo'],
   onlyUnits: ['only in the units below', 'solo en las unidades seleccionadas'],
-  who: ['Who can use it', 'Quién puede utilizarlo'], every: ['Every unit', 'Todas las unidades'],
+  who: ['Who can use it', 'Quién puede utilizarlo'], every: ['Every agent', 'Todos los agentes'],
   groupOne: ['Cluster, 1 agent', 'Clúster, 1 agente'], groupMany: ['Cluster, {count} agents', 'Clúster, {count} agentes'],
   originOne: ['from {source}, 1 unit', 'de {source}, 1 unidad'], originMany: ['from {source}, {count} units', 'de {source}, {count} unidades'],
   addedOne: ['{name} added for 1 unit', '{name} agregado para 1 unidad'], addedMany: ['{name} added for {count} units', '{name} agregado para {count} unidades'],

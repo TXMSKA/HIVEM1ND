@@ -25,7 +25,7 @@ test('the check precedes unit selection and runtime caution does not imply insta
   const view = renderAdd(document, { ...model, stage: 'check' }, {});
   const text = copy(view);
   for (const value of ['Add pdf', 'Pinned to commit 4f2c9e1', 'MIT license', 'Older than 7 days, no install scripts',
-    'Its scripts run Python', 'only in the units below', 'Who can use it', 'Every unit', 'Checkout launch', 'Cluster, 3 agents', 'adjutant', 'Back']) assert.ok(text.includes(value), value);
+    'Its scripts run Python', 'only in the units below', 'Who can use it', 'Every agent', 'Checkout launch', 'Cluster, 3 agents', 'adjutant', 'Back']) assert.ok(text.includes(value), value);
   assert.ok(text.indexOf('MIT license') < text.indexOf('Who can use it'));
   assert.equal(nodes(view).filter(node => node.getAttribute('data-check-ok') === 'false').length, 1);
   const buttons = nodes(view).filter(node => node.tagName === 'BUTTON');

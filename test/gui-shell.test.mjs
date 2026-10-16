@@ -5286,6 +5286,7 @@ test("unit removal confirms scope, cancels safely, retries the same write and re
   clickAction(desktop.root, "remove-unit");
   let dialog = desktop.document.querySelector("[data-remove-unit]");
   assert.equal(dialog.querySelector("h2").textContent, "Remove executor-shop?");
+  assert.equal(dialog.querySelector("button.primary").textContent, "Remove agent");
   assert.match(dialog.querySelector("p").textContent, /tasks stay in the project/);
   assert.equal(dialog.style.width, "480px");
   assert.equal(dialog.style.borderRadius, "22px");
