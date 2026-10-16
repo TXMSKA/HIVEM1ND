@@ -1571,3 +1571,6 @@ html { scrollbar-color: var(--line2) var(--panel); scrollbar-width: thin; }
 .agent-more { color: var(--body); font-size: 18px; letter-spacing: 1px; }
 /* Node names sit on their own plate, so an edge passing under a name never crosses its letters. */
 .map-label { background: var(--label-bg, var(--panel)); padding: 1px 6px; border-radius: 6px; z-index: 1; }
+/* The disclosure chevron leads its folder row, as in Hierarchy. */
+.library-disclosure { order: -1; display: inline-grid; place-items: center; width: 14px; color: var(--mute); }
+.library-disclosure .icon { width: 13px; height: 13px; }

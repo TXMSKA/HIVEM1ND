@@ -138,7 +138,7 @@ export function renderLibrary(document, { kind, project = null, data, actions, t
     const rootKey = `project:${group.project}`;
     const open = !(filtered ? state.matchingCollapsed : state.collapsed).has(rootKey);
     const heading = button(`folder-${rootKey}`, group.project, () => actions.toggle(rootKey), { class: "library-folder", "aria-expanded": String(open), "data-library-project": group.project, "data-keep": `library|${kind}|project|${encodeURIComponent(group.project)}` }, "folder");
-    heading.append(element(document, "span", { "aria-hidden": "true", text: open ? "⌄" : "›" }), element(document, "span", { text: group.project }), element(document, "span", { class: "library-count", text: group.items.length }));
+    heading.append(element(document, "span", { class: "library-disclosure", "aria-hidden": "true" }, icon(document, open ? "chevron" : "chevronRight")), element(document, "span", { text: group.project }), element(document, "span", { class: "library-count", text: group.items.length }));
     list.append(heading);
     if (!open) continue;
     const branch = (parentId, depth) => {
@@ -154,7 +154,7 @@ export function renderLibrary(document, { kind, project = null, data, actions, t
         if (state.rename?.id === folder.id && state.rename.type === "folder") row.append(rename(folder, "folder"));
         else {
           const control = button(`folder-${folder.id}`, folder.title, () => actions.toggle(key), { class: "library-folder", "aria-expanded": String(expanded) }, "folder");
-          control.append(element(document, "span", { "aria-hidden": "true", text: expanded ? "⌄" : "›" }), element(document, "span", { text: folder.title }), element(document, "span", { class: "library-count", text: filtered ? count : folder.count }));
+          control.append(element(document, "span", { class: "library-disclosure", "aria-hidden": "true" }, icon(document, expanded ? "chevron" : "chevronRight")), element(document, "span", { text: folder.title }), element(document, "span", { class: "library-count", text: filtered ? count : folder.count }));
           row.append(control);
           if (actions.manage) row.append(button(`more-folder-${folder.id}`, t("finalMore"), (event) => actions.menu("folder", folder, event.currentTarget ?? event.target.closest("button")), { "data-library-more": folder.id, "aria-haspopup": "menu" }, "more"));
         }
