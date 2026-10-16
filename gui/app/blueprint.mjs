@@ -1,4 +1,5 @@
 import { fetchAsset, perform } from "./api.mjs";
+import { text } from "./i18n.mjs";
 
 const SVG = "http://www.w3.org/2000/svg";
 
@@ -572,12 +573,13 @@ export function handStrokeNode(id, points, color, marker = false) {
     strokeWidth: 2.2, opacity: 1 };
 }
 
-export function addBoardFrame(board, id, point, size, colors, sketch = false) {
+export function addBoardFrame(board, id, point, size, colors, sketch = false, language = 'en') {
   if ((board.screens?.length ?? 0) >= 500 || indexNodes(board).size >= 10000) throw new RangeError("The board is full.");
   if (![point.x, point.y, size.w, size.h].every(Number.isFinite)) throw new RangeError("Invalid frame geometry.");
-  const screen = { id, title: sketch ? "Hand sketch" : "Frame", pageId: board.pages?.[0]?.id ?? "main",
+  const label = sketch ? text(language, 'handSketch') : text(language, 'boardFrame');
+  const screen = { id, title: label, pageId: board.pages?.[0]?.id ?? "main",
     x: point.x, y: point.y, w: Math.min(16000, Math.max(1, size.w)), h: Math.min(16000, Math.max(1, size.h)),
-    root: { id: `${id}-root`, name: sketch ? "Hand sketch" : "Frame", t: "box", dir: "stack",
+    root: { id: `${id}-root`, name: label, t: "box", dir: "stack",
       place: { x: 0, y: 0 }, w: Math.min(16000, Math.max(1, size.w)), h: Math.min(16000, Math.max(1, size.h)),
       radius: sketch ? 18 : 0, clip: true, fill: colors.card, stroke: colors.accent, strokeWidth: 2.2, kids: [],
       ...(sketch ? { sketch: true, dash: "6 5" } : {}) } };

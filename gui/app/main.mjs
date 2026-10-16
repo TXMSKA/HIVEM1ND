@@ -2136,7 +2136,7 @@ function boardToolbar(app, document, editor, t) {
         if (tool === "draw" && !boardDocument(editor).screens?.some((screen) => screen.root?.sketch)) {
           const board = structuredClone(boardDocument(editor));
           const reference = board.screens.find((screen) => screen.id === app.editors.focus?.screenId) ?? board.screens.at(-1);
-          addBoardFrame(board, `sketch-${operationId()}`, { x: (reference?.x ?? 0) + 350, y: (reference?.y ?? 0) + 120 }, { w: 300, h: 560 }, boardColors(document, app.root), true);
+          addBoardFrame(board, `sketch-${operationId()}`, { x: (reference?.x ?? 0) + 350, y: (reference?.y ?? 0) + 120 }, { w: 300, h: 560 }, boardColors(document, app.root), true, app.language);
           editor.boardView = boardBounds(board); setBoardDraft(editor, board); saveBoardDraft(app, editor);
         }
         renderShell(app);
@@ -3198,7 +3198,7 @@ function commentPreferenceControl(app, document, current, t) {
   });
   return element(document, "div", { class: `comment-preference${none ? " no-agents" : ""}` },
     element(document, "label", { class: "comment-preference-label" }, element(document, "span", { class: "comment-checkbox-hit" }, input, element(document, "span", { class: "comment-checkbox", "aria-hidden": "true" })), t("sendToAgent")),
-    element(document, "span", { class: "comment-preference-hint", text: t(none ? "noAgentsAttached" : choice.sendToAgent ? "notifiesAttachedAgents" : "keptAsNote", { count: choice.attached.length }) }));
+    element(document, "span", { class: "comment-preference-hint", text: t(none ? "noAgentsAttached" : choice.sendToAgent ? choice.attached.length === 1 ? "notifiesAttachedAgent" : "notifiesAttachedAgents" : "keptAsNote", { count: choice.attached.length }) }));
 }
 
 function resolveThread(app, threadId) {
