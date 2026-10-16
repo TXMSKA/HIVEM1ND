@@ -4353,6 +4353,8 @@ function finishMap(app) {
     retry: text(app.language, "retry"),
     fit: text(app.language, 'finalFit'), services: text(app.language, 'services'),
     zoomIn: text(app.language, 'finalZoomIn'), zoomOut: text(app.language, 'finalZoomOut'),
+    zoom: text(app.language, 'finalZoom'), zoomReset: text(app.language, 'finalZoomReset'),
+    incubator: text(app.language, 'finalIncubator'), genesis: text(app.language, 'finalGenesis'),
     drag: startText(app.language, 'drag'), unread: count => startText(app.language, 'unread', { count }),
     inside: (name, count) => startText(app.language, 'inside', { name, count }),
   };

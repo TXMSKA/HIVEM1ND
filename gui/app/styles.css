@@ -632,7 +632,15 @@ button, input { font: inherit; color: inherit; }
   background: var(--ring);
 }
 .board-outline { display: flex; flex-wrap: wrap; gap: 8px; max-width: 100%; }
-.map-actions { position: absolute; z-index: 2; left: var(--gap); bottom: var(--gap); display: flex; gap: 8px; }
+.map-actions { position: absolute; z-index: 2; left: var(--gap); bottom: calc(var(--gap) + 48px); display: flex; gap: 8px; }
+.map-zoom { position: absolute; z-index: 2; left: var(--gap); bottom: var(--gap); display: flex; align-items: center; gap: 4px; padding: 4px; border-radius: 10px; background: var(--card); border: 1px solid var(--line); }
+.map-zoom-button { display: inline-flex; align-items: center; justify-content: center; min-width: 32px; height: 32px; padding: 0 8px; border: 0; border-radius: 7px; background: transparent; color: var(--body); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.map-zoom-button .icon { width: 15px; height: 15px; }
+.map-zoom-button:hover, .map-zoom-button[aria-pressed="true"] { background: var(--card2); color: var(--text); }
+.map-services { position: absolute; z-index: 2; right: var(--gap); bottom: var(--gap); display: flex; align-items: center; gap: 6px; }
+.map-services-label { color: var(--mute); font-size: 12px; margin-right: 2px; }
+.map-service { display: inline-flex; align-items: center; gap: 7px; min-height: 32px; padding: 6px 12px; border-radius: var(--radius-pill); background: var(--card); border: 1px solid var(--line2); color: var(--body); font-size: 13px; }
+.map-service .icon { width: 14px; height: 14px; }
 .editor-catalog,
 .editor-resource,
 .editor-comments-column { padding: var(--gap) var(--space); gap: 8px; }

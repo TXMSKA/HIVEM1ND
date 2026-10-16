@@ -230,31 +230,53 @@ export function renderMap(document, host, map, labels = {}) {
   }
   const actions = document.createElement("div");
   actions.className = "map-actions";
+  // Zoom controls as the board draws them: plus, minus, Fit and the current scale, which returns to 100%.
+  const zoomGroup = document.createElement("div");
+  zoomGroup.className = "map-zoom";
+  zoomGroup.setAttribute("role", "group");
+  zoomGroup.setAttribute("aria-label", labels.zoom ?? "Zoom");
+  const center = { clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 };
+  const scale = Math.round((map.view?.zoom ?? 1) * 100);
+  for (const [action, label, glyph, text, choose] of [
+    ['zoom-in', labels.zoomIn ?? 'Zoom in', 'plus', null, () => { wheelZoom(map, { ...center, deltaY: -1 }, rect); refresh(map); }],
+    ['zoom-out', labels.zoomOut ?? 'Zoom out', 'minus', null, () => { wheelZoom(map, { ...center, deltaY: 1 }, rect); refresh(map); }],
+    ['fit-map', labels.fit ?? 'Fit', null, labels.fit ?? 'Fit', () => fitMap(map, rect)],
+    ['zoom-reset', labels.zoomReset ?? 'Back to 100%', null, `${scale}%`, () => { resetZoom(map, center, rect); refresh(map); }],
+  ]) {
+    const control = document.createElement('button'); control.type = 'button'; control.className = 'map-zoom-button';
+    control.setAttribute('data-action', action); control.setAttribute('aria-label', label); control.title = label;
+    if (glyph) control.append(icon(document, glyph)); else control.textContent = text;
+    control.addEventListener('click', choose); zoomGroup.append(control);
+  }
+  // Pan stays available for keyboard and touch; dragging the empty space also pans.
   const pan = document.createElement("button");
   pan.type = "button";
-  pan.className = "map-action";
+  pan.className = "map-zoom-button";
   pan.dataset.action = "pan";
   pan.setAttribute("data-action", "pan");
   pan.setAttribute("aria-pressed", String(Boolean(map.panning)));
-  pan.textContent = labels.pan ?? "Pan";
+  pan.setAttribute("aria-label", labels.pan ?? "Pan");
+  pan.title = labels.pan ?? "Pan";
+  pan.append(icon(document, "move"));
   pan.addEventListener("click", () => {
     map.panning = !map.panning;
     refresh(map);
   });
-  actions.append(pan);
-  for (const [action, label, choose] of [
-    ['fit-map', labels.fit ?? 'Fit', () => fitMap(map, rect)],
-    ['zoom-out', labels.zoomOut ?? 'Zoom out', () => { wheelZoom(map, { clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2, deltaY: 1 }, rect); refresh(map); }],
-    ['zoom-in', labels.zoomIn ?? 'Zoom in', () => { wheelZoom(map, { clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2, deltaY: -1 }, rect); refresh(map); }],
-  ]) {
-    const control = document.createElement('button'); control.type = 'button'; control.className = 'map-action';
-    control.setAttribute('data-action', action); control.setAttribute('aria-label', label); control.textContent = label;
-    control.addEventListener('click', choose); actions.append(control);
-  }
+  zoomGroup.append(pan);
+  let services = null;
   if (map.onServices) {
-    const services = document.createElement('button'); services.type = 'button'; services.className = 'map-action';
-    services.setAttribute('data-action', 'map-services'); services.textContent = labels.services ?? 'Services';
-    services.addEventListener('click', () => map.onServices()); actions.append(services);
+    services = document.createElement('div');
+    services.className = 'map-services';
+    services.setAttribute('role', 'group');
+    services.setAttribute('aria-label', labels.services ?? 'Services');
+    const caption = document.createElement('span'); caption.className = 'map-services-label'; caption.textContent = labels.services ?? 'Services';
+    services.append(caption);
+    for (const [action, label, glyph] of [['map-services', labels.incubator ?? 'Incubator', 'bulb'], ['map-genesis', labels.genesis ?? 'Genesis', 'genesis']]) {
+      const pill = document.createElement('button'); pill.type = 'button'; pill.className = 'map-service';
+      pill.setAttribute('data-action', action);
+      pill.append(icon(document, glyph), document.createTextNode(label));
+      pill.addEventListener('click', () => map.onServices()); services.append(pill);
+    }
   }
   if (map.selection.size > 1) {
     const message = document.createElement("button");
@@ -277,7 +299,7 @@ export function renderMap(document, host, map, labels = {}) {
   const insideCount = focused ? (map.groups ?? []).filter(group => group.parentId === focused.id).length : 0;
   const hint = document.createElement('p'); hint.className = 'map-hint';
   hint.textContent = focused && labels.inside ? labels.inside(focused.title, insideCount) : (labels.drag ?? '');
-  const children = [svg, layer, actions, hint];
+  const children = [svg, layer, actions, zoomGroup, ...(services ? [services] : []), hint];
   if (map.persistState === "saving" || map.persistState === "error") {
     const status = document.createElement("p");
     status.className = "map-save";
@@ -549,6 +571,15 @@ export function keyDown(map, event) {
   const moved = map.selection.has(id) ? [...map.selection] : [id];
   for (const movedId of moved) queueLayoutPatch(map, movedId, map.positions[movedId]);
   return flushLayout(map);
+}
+
+// Return to 100% around a point of the screen, keeping that point still.
+export function resetZoom(map, client, rect) {
+  map.flight = null;
+  const world = toWorld({ x: client.clientX, y: client.clientY }, rect, map.view);
+  map.view.zoom = 1;
+  map.view.x = client.clientX - rect.left - world.x;
+  map.view.y = client.clientY - rect.top - world.y;
 }
 
 export function wheelZoom(map, event, rect) {
