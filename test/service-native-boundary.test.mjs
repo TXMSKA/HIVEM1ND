@@ -128,7 +128,7 @@ async function world(t, { client = 'claude', ownProcess = true } = {}) {
   await mkdir(path.join(fixture.paths.mind, 'user', 'state'), { recursive: true });
   await writeFile(path.join(fixture.paths.mind, 'user', 'state', 'worker.md'), state);
   const spawned = [], handles = [], natives = [];
-  const adapter = createNativeAdapter(client, { command: `${client}-fake`, timeoutMs: 2000, interruptTimeoutMs: 100, describe: async () => report(client, 'supervised'),
+  const adapter = createNativeAdapter(client, { command: `${client}-fake`, interruptTimeoutMs: 100, describe: async () => report(client, 'supervised'),
     spawn: (command, args, options) => {
       const native = nativeFor[client](7000 + natives.length);
       native.nativeId = args[args.indexOf('--session-id') + 1]; natives.push(native); spawned.push({ command, args, options });
@@ -358,7 +358,7 @@ test('a supervised Cursor launch asks through the ACP permission request and a p
 async function planWorld(t, client) {
   const fixture = await makeCoreFixture(); t.after(() => dispose(fixture));
   const natives = [], handles = [], spawned = [];
-  const adapter = createNativeAdapter(client, { command: `${client}-fake`, timeoutMs: 2000, describe: async () => report(client, client === 'codex' ? 'confined' : 'supervised'),
+  const adapter = createNativeAdapter(client, { command: `${client}-fake`, describe: async () => report(client, client === 'codex' ? 'confined' : 'supervised'),
     spawn: (command, args, options) => {
       const native = nativeFor[client](9000 + natives.length); native.nativeId = args[args.indexOf('--session-id') + 1]; natives.push(native); spawned.push({ command, args, options });
       return native;
