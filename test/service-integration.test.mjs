@@ -544,7 +544,7 @@ test('an invalid owner pack stays rejected and visible until reconcile succeeds'
     kind: 'registration', sessionId: 'abababab-abab-4bab-8bab-abababababab', unitId, machine: 'LAPTOP',
   })}\n`);
   await writeFile(path.join(fixture.paths.origin, 'machines', 'LAPTOP', 'again.txt'), 'again\n');
-  const cleared = await waitForSync(port, token, (data) => data?.error == null);
+  const cleared = await waitForSync(port, token, (data) => data?.state && data.error == null);
   assert.equal(cleared.state === 'error', false);
   assert.equal(cleared.error, null);
   assert.equal(await readFile(messagePath, 'utf8'), messageBytes.toString('utf8'));
