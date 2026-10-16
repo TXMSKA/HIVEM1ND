@@ -53,6 +53,7 @@ test('Runs in shows only connected capabilities, unknown quota and explicitly di
   const localChoice = { client: 'lyra', model: 'small', effort: null, mode: 'normal' };
   const local = renderRunsInPicker(document, { language: 'es', clients, choice: localChoice }, {});
   assert.match(copy(local), /sin cuota/);
+  assert.match(copy(local), /de ahora en adelante/);
   assert.equal(nodes(local).find(node => node.attributes?.['data-action'] === 'runs-mode-thinking').disabled, true);
   nodes(local).find(node => node.attributes?.['data-action'] === 'runs-mode-thinking').listeners.click();
   assert.equal(selected, undefined, 'a disabled option cannot call the selection callback');

@@ -29,7 +29,7 @@ export const START_COPY=Object.freeze({
   noAgents:['No agents yet','Todavía no hay agentes'],noAgentsHint:['No agents yet: New agent adds one.','Todavía no hay agentes: Nuevo agente permite agregar uno.'],
   newAgent:['New agent','Nuevo agente'],newAgentIn:['New agent in {name}','Nuevo agente en {name}'],executor:['Executor','Executor'],overlord:['Overlord','Overlord'],
   agentScope:['It writes only in {name}’s repository. Its name and machine are set for you and can be changed later.','Solo se escribe en el repositorio de {name}. El nombre y la máquina se asignan automáticamente y pueden cambiarse después.'],
-  agent:['Agent','Agente'],model:['Model','Modelo'],effort:['Effort','Esfuerzo'],mode:['Mode','Modo'],defaultChoice:['Use for new agents from now on','Utilizar para los agentes nuevos'],
+  agent:['Agent','Agente'],model:['Model','Modelo'],effort:['Effort','Esfuerzo'],mode:['Mode','Modo'],defaultChoice:['Use for new agents from now on','Utilizar para los agentes nuevos de ahora en adelante'],
   weekQuota:['{percent}% of the week left','Queda el {percent}% de la semana'],quota:['{label}: {percent}% left','{label}: queda el {percent}%'],quotaUnknown:['Quota unavailable','Cuota no disponible'],
   localQuota:['On this machine, no quota','En esta máquina, sin cuota'],light:['Light, runs on 16 GB','Ligero, funciona con 16 GB'],complete:['Complete, more capable','Completo, más capaz'],
   low:['Low','Bajo'],medium:['Medium','Medio'],high:['High','Alto'],max:['Max','Máximo'],xhigh:['Extra high','Muy alto'],fast:['Fast','Rápido'],normal:['Normal','Normal'],thinking:['Thinking','Razonamiento'],
