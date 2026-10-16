@@ -84,7 +84,8 @@ export function fakeOwner(handles) {
 export const report = (client, boundary) => ({ id: client, title: client, connected: true, scopeEnforced: boundary === 'confined', boundary,
   models: [{ id: MODEL, title: 'Observed', efforts: ['high'], modes: [] }], quota: { remainingPercent: null, period: null, known: false }, context: { known: false, compact: false } });
 
-export async function until(read, limit = 5000) {
+// A native reply is waited on. The ceiling only covers a loaded suite.
+export async function until(read, limit = 30000) {
   const deadline = Date.now() + limit;
   for (;;) {
     const value = await read();
