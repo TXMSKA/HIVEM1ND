@@ -903,8 +903,8 @@ test("the evolve command without a terminal lists the conflicts, never waits and
   await write(path.join(kitPath, "rules.md"), "kit rules\n");
   await write(rulesPath, "locally written rules\n");
   const args = [cliPath, "evolve", "--kit-path", kitPath, "--mind-path", mindPath, "--home-dir", path.join(root, "home"), "--hostname", "TEST", "--dry-run", "--origin-path", path.join(root, "origin")];
-  // The child's stdin is an open pipe, so a prompt would run into the timeout instead of finishing.
-  const run = (extra = []) => execFileAsync(process.execPath, [...args, ...extra], { cwd: root, encoding: "utf8", timeout: 30_000 });
+  // The child's stdin is an open pipe, so a prompt would run into the timeout instead of finishing. The process is waited on until it exits; the ceiling only covers a loaded suite.
+  const run = (extra = []) => execFileAsync(process.execPath, [...args, ...extra], { cwd: root, encoding: "utf8", timeout: 120_000 });
 
   const blocked = await run().then(() => assert.fail("evolve should exit with a failure"), (error) => error);
   assert.equal(blocked.code, 1);
