@@ -2,7 +2,7 @@ import { canAccept, canSendBack } from "./actions.mjs";
 import { clientLabel, clusterLead } from './clusters.mjs';
 import { element, icon, labeledField, progressMark } from "./components.mjs";
 import { formatWhen } from "./i18n.mjs";
-import { unitDisplayName } from './hierarchy.mjs';
+import { readableIdentity, unitDisplayName } from './hierarchy.mjs';
 import { startText } from './start-copy.mjs';
 import { addText } from './add-view.mjs';
 
@@ -72,7 +72,8 @@ export function renderUnit(document, unit, t, language = "en") {
   card.append(element(document, "p", { text: `${t("job")}: ${unit?.job ?? t("unknown")}` }));
   const lines = [
     ["scope", unit?.scope?.name ?? unit?.scope?.kind],
-    ["lead", unit?.leadId],
+    // The lead by its name, never its scoped id.
+    ["lead", unit?.leadId ? readableIdentity(unit.leadId) : null],
     ["model", unit?.model],
     ["machine", unit?.machine],
     ["branch", unit?.branch],
