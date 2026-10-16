@@ -810,9 +810,15 @@ class SetupSession {
       return this.result;
     } catch (error) {
       if (!this.checkpoint) throw error;
-      const code = ['port_in_use', 'legacy_closure_required', 'legacy_changed', 'checkpoint_changed', 'invalid_path', 'unsafe_path', 'destination_exists', 'setup_incomplete'].includes(error.code)
+      // A denied file or folder is the person's to fix, so its message names it instead of a bare phase.
+      const denied = ['EPERM', 'EACCES'].includes(error?.code);
+      const code = denied ? 'permission_denied' : ['port_in_use', 'legacy_closure_required', 'legacy_changed', 'checkpoint_changed', 'invalid_path', 'unsafe_path', 'destination_exists', 'setup_incomplete'].includes(error.code)
         ? error.code : 'setup_failed';
-      this.checkpoint.error = { code, message: error.safeSetupMessage ?? (this.answers.language === 'es'
+      const spanish = this.answers.language === 'es', target = typeof error?.path === 'string' ? error.path : null;
+      const deniedMessage = spanish
+        ? `No se pudo completar la fase ${this.checkpoint.phase} de la instalación: se denegó el acceso a ${target ?? 'un archivo o una carpeta del destino'}. Revisar los permisos de esa carpeta.`
+        : `Setup could not complete the ${this.checkpoint.phase} phase: access to ${target ?? 'a file or folder in the destination'} was denied. Check the permissions of that folder.`;
+      this.checkpoint.error = { code, message: error.safeSetupMessage ?? (denied ? deniedMessage : spanish
         ? `No se pudo completar la fase ${this.checkpoint.phase} de la instalación.` : `Setup could not complete the ${this.checkpoint.phase} phase.`) };
       await this.saveCheckpoint();
       this.currentStep = 7;

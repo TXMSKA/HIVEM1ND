@@ -618,6 +618,21 @@ test('a migration failure leaves setup resumable until the remaining work succee
   assert.match(await readFile(path.join(fixture.mindPath, 'user', 'machines', 'TESTBOX.md'), 'utf8'), /^setup: done$/m);
 });
 
+test('a denied folder names the folder and the permission cause, and setup resumes after it is fixed', async (context) => {
+  const fixture = await makeFixture(context);
+  const session = await createSetupSession({ kitPath: KIT_PATH, mindPath: fixture.mindPath, homeDir: fixture.homeDir, hostname: 'TESTBOX', env: { PATH: '' }, language: 'en' });
+  await session.answer({});
+  await session.answer({ mindPath: fixture.mindPath });
+  await session.answer({ confirm: true });
+  const locked = path.join(fixture.mindPath, 'user');
+  session.migrateDestination = async () => { throw Object.assign(new Error(`EPERM: operation not permitted, mkdir '${locked}'`), { code: 'EPERM', path: locked }); };
+  await assert.rejects(session.install(), { code: 'EPERM' });
+  assert.equal(session.checkpoint.error.code, 'permission_denied');
+  assert.equal(session.checkpoint.error.message, `Setup could not complete the migrate phase: access to ${locked} was denied. Check the permissions of that folder.`);
+  delete session.migrateDestination;
+  assert.equal((await session.install()).completed, true);
+});
+
 test('service progress retains completed rows through failure, reopen and retry without logon registration',async context=>{
  const fixture=await makeFixture(context);let starts=0,release;const gate=new Promise(resolve=>{release=resolve;});
  const options={kitPath:KIT_PATH,...fixture,cosmicPath:path.join(fixture.root,'Cosmic'),hostname:'TESTBOX',env:{},language:'en',serviceSetup:true,serviceDryRun:false,serviceProtect:false,serviceRunner:async()=>assert.fail('No logon registration'),serviceQuery:async()=>assert.fail('No logon query'),serviceStart:async()=>{if(++starts===1){await gate;throw Object.assign(new Error('port 43210 occupied; private output omitted'),{code:'EADDRINUSE'});}return {viewerUrl:'http://127.0.0.1:9/gui/viewer'};}};
