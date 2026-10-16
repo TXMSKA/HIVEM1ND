@@ -6071,7 +6071,7 @@ function actionControls(app, t, selected) {
   if (selected && caps.includes("unit.create") && app.layout !== "phone") row.append(unitMenu(app, selected));
   const sessionId = selected?.sessionIds?.[0];
   if (sessionId && caps.includes("session.stop")) {
-    row.append(element(document, "button", { type: "button", class: "btn", "data-action": "stop-session", "data-session": sessionId, text: t("stopSession"), onclick: () => confirmStop(app, sessionId) }));
+    row.append(element(document, "button", { type: "button", class: "btn", "data-action": "stop-session", "data-session": sessionId, text: t("stopSession"), onclick: () => confirmStop(app, sessionId, selected) }));
   }
   for (const id of app.mapState?.layoutConflict?.ids ?? []) {
     row.append(element(document, "button", { type: "button", class: "btn", "data-action": "keep-local", text: t("keepLocal"), onclick: () => keepLocalPosition(app.mapState, id) }));
@@ -6590,9 +6590,9 @@ function openSessionForm(app, unit) {
   }, 'start-session');
 }
 
-function confirmStop(app, sessionId) {
+function confirmStop(app, sessionId, unit) {
   showDialog(app.root.ownerDocument, {
-    title: text(app.language, "stopSessionTitle"),
+    title: text(app.language, "stopSessionTitle", { name: unit ? unitDisplayName(unit) : "" }),
     body: text(app.language, "stopSessionBody"),
     confirm: text(app.language, "stopSession"),
     cancel: text(app.language, "cancel"),

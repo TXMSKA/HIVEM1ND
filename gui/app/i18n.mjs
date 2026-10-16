@@ -248,6 +248,8 @@ const COPY = {
   creatingUnit: ["Creating", "Creando"],
   startSession: ["Start", "Iniciar"],
   stopSession: ["Stop", "Detener"],
+  stopSessionTitle: ["Stop the session of {name}?", "¿Detener la sesión de {name}?"],
+  stopSessionBody: ["Its work in progress stops. The agent keeps its chat, inbox, tasks and clusters, and a new session can start later.", "El trabajo en curso se detiene. El agente conserva su chat, su bandeja de entrada, sus tareas y sus clústeres, y más adelante puede iniciarse una sesión nueva."],
   sessionQueued: ["The session is queued.", "La sesión está en cola."],
   sessionStarting: ["The session is starting.", "La sesión está iniciando."],
   sessionStarted: ["The session started.", "La sesión inició."],
