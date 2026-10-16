@@ -5835,6 +5835,12 @@ test('a repository plan stalls ten minutes after its last confirmed step', async
   assert.match(source, /data-action="stop-step"/);
 });
 
+test('the board conflict banner wraps its full sentence', async () => {
+  const css = await readFile('gui/app/styles.css', 'utf8');
+  assert.match(css, /\.board-conflict > span \{[^}]*white-space:\s*normal/);
+  assert.doesNotMatch(css, /\.board-conflict > span \{[^}]*text-overflow:\s*ellipsis/);
+});
+
 test('the cluster inspector keeps the composer and does not stretch Start a plan', async () => {
   const css = await readFile('gui/app/styles.css', 'utf8');
   assert.match(css, /\.shell\[data-layout="desktop"\]\[data-mode="map"\] \.inspector \{[^}]*overflow:\s*hidden/);

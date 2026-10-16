@@ -791,8 +791,8 @@ button, input { font: inherit; color: inherit; }
 .board-breadcrumb { font-size: 12px; color: var(--mute); margin: 0; }
 .board-comment-popover textarea { min-height: 80px; padding: 10px 12px; border-radius: 12px; background: var(--card); color: var(--text); border: 1px solid var(--line2); resize: vertical; }
 .board-comment-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.board-conflict { position: absolute; top: 66px; left: 14px; right: 14px; min-width: 0; padding: 10px 14px; display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; background: var(--waiting-soft, var(--card)); border: 1px solid var(--line2); border-radius: 12px; z-index: 3; }
-.board-conflict > span { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.board-conflict { position: absolute; top: 66px; left: 14px; right: 14px; min-width: 0; padding: 10px 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; background: var(--waiting-soft, var(--card)); border: 1px solid var(--line2); border-radius: 12px; z-index: 3; }
+.board-conflict > span { flex: 1 1 16rem; min-width: 12rem; overflow: visible; white-space: normal; text-overflow: clip; }
 .board-change-preview { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: 100%; }
 .board-change-preview pre { max-height: 280px; overflow: auto; font: 12px var(--mono); background: var(--card); padding: 10px; }
 .dialog[data-form="attach"] { position: fixed; width: 300px; max-width: calc(100vw - 24px); margin: 0; padding: 12px; border-radius: 16px; border: 1px solid var(--line2); background: var(--panel); }
