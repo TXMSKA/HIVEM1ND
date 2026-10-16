@@ -14,8 +14,10 @@ import { readHead, readOriginPack } from '../engine/sync/origin.mjs';
 import { stageTransaction } from '../engine/sync/store.mjs';
 import { makeCoreFixture, dispose } from './core-fixture.mjs';
 
+// A loaded suite still has to deliver the import; stop only once that is true, or after this ceiling.
 async function waitFor(read) {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  const deadline = Date.now() + 30000;
+  while (Date.now() < deadline) {
     const result = await read();
     if (result) return result;
     await new Promise(resolve => setTimeout(resolve, 50));
