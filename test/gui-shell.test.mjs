@@ -5889,6 +5889,20 @@ test('R13 session progress names the failed client and offers Retry only after f
   assert.equal(progress.querySelector('[data-action="cancel-start"]'), null);
 });
 
+test('an empty chat does not offer older messages until a cursor exists', async t => {
+  const desktop = await openedBoardDesktop(t);
+  const selected = desktop.app.unitList.catalog.find(unit => unit.id === 'project:shop:executor-shop');
+  desktop.app.mode = 'map';
+  desktop.app.editors.current = null;
+  desktop.app.store.selected.unitId = selected.id;
+  desktop.app.thread = { chat: { id: 'chat-empty', title: 'Shop', kind: 'direct', members: ['root:master', selected.id], pinned: true, listed: true }, messages: [], total: 0, nearBottom: true };
+  renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector('[data-action="older"]'), null);
+  desktop.app.thread.nextCursor = 'older-1';
+  renderShell(desktop.app);
+  assert.ok(desktop.root.querySelector('[data-action="older"]'));
+});
+
 test('ask cards sit above the composer outside the conversation scroll', async t => {
   const desktop = await openedBoardDesktop(t);
   const selected = desktop.app.unitList.catalog.find(unit => unit.id === 'project:shop:executor-shop');

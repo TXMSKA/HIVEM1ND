@@ -6989,7 +6989,7 @@ function chatPanel(app, t) {
     if (thread.chat.listed !== false) row.append(manageButton("unlist", t("removeFromList"), { listed: false }));
     if (thread.chat.listed === false) row.append(manageButton("reopen", t("reopenChat"), { listed: true }));
   }
-  row.append(element(document, "button", { type: "button", class: "btn", "data-action": "older", text: t("loadOlder"), onclick: () => loadOlder(app) }));
+  if (thread.nextCursor) row.append(element(document, "button", { type: "button", class: "btn", "data-action": "older", text: t("loadOlder"), onclick: () => loadOlder(app) }));
   if (agentTabs?.unitOnly && agentTabs.tab === 'work') panel.append(unitWork(document, agentTabs, app.language, t));
   else if (sessionView?.tab === 'work') {
     const work = renderSessionWork(document, sessionView, app.language, {
