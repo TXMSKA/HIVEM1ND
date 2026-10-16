@@ -176,8 +176,12 @@ Object.assign(cases, {
       await openMap(ctx, 5);
       await ctx.page.click(node(SHOP));
       await startFromInspector(ctx);
-      // The fake native client answers: the session is live when the inspector offers Stop.
-      await ctx.visible('.inspector [data-action="stop-session"]', { timeout: 60000 });
+      // Stop is offered as soon as a session id exists, including while start is still queued or starting.
+      // The dialog is the live session's Stop, so the starting progress has to be gone first.
+      await ctx.page.waitFor(() => {
+        const inspector = document.querySelector('.inspector');
+        return Boolean(inspector?.querySelector('[data-action="stop-session"]')) && !inspector.querySelector('[data-session-progress]');
+      }, { timeout: 60000, message: 'a live session before Stop' });
       await ctx.page.click('.inspector [data-action="stop-session"]');
       await ctx.visible('dialog[open] .dialog-actions .btn.primary');
     },

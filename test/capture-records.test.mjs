@@ -21,6 +21,14 @@ test('the capture runner covers every active destination without opening a brows
   ]);
 });
 
+test('reference 2.17 opens Stop only after the session is live', async () => {
+  const source = await readFile(new URL('./visual/cases/map.mjs', import.meta.url), 'utf8');
+  const reach = source.slice(source.indexOf("'2.17'"), source.indexOf('async function seedMobile'));
+  const progress = reach.indexOf('data-session-progress');
+  const click = reach.indexOf('await ctx.page.click(\'.inspector [data-action="stop-session"]\')');
+  assert.ok(progress > 0 && click > progress, 'Stop is clicked only after the starting progress is gone');
+});
+
 test('capture records match the actual PNG inventory and retain unreached states', async () => {
   const handoff = await readFile(new URL('./gui-browser.md', import.meta.url), 'utf8');
   const readme = await readFile(new URL('../docs/3.0/verification/README.md', import.meta.url), 'utf8');
