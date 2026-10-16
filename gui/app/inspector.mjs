@@ -1,5 +1,5 @@
 import { canAccept, canSendBack } from "./actions.mjs";
-import { clientLabel, clusterLead } from "./clusters.mjs";
+import { clientLabel, clusterLead } from './clusters.mjs';
 import { element, icon, labeledField, progressMark } from "./components.mjs";
 import { formatWhen } from "./i18n.mjs";
 import { unitDisplayName } from './hierarchy.mjs';
