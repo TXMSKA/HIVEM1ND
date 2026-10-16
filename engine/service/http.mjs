@@ -573,6 +573,7 @@ export async function createHttpServer(options) {
       rejectUnknown(route, body);
     }
     if (route.handler === 'events') {
+      rejectUnknownQuery(route, query);
       const principal = {
         ...domain.principal,
         stableId: credential.token,
@@ -1213,6 +1214,8 @@ function allowedBody(route) {
     'PATCH /editors/:resourceId/comments/:threadId': ['status', 'expectedCommentsRevision'],
     'POST /editors/:resourceId/assets': ['contentType', 'bytesBase64'],
     'POST /watch': ['unitId', 'resourceId', 'chatId'],
+    'DELETE /watch/:watchId': [],
+    'POST /auth/logout': [],
     'PATCH /viewer': ['dirty', 'look', 'language'],
   };
   const fields = table[`${route.method} ${route.template}`];

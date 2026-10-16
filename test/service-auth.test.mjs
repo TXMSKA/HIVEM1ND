@@ -552,3 +552,29 @@ async function closeQuiet(home) {
   const { closeHome } = await import('../engine/service/home.mjs');
   await closeHome(home);
 }
+
+test('ending a watch, logging out and opening the event stream refuse unknown fields', async (t) => {
+  const fixture = await makeCoreFixture();
+  const core = await composeCore({ store: fixture.store, paths: fixture.paths, now: () => fixture.clock.now, projects: [] });
+  t.after(async () => { await core.http.close(); await dispose(fixture); });
+  clearInterval(core.runtime.beatTimer); core.runtime.beatTimer = null;
+  const port = core.http.port;
+  const signIn = async () => (await requestJson(port, 'POST', '/api/v1/auth/local', {
+    token: core.bootstrap.secret, body: { embedded: false, hostOrigin: null, look: null, language: null } })).json.data.token;
+  const viewer = await signIn();
+  const watched = await requestJson(port, 'POST', '/api/v1/watch', { token: viewer, body: { unitId: 'root:master' }, headers: { 'idempotency-key': randomUUID() } });
+  assert.equal(watched.status < 300, true, `watch opened with ${watched.status}`);
+  const watchId = watched.json.data.id ?? watched.json.data.watchId;
+  const extraEnd = await requestJson(port, 'DELETE', `/api/v1/watch/${watchId}`, { token: viewer, body: { qaUnknown: true }, headers: { 'idempotency-key': randomUUID() } });
+  assert.equal(extraEnd.status, 400);
+  assert.equal(extraEnd.json.error.code, 'unknown_field');
+  assert.equal((await requestJson(port, 'DELETE', `/api/v1/watch/${watchId}`, { token: viewer, body: {}, headers: { 'idempotency-key': randomUUID() } })).status, 204);
+  const stream = await requestJson(port, 'GET', '/api/v1/events?qaUnknown=1', { token: viewer });
+  assert.equal(stream.status, 400);
+  assert.equal(stream.json.error.code, 'invalid_query');
+  const extraLogout = await requestJson(port, 'POST', '/api/v1/auth/logout', { token: viewer, body: { qaUnknown: true } });
+  assert.equal(extraLogout.status, 400);
+  assert.equal(extraLogout.json.error.code, 'unknown_field');
+  assert.equal((await requestJson(port, 'POST', '/api/v1/auth/logout', { token: viewer, body: {} })).status, 204);
+  assert.equal((await requestJson(port, 'POST', '/api/v1/auth/logout', { token: await signIn() })).status, 204, 'a logout without a body still works');
+});
