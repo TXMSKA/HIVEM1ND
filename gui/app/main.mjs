@@ -5523,7 +5523,7 @@ function activityNotices(records) {
 
 // Loads and answers that already have their own progress are not slow requests.
 function quietActivity(key) {
-  return /^(?:chat-load:|inspector:|group-chat(?::|$)|older:|mailboxes$|mailbox(?::|$)|catalog:|direct:|open-chat:|waiting:|read:|approval:|task:|grant:|undo:|cancel-start:|changes:|editor:|library:)/.test(String(key ?? ''));
+  return /^(?:chat-load:|inspector:|group-chat(?::|$)|mailboxes$|mailbox(?::|$)|catalog:|direct:|open-chat:|waiting:|read:|approval:|task:|grant:|undo:|cancel-start:|changes:|editor:|library:)/.test(String(key ?? ''));
 }
 
 function activityAnnouncement(app, record) {

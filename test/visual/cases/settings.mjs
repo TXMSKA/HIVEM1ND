@@ -166,7 +166,11 @@ export const cases = {
     // A read that takes longer than usual: the notice shows with its elapsed seconds while the line and the draft stay.
     boot: settingsBoot(),
     entry: 'none',
-    async seed(ctx) { await seedDesktop(ctx); },
+    async seed(ctx) {
+      const seeded = await seedDesktop(ctx);
+      const chat = await ctx.world.call('POST', '/chats', { members: [seeded.agents.executorShop.id] });
+      for (let index = 0; index < 51; index += 1) await ctx.world.call('POST', `/chats/${chat.id}/messages`, { body: `Earlier note ${index}.` });
+    },
     async reach(ctx) {
       const { page } = ctx;
       await openDesktop(ctx);

@@ -5952,6 +5952,9 @@ test('background loads do not announce a slow request', async t => {
   renderShell(desktop.app);
   assert.equal(desktop.root.querySelector('.slow-notice'), null);
   assert.equal(desktop.root.querySelector('.notice-area'), null);
+  desktop.app.activity.set('older:shop', { key: 'older:shop', phase: 'pending', scope: 'unit', label: 'Loading earlier messages', elapsed: 2 });
+  renderShell(desktop.app);
+  assert.ok(desktop.root.querySelector('.slow-notice'));
 });
 
 test('a session that never names its step says nothing was started', async t => {
