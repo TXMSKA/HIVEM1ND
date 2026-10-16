@@ -7048,21 +7048,28 @@ function takePendingChat(app) {
   if (!pending || app.chatOpening) return;
   app.pendingChat = null;
   app.chatOpening = true;
-  const finish = () => { app.chatOpening = false; };
+  const wanted = pending.unitId;
+  const stillSelected = () => app.store.selected.unitId === wanted;
+  const finish = () => {
+    app.chatOpening = false;
+    if (!app.disposed && app.pendingChat) takePendingChat(app);
+  };
   if (!pending.create) {
-    openExistingDirect(app, pending.unitId).finally(finish);
+    openExistingDirect(app, pending.unitId, stillSelected).finally(finish);
     return;
   }
   app.phoneChatNote = false;
   settle(app, `open-chat:${pending.unitId}`, text(app.language, "loadingConversation"), async (record) => {
     const result = await openDirectChat(app.api, [pending.unitId], record.operation);
+    if (!stillSelected()) return;
     await showChat(app, result.data);
   }).finally(finish);
 }
 
-function openExistingDirect(app, unitId) {
+function openExistingDirect(app, unitId, accept = () => true) {
   return settle(app, `direct:${unitId}`, text(app.language, "loadingConversation"), async () => {
     const chat = await findDirectChat(app.api, unitId);
+    if (!accept()) return;
     app.tab = "chats";
     if (chat) {
       app.phoneChatNote = false;
