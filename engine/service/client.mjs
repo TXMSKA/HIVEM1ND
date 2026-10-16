@@ -206,7 +206,9 @@ function personOperations(options) {
     try { return await run(viewer); } finally { await viewer.release(); }
   };
   const call = async (viewer, method, target, body) => {
-    const response = await request(viewer, { method, path: `/api/v1${target}`, ...(body === undefined ? {} : { body }), ...(method === 'GET' ? {} : { headers: { 'idempotency-key': randomUUID() } }), timeoutMs: 5000 });
+    // A mailbox post is a send. Every other person read waits the ordinary request ceiling.
+    const timeoutMs = method === 'POST' ? 10000 : 30000;
+    const response = await request(viewer, { method, path: `/api/v1${target}`, ...(body === undefined ? {} : { body }), ...(method === 'GET' ? {} : { headers: { 'idempotency-key': randomUUID() } }), timeoutMs });
     if (response.status >= 400) throw new CoreError(response.status, response.json?.error?.code ?? 'service_unavailable', response.json?.error?.message ?? 'The person operation failed.');
     return response.json.data;
   };
