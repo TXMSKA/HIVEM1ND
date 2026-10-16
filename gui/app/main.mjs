@@ -5515,6 +5515,11 @@ function activityNotices(records) {
   return records.filter(record => record.phase !== 'pending' || !chatWrapper(record.key));
 }
 
+// Loads and answers that already have their own progress are not slow requests.
+function quietActivity(key) {
+  return /^(?:chat-load:|inspector:|group-chat(?::|$)|older:|mailboxes$|mailbox(?::|$)|catalog:|direct:|open-chat:|waiting:|read:|approval:|task:|grant:|undo:|cancel-start:|changes:|editor:|library:)/.test(String(key ?? ''));
+}
+
 function activityAnnouncement(app, record) {
   const seconds = Number(record.elapsed) || 0;
   const waiting = seconds >= 1 ? `. ${sendText(app, 'waiting', { seconds })}` : '';
@@ -5553,7 +5558,7 @@ function placeBefore(anchor, node) {
 function paintActivity(app, shell) {
   const here = noteScope(app);
   const records = activityNotices([...(app.activity?.values() ?? [])].filter((record) => (record.scope ?? here) === here));
-  const pending = records.filter((record) => record.phase === "pending");
+  const pending = records.filter((record) => record.phase === "pending" && !quietActivity(record.key));
   const failed = records.filter((record) => record.phase === "error");
   if (!pending.length && !failed.length) return;
   const document = app.root.ownerDocument;
@@ -5581,6 +5586,8 @@ function paintActivity(app, shell) {
   }
   const field = here === "unit" ? composerField(shell) : null;
   if (field && placeBefore(field, region)) return;
+  const inspector = here === "unit" ? shell.querySelector?.(".inspector") : null;
+  if (inspector) { inspector.append(region); return; }
   region.className += " notice-area";
   region.setAttribute("data-overlay", "true");
   shell.append(region);

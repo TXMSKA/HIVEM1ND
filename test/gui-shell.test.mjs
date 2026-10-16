@@ -5870,6 +5870,18 @@ test('R13 session progress names the failed client and offers Retry only after f
   assert.equal(progress.querySelector('[data-action="cancel-start"]'), null);
 });
 
+test('background loads do not announce a slow request', async t => {
+  const desktop = await openedBoardDesktop(t);
+  desktop.app.mode = 'map';
+  desktop.app.editors.current = null;
+  if (!desktop.app.activity) desktop.app.activity = new Map();
+  desktop.app.activity.set('chat-load:shop', { key: 'chat-load:shop', phase: 'pending', scope: 'unit', label: 'Loading the conversation', elapsed: 0 });
+  desktop.app.activity.set('inspector:shop', { key: 'inspector:shop', phase: 'pending', scope: 'unit', label: 'Loading details', elapsed: 0 });
+  renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector('.slow-notice'), null);
+  assert.equal(desktop.root.querySelector('.notice-area'), null);
+});
+
 test('a session that never names its step says nothing was started', async t => {
   const desktop = await openedBoardDesktop(t), selected = desktop.app.unitList.catalog.find(unit => unit.id === 'project:shop:executor-shop');
   desktop.app.mode = 'map';
