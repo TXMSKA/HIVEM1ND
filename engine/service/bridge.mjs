@@ -144,6 +144,7 @@ export async function dispatchNative(endpoint, secret, operation, binding = {}) 
     const socket = createConnection(endpoint);
     let data = '';
     let answered = false;
+    let ownerPending = false;
     const silent = () => socket.destroy(new CoreError(503, 'service_unavailable', 'The native bridge did not answer.'));
     let timer = setTimeout(silent, 3000);
     socket.setEncoding('utf8');
@@ -161,8 +162,11 @@ export async function dispatchNative(endpoint, secret, operation, binding = {}) 
           if (operation === 'attach' && binding.hostSessionId !== undefined && message.pending === true && Object.keys(message).length === 2) {
             // A verified owner may be waiting for durable registration and wake locks under load.
             // The wait stays bounded: a pending owner has 30 s more to answer.
-            clearTimeout(timer);
-            timer = setTimeout(silent, 30000);
+            if (!ownerPending) {
+              ownerPending = true;
+              clearTimeout(timer);
+              timer = setTimeout(silent, 30000);
+            }
             continue;
           }
           answered = true;

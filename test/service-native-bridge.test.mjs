@@ -439,6 +439,56 @@ test('native host attach bounds an unacknowledged owner and requires a complete 
   });
 });
 
+test('a pending native host attach expires once even when the owner repeats its acknowledgment', async t => {
+  const fixture = await makeCoreFixture();
+  t.after(() => dispose(fixture));
+  const acknowledged = [Promise.withResolvers(), Promise.withResolvers()];
+  let peer, requestId, frameCount = 0;
+  const server = createNetServer(socket => {
+    peer = socket;
+    socket.on('error', () => {});
+    let buffer = '';
+    socket.on('data', chunk => {
+      buffer += chunk.toString();
+      if (!buffer.includes('\n')) return;
+      requestId = JSON.parse(buffer.slice(0, buffer.indexOf('\n'))).id;
+      socket.write(`${JSON.stringify({ id: requestId, pending: true })}\n`);
+    });
+  });
+  const endpoint = process.platform === 'win32' ? `\\\\.\\pipe\\hivem1nd-native-test-${randomUUID()}` : path.join(fixture.root, `${randomUUID()}.sock`);
+  await new Promise(resolve => server.listen(endpoint, resolve));
+  t.after(() => new Promise(resolve => { peer?.destroy(); server.close(resolve); }));
+  const createConnection = net.createConnection;
+  const observer = t.mock.method(net, 'createConnection', (...args) => {
+    const socket = createConnection(...args);
+    socket.on('data', () => acknowledged[frameCount++]?.resolve());
+    return socket;
+  });
+  syncBuiltinESMExports();
+  t.after(() => { observer.mock.restore(); syncBuiltinESMExports(); });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  t.after(() => t.mock.timers.reset());
+  let settled = false;
+  const pending = dispatchNative(endpoint, 'a'.repeat(43), 'attach', { hostSessionId: 'owned-conversation' });
+  const rejected = assert.rejects(pending, { code: 'service_unavailable' });
+  pending.then(() => { settled = true; }, () => { settled = true; });
+  try {
+    await acknowledged[0].promise;
+    t.mock.timers.tick(29999);
+    await new Promise(setImmediate);
+    assert.equal(settled, false, 'The first acknowledgment allows the existing 30-second owner deadline.');
+    peer.write(`${JSON.stringify({ id: requestId, pending: true })}\n`);
+    await acknowledged[1].promise;
+    t.mock.timers.tick(2);
+    await new Promise(setImmediate);
+    assert.equal(settled, true, 'A repeated acknowledgment cannot move the owner deadline.');
+    await rejected;
+  } finally {
+    peer?.destroy();
+    await rejected;
+  }
+});
+
 test('shared attach and enable carry the exact daily cap and reject unreviewed consent fields', async t => {
   const w = await world(t);
   w.launch.ready(NATIVE);
