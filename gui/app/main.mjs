@@ -1473,12 +1473,17 @@ function renderWaitingSurface(app, t) {
     type: "search",
     "data-waiting-search": "true",
     "aria-label": t("search"),
+    placeholder: t("search"),
   });
   search.value = list?.query ?? "";
   search.addEventListener("input", () => {
     if (list) setQuery(list, search.value);
   });
   const total = list?.total ?? 0;
+  // Waiting takes the stage for a while: a way back to the Map, then the search.
+  if (app.layout !== "phone") surface.append(element(document, "div", { class: "waiting-head" },
+    element(document, "button", { type: "button", class: "btn quiet", "data-action": "waiting-back", onclick: () => { app.waitingOpen = false; app.mode = "map"; renderShell(app); } },
+      icon(document, "map"), t("showMap"))));
   surface.append(search, element(document, "p", {
     "data-waiting-total": String(total),
     text: cardinal(app.language, "waitingCount", total),
@@ -1487,7 +1492,8 @@ function renderWaitingSurface(app, t) {
     surface.append(progressMark(document, t("loadingList")));
     return surface;
   }
-  if (list.status === "loading") surface.append(progressMark(document, t("loadingList"), { "data-list-progress": "true" }));
+  // A refresh under items already shown keeps them; the loading line is only for an empty list.
+  if (list.status === "loading" && !(list.items ?? []).length) surface.append(progressMark(document, t("loadingList"), { "data-list-progress": "true" }));
   if (list.status === "error") {
     surface.append(element(document, "p", { text: t("listError") }));
     surface.append(element(document, "button", {

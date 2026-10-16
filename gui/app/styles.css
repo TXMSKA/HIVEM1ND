@@ -1592,3 +1592,10 @@ html { scrollbar-color: var(--line2) var(--panel); scrollbar-width: thin; }
 .agent-inspector > [data-session-progress] { flex: 0 1 auto; max-height: 30%; overflow: auto; }
 .inspector-body.agent-inspector > .chat-panel.agent-conversation { min-height: 220px; }
 .agent-conversation .transcript > .action-cards { margin: 4px 0 0; max-height: none; overflow: visible; }
+/* Waiting on the stage: padded, a way back, items as rows. */
+.waiting-surface { padding: var(--gap) var(--space); display: grid; gap: 10px; align-content: start; overflow: auto; min-height: 0; }
+.waiting-head { display: flex; justify-content: flex-start; }
+.waiting-surface .waiting-list { display: grid; gap: 6px; }
+.waiting-surface [data-waiting-item] { display: flex; justify-content: flex-start; width: 100%; padding: 10px 14px; border-radius: 12px; background: var(--card); text-align: start; }
+/* Every composer keeps the panel gutter, the cluster chat included. */
+.inspector-body .chat-panel > .composer-field { margin-left: 16px; margin-right: 16px; margin-bottom: 8px; }
