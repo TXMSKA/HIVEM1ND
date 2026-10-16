@@ -321,7 +321,7 @@ async function loadMind(context) {
   await readApprovals(mind, issues);
   const approvals = await readPendingApprovals(mind, issues, now);
   const catalog = await readJsonRecord(mind, 'user/gui/resources.json', 'hivem1nd-resources-v1', issues);
-  const chats = await readChats(mind, messages, issues);
+  const chats = await readChats(mind, messages, issues, context.principal?.unitId || 'root:master');
   for (const relative of await filesUnder(mind, 'user/relay/preloads')) {
     if (!relative.endsWith('.json')) continue;
     const bytes = await readSafe(mind, relative);
@@ -869,7 +869,7 @@ function readTask(bytes, relative, units, issues, aliases = []) {
   }
 }
 
-async function readChats(mind, messages, issues) {
+async function readChats(mind, messages, issues, reader) {
   const chats = [];
   let entries = [];
   try {
@@ -899,7 +899,8 @@ async function readChats(mind, messages, issues) {
         createdAt: headers.get('created') || headers.get('created-at') || null,
         revision: hashBytes(bytes),
         lastMessage: own[own.length - 1] ?? null,
-        unread: own.filter((message) => !message.read).length,
+        // The reader's own posts are never unread for the reader.
+        unread: own.filter((message) => !message.read && message.fromId !== reader).length,
       });
     } catch {
       issues.push({ path: relative, code: 'corrupt_resource', message: 'The chat could not be projected.' });

@@ -573,7 +573,7 @@ async function unreadChat(context, chatId, reader, extra = []) {
   await collectReceipts(receiptRoot, read);
   const { readProjection } = await import('./projection.mjs');
   const messages = (await readProjection(context)).messages;
-  const ids = new Set(messages.filter(message => message.channel === 'message' && message.chatIds?.includes(chatId) && !read.has(message.id)).map(message => message.id));
+  const ids = new Set(messages.filter(message => message.channel === 'message' && message.chatIds?.includes(chatId) && message.fromId !== reader && !read.has(message.id)).map(message => message.id));
   return ids.size;
 }
 

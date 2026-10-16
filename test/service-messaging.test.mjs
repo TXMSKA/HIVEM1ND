@@ -55,7 +55,7 @@ test('direct chats are reused, groups stay bounded, and history survives unlist'
   assert.equal(afterPost.chat.lastMessage.toId, posted.message.toId);
   const detail = await readDetail(context, 'messages', posted.message.id, { chatId: first.chat.id });
   assert.equal(detail.toId, posted.message.toId);
-  assert.equal(afterPost.chat.unread, 1);
+  assert.equal(afterPost.chat.unread, 0, "the person's own post is not unread for the person");
   await patchChat(context, first.chat.id, { listed: false, pinned: true, expectedRevision: (await createChat(context, { members: ['project:shop:executor-shop'] })).chat.revision });
   const messagePath = path.join(fixture.paths.mind, 'user', 'relay', 'chats', first.chat.id, `${posted.message.id}.md`);
   assert.equal((await readFile(messagePath, 'utf8')).includes('Hello'), true);
@@ -116,7 +116,7 @@ test('fanout is restart-safe and a chat read leaves a late message unread', asyn
   assert.equal(pending.some((item) => item.state === 'ambiguous'), false);
   const read = await readChat(context, chat.chat.id, { messageIds: [later.message.id] });
   assert.deepEqual(read.readIds, [later.message.id]);
-  assert.equal(read.unread, 1);
+  assert.equal(read.unread, 0, "both posts are the reader's own");
   assert.equal(early.message.id === later.message.id, false);
   const quiet = await deliverNotifications(context);
   assert.equal(quiet.some((item) => item.state === 'submitted'), false);
@@ -477,4 +477,20 @@ test('canonical unread badges count chat and mailbox copies once and require the
   assert.equal(closed.items.some(message => message.id === authored.message.id), true);
   await readChat({ ...context, principal: { audience: 'agent', unitId } }, chat.id, { messageIds: [authored.message.id] });
   assert.equal((await readDetail(context, 'messages', authored.message.id)).delivery.state, 'read');
+});
+
+test('a chat counts only the messages of others as unread and a receipt clears only what it names', async (t) => {
+  const { context } = await world(t), unitId = 'project:shop:executor-shop';
+  const agent = { ...context, principal: { audience: 'agent', unitId } };
+  const { chat } = await createChat(context, { members: [unitId] });
+  await postChat(context, chat.id, { body: 'Question' });
+  const first = await postChat(agent, chat.id, { body: 'First answer' });
+  const second = await postChat(agent, chat.id, { body: 'Second answer' });
+  const unread = async (viewer) => (await readProjection(viewer)).chats.find((item) => item.id === chat.id).unread;
+  assert.equal(await unread(context), 2);
+  assert.equal((await readChat(context, chat.id, { messageIds: [first.message.id] })).unread, 1);
+  assert.equal(await unread(context), 1);
+  assert.equal((await readChat(context, chat.id, { messageIds: [second.message.id] })).unread, 0);
+  assert.equal(await unread(context), 0);
+  assert.equal(await unread(agent), 1, "the agent still has the person's question unread");
 });

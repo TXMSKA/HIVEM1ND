@@ -570,7 +570,7 @@ test('chat and mailbox reads stay with their reader, archive, and revisions', as
     id: 'm1', 'from-id': 'user', timestamp: '2026-10-10T11:00:00.000Z', kind: 'chat-notice', 'notice-key': 'direct:m1', 'resource-id': 'board-1',
   }, 'Earlier\n'));
   await writeFile(path.join(root, 'user', 'relay', 'chats', 'direct', 'm2.md'), stateFile({
-    id: 'm2', 'from-id': 'root:master', timestamp: '2026-10-10T12:00:00.000Z',
+    id: 'm2', 'from-id': 'project:shop:builder', timestamp: '2026-10-10T12:00:00.000Z',
   }, 'Later\n'));
   await writeFile(path.join(root, 'user', 'relay', 'chats', 'group', 'chat.md'), stateFile({
     id: 'group', title: 'Group', kind: 'group', members: '["root:master","project:shop:builder"]', created: '2026-10-10T10:00:00.000Z',
@@ -620,7 +620,7 @@ test('chat and mailbox reads stay with their reader, archive, and revisions', as
   const older = await readCollection(context, 'messages', { chatId: 'direct', before: 'm2' });
   assert.deepEqual(older.items.map((item) => item.id), ['m1']);
   await writeFile(path.join(root, 'user', 'relay', 'chats', 'direct', 'm2.md'), stateFile({
-    id: 'm2', 'from-id': 'root:master', timestamp: '2026-10-10T12:00:00.000Z',
+    id: 'm2', 'from-id': 'project:shop:builder', timestamp: '2026-10-10T12:00:00.000Z',
   }, 'Changed\n'));
   await assert.rejects(
     () => readCollection(context, 'messages', { chatId: 'direct', limit: 1, cursor: latest.nextCursor }),
@@ -641,7 +641,8 @@ test('chat and mailbox reads stay with their reader, archive, and revisions', as
   assert.equal(boxes.items.some((item) => item.unitId === 'project:shop:builder'), true);
 
   const view = await readProjection(context);
-  assert.equal(view.chats.find((chat) => chat.id === 'direct').unread, 2);
+  // The builder's receipt does not read m2 for the person, and the person's own m1 is never unread.
+  assert.equal(view.chats.find((chat) => chat.id === 'direct').unread, 1);
   assert.equal(view.waiting.some((item) => item.id === 'approval:approve-1'), true);
   assert.equal(view.waiting.find((item) => item.id === 'approval:approve-1').desktopOnly, false);
   assert.equal(view.waiting.some((item) => item.id === `question:root:overseer:${hashText('which name')}`), true);
