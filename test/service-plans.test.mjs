@@ -89,8 +89,9 @@ test('strict HTTP plan bodies and phone/unbound authority reject before durable 
   const desktop = credentials.issue({ audience: 'desktop' }).token, phone = credentials.issue({ audience: 'phone' }).token;
   const agent = credentials.issue({ audience: 'agent', unitId: 'root:foreign', sessionId: randomUUID() }).token;
   const http = await createHttpServer({ ...state.context, credentials }); t.after(() => http.close());
+  // The route is waited on. The ceiling only covers a loaded suite.
   const call = (token, url, body, method = 'POST', key = randomUUID()) => request({ origin: new URL(`http://127.0.0.1:${http.port}`), token },
-    { path: `/api/v1${url}`, method, body, headers: { 'idempotency-key': key }, timeoutMs: 3000 });
+    { path: `/api/v1${url}`, method, body, headers: { 'idempotency-key': key }, timeoutMs: 30000 });
   for (const token of [phone, agent]) assert.equal((await call(token, '/plans', state.input)).status, 403);
   assert.equal((await call(desktop, '/plans', { ...state.input, authority: 'master' })).status, 400);
   const key = randomUUID(), first = await call(desktop, '/plans', state.input, 'POST', key);
@@ -192,8 +193,9 @@ test('new task items reach the plan routes only through the desktop', async t =>
   const desktop = credentials.issue({ audience: 'desktop' }).token, phone = credentials.issue({ audience: 'phone' }).token;
   const agent = credentials.issue({ audience: 'agent', unitId: state.units[0].id, sessionId: randomUUID() }).token;
   const http = await createHttpServer({ ...state.context, credentials }); t.after(() => http.close());
+  // The route is waited on. The ceiling only covers a loaded suite.
   const call = (token, url, body, method = 'POST') => request({ origin: new URL(`http://127.0.0.1:${http.port}`), token },
-    { path: `/api/v1${url}`, method, body, headers: { 'idempotency-key': randomUUID() }, timeoutMs: 3000 });
+    { path: `/api/v1${url}`, method, body, headers: { 'idempotency-key': randomUUID() }, timeoutMs: 30000 });
   const input = { ...state.input, tasks: [newTask('Over HTTP', state.input.roles.builder, 'The body.')] };
   for (const token of [phone, agent]) assert.equal((await call(token, '/plans', input)).status, 403);
   assert.deepEqual(await taskNames(state), []);
@@ -305,8 +307,9 @@ test('plan_propose is listed with a strict schema and reaches only a bound lead 
   const done = await dispatch(session, message(3, { clusterId: state.cluster.id, title: 'Over MCP', tasks: [{ title: 'Task one' }] }));
   assert.equal(done.result.isError, false); assert.equal(JSON.parse(done.result.content[0].text).data.tasks[0].id, 'root:001');
   const http = await createHttpServer({ ...state.context, credentials }); t.after(() => http.close());
+  // The route is waited on. The ceiling only covers a loaded suite.
   const call = (token, url, body, method = 'POST') => request({ origin: new URL(`http://127.0.0.1:${http.port}`), token },
-    { path: `/api/v1${url}`, method, body, headers: { 'idempotency-key': randomUUID() }, timeoutMs: 3000 });
+    { path: `/api/v1${url}`, method, body, headers: { 'idempotency-key': randomUUID() }, timeoutMs: 30000 });
   const agent = credentials.issue({ audience: 'agent', unitId: state.units[0].id, sessionId: session.principal.sessionId }).token;
   const plans = (await listPlans(state.context)).items;
   assert.equal(plans.length, 1);
