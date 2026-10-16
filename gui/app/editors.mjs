@@ -522,6 +522,7 @@ function applyCommentThread(current, thread, commentsRevision) {
 export function noteRemote(editors, change) {
   const current = editors.drafts.get(change?.resourceId) ?? (editors.current?.resourceId === change?.resourceId ? editors.current : null);
   if (!current || !change?.revision || change.revision === current.revision) return;
+  if (current.boardSaving) return;
   current.remoteStale = true;
   if (current.dirty && change.revision !== current.baseRevision) {
     current.conflict = { ...(current.conflict ?? {}), revision: change.revision };
@@ -739,7 +740,7 @@ export function deleteEditor(api, editor, libraryRevision, retained = null) {
 }
 
 export function newestHistory(items) {
-  return [...items].sort((a, b) => String(b.at).localeCompare(String(a.at)) || b.id.localeCompare(a.id));
+  return [...items].sort((a, b) => Number(Boolean(b.current)) - Number(Boolean(a.current)) || String(b.at).localeCompare(String(a.at)) || b.id.localeCompare(a.id));
 }
 export function historyOperationKey(operation) {
   const keys = { create: 'historyCreated', rename: 'historyRenamed', 'board-edit': 'historyBoardEdited',
@@ -747,12 +748,13 @@ export function historyOperationKey(operation) {
     proposal: 'historySuggestionAccepted', conflict: 'historyConflictResolved', restore: 'historyRestored' };
   return Object.hasOwn(keys, operation) ? keys[operation] : 'historyChanged';
 }
-export function renderEditorHistory(document, items, t, onRestore) {
+export function renderEditorHistory(document, items, t, onRestore, present = {}) {
   const panel = element(document, 'section', { class: 'editor-history', 'aria-label': t('history') });
-  panel.append(element(document, 'h2', { text: t('history') }));
   for (const item of newestHistory(items)) {
     const row = element(document, 'article', { class: 'history-row', 'data-history-id': item.id });
-    row.append(element(document, 'p', { text: item.by + ' · ' + item.at }), element(document, 'p', { text: t(historyOperationKey(item.operation)) }));
+    const by = present.author?.(item) ?? item.by;
+    const at = present.time?.(item) ?? item.at;
+    row.append(element(document, 'p', { text: `${by} · ${at}` }), element(document, 'p', { text: t(historyOperationKey(item.operation)) }));
     if (item.current) row.append(element(document, 'span', { class: 'history-current', text: t('currentVersion') }));
     else row.append(element(document, 'button', { type: 'button', class: 'btn', text: t('restoreVersion'), onclick: () => onRestore(item) }));
     panel.append(row);

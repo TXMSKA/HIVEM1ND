@@ -39,7 +39,7 @@ export function initialRunsIn(clients, preferred = null, kind = null) {
 export function runsInLabel(choice, clients = [], language = 'en') {
   if (!choice) return '';
   const client = clients.find(item => item.id === choice.client);
-  const readable = value => String(value ?? '').replace(/[_-]+/g, ' ').replace(/\b\w/g, letter => letter.toUpperCase());
+  const readable = value => value == null || value === '' ? '' : String(value).replace(/[_-]+/g, ' ').replace(/\b\w/g, letter => letter.toUpperCase());
   const effort = choice.mode ?? choice.effort;
   const effortLabel = effort === 'xhigh' ? effort : effort && ['low', 'medium', 'high', 'max', 'fast', 'normal', 'thinking'].includes(effort)
     ? startText(language, effort) : readable(effort);

@@ -2815,7 +2815,7 @@ function renderEditorSurfaces(app, t) {
     }));
   }
   const commentsColumn = element(document, "aside", { class: `panel editor-comments-column${app.commentsOpen ? " is-open" : ""}`, "data-editor-column": "comments" },
-    element(document, "h2", { text: t("comments") }),
+    element(document, "h2", { text: t(current?.historyOpen ? "history" : "comments") }),
   );
   const tools = element(document, "div", { class: "editor-tools", "data-editor-tools": "true" },
     watchStatus,
@@ -2868,7 +2868,7 @@ function renderEditorSurfaces(app, t) {
       if (Object.hasOwn(DICTIONARIES[app.language] ?? DICTIONARIES.en, key)) return t(key);
       return { history: ["History", "Historial"], restoreVersion: ["Restore", "Restaurar"], currentVersion: ["Current", "Actual"] }[key][app.language === "es" ? 1 : 0];
     };
-    tools.append(element(document, "button", { type: "button", class: "btn", "data-action": "editor-history", text: historyLabel("history"), "aria-expanded": String(Boolean(current.historyOpen)), onclick: async () => {
+    tools.append(element(document, "button", { type: "button", class: "btn", "data-action": "editor-history", text: historyLabel("history"), "aria-expanded": String(Boolean(current.historyOpen)), "aria-pressed": String(Boolean(current.historyOpen)), onclick: async () => {
       current.historyOpen = !current.historyOpen;
       if (current.historyOpen) await loadHistory(app.api, editors).catch((error) => { editors.error = error; });
       renderShell(app);
@@ -2881,7 +2881,14 @@ function renderEditorSurfaces(app, t) {
         } catch (error) { app.actionNote = actionText(app.language, error.code); }
         renderShell(app);
       };
-      const panel = editorUi.renderEditorHistory?.(document, current.history ?? [], t, onRestore)
+      const panel = editorUi.renderEditorHistory?.(document, current.history ?? [], t, onRestore, {
+        author: item => {
+          const unit = unitById(app, item.by);
+          return item.by === "root:master" || item.by === "root:person" ? text(app.language, "person")
+            : unit ? unitDisplayName(unit) : readableIdentity(item.by, text(app.language, "person"));
+        },
+        time: item => formatShortTime(app.language, item.at),
+      })
         ?? element(document, "section", { class: "editor-history", "aria-label": historyLabel("history") }, element(document, "h2", { text: historyLabel("history") }));
       if (!editorUi.renderEditorHistory) {
         for (const item of current.history ?? []) {
@@ -2894,7 +2901,9 @@ function renderEditorSurfaces(app, t) {
         const historyId = button.closest("[data-history-id]")?.getAttribute("data-history-id");
         button.disabled = !canEditResources(app) || current.dirty || Boolean(current.historyPending) || Boolean(current.historyOperation && !current.historyOperation.path.endsWith(`/${historyId}/restore`));
       }
-      surfaces.catalog = panel;
+      commentsColumn.append(panel);
+      surfaces.comments = commentsColumn;
+      return surfaces;
     }
   }
   if (current.attachmentResource !== current.resourceId) {
@@ -4418,7 +4427,8 @@ function collectionRows(app, t, list) {
     pushGroup("recentChats", recent);
     return rows;
   }
-  const source = unitsForTree(list.query ? list.items : list.catalog, list.catalog);
+  const currentUnits = [...new Map([...(list.catalog ?? []), ...app.store.indexes.units.values()].map(unit => [unit.id, unit])).values()];
+  const source = unitsForTree(list.query ? list.items : currentUnits, currentUnits);
   const tree = buildHierarchy(app.store.audience === 'phone' ? source.filter(unit => unit.role !== 'master') : source, list.issues, [...app.store.indexes.groups.values()]);
   if (app.layout === 'desktop') for (const cluster of tree.clusters) {
     const link = app.startProjects?.clusterLinks?.find(item => item.clusterId === cluster.id);
