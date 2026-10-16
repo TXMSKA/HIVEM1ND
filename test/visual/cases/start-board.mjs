@@ -49,8 +49,9 @@ async function openNewAgent(ctx) {
 
 async function writePlan(ctx) {
   const seeded = await readyShop(ctx, ['overlord', 'executor', 'executor']);
-  await writeFile(path.join(ctx.world.fx.fixture.paths.localDirectory, 'client-permissions.json'), JSON.stringify({
-    permissions: [{ id: randomUUID(), machine: 'DESKTOP', client: 'codex', actions: ['git.commit'], scope: 'hivem1nd-started-sessions', grantedAt: new Date(ctx.world.fx.fixture.clock.now).toISOString(), grantedBy: 'root:master' }],
+  const paths = ctx.world.fx.fixture.paths;
+  await writeFile(path.join(paths.localDirectory, 'client-permissions.json'), JSON.stringify({
+    permissions: [{ id: randomUUID(), machine: paths.machine, client: 'codex', actions: ['git.commit', 'git.push'], scope: 'hivem1nd-started-sessions', grantedAt: new Date(ctx.world.fx.fixture.clock.now).toISOString(), grantedBy: 'root:master' }],
   }));
   const lead = seeded.agents.shop[0];
   const unit = seeded.agents.shop[1];
