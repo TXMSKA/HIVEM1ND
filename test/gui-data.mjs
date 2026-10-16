@@ -106,6 +106,7 @@ export async function seedFinalRepositories(fixture) {
   identity.trees.push(worktree);
   repositories.set(worktree, identity);
   const calls = [];
+  const branches = new Map();
   const gitRunner = async (_command, args, options) => {
     if (options.shell !== false || options.windowsHide !== true || options.env.GIT_OPTIONAL_LOCKS !== "0") throw new Error("Unsafe fixture Git invocation.");
     const repository = repositories.get(options.cwd);
@@ -116,7 +117,12 @@ export async function seedFinalRepositories(fixture) {
     if (args.includes("worktree")) return { stdout: repository.trees.map((directory, index) => `worktree ${directory}\0HEAD ${"a".repeat(40)}\0branch refs/heads/${index ? "alternate" : "main"}\0\0`).join("") };
     if (args.includes("--get-regexp")) return { stdout: "", code: 1 };
     if (args.includes("status")) return { stdout: " M source.txt\0?? new.txt\0" };
-    if (args.includes("symbolic-ref")) return { stdout: "main\n" };
+    if (args.includes("check-ref-format")) return { stdout: `${args.at(-1)}\n` };
+    if (args.includes("show-ref")) return { stdout: "", code: 1 };
+    if (args.includes("--git-path")) return { stdout: ".git/index\n" };
+    if (args.includes("config") && args.includes("--list")) return { stdout: "core.bare=false\n" };
+    if (args.includes("switch")) { branches.set(options.cwd, args.at(-1)); return { stdout: "" }; }
+    if (args.includes("symbolic-ref")) return { stdout: `${branches.get(options.cwd) ?? "main"}\n` };
     if (args.includes("config") && args.includes("remote.origin.url")) return { stdout: `https://example.test/acme/${repository.main.split(/[\\/]/).at(-1)}.git\n` };
     if (args.includes("--absolute-git-dir")) return { stdout: `${options.cwd === repository.main ? repository.common : join(repository.common, "worktrees", "alternate")}\n` };
     if (args.includes("--abbrev-ref")) return { stdout: `${options.cwd === repository.main ? "main" : "alternate"}\n` };

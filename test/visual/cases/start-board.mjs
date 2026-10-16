@@ -49,19 +49,7 @@ async function openNewAgent(ctx) {
 
 async function writePlan(ctx) {
   const seeded = await readyShop(ctx, ['overlord', 'executor', 'executor']);
-  const core = ctx.world.core;
-  let branch = 'main';
-  const inner = core.gitRunner;
-  core.gitRunner = async (command, args, options) => {
-    if (args.includes('check-ref-format')) return { stdout: String(args.at(-1) ?? '') };
-    if (args.includes('show-ref')) return { stdout: '', code: 1 };
-    if (args.includes('--git-path')) return { stdout: '.git/index\n' };
-    if (args.includes('config') && args.includes('--list')) return { stdout: 'core.bare=false\n' };
-    if (args.includes('switch')) { branch = String(args.at(-1) ?? branch); return { stdout: '' }; }
-    if (args.includes('symbolic-ref')) return { stdout: `${branch}\n` };
-    return inner(command, args, options);
-  };
-  await writeFile(path.join(core.paths.localDirectory, 'client-permissions.json'), JSON.stringify({
+  await writeFile(path.join(ctx.world.fx.fixture.paths.localDirectory, 'client-permissions.json'), JSON.stringify({
     permissions: [{ id: randomUUID(), machine: 'DESKTOP', client: 'codex', actions: ['git.commit'], scope: 'hivem1nd-started-sessions', grantedAt: new Date(ctx.world.fx.fixture.clock.now).toISOString(), grantedBy: 'root:master' }],
   }));
   const lead = seeded.agents.shop[0];
