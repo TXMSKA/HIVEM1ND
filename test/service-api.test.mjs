@@ -966,9 +966,17 @@ test('every contract route has a success result and an authority or boundary fai
     expectStatus(response, 200, template);
     if (template === '/projects') assert.equal(Array.isArray(response.json.data.items), true);
     if (template === '/sync') {
-      assert.ok(['idle', 'pending'].includes(response.json.data.state));
-      assert.equal(typeof response.json.data.pendingChanges, 'number');
-      assert.equal(response.json.data.items, undefined);
+      // A startup publish can still be in flight. Read again until the route is settled. The ceiling only covers a loaded suite.
+      let sync = response;
+      const deadline = Date.now() + 30000;
+      while (!['idle', 'pending'].includes(sync.json.data.state) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        sync = await call(port, 'GET', `/api/v1${template}`, { token });
+        expectStatus(sync, 200, template);
+      }
+      assert.ok(['idle', 'pending'].includes(sync.json.data.state), JSON.stringify(sync.json.data));
+      assert.equal(typeof sync.json.data.pendingChanges, 'number');
+      assert.equal(sync.json.data.items, undefined);
     }
     if (template === '/settings') {
       assert.equal(response.json.data.service.machine, fixture.machine);
