@@ -216,7 +216,7 @@ test("English and Spanish use the same copy keys", () => {
   assert.equal(text("en", "chats"), "Chats");
   assert.equal(text("es", "chats"), "Chats");
   assert.equal(text("es", "waiting"), "Pendientes");
-  assert.equal(text("es", "approveAlways"), "Siempre para esta unidad");
+  assert.equal(text("es", "approveAlways"), "Siempre para este agente");
   assert.equal(text("es", "sendBack"), "Devolver");
   assert.equal(text("es", "watch"), "Seguir");
   assert.equal(text("es", "document"), "Documento");
@@ -3405,9 +3405,9 @@ test("an editor action names its failure and waits inside its dialog", async (t)
 });
 
 test("counts, clocks, and session facts follow the active language", () => {
-  assert.equal(cardinal("en", "unitCount", 1), "1 unit");
-  assert.equal(cardinal("en", "unitCount", 0), "0 units");
-  assert.equal(cardinal("es", "unitCount", 1), "1 unidad");
+  assert.equal(cardinal("en", "unitCount", 1), "1 agent");
+  assert.equal(cardinal("en", "unitCount", 0), "0 agents");
+  assert.equal(cardinal("es", "unitCount", 1), "1 agente");
   assert.equal(cardinal("es", "issueCount", 1), "1 incidencia");
   assert.equal(cardinal("en", "pendingChanges", 1), "1 change waiting");
   assert.equal(text("en", "nothingToUndo"), "No task change to undo.");
@@ -4438,7 +4438,7 @@ test("selection actions count canonical recipients and Message all creates no pe
   desktop.app.mapState.onSelection(ids);
   desktop.app.language = "es";
   renderShell(desktop.app);
-  assert.equal(desktop.root.querySelector("[data-action='message-all']").textContent, "Enviar un mensaje a las 3 unidades");
+  assert.equal(desktop.root.querySelector("[data-action='message-all']").textContent, "Enviar un mensaje a los 3 agentes");
   clickAction(desktop.root, "clear-selection");
   assert.equal(desktop.app.mapState.selection.size, 0);
   assert.equal(desktop.app.store.selected.unitId, null);
@@ -5326,7 +5326,7 @@ test("unit removal confirms scope, cancels safely, retries the same write and re
   choose();
   clickAction(desktop.root, "remove-unit");
   dialog = desktop.document.querySelector("[data-remove-unit]");
-  assert.equal(dialog.querySelector("h2").textContent, "Quitar executor-shop?");
+  assert.equal(dialog.querySelector("h2").textContent, "¿Quitar executor-shop?");
   assert.match(dialog.querySelector("p").textContent, /El chat y el buzón pasan a Archivados/);
   assertVisibleCopy("es", [["Removal dialog", dialog.textContent]]);
   click(dialog.querySelector("button"));
@@ -6069,7 +6069,7 @@ test("the board attach picker searches groups and aliases and commits canonical 
   app.editors.current.attachmentChoice = new Set();
   click(root.querySelector("[data-action='attach']"));
   const chooser = document.querySelector("[data-form='attach']");
-  assert.equal(chooser.querySelector("[data-attach-search]").getAttribute("aria-label"), "Search units and groups");
+  assert.equal(chooser.querySelector("[data-attach-search]").getAttribute("aria-label"), "Search agents and clusters");
   typeInput(chooser.querySelector("[data-attach-search]"), "Checkout", 0, 0);
   assert.equal(chooser.querySelectorAll("[data-attach-unit]").length, 0);
   click(chooser.querySelector("[data-attach-group]"));

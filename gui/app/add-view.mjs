@@ -7,7 +7,7 @@ export const ADD_COPY = Object.freeze({
   link: ['Link', 'Enlace'],
   found: ['Found in {source}, {kind} {pin}', 'Detectado en {source}, {kind} {pin}'],
   commit: ['commit', 'commit'], version: ['version', 'versión'], snapshot: ['snapshot', 'copia'],
-  skill: ['Skill', 'Skill'], repository: ['Repository', 'Repositorio'], docs: ['Docs', 'Documentación'],
+  skill: ['Skill', 'Habilidad'], repository: ['Repository', 'Repositorio'], docs: ['Docs', 'Documentación'],
   'tool-server': ['Tool server', 'Servidor de herramientas'],
   docsDescription: ['Documentation', 'Documentación'], repositoryDescription: ['Git repository', 'Repositorio Git'],
   repositoryScope: ['A repository becomes a cluster. Its first agent can be added after acceptance.', 'El repositorio se convierte en un clúster. Se puede agregar el primer agente después de la confirmación.'],

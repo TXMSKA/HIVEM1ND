@@ -6332,7 +6332,7 @@ function unitMenu(app, unit) {
 
 function removalText(app, key, unit = "") {
   const copy = {
-    title: ["Remove {unit}?", "Quitar {unit}?"],
+    title: ["Remove {unit}?", "¿Quitar {unit}?"],
     body: ["It leaves the Map and Hierarchy. Its chat and mailbox move to Archived and its tasks stay in the project. A session running now is stopped first.", "El agente deja de aparecer en el Mapa y la Jerarquía. El chat y el buzón pasan a Archivados; las tareas permanecen en el proyecto. Una sesión en ejecución se detiene primero."],
     confirm: ["Remove agent", "Quitar agente"],
     archived: ["Archived", "Archivados"],
