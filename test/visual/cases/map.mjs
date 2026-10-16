@@ -7,6 +7,7 @@ import path from 'node:path';
 import { finalAdditionArchive } from '../../gui-data.mjs';
 import { agentCredential, createAgent, createCluster, createOverseer } from '../seed.mjs';
 import { directChat, heldStart, idOf, node, openMap, placeNodes, seedMap, setAlias, startFromInspector } from '../map-helpers.mjs';
+import { openHierarchyRows } from '../chats-helpers.mjs';
 import { openSettings } from '../settings-helpers.mjs';
 
 const SHOP = idOf('shop', 'executor-shop');
@@ -86,6 +87,7 @@ Object.assign(cases, {
     seed: plainMap,
     async reach(ctx) {
       await openMap(ctx, 5);
+      await openHierarchyRows(ctx, [GAME]);
       await beginRename(ctx, GAME);
       await ctx.page.type('Game');
       await ctx.page.waitFor(() => document.querySelector('[data-alias-input]')?.value === 'Game', { message: 'the typed alias' });
@@ -98,6 +100,7 @@ Object.assign(cases, {
     seed: plainMap,
     async reach(ctx) {
       await openMap(ctx, 5);
+      await openHierarchyRows(ctx, [GAME]);
       await beginRename(ctx, GAME);
       await ctx.page.type('Game');
       await ctx.page.press('Enter');
@@ -183,7 +186,7 @@ Object.assign(cases, {
         return Boolean(inspector?.querySelector('[data-action="stop-session"]')) && !inspector.querySelector('[data-session-progress]');
       }, { timeout: 60000, message: 'a live session before Stop' });
       await ctx.page.click('.inspector [data-action="stop-session"]');
-      await ctx.visible('dialog[open] .dialog-actions .btn.primary');
+      await ctx.visible('dialog[open] .dialog-actions button:last-child');
     },
   },
 });
@@ -250,6 +253,7 @@ Object.assign(cases, {
     async reach(ctx) {
       await openMap(ctx, 2);
       const menu = `[data-unit-menu="${ctx.unit.id}"]`;
+      await openHierarchyRows(ctx, [ctx.unit.id]);
       await ctx.page.click(`[data-row][data-id="${ctx.unit.id}"]`);
       await ctx.visible(`${menu} summary`);
       await ctx.page.click(`${menu} summary`);

@@ -54,6 +54,7 @@ export const cases = {
       await page.waitFor(() => document.querySelector('[data-form="library-folder"] [data-field="create-folder"]')?.value === '', { message: 'the project root to be the parent' });
       await page.click('[data-form="library-folder"] [data-action="confirm-form"]');
       await ctx.visible('[data-library-rename]', { timeout: 30000 });
+      await page.click('[data-library-rename]');
       await page.press('Enter');
       await ctx.gone('[data-library-rename]', { timeout: 30000 });
       await page.waitFor(() => [...document.querySelectorAll('.library-folder-row')].some(row => row.querySelector('.library-count')?.textContent === '0'), { timeout: 30000, message: 'the new empty folder in the library' });

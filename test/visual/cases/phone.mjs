@@ -1,5 +1,6 @@
 // Flow board, row 7: the phone. The phone opens the home listener the way a handset does and types the code.
 // The code stays in memory; the cells and the field are masked before the PNG is stored.
+import { until } from '../chrome.mjs';
 import { openPairing, openPhoneAccess, pairWithCode, presentLikeViewer, seedPhoneWorld, typeCode, wrongCode } from '../phone-helpers.mjs';
 
 const PAIRING = { en: 'Open your M1ND', es: 'Abrir el M1ND' };
@@ -118,7 +119,12 @@ export const cases = {
     entry: 'none',
     seed: ctx => prepare(ctx, { ask: false, review: false }),
     async reach(ctx) {
+      let streamConnected = false;
+      ctx.page.on('Network.responseReceived', ({ response }) => {
+        if (response.status === 200 && new URL(response.url).pathname === '/api/v1/events') streamConnected = true;
+      });
       await pairWithCode(ctx);
+      await until(() => streamConnected, { timeout: 30000, message: 'the phone event stream to connect' });
       await ctx.world.call('POST', '/settings/home-network', { enabled: false }, { key: ctx.world.key() });
       try {
         await ctx.visible('[data-phone-state="ended"]', { timeout: 20000 });

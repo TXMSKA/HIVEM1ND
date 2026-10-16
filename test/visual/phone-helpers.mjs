@@ -27,8 +27,7 @@ export async function openPairing(ctx) {
 
 // Type six characters into the code field the way a person does, then press Continue.
 export async function typeCode(ctx, code, { submit = true } = {}) {
-  await ctx.page.click('[data-home-code]');
-  await ctx.page.type(code);
+  await ctx.page.fill('[data-home-code]', code);
   if (submit) {
     await ctx.page.waitFor(() => !document.querySelector('.phone-code-form button[type="submit"]').disabled, { message: 'the code to be complete' });
     await ctx.page.click('.phone-code-form button[type="submit"]');

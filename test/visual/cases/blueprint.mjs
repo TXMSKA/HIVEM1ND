@@ -164,7 +164,7 @@ export const cases = {
       const { page } = ctx;
       await openCart(ctx);
       await startComment(ctx, 'Show the item price and a remove link here.');
-      await page.click('.board-comment-actions .btn.primary');
+      await page.click('.board-comment-actions button:last-child');
       await ctx.visible('[data-thread] .comment-text');
       await ctx.visible('.board-comment-pin');
       await page.waitFor(() => !document.querySelector('.board-comment-popover') && !document.querySelector('[data-activity]'), { message: 'the comment to be sent' });

@@ -116,6 +116,7 @@ export const cases = {
       await ctx.page.doubleClick('.map-group-label[aria-label="Web"]');
       const hint = ctx.es ? 'Vista de Web' : 'Zoomed in on Web';
       await ctx.visible('body', { text: hint, timeout: 20000 });
+      await ctx.settle();
       await ctx.page.click('.map-group-label[aria-label="shop"]');
       await ctx.visible('.inspector', { text: 'shop' });
     },

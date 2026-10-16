@@ -25,7 +25,7 @@ export function makeContext({ task, world, page, browser, spec }) {
       if (ready) await ctx.shellReady();
     },
     async shellReady(timeout = 30000) {
-      await page.waitFor(() => (document.querySelector('.foot') || document.querySelector('.phone-status')) && !document.querySelector('.workspace-opening') && !document.querySelector('#status'), { timeout, message: 'the app shell to finish reading' });
+      await page.waitFor(() => document.querySelector('.shell[data-boot="ready"]') || document.querySelector('.phone-status'), { timeout, message: 'the app shell to finish reading' });
     },
     // The state is shown when a selector is visible; cases wait on conditions, never on fixed sleeps.
     async visible(selector, { timeout = 15000, text = null } = {}) {

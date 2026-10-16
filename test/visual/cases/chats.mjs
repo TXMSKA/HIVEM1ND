@@ -212,9 +212,22 @@ export const cases = {
       await openChats(ctx, [SHOP_EXECUTOR]);
       await openUnit(ctx, ctx.unit, 1);
       await ctx.visible(`.inspector [data-task="${ctx.task}"] [data-note]`);
-      await ctx.page.click(`[data-note="${ctx.task}"]`);
-      await ctx.page.type('The empty illustration is still the old one.');
-      await ctx.page.waitFor(id => !document.querySelector(`[data-task="${id}"] [data-action="send-back"]`)?.disabled, { args: [ctx.task], message: 'Send back to be enabled' });
+      // A repaint can drop the typed note, so the note is typed again until Send back is enabled.
+      await ctx.page.waitFor(async id => {
+        const button = document.querySelector(`[data-task="${id}"] [data-action="send-back"]`);
+        return Boolean(button && !button.disabled);
+      }, { args: [ctx.task], message: 'Send back to be enabled', timeout: 1000 }).catch(async () => {
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          await ctx.page.click(`[data-note="${ctx.task}"]`);
+          await ctx.page.type('The empty illustration is still the old one.');
+          const enabled = await ctx.page.eval(id => !document.querySelector(`[data-task="${id}"] [data-action="send-back"]`)?.disabled, ctx.task);
+          if (enabled) return;
+        }
+        throw new Error('Timed out waiting for Send back to be enabled');
+      });
+      // Send back opens its own dialog (board 3.10).
+      await ctx.page.click(`[data-task="${ctx.task}"] [data-action="send-back"]`);
+      await ctx.visible('dialog[open]');
     },
   },
 

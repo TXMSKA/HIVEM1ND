@@ -137,7 +137,41 @@ export async function moveClock(ctx, ms) {
 export async function openChats(ctx, unitIds, { ahead = 0 } = {}) {
   await alignClock(ctx, ahead);
   await ctx.open({ overseerExists: true });
-  await ctx.page.waitFor(ids => ids.every(id => document.querySelector(`[data-row][data-id="${id}"]`)) && document.querySelector('[data-action="tab-hierarchy"][aria-pressed="true"]'),
+  await ctx.page.waitFor(() => document.querySelector('[data-action="tab-hierarchy"][aria-pressed="true"]'),
+    { timeout: 30000, message: 'the Hierarchy tab to be selected' });
+  await openHierarchyRows(ctx, unitIds);
+}
+
+// Reveal only the closed cluster ancestors needed to make the requested unit rows available.
+export async function openHierarchyRows(ctx, unitIds) {
+  const [unitsResult, clustersResult] = await Promise.all([
+    ctx.world.call('GET', '/units?limit=100'),
+    ctx.world.call('GET', '/clusters?limit=200'),
+  ]);
+  const units = unitsResult.items ?? unitsResult;
+  const clusters = clustersResult.items ?? clustersResult;
+  const unitsById = new Map(units.map(unit => [unit.id, unit]));
+  const clustersById = new Map(clusters.map(cluster => [cluster.id, cluster]));
+  const needed = new Set();
+  for (const id of unitIds) {
+    let cluster = clustersById.get(unitsById.get(id)?.clusterId);
+    const path = [];
+    while (cluster && !needed.has(cluster.id)) {
+      path.push(cluster);
+      cluster = clustersById.get(cluster.parentId);
+    }
+    path.reverse().forEach(item => needed.add(item.id));
+  }
+  for (const id of needed) {
+    const selector = `[data-row][data-id="cluster:${id}"]`;
+    await ctx.page.waitFor(sel => Boolean(document.querySelector(sel)), { args: [selector], timeout: 30000, message: `cluster ${id} to appear in the Hierarchy` });
+    const expanded = await ctx.page.eval(sel => document.querySelector(sel)?.getAttribute('aria-expanded') === 'true', selector);
+    if (!expanded) {
+      await ctx.page.click(selector);
+      await ctx.page.waitFor(sel => document.querySelector(sel)?.getAttribute('aria-expanded') === 'true', { args: [selector], timeout: 30000, message: `cluster ${id} to open` });
+    }
+  }
+  await ctx.page.waitFor(ids => ids.every(id => document.querySelector(`[data-row][data-id="${id}"]`)),
     { args: [unitIds], timeout: 30000, message: 'the Hierarchy to list the units' });
 }
 
