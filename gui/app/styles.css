@@ -1565,3 +1565,6 @@ html { scrollbar-color: var(--line2) var(--panel); scrollbar-width: thin; }
 .composer-send { flex: none; display: inline-grid; place-items: center; width: 32px; height: 32px; border: 0; border-radius: 8px; background: var(--accent); color: var(--accent-ink); }
 .composer-send .icon { width: 15px; height: 15px; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+/* The More control's three dots read at a glance, as on the board. */
+[data-action="cluster-more"] .icon { stroke-width: 3.4; color: var(--body); }
+.agent-more { color: var(--body); font-size: 18px; letter-spacing: 1px; }
