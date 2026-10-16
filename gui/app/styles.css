@@ -893,9 +893,12 @@ html[data-mode="focus"] body { background: #000000; color: #d8d4cc; }
 .void-surface .void-page, .void-source { width: 640px; max-width: calc(100% - 32px); height: 760px; margin: 70px auto 0; padding: 44px 56px; border-radius: 20px; background: var(--panel); overflow: auto; }
 .void-surface .void-title { margin: 0 0 6px; font-size: 26px; line-height: 1.2; font-weight: 700; color: var(--text); }
 .void-subtitle { margin: 0 0 20px; font-size: 13px; color: var(--mute); }
-.void-body { white-space: pre-wrap; font-size: 15.5px; line-height: 1.65; color: var(--body); caret-color: var(--accent); outline: none; overflow-wrap: anywhere; }
-.void-body article, .void-body p { margin: 0; }
-.void-body h1, .void-body h2, .void-body h3 { margin: 10px 0 6px; color: var(--text); font-size: 16px; font-weight: 700; line-height: 1.65; }
+/* Line breaks between blocks are markup, not text: only the blocks keep their own spaces and breaks. */
+.void-body { white-space: normal; font-size: 15.5px; line-height: 1.65; color: var(--body); caret-color: var(--accent); outline: none; overflow-wrap: anywhere; }
+.void-body p, .void-body h1, .void-body h2, .void-body h3, .void-body li, .void-body blockquote { white-space: pre-wrap; }
+.void-body article { margin: 0; }
+.void-body p { margin: 0 0 12px; }
+.void-body h1, .void-body h2, .void-body h3 { margin: 18px 0 6px; color: var(--text); font-size: 16px; font-weight: 700; line-height: 1.65; }
 .void-body ul, .void-body ol { margin: 0; padding-left: 24px; white-space: normal; }
 .void-body li { white-space: pre-wrap; }
 .void-body blockquote { margin: 0; border-left: 2px solid var(--accent); padding-left: 14px; }
