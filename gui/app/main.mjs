@@ -7431,7 +7431,7 @@ function renderInspector(app, t, selected) {
       const progress = element(document, 'section', { 'data-session-progress': tracked.requestId });
       const failed = tracked.state === 'failed' || tracked.state === 'expired';
       const clientId = tracked.client || selected.runsIn?.client || text(app.language, 'unknown');
-      const client = String(clientId).replace(/[_-]+/g, ' ').replace(/\b\w/g, letter => letter.toUpperCase());
+      const client = clientLabel(clientId, app.language);
       const machine = tracked.machine || selected.machine || text(app.language, 'unknown');
       const steps = [
         ['request', text(app.language, 'startStepSent'), 'done'],
