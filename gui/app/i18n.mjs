@@ -684,6 +684,7 @@ const COPY = {
   finalTypeCode: ['Or type this code', 'También se puede introducir este código'],
   finalAt: ['At', 'En'],
   finalAccessCloses: ['Access closes in {hours} h {minutes} min', 'El acceso se cierra en {hours} h {minutes} min'],
+  finalAccessClosesSoon: ['Access closes in less than a minute', 'El acceso se cierra en menos de un minuto'],
   finalNewCodeHint: ['A new code replaces this one; closing access signs the phone out.', 'Un código nuevo reemplaza al actual. Cerrar el acceso desconecta el teléfono.'],
   finalDone: ['Done', 'Listo'],
   finalTakingLonger: ['Taking longer than usual', 'Tardando más de lo habitual'],

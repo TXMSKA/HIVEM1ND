@@ -554,6 +554,11 @@ test("Settings phone dialog uses the real grant, retains expiry and scrubs secre
   const { document } = createTestDocument(1440);
   const panel = renderSettings(document, { tab: "general", machine: "DESKTOP", language: "en", home: { enabled: true, phoneCount: 2, expiresAt: new Date(Date.now() + 10000).toISOString() } }, (key, values) => text("en", key, values), {});
   assert.match(panel.querySelector("[data-phone-count]").textContent, /2 phones signed in/);
+  assert.match(panel.querySelector("[data-remaining]").textContent, /less than a minute/);
+  assert.doesNotMatch(panel.querySelector("[data-phone-count]").textContent, /\d:\d{2}:\d{2}/);
+  const later = renderSettings(document, { tab: "general", machine: "DESKTOP", language: "en", now: Date.now(), home: { enabled: true, phoneCount: 2, expiresAt: new Date(Date.now() + 43198 * 1000).toISOString() } }, (key, values) => text("en", key, values), {});
+  assert.match(later.querySelector("[data-remaining]").textContent, /Access closes in 11 h 59 min/);
+  assert.doesNotMatch(later.querySelector("[data-remaining]").textContent, /seconds/);
   clickAction(root, "open-home");
   await waitFor(() => root.querySelector("[data-phone-dialog]"), "The next QR grant did not open.");
   await fixture.control.advance(12 * 3600000);

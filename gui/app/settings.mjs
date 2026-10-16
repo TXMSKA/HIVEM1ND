@@ -1,6 +1,6 @@
 import { createOperation, request } from "./api.mjs";
 import { element, icon, labelDialog, labeledField } from "./components.mjs";
-import { cardinal, formatWhen, limitsUsage } from "./i18n.mjs";
+import { formatShortTime, formatWhen, limitsUsage } from "./i18n.mjs";
 import { encodeHomeQr } from "./qr.mjs";
 import { renderQr } from "./qr-render.mjs";
 import { catalogLabel, clientLabel } from './clusters.mjs';
@@ -526,9 +526,11 @@ function renderHome(document, model, t, actions) {
     block.append(element(document, "p", { text: t("homeClosed") }));
   } else {
     block.append(element(document, "p", { "data-phone-count": home.phoneCount ?? "unknown", text: Number.isInteger(home.phoneCount)
-      ? t(home.phoneCount === 1 ? "finalPhoneStatus" : "finalPhoneStatusPlural", { time: formatWhen(model.language, home.expiresAt), count: home.phoneCount })
-      : `${t("homeActive", { time: formatWhen(model.language, home.expiresAt) })} ${t("settingsPhoneCountUnknown")}` }));
-    block.append(element(document, "p", { "data-remaining": String(expiry.remainingSeconds), text: cardinal(model.language, "homeRemaining", expiry.remainingSeconds) }));
+      ? t(home.phoneCount === 1 ? "finalPhoneStatus" : "finalPhoneStatusPlural", { time: formatShortTime(model.language, home.expiresAt), count: home.phoneCount })
+      : `${t("homeActive", { time: formatShortTime(model.language, home.expiresAt) })} ${t("settingsPhoneCountUnknown")}` }));
+    const hours = Math.floor(expiry.remainingSeconds / 3600), minutes = Math.floor(expiry.remainingSeconds % 3600 / 60);
+    block.append(element(document, "p", { "data-remaining": String(expiry.remainingSeconds), text: expiry.remainingSeconds < 60
+      ? t("finalAccessClosesSoon") : t("finalAccessCloses", { hours, minutes }) }));
   }
   const grant = !expiry.expired ? model.grant : null;
   if (grant?.qrPayloads?.length) {
