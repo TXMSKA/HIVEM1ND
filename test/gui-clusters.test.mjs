@@ -69,7 +69,7 @@ test('Runs in labels keep agent, model and effort readable instead of exposing p
   assert.equal(runsInLabel({ client: 'claude', model: 'observed', effort: null, mode: null }, [{ id: 'claude', title: 'claude', models: [{ id: 'observed', title: 'observed', efforts: [] }] }]), 'Claude Code, Observed');
   assert.equal(runsInLabel({ client: 'codex', model: 'observed', effort: 'high' }, clients, 'es'), 'Codex, Observed, Alto');
   assert.equal(readableIdentity('root:master', 'Persona'), 'Persona');
-  assert.equal(readableIdentity('project:shop:executor-shop', 'Persona'), 'executor shop');
+  assert.equal(readableIdentity('project:shop:executor-shop', 'Persona'), 'executor-shop');
 });
 
 test('R5 plan cards show readable identities and Runs in copy in English and Spanish', () => {
@@ -82,7 +82,7 @@ test('R5 plan cards show readable identities and Runs in copy in English and Spa
     const card = renderPlanCard(document, planCardModel(controller, plan, language, clients), {});
     const visible = nodes(card).map(node => node.textContent).join(' ');
     assert.doesNotMatch(visible, /root:master|project:shop:executor-shop/);
-    assert.match(visible, /executor shop/);
+    assert.match(visible, /executor-shop/);
     assert.match(visible, /Codex, Observed, (?:High|Alto)/);
   }
 });

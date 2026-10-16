@@ -19,7 +19,8 @@ export function listedWorktrees(linkPath, worktrees = []) {
 
 export function readableIdentity(value, personLabel = 'You') {
   if (value === 'root:master' || value === 'root:person') return personLabel;
-  return String(value ?? '').split(':').at(-1).replace(/[_-]+/g, ' ');
+  // The unit's own name, as the Map and Hierarchy show it: only the scope prefix goes.
+  return String(value ?? '').split(':').at(-1);
 }
 
 export function hierarchyIcon(unit) {
