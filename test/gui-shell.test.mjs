@@ -5835,6 +5835,15 @@ test('a repository plan stalls ten minutes after its last confirmed step', async
   assert.match(source, /data-action="stop-step"/);
 });
 
+test('the cluster inspector keeps the composer and does not stretch Start a plan', async () => {
+  const css = await readFile('gui/app/styles.css', 'utf8');
+  assert.match(css, /\.shell\[data-layout="desktop"\]\[data-mode="map"\] \.inspector \{[^}]*overflow:\s*hidden/);
+  assert.match(css, /\.inspector-body > \.chat-panel:not\(\.agent-conversation\) \{[^}]*overflow:\s*hidden/);
+  assert.match(css, /\.inspector-body > \.chat-panel:not\(\.agent-conversation\) > \.transcript \{[^}]*overflow:\s*auto/);
+  assert.match(css, /\.transcript > \.btn \{[^}]*align-self:\s*start/);
+  assert.match(css, /\.transcript > \.btn \{[^}]*height:\s*auto/);
+});
+
 test('the Overseer subtitle stacks under the name inside the hierarchy row', async () => {
   const css = await readFile('gui/app/styles.css', 'utf8');
   assert.match(css, /\.list \.row-unit \.group-title:has\(\.hierarchy-sub\) \{[^}]*flex-direction:\s*column/);
