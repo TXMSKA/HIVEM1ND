@@ -29,6 +29,6 @@ export default {
     "relative-links": true,
   },
   globs: ["**/*.md"],
-  ignores: ["node_modules/**", "user/**", "dist/**"],
+  ignores: ["node_modules/**", "user/**", "dist/**", ".work/**"],
   customRules: [noEmDash, relativeLinks],
 };
