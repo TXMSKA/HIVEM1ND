@@ -3635,6 +3635,8 @@ test("the opening frame uses a stored or browser language before the read, then 
   const app = await pending;
   const storedApp = await storedBoot;
   t.after(() => { dispose(app); dispose(storedApp); });
+  await patient(() => [app, storedApp].every(mounted => mounted.bootSettled && !mounted.bootReading
+    && mounted.store.snapshotReady && mounted.store.viewer), 'The authoritative viewer presentation did not finish.');
   assert.equal(app.language, "en");
   assert.equal(document.documentElement.lang, "en");
   assert.equal(storage.get("hivem1nd:language"), "en");

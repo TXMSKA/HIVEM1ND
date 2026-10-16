@@ -17,6 +17,7 @@ import { readContent, readMachineSettings } from '../engine/service/settings.mjs
 import { routeTable, serveEvents } from '../engine/service/http.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 import { hashBytes } from '../engine/service/identity.mjs';
+import { withLocalChanges } from '../engine/service/store.mjs';
 import { drainRunLaunches, callPlanTool } from '../engine/service/runs.mjs';
 
 describe('service api', { concurrency: false }, () => {
@@ -1188,13 +1189,16 @@ test('every contract route has a success result and an authority or boundary fai
   assert.equal(contextReplacements.size, 1);
   // Stopping the step ends only the running turn; the session stays open. Only the desktop may ask.
   const stepTarget = `/api/v1/sessions/${sessionId}/stop-step`, stepKey = randomUUID();
-  const stepWrites = fixture.store.writes.length;
-  for (const denied of [phoneCredential.token, settingsAgent.token]) {
-    expectStatus(await call(port, 'POST', stepTarget, { token: denied, body: {}, headers: { 'idempotency-key': randomUUID() } }), 403, 'stop step authority');
-  }
-  expectStatus(await call(port, 'POST', stepTarget, { token, body: { unknown: true }, headers: { 'idempotency-key': randomUUID() } }), 400, 'stop step unknown body');
-  expectStatus(await call(port, 'POST', `/api/v1/sessions/${randomUUID()}/stop-step`, { token, body: {}, headers: { 'idempotency-key': randomUUID() } }), 404, 'stop step unknown session');
-  assert.equal(fixture.store.writes.length, stepWrites, 'a refused stop changes nothing');
+  // Wait for prior local observation and hold it while proving these rejected requests write nothing.
+  await withLocalChanges(fixture.store, async () => {
+    const stepWrites = fixture.store.writes.length;
+    for (const denied of [phoneCredential.token, settingsAgent.token]) {
+      expectStatus(await call(port, 'POST', stepTarget, { token: denied, body: {}, headers: { 'idempotency-key': randomUUID() } }), 403, 'stop step authority');
+    }
+    expectStatus(await call(port, 'POST', stepTarget, { token, body: { unknown: true }, headers: { 'idempotency-key': randomUUID() } }), 400, 'stop step unknown body');
+    expectStatus(await call(port, 'POST', `/api/v1/sessions/${randomUUID()}/stop-step`, { token, body: {}, headers: { 'idempotency-key': randomUUID() } }), 404, 'stop step unknown session');
+    assert.equal(fixture.store.writes.length, stepWrites, 'a refused stop changes nothing');
+  });
   assert.equal(routeTable().find(route => route.method === 'POST' && route.template === '/sessions/:sessionId/stop-step').operation, 'session.stop');
   const stepStopped = await call(port, 'POST', stepTarget, { token, body: {}, headers: { 'idempotency-key': stepKey } });
   expectStatus(stepStopped, 200, 'stop step');
