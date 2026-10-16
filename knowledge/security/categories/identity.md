@@ -59,15 +59,16 @@ Who the caller is and how that is proved on every request: login, sessions, toke
 
 ## Enumeration, throttling and bots
 
-**Applies when:** a login, registration, reset or verification endpoint is added or its messages change; a lockout is configured; a form is exposed to strangers.
+**Applies when:** a login, registration, reset or verification endpoint is added or its messages change; a lockout is configured; a form is exposed to strangers; login is hit by automated attempts.
 
 **Options:**
 
 - **Uniform answers.** Same status, same text and same timing whether the account exists or not. Always.
 - **Soft lock before hard lock.** A growing delay per account and per address, so an attacker cannot lock the owner out.
+- **A cheap risk check before the expensive hash.** Signals such as the client's TLS fingerprint, its failure rate and whether the device is known are combined into a score: low passes, medium gets a challenge, high is dropped before the hash. For a login under automated attack, where address blocking, per-account limits and lockouts each fail alone.
 - **Bot protection proportional to the risk.** A honeypot field or a short delay for a contact form; proof of work or a challenge for a flow with value. A third-party challenge brings cookies and a privacy notice update.
 
-**Build:** Build the three uniform answers as in [sessions-and-credentials.md](../sessions-and-credentials.md#uniform-answers): registration confirms the address first, login verifies a dummy hash for an unknown account, and reset answers before the lookup. Add a growing delay per account and per address under the ceiling in [essentials.md](../essentials.md), and limit reset and verification mail per target address.
+**Build:** Build the three uniform answers as in [sessions-and-credentials.md](../sessions-and-credentials.md#uniform-answers): registration confirms the address first, login verifies a dummy hash for an unknown account, and reset answers before the lookup. Add a growing delay per account and per address under the ceiling in [essentials.md](../essentials.md), limit reset and verification mail per target address, and under automated attack score each attempt from cheap signals before the hash runs, as in [sessions-and-credentials.md](../sessions-and-credentials.md#throttling).
 
 **Open:** steps 4 and 6 of [authentication-and-session](../protocols/authentication-and-session.md); step 1 of [resource-limits](../protocols/resource-limits.md).
 

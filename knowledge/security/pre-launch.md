@@ -17,6 +17,19 @@ The order is priority: the items that lose money or accounts come first, so a pa
 7. **Infrastructure.** No environment file served, no default credential, stock admin routes removed, directory listing disabled, source maps off the public origin, from [deployment-surface](protocols/deployment-surface.md). Database privileges reduced to what the application uses and row policies on every table the browser reaches, steps 2 and 3 of [data-store](protocols/data-store.md). Security events written and readable, step 4 of [logging-and-errors](protocols/logging-and-errors.md).
 8. **Personal data and notices.** Consent unticked and recorded, nothing non-essential loading before a choice, deletion and unsubscribe working, and the privacy policy, cookie notice, terms, refund policy and business details live, linked and matching what the application does. Steps 2 to 6 of [personal-data](protocols/personal-data.md).
 
+## Readiness topics
+
+A production-readiness statement names which topics apply, which are solved and which are pending, and "works locally" is never the evidence. Its security topics are answered by this pass:
+
+- **Secrets and keys.** Item 7 and [secrets](protocols/secrets.md), including one least-privilege key per consumer.
+- **IAM.** The database privileges of item 7, and the key scope in [secrets-and-configuration](categories/secrets-and-configuration.md).
+- **OAuth, signed tokens and key rotation.** [identity](categories/identity.md) and step 7 of [authentication-and-session](protocols/authentication-and-session.md).
+- **TLS, encryption in transit and at rest.** Item 3 and step 5 of [data-store](protocols/data-store.md).
+- **CORS, request forgery and injection.** Items 3 and 5, and [injection-and-output](protocols/injection-and-output.md).
+- **WAF and DDoS.** No step of their own: the pass records whether a WAF or a provider's flood protection stands in front of the public origin, or that none does, beside the limits in steps 1 and 4 of [resource-limits](protocols/resource-limits.md).
+
+The other topics of such a statement, such as resilience, delivery and observability, are engineering and are not part of this pass.
+
 ## Closing rule
 
 The pass closes with zero open fails. A fail that is deferred instead of fixed is a risk acceptance, which is a person's decision and is recorded with a name against it, as [rules-of-engagement.md](rules-of-engagement.md) sets out.
