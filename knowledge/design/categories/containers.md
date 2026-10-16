@@ -4,16 +4,17 @@ Surfaces that group content: cards, panels, lists and tables. Grouping with a ca
 
 ## Cards
 
-Applies when: cards are added, restyled or arranged in a grid; a card holds several unrelated figures; only a small link inside a card is clickable; cards sit inside cards; a request says "the cards look generic".
+Applies when: cards are added, restyled or arranged in a grid; a card holds several unrelated figures; only a small link inside a card is clickable; cards sit inside cards; a product or offer card carries its fine print; a request says "the cards look generic".
 
 Options:
 
 - **A card per concept**, marked by one soft shadow or one border, summarizing and linking to its detail.
 - **The whole card as the target** when it has one action; separate controls, and a card that is not itself a link, when it has two or more.
+- **A product card aligned, grouped and trimmed**: every text and the action on one start edge; what belongs together sits close, the name with its category and the price with its instalments, with more space between groups than inside them; fine print such as legal terms, shipping and conditions moves to the product page; with the card shorter, the name sits above the image and the price shares one row with the action, a button sized to its label instead of the full width. Names follow sentence case, which Spanish uses always.
 - **No card**, spacing and a rule instead, when the grouping is already clear from proximity or the page is dense.
 - **A grid that fills exactly**, as many cells as items at every width, with mixed sizes when the content has a lead item. Auto-fit columns suit open-ended collections, where a short last row is expected.
 
-Build: One concept per card with one border or one soft shadow; the whole card is the target through one stretched link when it has one action. For a known count, column counts that divide it at each breakpoint, or a lead card that spans; `repeat(auto-fit, minmax(min(100%, 17.5rem), 1fr))` only for open-ended collections.
+Build: One concept per card with one border or one soft shadow; the whole card is the target through one stretched link when it has one action. Text and actions start on one edge, spacing inside a group is smaller than between groups, and fine print lives on the detail page. For a known count, column counts that divide it at each breakpoint, or a lead card that spans; `repeat(auto-fit, minmax(min(100%, 17.5rem), 1fr))` only for open-ended collections.
 
 Open: [composition-and-layout](../protocols/composition-and-layout.md), step 5; [dashboards.md](../dashboards.md), Cards; [ux-laws.md](../ux-laws.md), uniform connectedness; [defaults.md](../defaults.md), Page scaffolds.
 

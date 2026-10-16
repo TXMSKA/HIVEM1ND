@@ -18,16 +18,17 @@ Open: [hierarchy-and-type](../protocols/hierarchy-and-type.md); [tokens.md](../t
 
 ## Body text and reading
 
-Applies when: paragraphs, articles or documentation change; lines run too long; a request says "hard to read", "wall of text"; a subheading or a helper sentence repeats what the heading says.
+Applies when: paragraphs, articles or documentation change; lines run too long; a request says "hard to read", "wall of text"; a subheading or a helper sentence repeats what the heading says; a block of several lines is centred.
 
 Options:
 
 - **Reading measure** of 65 to 75 characters for prose, with a looser line height; tighter for compact interface text.
 - **One reading path** for long form, with related links collected in one block at the end rather than scattered.
 - **Cut the text** before restyling it: each idea said once, no sentence under a heading that restates it.
+- **Start-aligned text** for anything that runs past one line: every line begins on the same edge, so the eye never hunts for the next start. Centring suits one line only, such as a lone title or a short label.
 - **Reading aids** for long pages: a progress bar, a last updated date, a table of contents, a print stylesheet where documents get printed.
 
-Build: `max-width` of 65 to 70ch on prose, line height 1.5, paragraphs spaced on the within-group band, links in text underlined with an offset.
+Build: `max-width` of 65 to 70ch on prose, line height 1.5, paragraphs spaced on the within-group band, links in text underlined with an offset, `text-align: start` on any text of two lines or more.
 
 Open: [hierarchy-and-type](../protocols/hierarchy-and-type.md), steps 3 and 6; [site-polish.md](../site-polish.md), Build when the site calls for it.
 

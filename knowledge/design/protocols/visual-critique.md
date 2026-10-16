@@ -20,7 +20,7 @@ report: the named screenshots, the board comparison, the proportion check, the c
    Result: one line per screen, either matching or listing each difference with its element and measurement.
 
 3. Check proportion.
-   Task: on the board and again on the screen, check that texts are aligned and centred where they should be, contents are evenly distributed, padding is consistent between siblings, and every component is built whole.
+   Task: on the board and again on the screen, check that texts are aligned and centred where they should be (no text of two lines or more centred), contents are evenly distributed, padding is consistent between siblings, and every component is built whole.
    Time: 15 minutes.
    Result: per screen, each misalignment, uneven gap or broken component with its element and measured offset, or the line "proportion holds".
 
