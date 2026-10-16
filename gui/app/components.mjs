@@ -6,6 +6,10 @@ const ICONS = {
   phone: "M7 3h10a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zM10 17h4",
   bell: "M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4",
   plus: "M12 5v14M5 12h14",
+  check: "M5 12.5l4.5 4.5L19 7",
+  folder: "M3 7V4h7l2 3h9v13H3z",
+  graph: "M6 3v12M18 3a3 3 0 1 0 0 6 3 3 0 1 0 0-6M6 15a3 3 0 1 0 0 6 3 3 0 1 0 0-6M18 9a9 9 0 0 1-9 9",
+  users: "M9 8a3 3 0 1 0 0 .1M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5M16.5 6.5a2.5 2.5 0 1 1 0 5M17 14.5c2.4.4 4 2.2 4 5",
   send: "M4 12 20 4l-6 16-3-7z",
   minus: "M5 12h14",
   move: "M12 3v18M3 12h18M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3",
@@ -245,4 +249,9 @@ export function namedIconButton(document, glyph, label, onClick) {
   if (typeof label !== 'string' || !label.trim()) throw new TypeError('An icon button needs an accessible name.');
   return element(document, 'button', { type: 'button', class: 'icon-button', 'aria-label': label,
     title: label, onclick: onClick }, icon(document, glyph));
+}
+
+// The glyph of a cluster follows its link, as the boards draw it: a folder, a repository, or a cluster with no link.
+export function clusterGlyph(kind) {
+  return kind === 'repository' ? 'graph' : kind === 'folder' ? 'folder' : 'users';
 }

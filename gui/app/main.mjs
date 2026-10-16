@@ -38,7 +38,7 @@ import {
 import { addNode, addBoardFrame, appendBoardNode, boardBounds, boardColors, boardCommentAnchor, boardDocument, dragNodeGeometry, editedBoard, hitBoardNode, indexNodes, loadAssets, parentPoint, patchNode, releaseAssets, removeNode, renderBoard, replaceBoard, setBoardDraft, sketchStroke, touchedStrokes, uploadAsset } from "./blueprint.mjs";
 import * as editorUi from "./editors.mjs";
 import { ApiError, clearCredentials, createApi, createOperation, dispose as disposeApi, fetchAsset, operationId, perform, request } from "./api.mjs";
-import { element, icon, labelDialog, labeledField, progressMark, runAction, setBusy, showDialog, showError } from "./components.mjs";
+import { clusterGlyph, element, icon, labelDialog, labeledField, progressMark, runAction, setBusy, showDialog, showError } from "./components.mjs";
 import {
   applyWatch,
   createComment,
@@ -6178,7 +6178,7 @@ function decorateHierarchy(app, host) {
         node.setAttribute("aria-expanded", String(row.expanded));
         const disclosure = hierarchyDisclosure(document, row.expanded);
         disclosure.style.gridColumn = "1";
-        const mark = folderIcon(document);
+        const mark = icon(document, clusterGlyph(row.group?.link?.kind));
         mark.style.gridColumn = "2";
         const title = element(document, "span", { class: "group-title", text: row.label });
         title.style.gridColumn = "3";

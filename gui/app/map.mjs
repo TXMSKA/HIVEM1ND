@@ -1,5 +1,5 @@
 import { createOperation, request as apiRequest, retryOperation } from "./api.mjs";
-import { icon } from "./components.mjs";
+import { clusterGlyph, icon } from "./components.mjs";
 import { unitDisplayName } from "./hierarchy.mjs";
 import {
   edgeEndpoints,
@@ -149,13 +149,7 @@ export function renderMap(document, host, map, labels = {}) {
     label.setAttribute("aria-pressed", String(map.selectedGroupId === zone.group.id));
     label.style.left = `${screen.x - rect.left}px`;
     label.style.top = `${screen.y - rect.top}px`;
-    const folder = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    folder.setAttribute("viewBox", "0 0 24 24");
-    folder.setAttribute("class", "icon");
-    folder.setAttribute("aria-hidden", "true");
-    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute("d", "M3 7V4h7l2 3h9v13H3z");
-    folder.append(path);
+    const folder = icon(document, clusterGlyph(zone.folder ? "folder" : zone.group.link?.kind));
     const title = document.createElement("span");
     title.textContent = zone.group.title + (zone.count ? `, ${zone.count}` : '');
     const caption = document.createElement("span");
