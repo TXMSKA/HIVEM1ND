@@ -7347,3 +7347,29 @@ test('a slow chat load shows one notice above the composer', async (t) => {
   assert.equal(texts.some(text => /\b0 s\b/.test(text)), false);
   release();
 });
+
+test("an agent with no conversation offers the composer and its first message opens the conversation", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const api = apiFrom(fixture.desktopUrl);
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.unitList?.catalog?.length, "The agents did not load.");
+  const chats = (await request(api, "GET", "/chats", { query: { listed: "true" } })).data.items;
+  const talked = new Set(chats.filter((chat) => chat.kind === "direct").flatMap((chat) => chat.members));
+  const quiet = desktop.app.unitList.catalog.find((unit) => unit.role !== "master" && !talked.has(unit.id));
+  assert.ok(quiet, "the fixture has an agent with no conversation");
+  desktop.app.mapState.selection = new Set([quiet.id]);
+  desktop.app.mapState.onSelection([quiet.id]);
+  await waitFor(() => desktop.root.querySelector(`[data-first-message="${quiet.id}"]`), "The first-message composer did not appear.");
+  typeInput(desktop.root.querySelector(`[data-first-message="${quiet.id}"]`), "Hello from the first message", 0, 0);
+  click(desktop.root.querySelector('[data-action="send"]'));
+  await waitFor(() => desktop.app.thread?.chat?.kind === "direct" && desktop.app.thread.chat.members.includes(quiet.id), "The conversation did not open.");
+  let posted = false;
+  for (let attempt = 0; attempt < 100 && !posted; attempt += 1) {
+    const items = (await request(api, "GET", `/chats/${encodeURIComponent(desktop.app.thread.chat.id)}/messages`)).data.items ?? [];
+    posted = items.some((message) => message.body === "Hello from the first message");
+    if (!posted) await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.equal(posted, true, "The first message was not posted.");
+});

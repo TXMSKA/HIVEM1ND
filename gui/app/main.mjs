@@ -6868,9 +6868,13 @@ function chatPanel(app, t) {
       onMore: async () => { await loadSessionView(app.api, sessionView, { older: true }); if (!app.disposed) renderShell(app); },
       onStop: () => stopWorkStep(app, sessionView),
     }, app.api.now()));
-    else panel.append(element(document, 'div', {
-      class: 'transcript', id: `session-${agentTabs.session.id}-panel`, role: 'tabpanel', 'aria-labelledby': `session-${agentTabs.session.id}-chat`,
-    }));
+    else {
+      panel.append(element(document, 'div', {
+        class: 'transcript', id: `session-${agentTabs.session.id}-panel`, role: 'tabpanel', 'aria-labelledby': `session-${agentTabs.session.id}-chat`,
+      }));
+      // An agent with no conversation yet still gets the composer; the first message opens the conversation.
+      if ((app.store.capabilities ?? []).includes("chat.post")) panel.append(firstMessageComposer(app, t, subject));
+    }
     return panel;
   }
   const members = thread.chat.members ?? [];
@@ -7380,6 +7384,38 @@ function sendMailbox(app, compose) {
     box.operation = error?.operation ?? box.operation;
     noteAction(app, error, `mailbox:${box.unitId}`);
   });
+}
+
+function firstMessageComposer(app, t, unit) {
+  const document = app.root.ownerDocument;
+  const name = t("messageUnit", { unit: unit.alias || unit.unit });
+  const hint = startText(app.language, 'readsNext');
+  const key = `first:${unit.id}`;
+  const composer = element(document, "input", { class: "composer", "data-composer": "true", "data-first-message": unit.id, "data-keep": keepId("chat", key), "aria-label": name, placeholder: name });
+  composer.value = inputDrafts(app).chats.get(key)?.value ?? "";
+  composer.addEventListener("input", () => { inputDrafts(app).chats.set(key, fieldDraft(composer)); syncViewerDirty(app); });
+  const send = element(document, "button", { type: "button", class: "composer-send", "data-action": "send", "aria-label": t("send"), title: t("send"),
+    onclick: () => sendFirstMessage(app, unit, composer) }, icon(document, "send"));
+  const hintId = `composer-hint-${key}`;
+  composer.setAttribute("aria-describedby", hintId);
+  return element(document, "label", { class: "field composer-field" },
+    element(document, "span", { class: "field-label visually-hidden", text: name }),
+    element(document, "div", { class: "composer-row" }, composer, send),
+    element(document, "p", { class: "field-hint", id: hintId, text: hint }));
+}
+
+// The first message opens the direct conversation with the agent, then goes out as any other message.
+function sendFirstMessage(app, unit, composer) {
+  const body = composer.value;
+  if (!body.trim()) return;
+  // Its own key: selecting the agent may already be opening its conversation under open-chat.
+  settle(app, `first-message:${unit.id}`, text(app.language, "loadingConversation"), async (record) => {
+    const result = await openDirectChat(app.api, [unit.id], record.operation);
+    await showChat(app, result.data);
+    clearInputDraft(app, "chat", `first:${unit.id}`);
+    await postMessage(app.api, app.thread, { body });
+    syncViewerDirty(app);
+  }).finally(() => { if (!app.disposed) renderShell(app); });
 }
 
 function submitComposer(app, composer) {
