@@ -1,4 +1,5 @@
 import { element, icon, labelDialog, progressMark } from './components.mjs';
+import { pathFolder } from './hierarchy.mjs';
 import { startText } from './start-copy.mjs';
 
 export function connectedChoices(clients = []) {
@@ -97,16 +98,18 @@ export function renderRepositoryOffer(document, model, actions) {
     const check = tick(document, group.title, selected === original.repositories.length, value => actions.onFolder(group.id, value), { 'data-discovery-folder': group.id });
     check.querySelector?.('input') && (check.querySelector('input').indeterminate = selected > 0 && selected < original.repositories.length);
     const open = model.expanded.has(group.id) || Boolean(model.query);
-    const row = element(document, 'div', { class: 'discovery-folder' }, check,
-      button(document, open ? '⌄' : '›', `expand-${group.id}`, () => actions.onExpand(group.id)),
-      element(document, 'code', { text: group.path }), element(document, 'small', { text: t(original.repositories.length === 1 ? 'repositoryOne' : 'repositoryMany', { count: original.repositories.length }) }));
+    const toggle = button(document, '', `expand-${group.id}`, () => actions.onExpand(group.id));
+    toggle.replaceChildren(icon(document, open ? 'chevron' : 'chevronRight'));
+    toggle.className = `${toggle.className} hierarchy-disclosure`;
+    const row = element(document, 'div', { class: 'discovery-folder' }, check, toggle,
+      element(document, 'code', { text: pathFolder(group.path) || group.title }), element(document, 'small', { text: t(original.repositories.length === 1 ? 'repositoryOne' : 'repositoryMany', { count: original.repositories.length }) }));
     row.children[1].setAttribute('aria-label', group.title);
     row.children[1].setAttribute('aria-expanded', String(open));
     list.append(row);
     if (open) for (const repo of group.repositories) {
       list.append(element(document, 'div', { class: 'discovery-repository' },
         tick(document, repo.name, model.selected.has(repo.id), value => actions.onRepository(repo.id, value), { 'data-discovery-repository': repo.id }),
-        ...repo.worktrees.map(tree => element(document, 'code', { class: 'discovery-worktree', text: [tree.path, tree.branch].filter(Boolean).join(' · ') }))));
+        ...repo.worktrees.map(tree => element(document, 'code', { class: 'discovery-worktree', text: [pathFolder(tree.path) || tree.path, tree.branch].filter(Boolean).join(' · ') }))));
     }
   }
   root.append(list, element(document, 'p', { class: 'start-hint', text: t('worktreesHint') }),

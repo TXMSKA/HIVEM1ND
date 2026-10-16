@@ -70,7 +70,7 @@ import {
   startWatch,
   stopWatch,
 } from "./editors.mjs";
-import { activateUnit, buildHierarchy, flattenVisibleHierarchy, revealGroup, toggleGroup, unitDisplayName, unitsForTree } from "./hierarchy.mjs";
+import { activateUnit, buildHierarchy, collapseNewClusters, flattenVisibleHierarchy, hierarchyDisclosure, hierarchyIcon, pathFolder, revealGroup, toggleGroup, unitDisplayName, unitsForTree } from "./hierarchy.mjs";
 import { checkoutFacts, openTaskDetail, renderApproval, renderGrants, renderMachine, renderSession, renderTask, renderUnit, renderWaiting } from "./inspector.mjs";
 import { cardinal, DICTIONARIES, formatClock, formatNumber, formatWhen, text } from "./i18n.mjs";
 import { collectPages, createPagedList, loadAll, reloadList, renderWindow, setQuery, windowRange } from "./lists.mjs";
@@ -1611,6 +1611,7 @@ function renderCollection(app, t) {
       if (row.kind === "cluster") {
         if (kind === 'single' && app.lastClusterClick?.id === row.groupId && app.api.now() - app.lastClusterClick.at < 500) kind = 'double';
         app.lastClusterClick = kind === 'single' ? { id: row.groupId, at: app.api.now() } : null;
+        if (kind === 'double') openCluster(app, row.groupId);
         selectGroup(app, row.groupId);
         if (kind === 'double') app.pendingClusterFlight = row.groupId;
         else toggleGroup(app.hierarchy, row.id);
@@ -4261,6 +4262,7 @@ function ensureMap(app) {
     renderShell(app);
   };
   app.mapState.onPersonalGroup = (id) => selectGroup(app, id);
+  app.mapState.onOpenCluster = (id) => openCluster(app, id);
   app.mapState.onServices = () => { navigate(app, 'settings'); };
   app.mapState.onRename = (id) => beginAlias(app, id);
   app.mapState.onConnect = (pending) => confirmConnection(app, pending.source, [pending.target]);
@@ -4399,6 +4401,7 @@ function collectionRows(app, t, list) {
     const offered = app.startProjects?.discoveryOffer?.groups.flatMap(group => group.repositories).find(repo => repo.worktrees.some(worktree => worktree.path && worktree.path === link?.localPath));
     cluster.worktrees = offered?.worktrees ?? [];
   }
+  collapseNewClusters(app.hierarchy, tree.clusters);
   const rows = flattenVisibleHierarchy(tree, app.hierarchy, list.query);
   const labels = new Map();
   for (const row of rows) if (row.kind === "unit") labels.set(row.label, (labels.get(row.label) ?? 0) + 1);
@@ -6074,9 +6077,19 @@ function decorateHierarchy(app, host) {
       if (!row) continue;
       if (row.unit) {
         node.setAttribute("aria-label", row.text);
-        node.style.paddingLeft = `${row.depth > 1 ? 42 : row.depth ? 24 : 8}px`;
-        node.replaceChildren(unitNameNode(document, row.unit), element(document, "i", { class: "map-status row-status", "data-status": row.unit.status, role: "img", "aria-label": t(statusKey(row.unit.status)) }));
-        if (row.unit.unread > 0) node.append(element(document, 'span', { class: 'hierarchy-unread', 'aria-label': startText(app.language, 'unread', { count: row.unit.unread }), text: row.unit.unread }));
+        const title = element(document, "span", { class: "group-title" });
+        title.style.gridColumn = "3";
+        title.style.paddingLeft = `${row.depth * 16}px`;
+        title.append(unitNameNode(document, row.unit));
+        if (row.unit.role === "overseer") title.append(element(document, "span", { class: "hierarchy-sub", text: startText(app.language, "above") }));
+        const glyph = icon(document, hierarchyIcon(row.unit));
+        glyph.style.gridColumn = "2";
+        const status = element(document, "i", { class: "map-status row-status", "data-status": row.unit.status, role: "img", "aria-label": t(statusKey(row.unit.status)) });
+        const tail = element(document, "span", { class: "hierarchy-tail" });
+        tail.style.gridColumn = "4";
+        if (row.unit.unread > 0) tail.append(element(document, 'span', { class: 'hierarchy-unread', 'aria-label': startText(app.language, 'unread', { count: row.unit.unread }), text: row.unit.unread }));
+        tail.append(status);
+        node.replaceChildren(glyph, title, tail);
         if (app.aliasEdit?.rowId === row.id) {
           const editor = aliasField(app, row.unit);
           if (host.insertBefore) host.insertBefore(editor, node);
@@ -6088,15 +6101,30 @@ function decorateHierarchy(app, host) {
           node.remove();
         }
       } else if (row.kind === "cluster") {
-        node.style.paddingLeft = `${row.depth ? 30 : 8}px`;
         node.setAttribute("data-cluster-row", row.groupId);
         node.setAttribute("aria-expanded", String(row.expanded));
-        node.replaceChildren(element(document, "span", { "aria-hidden": "true", text: row.expanded ? "⌄" : "›" }), folderIcon(document), element(document, "span", { class: "group-title", text: row.label }), element(document, "span", { class: "group-count", text: row.count }));
-        const branch = app.clusterGit?.get(row.groupId)?.git?.branch;
-        if (branch) node.append(element(document, 'code', { class: 'hierarchy-branch', text: branch }));
+        const disclosure = hierarchyDisclosure(document, row.expanded);
+        disclosure.style.gridColumn = "1";
+        const mark = folderIcon(document);
+        mark.style.gridColumn = "2";
+        const title = element(document, "span", { class: "group-title", text: row.label });
+        title.style.gridColumn = "3";
+        title.style.paddingLeft = `${row.depth * 16}px`;
+        const gitBranch = app.clusterGit?.get(row.groupId)?.git?.branch ?? "";
+        const branchText = gitBranch || (row.group?.link?.kind === "none" && !row.count ? startText(app.language, "noLink") : "");
+        const branch = element(document, "code", { class: "hierarchy-branch", text: branchText });
+        branch.style.gridColumn = "4";
+        const count = element(document, "span", { class: "group-count", text: row.count ? String(row.count) : "" });
+        count.style.gridColumn = "5";
+        node.replaceChildren(disclosure, mark, title, branch, count);
       } else if (row.kind === 'worktree') {
         node.setAttribute('data-cluster-worktree', row.worktree.id);
-        node.replaceChildren(element(document, 'code', { class: 'hierarchy-worktree', text: row.worktree.path ?? '' }), element(document, 'code', { class: 'hierarchy-branch', text: row.worktree.branch ?? '' }));
+        const title = element(document, 'code', { class: 'hierarchy-worktree', text: row.label || pathFolder(row.worktree.path) });
+        title.style.gridColumn = '3';
+        title.style.paddingLeft = `${row.depth * 16}px`;
+        const branch = element(document, 'code', { class: 'hierarchy-branch', text: row.worktree.branch ?? '' });
+        branch.style.gridColumn = '4';
+        node.replaceChildren(title, branch);
       } else if (row.id === "section:clusters") {
         const heading = element(document, "div", { class: "my-groups-heading", "data-my-groups": "true" }, element(document, "span", { text: startText(app.language, "clusters") }));
         if (app.layout !== "phone" && app.store.capabilities.includes("chat.manage")) {
@@ -6307,6 +6335,16 @@ function emptySelection(app, t) {
   return element(app.root.ownerDocument, 'section', { class: 'empty-selection' }, icon(app.root.ownerDocument, 'map'),
     element(app.root.ownerDocument, 'h2', { text: startText(app.language, empty ? 'nothingHere' : 'nothingSelected') }),
     element(app.root.ownerDocument, 'p', { text: startText(app.language, empty ? 'emptyHint' : 'selectHint') }));
+}
+
+function openCluster(app, id) {
+  const seen = new Set();
+  let current = app.store.indexes.groups.get(id);
+  while (current && !seen.has(current.id)) {
+    seen.add(current.id);
+    app.hierarchy.collapsed.delete(`cluster:${current.id}`);
+    current = app.store.indexes.groups.get(current.parentId);
+  }
 }
 
 function selectGroup(app, id) {

@@ -1,3 +1,31 @@
+import { element, icon } from './components.mjs';
+
+const ROLE_ICON = { overseer: 'crown', overlord: 'executive', executor: 'executor', genesis: 'genesis', incubator: 'genesis', adjutant: 'adjutant', executive: 'executive' };
+
+export function pathFolder(value) {
+  const parts = String(value ?? '').split(/[\\/]/).filter(Boolean);
+  return parts.at(-1) ?? '';
+}
+
+export function hierarchyIcon(unit) {
+  return ROLE_ICON[unit?.role] ?? 'executor';
+}
+
+export function hierarchyDisclosure(document, expanded) {
+  return element(document, 'span', { class: 'hierarchy-disclosure', 'aria-hidden': 'true' }, icon(document, expanded ? 'chevron' : 'chevronRight'));
+}
+
+// A folder starts closed. Clusters already in the set keep whatever the person opened.
+export function collapseNewClusters(state, clusters) {
+  const ids = clusters.map(cluster => cluster.id).sort();
+  const signature = ids.join('\0');
+  if (state.seeded === signature) return state;
+  const known = new Set(String(state.seeded ?? '').split('\0').filter(Boolean));
+  state.seeded = signature;
+  for (const cluster of clusters) if (!known.has(cluster.id)) state.collapsed.add(`cluster:${cluster.id}`);
+  return state;
+}
+
 export function buildHierarchy(units, issues = [], groups = []) {
   const list = (Array.isArray(units) ? units : []).filter(unit => !unit.removed && unit.role !== 'master');
   const canonical = list.find(unit => unit.role === 'overseer' && unit.unit === 'overseer' && unit.scope?.kind === 'root');
@@ -50,7 +78,7 @@ export function flattenVisibleHierarchy(tree, state, query = '') {
     rows.push({ id: key, kind: 'cluster', groupId: cluster.id, group: cluster, label: cluster.title, depth, count: children.length || cluster.units.length, expanded });
     if (!expanded) return;
     pushUnits(cluster.units.filter(matches), depth + 1);
-    for (const worktree of cluster.worktrees ?? []) rows.push({ id: `worktree:${cluster.id}:${worktree.id}`, kind: 'worktree', groupId: cluster.id, worktree, label: worktree.path ?? worktree.branch ?? '', depth: depth + 1 });
+    for (const worktree of cluster.worktrees ?? []) rows.push({ id: `worktree:${cluster.id}:${worktree.id}`, kind: 'worktree', groupId: cluster.id, worktree, label: pathFolder(worktree.path) || worktree.branch || '', depth: depth + 1 });
     const shown = query ? children.length : fold.shown.get(key) ?? 6;
     for (const child of children.slice(0, shown)) appendCluster(child, depth + 1);
     if (children.length > shown) rows.push({ id: `more:${key}`, kind: 'more', groupId: key, count: children.length - shown, depth: depth + 1, labelKey: 'more' });

@@ -8,6 +8,8 @@ const ICONS = {
   focus: "M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5",
   settings: "M4 7h10M18 7h2M4 12h2M10 12h10M4 17h12",
   close: "M6 6l12 12M18 6 6 18",
+  chevron: "M6 9l6 6 6-6",
+  chevronRight: "M9 6l6 6-6 6",
   alert: "M12 4 3 19h18zM12 10v4M12 16h.1",
   crown: "M3 8l4 4 5-7 5 7 4-4-2 11H5z",
   person: [{ tag: "circle", cx: "12", cy: "8", r: "4" }, { tag: "path", d: "M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8" }],

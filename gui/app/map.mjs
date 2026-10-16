@@ -166,6 +166,7 @@ export function renderMap(document, host, map, labels = {}) {
     label.addEventListener('click', () => {
       const now = Date.now(), double = map.lastClusterClick?.id === zone.group.id && now - map.lastClusterClick.at < 500;
       map.lastClusterClick = double ? null : { id: zone.group.id, at: now };
+      if (double) map.onOpenCluster?.(zone.group.id);
       selectPersonalGroup(map, zone.group.id);
       if (double) flyToCluster(map, zone.group.id);
     });

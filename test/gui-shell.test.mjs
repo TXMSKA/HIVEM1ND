@@ -4180,7 +4180,7 @@ test("personal folders, zones and chats select one group and deletion offers onl
   t.after(() => dispose(desktop.app));
   assert.ok(desktop.app.activeRows.some(row => row.id === 'section:clusters'));
   const folder = desktop.root.querySelector(`[data-cluster-row="${group.id}"]`);
-  assert.equal(folder.getAttribute("aria-expanded"), "true");
+  assert.equal(folder.getAttribute("aria-expanded"), "false");
   assert.equal(desktop.root.querySelector("[data-action='new-cluster']").getAttribute("aria-label"), "New cluster");
   click(folder);
   await waitFor(() => desktop.app.thread?.chat?.id === group.chatId, "The folder did not select its linked chat.");

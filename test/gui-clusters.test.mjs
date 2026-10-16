@@ -6,7 +6,7 @@ import { renderApproval } from '../gui/app/inspector.mjs';
 import { renderSessionWork } from '../gui/app/session-work.mjs';
 import { startText } from '../gui/app/start-copy.mjs';
 import { clusterFrames, placeUnits } from '../gui/app/map-geometry.mjs';
-import { buildHierarchy, flattenVisibleHierarchy, revealGroup } from '../gui/app/hierarchy.mjs';
+import { buildHierarchy, collapseNewClusters, flattenVisibleHierarchy, hierarchyDisclosure, revealGroup } from '../gui/app/hierarchy.mjs';
 import { createMap, fitMap, flyToCluster, graphBounds, paintNodes, pointerDown, pointerMove, pointerUp, wheelZoom } from '../gui/app/map.mjs';
 import { renderCluster } from '../gui/app/inspector.mjs';
 import { applyEvent, createStore } from '../gui/app/state.mjs';
@@ -82,6 +82,25 @@ test('canonical nested clusters keep aliases and exact lead links without a root
   revealGroup(state, 'cluster:Web', 13); assert.equal(flattenVisibleHierarchy(tree, state).filter(row => row.kind === 'cluster').length, 20);
   assert.ok(flattenVisibleHierarchy(tree, { shown: new Map(), collapsed: new Set(['cluster:Web']) }, 'repo-18').some(row => row.groupId === 'repo-18'));
   assert.equal(clusterLead(clusters[1], units).id, 'root:lead');
+});
+
+test('a worktree is named by its folder and folders start collapsed', () => {
+  const web = cluster('Web', 'folder');
+  const shop = { ...cluster('shop', 'repository', 'Web'), worktrees: [{ id: 'wt', path: 'C:\\temp\\hivem1nd\\shop', branch: 'feature/cart-empty-state' }] };
+  const tree = buildHierarchy([unit('root:overseer', 'overseer')], [], [web, shop]);
+  const open = flattenVisibleHierarchy(tree, { shown: new Map(), collapsed: new Set() });
+  const worktree = open.find(row => row.kind === 'worktree');
+  assert.equal(worktree.label, 'shop');
+  assert.equal(worktree.worktree.branch, 'feature/cart-empty-state');
+  const state = { shown: new Map(), collapsed: new Set() };
+  collapseNewClusters(state, tree.clusters);
+  const folded = flattenVisibleHierarchy(tree, state);
+  assert.equal(folded.some(row => row.kind === 'worktree' || row.groupId === 'shop'), false);
+  assert.equal(folded.find(row => row.groupId === 'Web').expanded, false);
+  const disclosure = hierarchyDisclosure(document, true);
+  assert.equal(nodes(disclosure).some(node => node.tagName === 'SVG'), true);
+  assert.equal(copy(disclosure).includes('v'), false);
+  assert.equal(nodes(disclosure).find(node => node.tagName === 'PATH').getAttribute('d'), 'M6 9l6 6 6-6');
 });
 
 test('saved cluster frames, empty and nested folders remain in Fit beyond the former zoom floor', () => {

@@ -515,6 +515,27 @@ button, input { font: inherit; color: inherit; }
   color: var(--body);
   text-align: left;
 }
+.list .row-cluster, .list .row-worktree {
+  display: grid;
+  grid-template-columns: 16px 18px minmax(0, 1fr) 7.5rem 2.5rem;
+  column-gap: 8px;
+  align-items: center;
+  padding-left: 8px;
+  padding-right: 8px;
+}
+.list .row-unit {
+  display: grid;
+  grid-template-columns: 16px 18px minmax(0, 1fr) auto;
+  column-gap: 8px;
+  align-items: center;
+  padding-left: 8px;
+  padding-right: 8px;
+}
+.list .row-unit .group-title { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.list .row-cluster .group-count, .list .hierarchy-branch, .list .row-status, .list .hierarchy-unread { margin-left: 0; justify-self: end; }
+.hierarchy-disclosure { display: grid; place-items: center; width: 16px; height: 16px; padding: 0; }
+.hierarchy-sub { margin-left: auto; flex: none; color: var(--mute); font-size: 11.5px; font-weight: 400; white-space: nowrap; }
+.hierarchy-tail { display: inline-flex; align-items: center; gap: 6px; }
 .row[aria-selected="true"], .row:focus-visible { background: var(--card); color: var(--text); }
 .row-heading, .row-issue { color: var(--mute); }
 
@@ -1234,9 +1255,9 @@ button, [role="button"], a[href], summary, select, textarea, [contenteditable="t
 .map-unread, .hierarchy-unread { min-width: 20px; padding: 1px 7px; border-radius: var(--radius-pill); background: var(--accent); color: var(--accent-ink); font-size: 11px; font-weight: 700; }
 .map-unread { position: absolute; right: -10px; top: -10px; }
 .hierarchy-unread { margin-left: auto; }
-.hierarchy-branch { margin-left: auto; color: var(--mute); font-size: 11px; font-weight: 400; }
-.row-worktree { display: flex; align-items: center; gap: 8px; }
-.hierarchy-worktree { font-size: 11.5px; white-space: normal; overflow-wrap: anywhere; }
+.hierarchy-branch { margin-left: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--mute); font-size: 11px; font-weight: 400; }
+.row-worktree { display: grid; align-items: center; gap: 8px; }
+.hierarchy-worktree { font-size: 11.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cluster-heading { display: flex; align-items: center; gap: 8px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
 .cluster-heading > div { flex: 1; }
 .cluster-heading h2 { margin: 0; font-size: 15px; font-weight: 700; }
@@ -1267,10 +1288,10 @@ button, [role="button"], a[href], summary, select, textarea, [contenteditable="t
 .discovery-folders { display: flex; flex-direction: column; gap: 6px; max-height: 50vh; overflow: auto; }
 .discovery-folder { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; background: var(--card); }
 .discovery-folder .start-check { font-size: 13.5px; font-weight: 700; }
-.discovery-folder > code { flex: 1; font-size: 11.5px; overflow-wrap: anywhere; }
+.discovery-folder > code { flex: 1; min-width: 0; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .discovery-folder > small { color: var(--mute); font-size: 12px; }
 .discovery-repository { display: flex; flex-direction: column; padding: 5px 10px 5px 42px; font-size: 13px; }
-.discovery-worktree { padding-left: 28px; color: var(--mute); font-size: 11px; overflow-wrap: anywhere; }
+.discovery-worktree { padding-left: 28px; color: var(--mute); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .start-check { display: flex; align-items: center; gap: 10px; font-size: 13.5px; }
 .start-check input { width: 18px; height: 18px; min-height: 18px; min-width: 18px; accent-color: var(--accent); }
 .overseer-kinds { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
