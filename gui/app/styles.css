@@ -1577,3 +1577,8 @@ html { scrollbar-color: var(--line2) var(--panel); scrollbar-width: thin; }
 /* The disclosure chevron leads its folder row, as in Hierarchy. */
 .library-disclosure { order: -1; display: inline-grid; place-items: center; width: 14px; color: var(--mute); }
 .library-disclosure .icon { width: 13px; height: 13px; }
+/* The no-cluster hint follows the Clusters heading; the list below it is empty. */
+.shell .list-block > .list:has(+ .empty-clusters), .shell[data-layout="desktop"][data-mode="map"] .list-block > .list:has(+ .empty-clusters) { flex: 0 0 auto; }
+.list-block > .empty-clusters { margin: 4px var(--gap) 8px; }
+/* A list action keeps its own width instead of spanning the panel. */
+.list-block > .btn { align-self: flex-start; margin: 0 var(--gap) 8px; }

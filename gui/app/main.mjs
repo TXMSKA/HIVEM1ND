@@ -1677,8 +1677,11 @@ function renderCollection(app, t) {
   app.activeList = list;
   app.activeRows = rows;
   app.activeHandlers = handlers;
+  // With no cluster yet, the hint sits under the Clusters heading at the top, not at the foot of the panel.
+  const noClusters = app.tab === 'hierarchy' && ![...app.store.indexes.groups.values()].some(group => !group.deleted)
+    ? element(document, 'p', { class: 'start-hint empty-clusters', text: startText(app.language, 'noClusters') }) : null;
   block.append(search, total, host);
-  if (app.tab === 'hierarchy' && ![...app.store.indexes.groups.values()].some(group => !group.deleted)) block.append(element(document, 'p', { class: 'start-hint empty-clusters', text: startText(app.language, 'noClusters') }));
+  if (noClusters) block.append(noClusters);
   if (app.tab === "chats" && app.layout !== "phone") {
     block.append(element(document, "button", { type: "button", class: "btn", "data-action": "archived-chats", "aria-pressed": String(Boolean(app.archivedChats)), text: t("finalArchived"), onclick: () => {
       app.archivedChats = !app.archivedChats;
