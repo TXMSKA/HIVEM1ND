@@ -5919,7 +5919,7 @@ test('an empty chat does not offer older messages until a cursor exists', async 
   assert.ok(desktop.root.querySelector('[data-action="older"]'));
 });
 
-test('ask cards sit above the composer outside the conversation scroll', async t => {
+test('ask cards scroll with the conversation, after its messages and above the composer, in one scroll area', async t => {
   const desktop = await openedBoardDesktop(t);
   const selected = desktop.app.unitList.catalog.find(unit => unit.id === 'project:shop:executor-shop');
   desktop.app.mode = 'map';
@@ -5930,17 +5930,19 @@ test('ask cards sit above the composer outside the conversation scroll', async t
   const card = desktop.root.querySelector('[data-approval="approval-ask"]');
   assert.ok(card);
   const transcript = desktop.root.querySelector('.transcript');
-  let parent = card;
+  let parent = card, inside = false;
   while (parent) {
-    assert.notEqual(parent, transcript);
+    if (parent === transcript) inside = true;
     parent = parent.parentNode ?? parent.parent ?? null;
   }
+  assert.equal(inside, true, 'the ask card scrolls with the conversation');
   const panel = desktop.root.querySelector('.chat-panel');
   const kids = [...panel.children];
-  const host = kids.includes(card) ? card : kids.find(node => node.contains?.(card) || [...(node.querySelectorAll?.('[data-approval]') ?? [])].includes(card));
   const field = panel.querySelector('.field');
-  if (field) assert.ok(kids.indexOf(host) < kids.indexOf(field));
+  if (field) assert.ok(kids.indexOf(transcript) < kids.indexOf(field), 'the conversation, with its asks, sits above the composer');
+  assert.equal([...panel.children].some(node => node.classList?.contains?.('action-cards')), false, 'no second scroll area beside the conversation');
 });
+
 
 test('background loads do not announce a slow request', async t => {
   const desktop = await openedBoardDesktop(t);

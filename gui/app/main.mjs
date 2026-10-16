@@ -1280,7 +1280,8 @@ function renderWorkspace(app, t, view, counts) {
       // Asks and task cards belong to the conversation: they scroll with the messages, in one scroll area.
       if (cards) {
         const field = panel.querySelector('.field');
-        if (!(field && placeBefore(field, cards))) panel.append(cards);
+        if (scroll) scroll.append(cards);
+        else if (!(field && placeBefore(field, cards))) panel.append(cards);
       }
       inspectorBody.append(panel);
     } else {
