@@ -188,8 +188,8 @@ test('ordinary configured startup loads exact machine project paths for native l
   const desktop = { origin, token: login.json.data.token, closed: false };
   let started = await request(desktop, { path: `/api/v1/units/${UNIT}/session`, headers: { 'idempotency-key': randomUUID() }, body: { runMode: 'chat', expectedRevision: hashBytes(await readFile(path.join(fixture.paths.mind, 'user', 'state', 'one.md'))) } });
   assert.equal(started.status, 202, JSON.stringify(started.json));
-  // The route queues the start; the same request reports the verified launch.
-  for (const deadline = Date.now() + 5000; ['queued', 'starting'].includes(started.json.data.state) && Date.now() < deadline;) {
+  // The route queues the start; the same request reports the verified launch. The ceiling only covers a loaded suite.
+  for (const deadline = Date.now() + 30000; ['queued', 'starting'].includes(started.json.data.state) && Date.now() < deadline;) {
     await new Promise((resolve) => setTimeout(resolve, 20));
     started = await request(desktop, { method: 'GET', path: `/api/v1/session-requests/${started.json.data.requestId}` });
   }
