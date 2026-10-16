@@ -1528,17 +1528,17 @@ test("session, approval and grant outcomes use the contract events", async (t) =
   await waitFor(() => (desktop.app.trackedAt ?? 0) > firstMark && noteText(desktop) === text('en', 'launchAmbiguous') && urls.slice(beforeReset).some((url) => url.includes(`/session-requests/${started.data.requestId}`)), "The session request was not reread.");
 
   const pendingId = "e80a0bf9-8fb4-4d64-9527-04524c9a2ecf";
-  const pending = desktop.root.querySelector(`[data-approval="${pendingId}"]`);
-  click(pending?.querySelector("[data-action='deny']"));
+  const approvalCard = () => desktop.root.querySelector(`.card[data-approval="${pendingId}"]`);
+  click(approvalCard()?.querySelector("[data-action='deny']"));
   await waitFor(() => desktop.app.answerId && noteText(desktop) === "Answer queued.", "The queued denial was not shown.");
   assert.notEqual(noteText(desktop), "Approved");
-  assert.equal(desktop.root.querySelector(`[data-approval="${pendingId}"]`)?.getAttribute("data-approval-state"), "answering");
+  assert.equal(approvalCard()?.getAttribute("data-approval-state"), "answering");
   const beforeAnswer = urls.length;
   const answerMark = desktop.app.trackedAt ?? 0;
   await fixture.control.emit("stream.reset", { reason: "cursor_expired", cursor: "0" });
   await waitFor(() => (desktop.app.trackedAt ?? 0) > answerMark && urls.slice(beforeAnswer).some((url) => url.includes(`/approvals/${pendingId}/answers/${desktop.app.answerId}`)), "The answer was not reread.");
   await fixture.control.settleAnswer(desktop.app.answerId, "applied");
-  await waitFor(() => noteText(desktop) === "Denied" && desktop.root.querySelector(`[data-approval="${pendingId}"]`)?.getAttribute("data-approval-state") === "denied", "The denial was labeled as an approval.");
+  await waitFor(() => noteText(desktop) === "Denied" && approvalCard()?.getAttribute("data-approval-state") === "denied", "The denial was labeled as an approval.");
   assert.equal(urls.some((url) => url.includes("/waiting")), true);
   assert.equal(urls.some((url) => url.includes("/approval-grants")), true);
 
