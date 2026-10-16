@@ -5666,7 +5666,9 @@ function renderFooter(app, t) {
   const syncKey = syncCopy(syncState);
   const time = formatClock(app.language, app.readAt);
   // Sync shows only when it is doing something or needs attention; a saved, idle M1ND says nothing extra.
-  const quietSync = ['local', 'idle', 'published', undefined, null].includes(syncState) || syncKey === 'syncLocal';
+  // A pending sync that already shows its count of waiting changes needs no second line.
+  const quietSync = ['local', 'idle', 'published', undefined, null].includes(syncState) || syncKey === 'syncLocal'
+    || (syncState === 'pending' && Number.isInteger(app.settingsSync?.pendingChanges));
   const serviceText = app.serviceStopped ? recoveryText(app, 'stopped', { machine }) : ['connecting', 'reconnecting'].includes(app.store.stream?.state) ? t('reconnecting') : t("serviceRunning", { machine });
   const serviceState = app.serviceStopped ? 'out' : ['connecting', 'reconnecting'].includes(app.store.stream?.state) ? 'waiting' : 'working';
   const machines = element(document, "span", { class: "foot-machines" });
