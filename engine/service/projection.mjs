@@ -2,7 +2,7 @@ import { lstat, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { CLIENTS, CoreError, canonicalJson, canonicalTaskId, hashBytes, hashText, isUuid, parseTaskId, parseUnitId, resolvePerson, resolveUnit, uuidV8, validateRole } from './identity.mjs';
 import { leadApproved } from './tasks.mjs';
-import { stateRunsIn, stateUnitId } from './state.mjs';
+import { isMachineCopy, machineNames, stateRunsIn, stateUnitId } from './state.mjs';
 import { projectGroup } from './groups.mjs';
 import { readBytes, withLocalChanges } from './store.mjs';
 import { MESSAGE_BYTES_MAX, MESSAGE_MAX, MESSAGE_WINDOW_MS, SYNC_BYTES_MAX, SYNC_WINDOW_MS } from '../sync/limits.mjs';
@@ -264,9 +264,18 @@ async function loadMind(context) {
   const issues = [];
   const scopes = await scopeRoots(mind);
   const units = [];
+  const machineSuffixes = await machineNames(mind);
   for (const scope of scopes) {
-    for (const relative of await filesUnder(mind, scope.state)) {
+    const files = await filesUnder(mind, scope.state);
+    const siblings = new Map();
+    for (const relative of files) {
+      const directory = path.dirname(relative);
+      if (!siblings.has(directory)) siblings.set(directory, new Set());
+      siblings.get(directory).add(path.basename(relative));
+    }
+    for (const relative of files) {
       if (!relative.endsWith('.md') || relative.includes('.conflict-')) continue;
+      if (isMachineCopy(path.basename(relative), siblings.get(path.dirname(relative)), machineSuffixes)) continue;
       units.push(readUnit(await readSafe(mind, relative), relative, issues));
     }
   }

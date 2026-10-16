@@ -3,6 +3,21 @@ import path from 'node:path';
 import { CoreError, parseUnitId, unitStatePath } from './identity.mjs';
 import { readBytes } from './store.mjs';
 
+// A sync service that cannot merge two edits keeps both, the second as name-MACHINE.md (OneDrive's form). Such a copy
+// is not another agent: it is skipped when its base file sits beside it and the suffix names a machine of this M1ND.
+export async function machineNames(mind) {
+  const names = new Set();
+  for (const entry of await readdir(path.join(mind, 'user', 'machines'), { withFileTypes: true }).catch(() => [])) {
+    if (entry.isFile() && entry.name.endsWith('.md')) names.add(entry.name.slice(0, -3).toLowerCase());
+  }
+  return names;
+}
+
+export function isMachineCopy(name, siblings, machines) {
+  const match = /^(.+)-([^-]+)\.md$/.exec(name);
+  return Boolean(match && machines.has(match[2].toLowerCase()) && siblings.has(`${match[1]}.md`));
+}
+
 export function stateHeader(bytes, name) {
   const text = bytes.toString('utf8');
   const end = text.search(/\r?\n\r?\n/);
@@ -62,9 +77,12 @@ export async function readUnitStates(context) {
     }
   }
   const records = new Map();
+  const machines = await machineNames(context.paths.mind);
   for (const directory of directories) {
-    for (const entry of await entries(path.join(context.paths.mind, ...directory.split('/')))) {
-      if (!entry.isFile() || entry.isSymbolicLink() || !entry.name.endsWith('.md') || entry.name.includes('.conflict-')) continue;
+    const listed = await entries(path.join(context.paths.mind, ...directory.split('/')));
+    const siblings = new Set(listed.filter(entry => entry.isFile()).map(entry => entry.name));
+    for (const entry of listed) {
+      if (!entry.isFile() || entry.isSymbolicLink() || !entry.name.endsWith('.md') || entry.name.includes('.conflict-') || isMachineCopy(entry.name, siblings, machines)) continue;
       const relative = `${directory}/${entry.name}`;
       const bytes = await readBytes(context.store, path.join(context.paths.mind, ...relative.split('/')));
       if (!bytes) continue;
