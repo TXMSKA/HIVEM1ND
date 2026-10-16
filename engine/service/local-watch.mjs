@@ -188,7 +188,9 @@ export async function watchLocalChanges(runtime, onChanges) {
         if (bytes && entry && !entry.readOnly) {
           const validated = await readEditor(context, entry.id);
           if (entry.kind === 'void') {
-            const outside = await observeExternal(context, entry.id, { baseline: baseline || unchanged });
+            // Baseline the bytes just classified. A write that lands before the next read is its own observation.
+            const adopt = baseline || unchanged;
+            const outside = await observeExternal(context, entry.id, adopt ? { baseline: true, bytes } : {});
             if (outside.issue) continue;
             changes.push(...(outside.changes ?? []));
             if (outside.changed) {

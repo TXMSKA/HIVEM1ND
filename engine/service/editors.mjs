@@ -1911,7 +1911,10 @@ export async function observeExternal(context, id, options = {}) {
 async function observeExternalUnlocked(context, id, options) {
   const found = await resourceOf(context, id);
   const file = inside(found.project.localPath, found.entry.path);
-  const loaded = await loadBytes(file);
+  // A baseline adopts the bytes already classified. Rereading would fold a newer write into that baseline and lose it.
+  const loaded = options.baseline === true && options.bytes
+    ? { bytes: options.bytes, revision: hashBytes(options.bytes) }
+    : await loadBytes(file);
   if (!loaded.bytes) return { changed: false, issue: true };
   externalState(context);
   if (context.externalHashes.get(id) === loaded.revision) return { changed: false };
