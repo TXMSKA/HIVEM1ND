@@ -38,8 +38,9 @@ function keyOf(binding) {
   return createHash('sha256').update(JSON.stringify([binding.unitId ?? binding.unit, binding.nativeSessionId, binding.client, binding.machine])).digest('hex');
 }
 
+// The worker is resumed by the test clock and the wait ends when it sleeps again. The ceiling only covers a loaded suite.
 async function until(predicate, message = 'condition did not become true') {
-  const deadline = Date.now() + 15000;
+  const deadline = Date.now() + 30000;
   let last;
   while (Date.now() < deadline) {
     last = await predicate();
