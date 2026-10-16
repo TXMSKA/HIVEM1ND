@@ -50,8 +50,12 @@ Sources marked "pack" are this module's own choice, stated so a builder does not
 | Links in running text | underlined; colour alone needs 3:1 against the surrounding text plus another cue | WCAG 1.4.1, technique G183 |
 | Focus ring | `outline: 2px solid` the focus role, `outline-offset: 2px`, 3:1 against what surrounds it | WCAG 2.4.13 (AAA) names a 2 px solid outline as the easiest pass; 1.4.11 |
 | Focus under sticky regions | `scroll-padding-top` equal to the sticky header height | WCAG 2.4.11, technique C43 |
-| Pointer target | 24 by 24 CSS px minimum; 44 by 44 on touch and for primary controls | WCAG 2.5.8; 2.5.5 (AAA) |
+| Pointer target | 24 by 24 CSS px minimum; 44 by 44 on touch and for primary controls; on a mobile screen 44 by 44 pt on iOS and 48 by 48 dp on Android, with 8 between neighbouring targets | WCAG 2.5.8; 2.5.5 (AAA); pack for the mobile sizes |
 | Input font size | 16 CSS px or more on phones and touch; desktop chrome keeps its compact size | pack, [forms-and-controls.md](forms-and-controls.md): phone browsers zoom smaller inputs |
+| Mobile text | body 16 to 17, smallest text 11 to 12, titles 24 and up | pack |
+| Mobile controls | visual button height 40 to 56 with the touch area never below 44 (iOS) or 48 (Android); floating action button 56; list rows and fields 44 to 56 | pack |
+| Mobile bars and spacing | top bar 44 to 64 (iOS 44, Material 64); bottom bar 49 to 80 (iOS 49, Material 80); side margin 16; spacing on a base of 4 or 8 | pack |
+| Mobile safe areas | content and bars inset from the status bar, the Dynamic Island and the home indicator, about 34 pt tall; on the web `env(safe-area-inset-*)` | pack, [actions](categories/actions.md), Floating and sticky actions |
 | Reflow | 320 CSS px wide, 256 CSS px tall; a data table may scroll on its own axis | WCAG 1.4.10 |
 | Text spacing test | line height 1.5, paragraph spacing 2, letter spacing 0.12, word spacing 0.16, each times the font size | WCAG 1.4.12 |
 | Truncation | allowed only when the full value is reachable on focus, on activation or on a linked page | WCAG 1.4.12 understanding |
@@ -83,5 +87,7 @@ Sources marked "pack" are this module's own choice, stated so a builder does not
 | Search | results as the person types, debounced 200 to 300 ms | pack |
 | Controls by option count | 2 to 4: radios or a segmented control; 5 to about 10: a select; 10 or more: a menu with a filter | pack, [forms-and-controls.md](forms-and-controls.md) |
 | Native select | chevron at the right edge, as wide as its column, as tall as the other fields, the open list in the theme's colours through `color-scheme` and explicit option colours | pack |
+
+The mobile rows apply on mobile screens unless the project's design system sets sizes of its own.
 
 The palette, the faces and the one bold move come from the subject, through [direction.md](direction.md) and [defaults.md](defaults.md).

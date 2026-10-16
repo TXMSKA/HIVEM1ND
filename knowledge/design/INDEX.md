@@ -19,7 +19,7 @@ A build from scratch or a pass over a whole surface reads [essentials.md](essent
 - [data-display](categories/data-display.md): dashboards, charts, metrics, dense tables, live values.
 - [media-and-icons](categories/media-and-icons.md): icons, images, video, fonts, brand marks, illustration and texture.
 - [motion](categories/motion.md): entrances, feedback, state transitions, scroll and storytelling, gestures, reduced motion.
-- [pages-and-composition](categories/pages-and-composition.md): hero, landing sections, storytelling, app shell, responsive structure, finishing a site.
+- [pages-and-composition](categories/pages-and-composition.md): hero, landing sections, storytelling, app shell, responsive structure, mobile screens, finishing a site.
 
 ## Routing
 
@@ -39,7 +39,7 @@ Which protocol steps and topic sections each category sends work to. accessibili
 | data-display | composition-and-layout 2; colour-and-theming 6; hierarchy-and-type 5; interface-states 7; device-reach 1 to 10 | dashboards: Layout, Cards, Figures, Charts; app-shell: Overview |
 | media-and-icons | assets-and-media 1 to 7; accessibility 7; motion 7 for video; device-reach 1 to 10 | icons-and-media: Icons, Choosing whether to add icons, Images, Fonts |
 | motion | motion 1 to 7; design-specificity 7 for a story page; responsive-behaviour 6 for gestures; device-reach 1 to 10 | animation: Gates, Numbers, Recipes, Constraints; pages-and-sections: Pacing and storytelling for a story page |
-| pages-and-composition | composition-and-layout 1 to 7; design-specificity; responsive-behaviour 1 to 5; device-reach 1 to 10 | pages-and-sections: First viewport, Sections, Widths; direction: Find the gesture; app-shell; site-polish |
+| pages-and-composition | composition-and-layout 1 to 7; design-specificity; responsive-behaviour 1 to 5; device-reach 1 to 10 | pages-and-sections: First viewport, Sections, Widths; direction: Find the gesture; essentials: the mobile rows of Default values; app-shell; site-polish |
 
 ## Running the protocols
 

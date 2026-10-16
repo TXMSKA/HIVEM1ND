@@ -1,6 +1,6 @@
 # Pages and composition
 
-Whole pages and how they are put together: the first viewport, landing sections, storytelling, the app shell, responsive structure and the finishing pass.
+Whole pages and how they are put together: the first viewport, landing sections, storytelling, the app shell, responsive structure, mobile screens and the finishing pass.
 
 ## First viewport and hero
 
@@ -71,6 +71,20 @@ Options:
 Build: Mobile first: one column below 40rem, structural changes at the widths where the content breaks, `min-width: 0` on grid and flex children that hold text, no horizontal page scroll at 320 CSS pixels.
 
 Open: [responsive-behaviour](../protocols/responsive-behaviour.md); [pages-and-sections.md](../pages-and-sections.md), Widths.
+
+## Mobile screens
+
+Applies when: a screen is built or reviewed for a phone, native or web; a request says "the buttons are too small on the phone", "make it feel like an app"; bars, rows or margins need sizes.
+
+Options:
+
+- **The platform sizes** in the mobile rows of [essentials.md](../essentials.md): the default when the project sets none.
+- **The project's design system sizes**, when it states them; they win over the platform values.
+- **A hit area larger than the visual**, when a small icon or control has to stay small to look right.
+
+Build: Use the mobile rows of [essentials.md](../essentials.md), Default values, as written unless the project's design system says otherwise. Size the touch area first and seat the visual inside it, keep the bars and the content inside the safe areas, and keep every gap on the 4 or 8 base.
+
+Open: [responsive-behaviour](../protocols/responsive-behaviour.md), steps 5 and 7; [accessibility](../protocols/accessibility.md), step 4; [actions](actions.md), Floating and sticky actions; [ux-laws.md](../ux-laws.md), Pointing and reach.
 
 ## Finishing a site
 
