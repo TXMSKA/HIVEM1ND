@@ -37,6 +37,7 @@ function systemTool(...parts) {
 function windowsDriver() {
   const exists = pid => { try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
   return {
+    requiresTerminationProof: true,
     async creation(pid, context = {}) {
       const { child, recorded, spawnedAt } = context;
       if (!child || child.exitCode != null || child.signalCode != null || !exists(pid)) return null;
@@ -51,7 +52,7 @@ function windowsDriver() {
       catch (error) {
         // 128 means the process is already gone, which is the state being asked for. A failure to start the tool is not.
         if (typeof error.code !== 'number') throw error;
-        output = error.stdout ?? '';
+        return { killed: [], complete: false };
       }
       const killed = [];
       for (const line of String(output).split(/\r?\n/)) {
@@ -59,7 +60,7 @@ function windowsDriver() {
         const found = first ? Number(first[0]) : 0;
         if (found > 0 && found !== pid && !killed.some(item => item.pid === found)) killed.push({ pid: found, created: null });
       }
-      return { killed };
+      return { killed, complete: true };
     },
     async escalate() {},
     // After a root that ended by itself the pid is only swept while no other process holds it, so an unrelated tree is never touched.
@@ -157,8 +158,11 @@ export async function ownChildProcess(child, { platform = process.platform, driv
     listeners.add(listener);
   });
   // What is known to have been inside the tree. An unreadable tree is never reported closed.
-  let recorded = null, unreadable = false, stopping = null, swept = false;
-  const note = report => { for (const item of report?.killed ?? []) { recorded ??= []; if (!recorded.some(known => known.pid === item.pid)) recorded.push(item); } };
+  let recorded = null, unreadable = false, stopping = null, swept = false, terminationProved = false;
+  const note = report => {
+    if (report?.complete === true) terminationProved = true;
+    for (const item of report?.killed ?? []) { recorded ??= []; if (!recorded.some(known => known.pid === item.pid)) recorded.push(item); }
+  };
   const handle = {
     identity,
     async verify() {
@@ -197,11 +201,10 @@ export async function ownChildProcess(child, { platform = process.platform, driv
       return work;
     },
     // After the exit: no recorded descendant may still be alive.
-    // Remaining weakness: when the root ends by itself nothing was recorded at stop time. Windows lists no tree without PowerShell or WMIC,
-    // so the single sweep below (taskkill /T on the root pid, only while no other process holds that pid) finds nothing once the root is gone,
-    // and orphans of a root that exited alone are not proved closed. A Linux client is covered by its process group instead.
+    // Windows cannot enumerate orphans after their parent exits. Only a successful owned-tree termination supplies that proof.
     async cleanup() {
       if (!exited || unreadable) return { closed: false, identity };
+      if (driver.requiresTerminationProof && !terminationProved) return { closed: false, identity };
       if (!swept && recorded === null && typeof driver.sweepable === 'function' && driver.sweepable(pid)) {
         swept = true;
         try { note(await driver.terminate(pid)); } catch { /* Nothing to sweep, or the tool is unavailable: the recorded list stays as it is. */ }

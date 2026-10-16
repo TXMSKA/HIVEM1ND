@@ -12,8 +12,10 @@ test.after(() => { for (const child of children) { try { child.kill(); } catch {
 const PARENT = "const { spawn } = require('node:child_process'); const grandchild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true });"
   + " process.stdout.write(grandchild.pid + '\\n'); setInterval(() => {}, 1000);";
 
-async function launchTree() {
-  const child = spawn(process.execPath, ['-e', PARENT], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true, ...ownedSpawnOptions() });
+async function launchTree({ selfExit = false } = {}) {
+  const program = selfExit ? PARENT.replace("windowsHide: true", "windowsHide: true, detached: true")
+    + " grandchild.unref(); process.stdin.once('data', () => process.exit(0));" : PARENT;
+  const child = spawn(process.execPath, ['-e', program], { stdio: [selfExit ? 'pipe' : 'ignore', 'pipe', 'ignore'], windowsHide: true, ...ownedSpawnOptions() });
   children.push(child);
   child.stdout.setEncoding('utf8');
   const grandchild = await new Promise((resolve, reject) => {
@@ -74,10 +76,49 @@ test('on Windows the kill report names every ended descendant and a pid that ano
   const ended = once(child, 'exit');
   const report = await driver.terminate(child.pid);
   assert.ok(report.killed.some(item => item.pid === grandchild), 'the report lists the grandchild');
+  assert.equal(report.complete, true, 'the owned tree termination succeeded');
   assert.equal(report.killed.some(item => item.pid === child.pid), false, 'the root is not its own descendant');
   await ended;
-  assert.deepEqual(await driver.terminate(child.pid), { killed: [] }, 'a pid that is gone is not an error');
+  assert.deepEqual(await driver.terminate(child.pid), { killed: [], complete: false }, 'a gone root cannot prove its descendants ended');
   assert.equal(alive(grandchild), false);
+});
+
+test('Windows cleanup cannot close a naturally exited root while its real orphan is still running', { skip: process.platform !== 'win32' }, async () => {
+  const { child, grandchild } = await launchTree({ selfExit: true });
+  try {
+    const handle = await ownChildProcess(child);
+    const ended = once(child, 'exit');
+    child.stdin.end('exit');
+    await ended;
+    assert.equal(alive(grandchild), true, 'the fixture leaves an actual orphan');
+    assert.deepEqual(await handle.cleanup(), { closed: false, identity: handle.identity });
+    assert.deepEqual(await handle.stop(), { acknowledged: true });
+    assert.deepEqual(await handle.cleanup(), { closed: false, identity: handle.identity }, 'a late stop cannot invent tree evidence');
+  } finally {
+    if (alive(grandchild)) process.kill(grandchild);
+    await settled(() => !alive(grandchild));
+    assert.equal(alive(grandchild), false, 'the fixture orphan was explicitly closed');
+  }
+});
+
+test('a Windows-style tree needs a complete termination report even when stop races its root exit', async () => {
+  for (const complete of [false, true]) {
+    const fake = Object.assign(new EventEmitter(), { pid: 5656, exitCode: null });
+    let terminations = 0;
+    const driver = { requiresTerminationProof: true, creation: async () => 'created', descendants: async () => [], alive: async () => [],
+      terminate: async () => { terminations += 1; fake.exitCode = 0; fake.emit('exit', 0); return { killed: [], complete }; }, escalate: async () => {} };
+    const handle = await ownChildProcess(fake, { driver });
+    assert.deepEqual(await handle.stop(), { acknowledged: true });
+    assert.equal((await handle.cleanup()).closed, complete);
+    assert.equal(terminations, 1);
+  }
+  const fake = Object.assign(new EventEmitter(), { pid: 5757, exitCode: null });
+  const driver = { requiresTerminationProof: true, creation: async () => 'created',
+    descendants: async () => { fake.exitCode = 0; fake.emit('exit', 0); return []; }, alive: async () => [],
+    terminate: async () => { assert.fail('the ended root must never be signaled'); }, escalate: async () => {} };
+  const handle = await ownChildProcess(fake, { driver });
+  assert.deepEqual(await handle.stop(), { acknowledged: true });
+  assert.equal((await handle.cleanup()).closed, false, 'exit between enumeration and termination leaves ownership unproved');
 });
 
 test('a root that exits by itself is swept once, only while no other process holds its pid, and what the sweep reports is proved gone', async () => {
