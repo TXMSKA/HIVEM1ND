@@ -3,6 +3,7 @@ import { element, icon, labelDialog, labeledField } from "./components.mjs";
 import { cardinal, formatWhen, limitsUsage } from "./i18n.mjs";
 import { encodeHomeQr } from "./qr.mjs";
 import { renderQr } from "./qr-render.mjs";
+import { catalogLabel, clientLabel } from './clusters.mjs';
 import { startText } from './start-copy.mjs';
 import { addButton, renderAddedContent } from './add-view.mjs';
 
@@ -377,7 +378,7 @@ function renderAgents(document, model, t, actions) {
     section.append(row);
     const capability = model.agents?.connectedClients?.find(item => item.id === agent.id);
     if (capability) row.append(element(document, 'small', { class: 'settings-client-capability', text:
-      capability.models.map(item => item.title).join(', ') + ' · ' + (capability.id === 'lyra' ? startText(model.language, 'localQuota')
+      capability.models.map(item => catalogLabel(item.title, item.id, model.language)).join(', ') + ' · ' + (capability.id === 'lyra' ? startText(model.language, 'localQuota')
         : capability.quota?.known ? startText(model.language, 'quota', { label: capability.quota.period ?? capability.title, percent: capability.quota.remainingPercent }) : startText(model.language, 'quotaUnknown')) }));
   }
   if (!model.agents?.items?.length) section.append(element(document, "p", { text: t("settingsNoAgents") }));
@@ -399,10 +400,9 @@ function renderPermissions(document, model, t, actions) {
   for (const item of model.permissions?.unitGrants ?? []) standing.append(row(item.grant.id, item.unitId,
     item.grant.pattern?.command ?? `${item.grant.action}: ${JSON.stringify(item.grant.pattern)}`, item.grant.grantedAt,
     () => actions.onRevokeGrant?.(item), !model.canRevoke || model.pendingGrants?.has(item.grant.id)));
-  const titles = { claude: 'Claude Code', cursor: 'Cursor' };
   for (const item of model.permissions?.agentPermissions ?? []) {
     const automatic = item.actions.includes('native.automatic');
-    agents.append(row(item.id, automatic ? item.unitId : item.client, automatic ? startText(model.language, 'automaticPermission', { client: titles[item.client] ?? item.client }) : item.actions.join(", "),
+    agents.append(row(item.id, automatic ? item.unitId : clientLabel(item.client, model.language), automatic ? startText(model.language, 'automaticPermission', { client: clientLabel(item.client, model.language) }) : item.actions.join(", "),
       item.grantedAt, () => actions.onRevokePermission?.(item), !model.canWrite));
   }
   if ((model.permissions?.agentPermissions ?? []).some(item => item.actions.includes('native.automatic'))) agents.append(element(document, 'p', { class: 'settings-hint', text: startText(model.language, 'automaticRevokeHint') }));

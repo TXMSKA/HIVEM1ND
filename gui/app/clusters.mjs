@@ -36,14 +36,38 @@ export function initialRunsIn(clients, preferred = null, kind = null) {
   return null;
 }
 
+const CLIENT_KEYS = { codex: 'clientCodex', claude: 'clientClaude', cursor: 'clientCursor', lyra: 'clientLyra' };
+const EFFORT_KEYS = ['low', 'medium', 'high', 'max', 'xhigh', 'fast', 'normal', 'thinking'];
+
+function readable(value) {
+  if (value == null || value === '') return '';
+  return String(value).replace(/[_-]+/g, ' ').replace(/\b\w/g, letter => letter.toUpperCase());
+}
+
+export function clientLabel(id, language = 'en') {
+  const key = CLIENT_KEYS[typeof id === 'string' ? id : ''];
+  return key ? startText(language, key) : readable(id);
+}
+
+// A catalog title that is only the id is not a name. Known clients use the copy table; other ids are title case.
+export function catalogLabel(title, id, language = 'en') {
+  const name = typeof title === 'string' ? title.trim() : '';
+  const key = typeof id === 'string' ? id.trim() : '';
+  if (name && key && name.localeCompare(key, undefined, { sensitivity: 'accent' }) !== 0) return name;
+  if (CLIENT_KEYS[key]) return clientLabel(key, language);
+  return readable(key || name);
+}
+
+export function effortLabel(value, language = 'en') {
+  if (typeof value !== 'string' || value === '') return '';
+  return EFFORT_KEYS.includes(value) ? startText(language, value) : readable(value);
+}
+
 export function runsInLabel(choice, clients = [], language = 'en') {
   if (!choice) return '';
   const client = clients.find(item => item.id === choice.client);
-  const readable = value => value == null || value === '' ? '' : String(value).replace(/[_-]+/g, ' ').replace(/\b\w/g, letter => letter.toUpperCase());
   const effort = choice.mode ?? choice.effort;
-  const effortLabel = effort === 'xhigh' ? effort : effort && ['low', 'medium', 'high', 'max', 'fast', 'normal', 'thinking'].includes(effort)
-    ? startText(language, effort) : readable(effort);
-  return [client?.title ?? readable(choice.client), client?.models.find(item => item.id === choice.model)?.title ?? readable(choice.model), effortLabel].filter(Boolean).join(', ');
+  return [catalogLabel(client?.title, choice.client, language), catalogLabel(client?.models.find(item => item.id === choice.model)?.title, choice.model, language), effortLabel(effort, language)].filter(Boolean).join(', ');
 }
 
 export function repositorySelection(offer) {
@@ -153,10 +177,10 @@ export function renderRunsInPicker(document, model, actions) {
       () => actions.onChoice(choice));
   })));
   const local = current?.id === 'lyra';
-  const values = local ? ['fast', 'normal', 'thinking'] : [...new Set((current?.models ?? []).flatMap(item => item.efforts))];
+  const values = (local ? ['fast', 'normal', 'thinking'] : [...new Set((current?.models ?? []).flatMap(item => item.efforts))]).filter(value => typeof value === 'string' && value);
   columns.append(column(t(local ? 'mode' : 'effort'), values.map(value => {
     const supported = (local ? selectedModel?.modes : selectedModel?.efforts)?.includes(value);
-    const label = ['low', 'medium', 'high', 'max', 'fast', 'normal', 'thinking'].includes(value) ? t(value) : value;
+    const label = effortLabel(value, model.language);
     return option(`runs-${local ? 'mode' : 'effort'}-${value}`, label,
       !supported ? t('unavailable') : local ? t(`${value}Hint`) : '', (local ? model.choice?.mode : model.choice?.effort) === value,
       () => actions.onChoice({ ...model.choice, [local ? 'mode' : 'effort']: value }), !supported);

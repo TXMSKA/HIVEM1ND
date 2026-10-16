@@ -84,7 +84,7 @@ import { assetIdentity, plainCaretFromSource, plainOffsets, plainText, sourceBou
 import { close as closeStream, resetCredentials, synchronize } from "./stream.mjs";
 import * as startApi from './start-api.mjs';
 import { startText } from './start-copy.mjs';
-import { acceptedRepositoryCluster, clusterLead, initialRunsIn, repositorySelection, renderAgentForm, renderClusterForm, renderRepositoryOffer, renderRunsInPicker, runsInLabel, startDialog, supervisedClient } from './clusters.mjs';
+import { acceptedRepositoryCluster, clientLabel, clusterLead, initialRunsIn, repositorySelection, renderAgentForm, renderClusterForm, renderRepositoryOffer, renderRunsInPicker, runsInLabel, startDialog, supervisedClient } from './clusters.mjs';
 import { renderAgentHeader, renderCluster, renderClusterChanges } from './inspector.mjs';
 import { fitMap, flyToCluster } from './map.mjs';
 import { changeContext, createSessionView, loadSessionView, loadTranscriptPage, renderContext, renderSessionTabs, renderSessionWork, renderStartedWith } from './session-work.mjs';
@@ -7383,7 +7383,8 @@ function renderInspector(app, t, selected) {
     const extra = trackDisclosure(app, element(document, "details", { class: "unit-metadata" }, element(document, "summary", { text: t("details") })), keepId("unit-metadata", selected.id));
     for (const child of [...card.children].slice(1)) { child.remove(); extra.append(child); }
     const session = data?.unitId === selected.id ? data.sessions?.find((item) => item.state !== "stopped") : app.store.view?.sessions?.find((item) => item.unitId === selected.id && item.state !== "stopped");
-    const runs = !selected.sessionIds?.length ? t("finalNotStarted") : session?.launchKind === "manual-app" ? t("runsApp", { client: session.client }) : session?.launchKind === "cli" ? t("runsCli", { client: session.client }) : session?.client ?? t("unknown");
+    const namedClient = clientLabel(session?.client, app.language);
+    const runs = !selected.sessionIds?.length ? t("finalNotStarted") : session?.launchKind === "manual-app" ? t("runsApp", { client: namedClient }) : session?.launchKind === "cli" ? t("runsCli", { client: namedClient }) : namedClient || t("unknown");
     const facts = element(document, "div", { class: "unit-facts", "data-unit-facts": "true" });
     const checkout = checkoutSession(app, selected);
     const where = checkoutFacts(t, app.language, { session: checkout, local: startMachine(app), entry: checkout && app.checkouts?.get(checkout.id) });

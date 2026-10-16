@@ -1,9 +1,9 @@
 import { canAccept, canSendBack } from "./actions.mjs";
+import { clientLabel, clusterLead } from "./clusters.mjs";
 import { element, icon, labeledField, progressMark } from "./components.mjs";
 import { formatWhen } from "./i18n.mjs";
 import { unitDisplayName } from './hierarchy.mjs';
 import { startText } from './start-copy.mjs';
-import { clusterLead } from './clusters.mjs';
 import { addText } from './add-view.mjs';
 
 export function renderAgentHeader(document, unit, session, language, onMore) {
@@ -153,8 +153,9 @@ function wakeSentence(t, wake) {
 export function renderSession(document, session, t) {
   if (!session) return element(document, "p", { text: t("unknown") });
   const block = element(document, "section", { "data-session": session.id, "data-session-state": session.state ?? "" });
-  const runs = session.launchKind === 'cli' ? t('runsCli', { client: session.client })
-    : session.launchKind === 'manual-app' ? t('runsApp', { client: session.client }) : t('unknown');
+  const named = clientLabel(session.client);
+  const runs = session.launchKind === 'cli' ? t('runsCli', { client: named })
+    : session.launchKind === 'manual-app' ? t('runsApp', { client: named }) : named || t('unknown');
   block.append(element(document, 'p', { 'data-runs-in': session.launchKind ?? '', text: `${t('finalRunsIn')}: ${runs} · ${session.machine ?? t('unknown')}` }));
   const activity = session.activity ?? "unknown";
   const activityText = t(ACTIVITY_COPY[activity] ?? "activityUnknown");

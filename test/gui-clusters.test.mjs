@@ -27,7 +27,7 @@ test('accepted repositories select their existing nested identity and retain the
   assert.equal(acceptedRepositoryCluster([parent, repo], { projectId: 'shop' }), repo);
   assert.equal(acceptedRepositoryCluster([{ ...repo, deleted: true }], { projectId: 'shop' }), null);
   const view = renderAgentForm(document, { language: 'en', kind: 'agent', cluster: repo, clients, role: 'executor', choice: initialRunsIn(clients, { client: 'codex', model: 'observed', effort: 'xhigh', mode: null }) }, {});
-  assert.match(copy(view), /Codex, Observed, xhigh/);
+  assert.match(copy(view), /Codex, Observed, Extra high/);
   assert.equal(nodes(view).find(node => node.attributes?.['data-action'] === 'choose-executor').getAttribute('aria-pressed'), 'true');
 });
 
@@ -62,7 +62,10 @@ test('Runs in shows only connected capabilities, unknown quota and explicitly di
 
 test('Runs in labels keep agent, model and effort readable instead of exposing picker ids', () => {
   assert.equal(runsInLabel({ client: 'codex', model: 'observed', effort: 'high' }, clients), 'Codex, Observed, High');
-  assert.equal(runsInLabel({ client: 'codex', model: 'alternate-model', effort: 'xhigh' }, clients), 'Codex, Alternate Model, xhigh');
+  assert.equal(runsInLabel({ client: 'codex', model: 'alternate-model', effort: 'xhigh' }, clients), 'Codex, Alternate Model, Extra high');
+  assert.equal(runsInLabel({ client: 'codex', model: 'observed', effort: 'xhigh' }, clients, 'es'), 'Codex, Observed, Muy alto');
+  assert.equal(runsInLabel({ client: 'codex', model: 'observed', effort: 'high' }, [{ id: 'codex', title: 'codex', models: [{ id: 'observed', title: 'observed', efforts: ['high'] }] }]), 'Codex, Observed, High');
+  assert.equal(runsInLabel({ client: 'claude', model: 'observed', effort: null, mode: null }, [{ id: 'claude', title: 'claude', models: [{ id: 'observed', title: 'observed', efforts: [] }] }]), 'Claude Code, Observed');
   assert.equal(runsInLabel({ client: 'codex', model: 'observed', effort: 'high' }, clients, 'es'), 'Codex, Observed, Alto');
   assert.equal(readableIdentity('root:master', 'Persona'), 'Persona');
   assert.equal(readableIdentity('project:shop:executor-shop', 'Persona'), 'executor shop');
