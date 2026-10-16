@@ -1524,6 +1524,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
 .look-preview-radio { border-color: var(--ring) !important; }
 html { scrollbar-color: var(--line2) var(--panel); scrollbar-width: thin; }
 *::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
 *::-webkit-scrollbar-track { background: var(--panel); }
 *::-webkit-scrollbar-thumb { background: var(--line2); border: 2px solid var(--panel); border-radius: 999px; }
 .status-dot[data-status="waiting"], .map-status[data-status="waiting"] { box-shadow: inset 0 0 0 2px var(--ring); }

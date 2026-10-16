@@ -5866,6 +5866,7 @@ test('R10 look controls and placeholders use themed contrast tokens', async () =
   assert.match(css, /--focus: 2px solid var\(--accent\)/);
   assert.match(css, /\.look-preview-radio \{ border-color: var\(--ring\) !important;/);
   assert.match(css, /scrollbar-color: var\(--line2\) var\(--panel\)/);
+  assert.match(css, /\*::-webkit-scrollbar-button \{[^}]*display:\s*none/);
   assert.match(css, /input::placeholder, textarea::placeholder \{ color: var\(--mute\); opacity: 1;/);
   assert.match(css, /\.settings-panel input\[type="checkbox"\].*appearance: none/);
   assert.match(css, /\[data-look="txmska"\][\s\S]*?--ring: #a855f7/);
