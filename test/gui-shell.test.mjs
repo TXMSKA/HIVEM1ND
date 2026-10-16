@@ -5841,6 +5841,14 @@ test('a repository plan stalls ten minutes after its last confirmed step', async
   assert.match(source, /data-action="stop-step"/);
 });
 
+test('the slow notice keeps Cancel inside the card', async () => {
+  const css = await readFile('gui/app/styles.css', 'utf8');
+  assert.match(css, /\.slow-notice \{[^}]*max-width:\s*100%/);
+  assert.match(css, /\.slow-notice \{[^}]*box-sizing:\s*border-box/);
+  assert.match(css, /\.slow-notice > div \{[^}]*min-width:\s*0/);
+  assert.match(css, /\.slow-notice \.btn \{[^}]*flex:\s*0 0 auto/);
+});
+
 test('the board conflict banner wraps its full sentence', async () => {
   const css = await readFile('gui/app/styles.css', 'utf8');
   assert.match(css, /\.board-conflict > span \{[^}]*white-space:\s*normal/);
