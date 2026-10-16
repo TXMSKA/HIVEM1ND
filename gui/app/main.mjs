@@ -1284,7 +1284,7 @@ function renderWorkspace(app, t, view, counts) {
         inspectorBody.append(renderAgentHeader(document, selected, sessionForUnit(app, selected.id), app.language, () => openAgentMore(app, selected)));
         const actions = trackDisclosure(app, element(document, 'details', { class: 'agent-controls' }, element(document, 'summary', { text: t('details') }), actionControls(app, t, selected)), `agent-controls:${selected.id}`);
         inspectorBody.append(actions);
-      } else inspectorBody.append(heading, actionControls(app, t, selected));
+      } else inspectorBody.append(...(selected ? [heading] : []), actionControls(app, t, selected));
       if (app.layout !== "phone") {
         if (!selected && !app.thread?.chat) inspectorBody.append(emptySelection(app, t));
         inspectorBody.append(chatPanel(app, t), renderInspector(app, t, selected));
