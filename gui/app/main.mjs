@@ -1268,8 +1268,9 @@ function renderWorkspace(app, t, view, counts) {
       const cards = review.querySelector('[data-action-cards]');
       if (cards) cards.remove();
       const scroll = panel.querySelector('.transcript') ?? panel.querySelector('[data-session-work]') ?? panel.querySelector('[data-unit-work]');
-      if (scroll) keepFirst(scroll, '[data-started-with]', [...review.children]);
-      else if ([...review.children].length) panel.append(review);
+      // What is left of the unit card (its metadata, the machine, sessions, grants and waiting) belongs with the
+      // controls in Details; the conversation keeps only messages, as the board draws it.
+      for (const part of [...review.children]) { part.remove(); controls.append(part); }
       if (cards) {
         const field = panel.querySelector('.field');
         if (!(field && placeBefore(field, cards))) panel.append(cards);
