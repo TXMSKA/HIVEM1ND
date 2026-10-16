@@ -89,29 +89,73 @@ export function initialPositions(units, saved, groupOrigins) {
   return positions;
 }
 
+const NODE_RADIUS = { overseer: 30, overlord: 25 };
+const nodeRadius = unit => NODE_RADIUS[unit.role] ?? 21;
+const canonicalOverseer = unit => unit.role === 'overseer' && unit.unit === 'overseer' && unit.scope?.kind === 'root';
+// A brand-new unit is stored at the origin. That point is not a chosen place on the Map.
+const chosenPoint = point => Number.isFinite(point?.x) && Number.isFinite(point?.y) && !(point.x === 0 && point.y === 0);
+
+function circleHits(point, radius, bounds, pad = 8) {
+  const left = bounds.x - pad, right = bounds.x + bounds.w + pad, top = bounds.y - pad, bottom = bounds.y + bounds.h + pad;
+  const x = Math.max(left, Math.min(point.x, right)), y = Math.max(top, Math.min(point.y, bottom));
+  return (point.x - x) ** 2 + (point.y - y) ** 2 < radius ** 2;
+}
+
+function insideFrame(point, radius, bounds) {
+  return point.x - radius >= bounds.x + 8 && point.x + radius <= bounds.x + bounds.w - 8
+    && point.y - radius >= bounds.y + 8 && point.y + radius + 22 <= bounds.y + bounds.h - 4;
+}
+
+function overseerPoint(frames) {
+  const preferred = { x: 380, y: 409 };
+  const radius = NODE_RADIUS.overseer;
+  if (!frames.some(frame => circleHits(preferred, radius, frame.bounds))) return preferred;
+  let point = { x: Math.max(0, ...frames.map(frame => frame.bounds.x + frame.bounds.w)) + radius + 48, y: preferred.y };
+  while (frames.some(frame => circleHits(point, radius, frame.bounds))) point = { x: point.x + 48, y: point.y };
+  return point;
+}
+
+function memberPoint(bounds, executorIndex, taken, radius) {
+  const inset = Math.min(90, Math.max(radius + 8, bounds.w / 2 - 8));
+  for (let row = Math.floor(executorIndex / 2); row < 8; row += 1) {
+    const point = { x: bounds.x + (executorIndex % 2 ? bounds.w - inset : inset), y: bounds.y + Math.min(160, bounds.h * 0.62) + row * 72 };
+    if (insideFrame(point, radius, bounds) && taken.every(other => Math.hypot(point.x - other.x, point.y - other.y) >= radius + other.radius + 8)) return point;
+  }
+  return { x: bounds.x + bounds.w / 2, y: bounds.y + bounds.h / 2 };
+}
+
 export function placeUnits(units, saved, clusters = []) {
   const layout = saved.layout ?? saved ?? {};
   if (clusters.length) {
-    const frames = clusterFrames(clusters, layout);
+    const frames = clusterFrames(clusters, layout, null, units);
     const positions = structuredClone(layout.nodes ?? {});
     delete positions['root:master'];
     const origins = Object.fromEntries(frames.map(frame => [`cluster:${frame.group.id}`, { x: frame.bounds.x, y: frame.bounds.y }]));
     const placed = new Set();
     for (const frame of frames) {
-      const members = units.filter(unit => unit.role !== 'master' && !placed.has(unit.id) && (unit.clusterId === frame.group.id || !unit.clusterId && frame.group.members.includes(unit.id)));
+      const members = units.filter(unit => unit.role !== 'master' && unit.role !== 'overseer' && !unit.removed && !placed.has(unit.id)
+        && (unit.clusterId === frame.group.id || !unit.clusterId && frame.group.members?.includes(unit.id)));
       members.sort((a, b) => (b.role === 'overlord') - (a.role === 'overlord') || byId(a, b));
+      const taken = [];
       let executorIndex = 0;
-      members.forEach((unit, index) => {
+      for (const unit of members) {
         placed.add(unit.id);
-        if (positions[unit.id]) return;
+        const radius = nodeRadius(unit);
+        const current = positions[unit.id];
+        if (chosenPoint(current) && insideFrame(current, radius, frame.bounds)) { taken.push({ ...current, radius }); continue; }
         const lead = unit.role === 'overlord';
-        const slot = lead ? index : executorIndex++;
-        positions[unit.id] = { x: frame.bounds.x + (lead ? frame.bounds.w / 2 : 70 + (slot % 2) * 150),
-          y: frame.bounds.y + (lead ? 75 + index * 84 : 160 + Math.floor(slot / 2) * 84) };
-      });
+        const point = lead
+          ? { x: frame.bounds.x + frame.bounds.w / 2, y: frame.bounds.y + Math.min(75, Math.max(radius + 8, frame.bounds.h * 0.32)) }
+          : memberPoint(frame.bounds, executorIndex++, taken, radius);
+        positions[unit.id] = point;
+        taken.push({ ...point, radius });
+      }
     }
-    for (const [index, unit] of units.filter(unit => unit.role !== 'master' && !placed.has(unit.id)).entries()) {
-      positions[unit.id] ??= unit.role === 'overseer' ? { x: 380, y: 409 } : { x: 380 + (index % 4) * 84, y: 810 + Math.floor(index / 4) * 84 };
+    for (const unit of units) {
+      if (unit.role === 'master' || unit.removed || placed.has(unit.id)) continue;
+      if (!canonicalOverseer(unit)) continue;
+      const current = positions[unit.id];
+      if (!chosenPoint(current) || frames.some(frame => circleHits(current, nodeRadius(unit), frame.bounds))) positions[unit.id] = overseerPoint(frames);
     }
     return { origins, positions };
   }
@@ -281,47 +325,114 @@ export function personalGroupBounds(memberIds, nodes, padding = 24) {
     w: right - left + padding * 2, h: bottom - top + padding * 2 };
 }
 
-export function clusterFrames(clusters, saved = {}, focusedId = null) {
-  const active = clusters.filter(cluster => !cluster.deleted), frames = [], visited = new Set();
-  const defaults = [[40, 470, 290, 230], [500, 480, 220, 170], [500, 150, 220, 160], [40, 150, 220, 160]];
-  const append = (group, index, parent = null) => {
-    if (visited.has(group.id)) return;
-    visited.add(group.id);
-    const children = active.filter(item => item.parentId === group.id);
-    const stored = saved.groups?.[`cluster:${group.id}`];
-    const linked = group.link?.kind ?? 'none';
-    const compact = Boolean(parent && !children.length && !group.members.length && !stored);
-    let fallback;
-    if (parent) {
-      const focused = parent.group.id === focusedId;
-      const columns = focused ? 4 : Math.max(1, Math.floor((parent.bounds.w - 24) / 72));
-      fallback = focused ? [parent.bounds.x + 24 + (index % 4) * 172, parent.bounds.y + 28 + Math.floor(index / 4) * 92, compact ? 156 : 290, compact ? 62 : 230]
-        : [parent.bounds.x + 14 + (index % columns) * 72, parent.bounds.y + 20 + Math.floor(index / columns) * 30, compact ? 66 : 290, compact ? 24 : 230];
-    } else if (children.length) {
-      const width = index === 0 ? 318 : 300, columns = Math.floor((width - 24) / 72);
-      fallback = [index === 0 ? 8 : 444 + Math.floor((index - 1) / 3) * 340, index === 0 ? 320 : 260 + ((index - 1) % 3) * 210,
-        width, Math.max(60, 36 + Math.ceil(children.length / columns) * 30)];
-    } else fallback = linked === 'none' ? [290 + Math.floor(index / 4) * 240, 720 + (index % 4) * 110, 180, 70]
-      : defaults[index] ?? [40 + (index % 3) * 330, 850 + Math.floor(index / 3) * 300, 290, 230];
-    if (group.id === focusedId) fallback = [20, 48, 720, Math.max(690, 56 + Math.ceil(children.length / 4) * 92)];
-    const [x, y, w, h] = fallback;
-    const bounds = { x: stored?.x ?? x, y: stored?.y ?? y, w: stored?.width ?? stored?.w ?? (group.members.length ? Math.max(290, w) : w),
-      h: stored?.height ?? stored?.h ?? (group.members.length ? Math.max(230, h, 202 + Math.max(0, Math.ceil((group.members.length - 1) / 2) - 1) * 84) : h) };
-    const frame = { group, bounds, compact, folder: children.length > 0 || linked === 'folder', count: children.length };
-    frames.push(frame);
-    children.forEach((child, childIndex) => append(child, childIndex, frame));
-  };
-  active.filter(group => !active.some(parent => parent.id === group.parentId)).forEach((group, index) => append(group, index));
-  for (const group of active) if (!visited.has(group.id)) append(group, frames.length);
-  // A parent always contains all descendant frames, including persisted full-size repository frames.
-  for (const frame of [...frames].reverse()) {
-    for (const child of frames.filter(item => item.group.parentId === frame.group.id)) {
-      const right = Math.max(frame.bounds.x + frame.bounds.w, child.bounds.x + child.bounds.w + 14);
-      const bottom = Math.max(frame.bounds.y + frame.bounds.h, child.bounds.y + child.bounds.h + 14);
-      frame.bounds.x = Math.min(frame.bounds.x, child.bounds.x - 14);
-      frame.bounds.y = Math.min(frame.bounds.y, child.bounds.y - 20);
-      frame.bounds.w = right - frame.bounds.x; frame.bounds.h = bottom - frame.bounds.y;
-    }
+function storedBox(saved, id) {
+  const stored = saved.groups?.[`cluster:${id}`];
+  const w = stored?.width ?? stored?.w, h = stored?.height ?? stored?.h;
+  if (![stored?.x, stored?.y, w, h].every(Number.isFinite)) return null;
+  return { x: stored.x, y: stored.y, w, h };
+}
+
+function rectsOverlap(left, right) {
+  return left.x < right.x + right.w && left.x + left.w > right.x && left.y < right.y + right.h && left.y + left.h > right.y;
+}
+
+function shiftFrame(frame, dx, dy, frames, saved) {
+  frame.bounds.x += dx;
+  frame.bounds.y += dy;
+  for (const child of frames) {
+    if (child.group.parentId !== frame.group.id || storedBox(saved, child.group.id)) continue;
+    shiftFrame(child, dx, dy, frames, saved);
   }
+}
+
+// Saved frames stay where they were put. An unsaved frame moves clear of the one it covers.
+function separateRoots(roots, frames, saved) {
+  const gap = 28;
+  for (let pass = 0; pass < roots.length + 2; pass += 1) {
+    let moved = false;
+    for (let i = 0; i < roots.length; i += 1) for (let j = i + 1; j < roots.length; j += 1) {
+      const earlier = roots[i], later = roots[j];
+      if (!rectsOverlap(earlier.bounds, later.bounds)) continue;
+      const lockEarlier = Boolean(storedBox(saved, earlier.group.id)), lockLater = Boolean(storedBox(saved, later.group.id));
+      if (lockEarlier && lockLater) continue;
+      const mover = lockEarlier ? later : lockLater ? earlier : later;
+      const other = mover === earlier ? later : earlier;
+      const dy = other.bounds.y + other.bounds.h + gap - mover.bounds.y;
+      if (dy > 0) { shiftFrame(mover, 0, dy, frames, saved); moved = true; }
+    }
+    if (!moved) break;
+  }
+}
+
+// Flying the camera into a folder must not move that folder: a larger frame would cover the clusters beside it.
+export function clusterFrames(clusters, saved = {}, focusedId = null, units = []) {
+  const active = clusters.filter(cluster => !cluster.deleted);
+  const childrenOf = id => active.filter(group => group.parentId === id && active.some(parent => parent.id === id));
+  const measure = group => {
+    const agents = Math.max(group.members?.length ?? 0, units.filter(unit => unit.role !== 'master' && unit.role !== 'overseer' && !unit.removed
+      && (unit.clusterId === group.id || group.members?.includes(unit.id))).length);
+    if (!agents) return { w: 66, h: 24, compact: true };
+    const rows = Math.max(1, Math.ceil(Math.max(0, agents - 1) / 2));
+    return { w: 290, h: Math.max(230, 96 + rows * 84), compact: false };
+  };
+  const frames = [], packed = new Set();
+  const pack = parent => {
+    if (packed.has(parent.group.id)) return;
+    packed.add(parent.group.id);
+    const children = childrenOf(parent.group.id);
+    let x = parent.bounds.x + 14, y = parent.bounds.y + 20, rowH = 0;
+    const startX = x, limit = parent.bounds.x + parent.bounds.w - 14;
+    for (const child of children) {
+      const stored = storedBox(saved, child.id);
+      const size = stored ? { w: stored.w, h: stored.h, compact: stored.w <= 80 && stored.h <= 40 } : measure(child);
+      if (!stored && x > startX && x + size.w > limit) {
+        x = startX;
+        y += rowH + (rowH <= 24 ? 6 : 8);
+        rowH = 0;
+      }
+      const frame = { group: child, bounds: stored ? { ...stored } : { x, y, w: size.w, h: size.h }, compact: Boolean(size.compact && !childrenOf(child.id).length),
+        folder: childrenOf(child.id).length > 0 || child.link?.kind === 'folder', count: childrenOf(child.id).length, focused: child.id === focusedId };
+      frames.push(frame);
+      if (!stored) { rowH = Math.max(rowH, size.h); x += size.compact ? 72 : size.w + 14; }
+      pack(frame);
+    }
+    if (!storedBox(saved, parent.group.id) && children.length) {
+      const kids = frames.filter(frame => frame.group.parentId === parent.group.id);
+      const right = Math.max(parent.bounds.x + parent.bounds.w, ...kids.map(frame => frame.bounds.x + frame.bounds.w + 14));
+      const bottom = Math.max(parent.bounds.y + parent.bounds.h, ...kids.map(frame => frame.bounds.y + frame.bounds.h + 16));
+      parent.bounds.w = right - parent.bounds.x;
+      parent.bounds.h = bottom - parent.bounds.y;
+    }
+  };
+  const roots = active.filter(group => !active.some(parent => parent.id === group.parentId));
+  const folders = roots.filter(group => group.link?.kind === 'folder' || childrenOf(group.id).length);
+  const loose = roots.filter(group => !folders.includes(group));
+  let stackY = 260;
+  for (const [index, group] of folders.entries()) {
+    const stored = storedBox(saved, group.id);
+    const width = index === 0 ? 318 : 300;
+    const children = childrenOf(group.id);
+    const columns = Math.max(1, Math.floor((width - 24) / 72));
+    const minis = children.every(child => !storedBox(saved, child.id) && measure(child).compact);
+    const height = minis ? Math.max(60, 36 + Math.ceil(children.length / columns) * 30) : 90;
+    const frame = { group, bounds: stored ? { ...stored } : { x: index === 0 ? 8 : 444, y: index === 0 ? 320 : stackY, w: width, h: height },
+      compact: false, folder: true, count: children.length, focused: group.id === focusedId };
+    frames.push(frame);
+    pack(frame);
+    if (index > 0) stackY = frame.bounds.y + frame.bounds.h + 36;
+  }
+  separateRoots(folders.map(group => frames.find(frame => frame.group.id === group.id)), frames, saved);
+  let looseY = Math.max(720, ...frames.filter(frame => folders.some(group => group.id === frame.group.id)).map(frame => frame.bounds.y + frame.bounds.h + 40), 0);
+  for (const group of loose) {
+    const stored = storedBox(saved, group.id);
+    const size = measure(group);
+    const unlinked = (group.link?.kind ?? 'none') === 'none' && size.compact;
+    const bounds = stored ?? (unlinked ? { x: 290, y: looseY, w: 180, h: 70 } : { x: 40, y: looseY, w: Math.max(290, size.w), h: Math.max(230, size.h) });
+    const frame = { group, bounds: { ...bounds }, compact: false, folder: group.link?.kind === 'folder', count: childrenOf(group.id).length, focused: group.id === focusedId };
+    frames.push(frame);
+    pack(frame);
+    if (!stored) looseY = frame.bounds.y + frame.bounds.h + 40;
+  }
+  separateRoots(roots.map(group => frames.find(frame => frame.group.id === group.id)).filter(Boolean), frames, saved);
   return frames;
 }

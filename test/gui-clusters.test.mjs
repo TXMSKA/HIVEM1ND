@@ -103,6 +103,36 @@ test('saved cluster frames, empty and nested folders remain in Fit beyond the fo
   const placement = placeUnits([unit('root:overseer', 'overseer')], saved, groups); assert.deepEqual(placement.positions['root:overseer'], { x: 380, y: 409 });
 });
 
+test('sibling cluster frames stay apart, agents stay inside and the overseer stays outside', () => {
+  const web = cluster('Web', 'folder'), shop = cluster('shop', 'repository', 'Web', ['lead', 'a', 'b']);
+  const blog = cluster('blog', 'repository', 'Web'), unity = cluster('Unity', 'folder'), game = cluster('game-1', 'repository', 'Unity');
+  const ideas = cluster('ideas');
+  const groups = [ideas, web, shop, blog, unity, game];
+  const units = [unit('root:overseer', 'overseer'), unit('lead', 'overlord', 'shop'), unit('a', 'executor', 'shop', 'lead'), unit('b', 'executor', 'shop', 'lead')];
+  const saved = { nodes: { 'root:overseer': { x: 0, y: 0 }, a: { x: 0, y: 0 }, b: { x: 900, y: 20 } }, groups: {} };
+  const box = (frames, id) => frames.find(frame => frame.group.id === id).bounds;
+  const overlaps = (left, right) => left.x < right.x + right.w && left.x + left.w > right.x && left.y < right.y + right.h && left.y + left.h > right.y;
+  const contains = (outer, inner, radius = 0) => inner.x - radius >= outer.x && inner.y - radius >= outer.y
+    && inner.x + (inner.w ?? 0) + radius <= outer.x + outer.w && inner.y + (inner.h ?? 0) + radius <= outer.y + outer.h;
+  const frames = clusterFrames(groups, saved, 'Web', units);
+  const roots = ['Web', 'Unity', 'ideas'].map(id => box(frames, id));
+  for (let i = 0; i < roots.length; i += 1) for (let j = i + 1; j < roots.length; j += 1) assert.equal(overlaps(roots[i], roots[j]), false, `${i}:${j}`);
+  assert.equal(overlaps(box(frames, 'shop'), box(frames, 'blog')), false);
+  assert.equal(contains(box(frames, 'Web'), box(frames, 'shop')), true);
+  assert.equal(contains(box(frames, 'Unity'), box(frames, 'game-1')), true);
+  assert.equal(box(frames, 'Unity').x > box(frames, 'Web').x + box(frames, 'Web').w, true);
+  const placed = placeUnits(units, saved, groups);
+  for (const [id, radius] of [['lead', 25], ['a', 21], ['b', 21]]) assert.equal(contains(box(frames, 'shop'), placed.positions[id], radius), true, id);
+  const overseer = placed.positions['root:overseer'];
+  assert.notDeepEqual(overseer, { x: 0, y: 0 });
+  assert.equal(frames.some(frame => contains(frame.bounds, overseer, 30)), false);
+  const withoutIdeas = clusterFrames([web, shop, blog, unity, game], saved, null, units);
+  assert.deepEqual(box(withoutIdeas, 'Web'), box(clusterFrames(groups, saved, null, units), 'Web'));
+  const focused = clusterFrames([web, shop, blog, unity, game], saved, 'Web', units);
+  assert.deepEqual(box(focused, 'Web'), box(withoutIdeas, 'Web'));
+  assert.deepEqual(box(focused, 'Unity'), box(withoutIdeas, 'Unity'));
+});
+
 test('empty drag pans, Shift-drag selects agents and camera changes never persist writes', () => {
   const map = createMap({ units: [unit('root:a')], saved: { nodes: { 'root:a': { x: 100, y: 100 } }, groups: {} } });
   const rect = { left: 0, top: 0, width: 736, height: 818 };

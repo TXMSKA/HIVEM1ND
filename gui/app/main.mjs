@@ -74,7 +74,7 @@ import { activateUnit, buildHierarchy, flattenVisibleHierarchy, revealGroup, tog
 import { checkoutFacts, openTaskDetail, renderApproval, renderGrants, renderMachine, renderSession, renderTask, renderUnit, renderWaiting } from "./inspector.mjs";
 import { cardinal, DICTIONARIES, formatClock, formatNumber, formatWhen, text } from "./i18n.mjs";
 import { collectPages, createPagedList, loadAll, reloadList, renderWindow, setQuery, windowRange } from "./lists.mjs";
-import { adoptInitialLayout, applyRemoteLayout, centerUnit, createMap, keepLocalPosition, renderMap, retrySavedLayout, useIncomingPosition } from "./map.mjs";
+import { adoptInitialLayout, applyRemoteLayout, centerUnit, createMap, keepLocalPosition, renderMap, retrySavedLayout, settlePositions, useIncomingPosition } from "./map.mjs";
 import { dispose as disposeEmbed, publishDirty, publishReady, startEmbedChannel } from "./embed.mjs";
 import { PHONE_NAV, exchangeCode, exchangeHomeFragment, logout, renderCodeEntry, renderPhone } from "./phone.mjs";
 import { applyIssueChange, applyServiceBeat, applySettingsRead, applySyncSnapshot, armExpiry, clearGrant, closeHome, noteHomeChange, openHome, renderClientReview, renderSettings, saveSettings, takeGrant } from "./settings.mjs";
@@ -4229,14 +4229,17 @@ function ensureMap(app) {
   const groups = [...app.store.indexes.groups.values()];
   if (!app.mapState) app.mapState = createMap({ units, groups, saved, api: app.api });
   else {
-    if (!app.mapState.groups.length && groups.length) app.mapState.fitted = false;
     app.mapState.units = units;
     adoptInitialLayout(app.mapState, saved);
-    const placed = createMap({ units, groups, saved: { nodes: app.mapState.positions, groups: app.mapState.saved.groups } });
-    for (const unit of units) if (!app.mapState.positions[unit.id]) app.mapState.positions[unit.id] = placed.positions[unit.id];
   }
   app.mapState.api = app.api;
-  app.mapState.groups = [...app.store.indexes.groups.values()];
+  app.mapState.groups = groups;
+  const clusterKey = groups.filter(group => !group.deleted).map(group => group.id).sort().join('\0');
+  if (app.mapState.clusterKey !== clusterKey) {
+    app.mapState.clusterKey = clusterKey;
+    app.mapState.fitted = false;
+  }
+  settlePositions(app.mapState);
   app.mapState.selectedGroupId = app.store.selected.groupId;
   app.mapState.persist = Boolean(app.store.capabilities?.includes("layout.write"));
   app.mapState.onSelect = (id) => {

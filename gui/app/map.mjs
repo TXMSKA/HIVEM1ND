@@ -577,12 +577,27 @@ export function paintNodes(map) {
 }
 
 export function personalZones(map) {
-  return clusterFrames(map.groups ?? [], map.saved, map.focusedFolder);
+  return clusterFrames(map.groups ?? [], map.saved, map.focusedFolder, map.units);
+}
+
+function nodeExtent(node) {
+  const half = Math.max(node.radius, 72);
+  return { x: node.x - half, y: node.y - node.radius, width: half * 2, height: node.radius * 2 + 36 };
 }
 
 export function graphBounds(map) {
   return [...personalZones(map).map(({ bounds: b }) => ({ x: b.x, y: b.y - 16, width: b.w, height: b.h + 16 })),
-    ...paintNodes(map).map(node => ({ x: node.x - node.radius, y: node.y - node.radius, width: node.radius * 2, height: node.radius * 2 + 28 }))];
+    ...paintNodes(map).map(nodeExtent)];
+}
+
+// The core stores a new unit at {0, 0}. Once clusters exist, that origin is not a place on the Map:
+// agents move inside their frame and the Overseer moves outside every frame.
+export function settlePositions(map) {
+  if (!map?.groups?.some(group => !group.deleted)) return;
+  const placed = placeUnits((map.units ?? []).filter(unit => unit.role !== 'master' && !unit.removed),
+    { nodes: map.positions, groups: map.saved?.groups ?? {} }, map.groups);
+  map.positions = placed.positions;
+  map.origins = placed.origins;
 }
 
 export function fitMap(map, rect = hostRect(map.host)) {
@@ -605,7 +620,7 @@ export function flyToCluster(map, id, rect = hostRect(map.host)) {
   const frames = personalZones(map).filter(item => ids.has(item.group.id));
   const members = new Set(frames.flatMap(item => item.group.members));
   const bounds = [...frames.map(({ bounds: b }) => ({ x: b.x, y: b.y - 16, width: b.w, height: b.h + 16 })),
-    ...paintNodes(map).filter(node => members.has(node.id)).map(node => ({ x: node.x - node.radius, y: node.y - node.radius, width: node.radius * 2, height: node.radius * 2 + 28 }))];
+    ...paintNodes(map).filter(node => members.has(node.id)).map(nodeExtent)];
   const to = clusterCamera(bounds, rect), from = { ...map.view }, view = map.document?.defaultView;
   const flight = {}; map.flight = flight;
   if (map.reducedMotion || view?.matchMedia?.('(prefers-reduced-motion: reduce)').matches || !view?.requestAnimationFrame) { map.view = to; refresh(map); return true; }
@@ -950,6 +965,7 @@ function renderPositions(map, nodes) {
     if (map.pending.has(id)) map.positions[id] = { ...map.pending.get(id).position };
     else map.positions[id] = { x: point.x, y: point.y };
   }
+  settlePositions(map);
   refresh(map);
 }
 
