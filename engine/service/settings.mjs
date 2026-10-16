@@ -823,9 +823,12 @@ export async function writeContent(context, input) {
     let current = previous?.toString('utf8') ?? '';
     if (saved) {
       const oldBlock = preferenceBlock(saved.preferences);
-      if (!current.includes(oldBlock)) fail(409, 'configuration_changed', 'The managed preference text changed.');
-      const offset = saved.preferences.keepExistingPreferencesFirst ? current.lastIndexOf(oldBlock) : current.indexOf(oldBlock);
-      current = current.slice(0, offset) + current.slice(offset + oldBlock.length);
+      // Content settings created by Add to M1ND never wrote a preference block; only a block that exists and was
+      // edited by hand is a conflict.
+      if (current.includes(oldBlock)) {
+        const offset = saved.preferences.keepExistingPreferencesFirst ? current.lastIndexOf(oldBlock) : current.indexOf(oldBlock);
+        current = current.slice(0, offset) + current.slice(offset + oldBlock.length);
+      } else if (current.includes(PREFERENCE_MARK)) fail(409, 'configuration_changed', 'The managed preference text changed.');
     }
     const owned = preferenceBlock(preferences);
     const preferenceBytes = Buffer.from(preferences.keepExistingPreferencesFirst ? `${current}${current && !current.endsWith('\n') ? '\n' : ''}${owned}` : `${owned}${current}`);
@@ -838,8 +841,10 @@ export async function writeContent(context, input) {
   });
 }
 
+const PREFERENCE_MARK = '<!-- HIVEM1ND Settings preferences -->';
+
 function preferenceBlock(preferences) {
-  return `<!-- HIVEM1ND Settings preferences -->\nAddress style: ${preferences.addressStyle}\nKeep existing preferences first: ${preferences.keepExistingPreferencesFirst ? 'yes' : 'no'}\nCheck for updates: ${preferences.updateChecks}\n\n${preferences.additionalInstructions}\n<!-- /HIVEM1ND Settings preferences -->\n`;
+  return `${PREFERENCE_MARK}\nAddress style: ${preferences.addressStyle}\nKeep existing preferences first: ${preferences.keepExistingPreferencesFirst ? 'yes' : 'no'}\nCheck for updates: ${preferences.updateChecks}\n\n${preferences.additionalInstructions}\n<!-- /HIVEM1ND Settings preferences -->\n`;
 }
 
 function replaceListSection(source, title, lines) {

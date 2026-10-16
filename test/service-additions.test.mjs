@@ -545,3 +545,13 @@ test('repository removal retains agents and rejects a running session before det
   await undoChange(context, removed.changeId);
   assert.deepEqual((await rawClusters(context)).find(item => item.cluster.id === cluster.id).cluster, cluster);
 });
+
+test('a skill accepted on a M1ND that never saved Content still lets Settings save Content', async t => {
+  const { context } = await setup(t); await agents(context);
+  const { ready } = await reviewed(t, { context });
+  await applyAdditions(context, acceptance(ready, ['skill']));
+  const content = await readContent(context);
+  const saved = await writeContent(context, { includedFeatures: content.features.filter(item => item.included).map(item => item.id), includedKnowledge: [],
+    preferences: { ...content.preferences, additionalInstructions: 'Saved after the first skill.' }, expectedRevision: content.revision });
+  assert.equal(saved.preferences.additionalInstructions, 'Saved after the first skill.');
+});
