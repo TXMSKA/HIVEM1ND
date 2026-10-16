@@ -962,7 +962,7 @@ test('delivery status follows a sent message from published through woken, read 
   const published = await alice.delivery({ ids: [sent.id] });
   assert.deepEqual(published, { deliveries: [{
     id: sent.id, to: 'executor-beta', subject: 'Ladder', priority: 'urgent', sentAt: sent.timestamp,
-    stage: 'published', woken: [], read: false, replied: null,
+    stage: 'published', woken: [], read: false, replied: null, wake: { live: false, reason: 'none' },
   }], unknown: [] });
 
   const at = new Date().toISOString();
@@ -1134,4 +1134,22 @@ test('a new registration of a unit retires the older ones of that unit on this m
   assert.equal(listed.includes('closed-chat'), false);
   assert.equal((await fresh.reminder({ nativeSessionId: 'closed-chat', client: 'claude' })).registered, false);
   assert.equal((await fresh.reminder({ nativeSessionId: 'open-chat', client: 'claude' })).registered, true);
+});
+
+test('delivery status tells the sender whether the recipient can be woken now', async (context) => {
+  const { mind } = await fixture(context);
+  const alice = await bind(mind, 'executor-alpha', 'wake-alice');
+  await bind(mind, 'executor-beta', 'wake-bob');
+  const sent = await alice.send({ to: 'executor-beta', subject: 'Urgent', body: 'urgent', priority: 'urgent' });
+  const policies = path.join(mind, 'user', 'relay', 'wake', 'policies');
+  await mkdir(policies, { recursive: true });
+  const policy = (deadlineAt, extra = {}) => writeFile(path.join(policies, `${'e'.repeat(64)}.json`), JSON.stringify({
+    kind: 'relay-wake-policy', binding: { unit: 'executor-beta', nativeSessionId: 'bob-native', client: 'claude', machine: 'TESTBOX' },
+    enabled: true, pausedReason: null, deadlineAt, deliveries: {}, ...extra }));
+  await policy(new Date(Date.now() - 60000).toISOString());
+  assert.deepEqual((await alice.delivery({ ids: [sent.id] })).deliveries[0].wake, { live: false, reason: 'expired' });
+  await policy(new Date(Date.now() + 3600000).toISOString());
+  assert.deepEqual((await alice.delivery({ ids: [sent.id] })).deliveries[0].wake, { live: true, reason: null });
+  await policy(new Date(Date.now() + 3600000).toISOString(), { pausedReason: 'handoff-budget-exhausted' });
+  assert.deepEqual((await alice.delivery({ ids: [sent.id] })).deliveries[0].wake, { live: false, reason: 'handoff-budget-exhausted' });
 });

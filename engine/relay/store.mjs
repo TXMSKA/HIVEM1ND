@@ -1500,8 +1500,20 @@ export async function createRelay(options = {}) {
       }
       const text = (value) => typeof value === 'string' ? value : null;
       const validName = (value) => typeof value === 'string' && UNIT_PATTERN.test(value);
-      const policies = (await listWakeRecords('policies')).map((record) => record.value).filter((policy) => policy?.kind === 'relay-wake-policy'
-        && typeof policy.binding?.unit === 'string' && policy.deliveries && typeof policy.deliveries === 'object');
+      const allPolicies = (await listWakeRecords('policies')).map((record) => record.value).filter((policy) => policy?.kind === 'relay-wake-policy'
+        && typeof policy.binding?.unit === 'string');
+      const policies = allPolicies.filter((policy) => policy.deliveries && typeof policy.deliveries === 'object');
+      // Whether the recipient can be woken now, so a sender never mistakes a publication for a delivery.
+      function recipientWake(unit) {
+        const own = allPolicies.filter((policy) => policy.binding.unit.toLowerCase() === unit.toLowerCase());
+        const now = Date.now();
+        if (own.some((policy) => policy.enabled === true && !policy.pausedReason && (policy.deadlineAt == null || Date.parse(policy.deadlineAt) > now))) return { live: true, reason: null };
+        const policy = own[0];
+        if (!policy) return { live: false, reason: 'none' };
+        if (policy.pausedReason) return { live: false, reason: policy.pausedReason };
+        if (policy.enabled !== true) return { live: false, reason: 'disabled' };
+        return { live: false, reason: 'expired' };
+      }
       let everything = null;
       let mailbox = null;
       // The event is the cheap source; a message whose event never got written is found by scanning, which only an unknown id pays for.
@@ -1535,7 +1547,7 @@ export async function createRelay(options = {}) {
         deliveries.push({
           id, to: record.to, subject: text(record.subject) ?? '', priority: record.priority === 'urgent' ? 'urgent' : 'normal', sentAt: text(record.timestamp),
           stage: replied ? 'replied' : read ? 'read' : woken.some((item) => item.state === 'submitted') ? 'woken' : 'published',
-          woken, read, replied,
+          woken, read, replied, wake: recipientWake(record.to),
         });
       }
       return { deliveries, unknown };
