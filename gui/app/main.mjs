@@ -1433,7 +1433,8 @@ async function loadLists(app) {
   const refresh = () => {
     if (!app.disposed && app.layout !== "unknown") renderShell(app);
   };
-  app.unitList.onUpdate = refresh;
+  // An open Attach agents picker also lists agents that arrive after it opened.
+  app.unitList.onUpdate = () => { refresh(); app.attachRepaint?.(); };
   app.chatList.onUpdate = refresh;
   app.waitingList.onUpdate = refresh;
   try {
@@ -3428,10 +3429,12 @@ function openAttachChooser(app) {
   }));
   dialog.append(form);
   dialog.addEventListener("close", () => {
+    if (app.attachRepaint === paint) app.attachRepaint = null;
     dialog.remove();
     restoreInvoker(app, "attach");
   });
   document.body.append(dialog);
+  app.attachRepaint = paint;
   paint();
   const bounds = app.root.querySelector(".board-host")?.getBoundingClientRect() ?? app.root.getBoundingClientRect();
   dialog.style.left = `${Math.max(12, Math.min(document.defaultView.innerWidth - 312, bounds.left + bounds.width / 2 - 150))}px`;

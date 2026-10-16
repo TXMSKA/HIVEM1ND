@@ -6083,6 +6083,22 @@ test("the board attach picker searches groups and aliases and commits canonical 
   assert.deepEqual([...app.editors.current.attached].sort(), [...members].sort());
 });
 
+test("the board attach picker lists agents that load after it opened", async (t) => {
+  const desktop = await openedBoardDesktop(t), { app, root, document } = desktop;
+  await waitFor(() => app.unitList?.catalog?.length, "Units did not load.");
+  const loaded = app.unitList.catalog;
+  app.unitList.catalog = [];
+  app.editors.current.attachmentChoice = new Set();
+  click(root.querySelector("[data-action='attach']"));
+  const chooser = document.querySelector("[data-form='attach']");
+  assert.equal(chooser.querySelectorAll("[data-attach-unit]").length, 0);
+  app.unitList.catalog = loaded;
+  app.unitList.onUpdate();
+  assert.equal(chooser.querySelectorAll("[data-attach-unit]").length > 0, true, "the open picker shows the agents once they arrive");
+  click(chooser.querySelector("[data-action='cancel-form']"));
+  assert.equal(app.attachRepaint, null);
+});
+
 test("board text saves later typing, comments pin full anchors, and conflict controls retain both versions", async (t) => {
   let release, held = false; const hold = new Promise((resolve) => { release = resolve; }); t.after(() => release());
   const desktop = await openedBoardDesktop(t, async (url, init) => {
