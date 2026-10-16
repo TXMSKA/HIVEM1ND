@@ -1271,7 +1271,13 @@ function renderWorkspace(app, t, view, counts) {
       const scroll = panel.querySelector('.transcript') ?? panel.querySelector('[data-session-work]') ?? panel.querySelector('[data-unit-work]');
       // What is left of the unit card (its metadata, the machine, sessions, grants and waiting) belongs with the
       // controls in Details; the conversation keeps only messages, as the board draws it.
-      for (const part of [...review.children]) { part.remove(); controls.append(part); }
+      for (const part of [...review.children]) {
+        part.remove();
+        // Nested disclosures open flat inside Details: one Details, not three.
+        for (const inner of [part, ...(part.querySelectorAll?.('details') ?? [])]) if (inner.matches?.('details')) inner.setAttribute('open', '');
+        controls.append(part);
+      }
+      // Asks and task cards belong to the conversation: they scroll with the messages, in one scroll area.
       if (cards) {
         const field = panel.querySelector('.field');
         if (!(field && placeBefore(field, cards))) panel.append(cards);

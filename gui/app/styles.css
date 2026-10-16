@@ -1584,3 +1584,11 @@ html { scrollbar-color: var(--line2) var(--panel); scrollbar-width: thin; }
 .list-block > .btn { align-self: flex-start; margin: 0 var(--gap) 8px; }
 .map-group-label.is-mini, .map-group-label.is-mini .map-group-caption { min-width: 0; max-width: 100%; }
 .map-group-label.is-mini .map-group-caption span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Inside Details the nested disclosures read flat, and the agent's name is already in the header. */
+.agent-controls details > summary { display: none; }
+.agent-controls .unit-card > h3 { display: none; }
+/* The upper part of the agent inspector never pushes the conversation and its composer out of view. */
+.agent-inspector > .agent-controls[open] { flex: 0 1 auto; max-height: 40%; overflow: auto; }
+.agent-inspector > [data-session-progress] { flex: 0 1 auto; max-height: 30%; overflow: auto; }
+.inspector-body.agent-inspector > .chat-panel.agent-conversation { min-height: 220px; }
+.agent-conversation .transcript > .action-cards { margin: 4px 0 0; max-height: none; overflow: visible; }
