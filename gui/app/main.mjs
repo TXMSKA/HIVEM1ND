@@ -5412,7 +5412,7 @@ function deleteLibraryEntry(app, kind, entry, type) {
     let operation = null;
     const dialog = showDialog(app.root.ownerDocument, {
       title: text(app.language, "finalDeleteTitle", { title: record.title }),
-      body: `${text(app.language, type === "folder" ? kind === "blueprint" ? "deleteBoardFolderScope" : "deleteTextFolderScope" : kind === "blueprint" ? "finalDeleteBoardScope" : "deleteTextScope", { count: record.count })} ${text(app.language, "undoTenSeconds")}`,
+      body: `${type === "folder" ? cardinal(app.language, kind === "blueprint" ? "deleteBoardFolderScope" : "deleteTextFolderScope", record.count) : text(app.language, kind === "blueprint" ? "finalDeleteBoardScope" : "deleteTextScope", { count: record.count })} ${text(app.language, "undoTenSeconds")}`,
       confirm: text(app.language, type === "folder" ? "deleteFolder" : kind === "blueprint" ? "deleteBoard" : "deleteText"), cancel: text(app.language, "cancel"), retry: text(app.language, "retry"),
       onConfirm: async () => {
         try {
