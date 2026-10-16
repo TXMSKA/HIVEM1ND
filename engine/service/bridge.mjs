@@ -82,7 +82,8 @@ export async function dispatchLocal(bridge, operation, binding) {
     const socket = createConnection(bridge.endpoint, () => socket.write(payload));
     let data = '';
     let answered = false;
-    const timer = setTimeout(() => socket.destroy(new CoreError(503, 'service_unavailable', 'The owner bridge did not answer.')), 3000);
+    // The handler may still be reading. The answer is the line; a silent socket still ends here.
+    const timer = setTimeout(() => socket.destroy(new CoreError(503, 'service_unavailable', 'The owner bridge did not answer.')), 30000);
     socket.setEncoding('utf8');
     socket.once('close', () => { clearTimeout(timer); if (!answered) reject(new CoreError(503, 'service_unavailable', 'The owner bridge closed without a complete response.')); });
     socket.on('data', (chunk) => {
@@ -146,7 +147,8 @@ export async function dispatchNative(endpoint, secret, operation, binding = {}) 
     let answered = false;
     let ownerPending = false;
     const silent = () => socket.destroy(new CoreError(503, 'service_unavailable', 'The native bridge did not answer.'));
-    let timer = setTimeout(silent, 3000);
+    // The handler may still be reading. The answer is the line; a silent socket still ends here.
+    let timer = setTimeout(silent, 30000);
     socket.setEncoding('utf8');
     socket.once('connect', () => socket.write(`${JSON.stringify({ id, operation, secret, binding })}\n`));
     socket.on('data', (chunk) => {
