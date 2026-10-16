@@ -1473,6 +1473,10 @@ button.plan-assignment { min-height: 32px; padding: 0; border: 0; background: tr
 .context-notice .action-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .context-notice .action-row .btn { min-width: 0; flex: 1 1 96px; }
 .context-notice [data-action="context-dismiss"] { min-width: 36px; min-height: 36px; }
+.session-start-step { display: flex; align-items: center; gap: 8px; margin: 4px 0; color: var(--mute); font-size: 12.5px; }
+.session-start-step.is-done { color: var(--body); }
+.session-start-step.is-working { color: var(--text); }
+.session-start-step.is-failed { color: var(--error); }
 .private-transcript { max-height: 65dvh; overflow: auto; }
 .private-transcript pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 11.5px var(--mono); }
 .plan-draft input, .plan-draft select { width: 100%; min-width: 0; min-height: 32px; }

@@ -44,6 +44,8 @@ import { createContext, readContext } from '../engine/service/context.mjs';
 import { registerNative } from '../engine/service/adapters.mjs';
 import { refreshPlan } from '../gui/app/plan-controller.mjs';
 import { element } from '../gui/app/components.mjs';
+import { runsInLabel } from '../gui/app/clusters.mjs';
+import { renderContext } from '../gui/app/session-work.mjs';
 
 test('R057 bar modes, waiting copy, destinations and shared buttons match the final controls', () => {
   const { document, root } = createTestDocument(1440);
@@ -228,7 +230,8 @@ test("English and Spanish use the same copy keys", () => {
   assert.equal(text("es", "highContrast"), "Nocturne");
   assert.equal(text("es", "settings"), "Configuración");
   assert.equal(text("en", "showMore", { count: 4 }), "Show 4 more");
-  assert.equal(text("es", "queued").includes("respuesta registrada"), true);
+  assert.equal(text("es", "queued").includes("en cola"), true);
+  assert.equal(text("es", "queued").includes("respuesta registrada"), false);
   assert.equal(text("en", "submitted").includes("has not been recorded"), true);
   assert.throws(() => text("en", "missing-key"), /Unknown copy key: missing-key/);
   assert.throws(() => text("es", "missing-key"), /Unknown copy key: missing-key/);
@@ -1575,7 +1578,7 @@ test("Watch opens the focused board and clears a stopped watch", async (t) => {
   await waitFor(() => desktop.app.editors.watch == null, "The stopped watch remained.");
 });
 
-test("an incoming render keeps unsent chat text and return notes", async (t) => {
+test("R13 Send back confirms in its dialog and incoming renders keep chat text and return notes", async (t) => {
   const fixture = await createGuiFixture();
   t.after(() => fixture.close());
   const desktop = await bootApp(fixture.desktopUrl, 1440, []);
@@ -1610,6 +1613,10 @@ test("an incoming render keeps unsent chat text and return notes", async (t) => 
   assert.equal(desktop.root.querySelector("[data-note='project:shop:030']").value, "Needs another pass");
   assert.equal(desktop.root.querySelector("[data-note='project:shop:030']").selectionStart, 6);
   click(desktop.root.querySelector("[data-task='project:shop:030']")?.querySelector("[data-action='send-back']"));
+  const sendBack = desktop.document.querySelector('dialog');
+  assert.equal(sendBack.querySelector('h2').textContent, text('en', 'sendBackTaskTitle'));
+  assert.equal(desktop.root.querySelector("[data-note='project:shop:030']").value, "Needs another pass");
+  click(sendBack.querySelector('button.primary'));
   await waitFor(() => desktop.root.querySelector("[data-note='project:shop:030']")?.value === "", "The sent return note remained.");
 });
 
@@ -1662,7 +1669,7 @@ test("visible sent lines do not acknowledge the recipient and agents have no sep
   assert.equal(phoneUrls.some((url) => /\/mailboxes\/[^ ?]+\/read/.test(url)), false);
 });
 
-test("waiting task acceptance and undo work without opening the unit inspector", async (t) => {
+test("R13 accepted waiting tasks use a toast and quiet Undo without opening the unit inspector", async (t) => {
   const fixture = await createGuiFixture();
   t.after(() => fixture.close());
   const desktop = await bootApp(fixture.desktopUrl, 1440, []);
@@ -1675,9 +1682,11 @@ test("waiting task acceptance and undo work without opening the unit inspector",
   click(desktop.root.querySelector("[data-waiting-record='review']").querySelector("[data-action='accept']"));
   await waitFor(() => desktop.app.activity.get("task:project:shop:029")?.phase === "success", "Task acceptance did not settle.");
   assert.equal(desktop.app.waitingRecord.task.status, "done");
+  assert.equal(desktop.root.querySelector('[data-map-toast]').textContent.includes(text('en', 'taskAccepted')), true);
+  assert.match(desktop.root.querySelector('[data-action="map-undo"]').className, /ghost/);
   assert.equal((await request(desktop.app.api, "GET", "/tasks/project%3Ashop%3A029")).data.status, "done");
-  click(desktop.root.querySelector("[data-waiting-record='review']").querySelector("[data-action='undo']"));
-  await waitFor(() => desktop.app.activity.get("undo:project:shop:029")?.phase === "success", "Undo did not settle.");
+  clickAction(desktop.root, 'map-undo');
+  await waitFor(() => desktop.app.store.indexes.tasks.get("project:shop:029").status === "review", "Undo did not settle.");
   assert.equal(desktop.app.waitingRecord.task.status, "review");
   assert.equal(desktop.app.inspectorData ?? null, null);
   assert.equal(desktop.app.store.indexes.tasks.get("project:shop:029").status, "review");
@@ -2747,6 +2756,19 @@ test("Void keeps the source selection and draft through formatting, Source, Focu
   input = desktop.root.querySelector("[data-source]");
   assert.equal(input.value, formatted);
   assert.equal(input.selectionStart, caret.start); assert.equal(input.selectionEnd, caret.end);
+  const mappedSource = "## Chats and mailboxes\r\n\r\nEdited here.";
+  typeInput(input, mappedSource, mappedSource.length, mappedSource.length);
+  click(desktop.root.querySelector("[data-action='toggle-source']"));
+  const editedText = textNodes(desktop.root.querySelector("[data-void-body]")).find(node => node.textContent === "Edited here.");
+  assert.ok(editedText, "The edited paragraph did not render in Document view.");
+  selection.setBaseAndExtent(editedText, 6, editedText, 6);
+  desktop.root.querySelector("[data-void-body]").focus();
+  const sourceToggle = desktop.root.querySelector("[data-action='toggle-source']");
+  for (const handler of sourceToggle.listeners.get("pointerdown") ?? []) handler();
+  click(sourceToggle);
+  input = desktop.root.querySelector("[data-source]");
+  assert.equal(input.selectionStart, mappedSource.indexOf("Edited here.") + 6);
+  assert.equal(input.selectionEnd, mappedSource.indexOf("Edited here.") + 6);
 });
 
 test("Void shows Not saved and retries the captured operation before saving later typing", async (t) => {
@@ -2900,6 +2922,7 @@ test("action notes use bilingual outcomes and keep wire codes for diagnostics", 
   desktop.app.mapState.onConnect({ source: "env:web:overlord-web", target: "root:master" });
   click(desktop.document.querySelector("dialog").querySelector(".primary"));
   await waitFor(() => desktop.document.querySelector("[data-dialog-error]")?.textContent === "That connection is not valid.", "The connection note was not translated.");
+  assert.equal(desktop.document.querySelector("dialog")?.getAttribute("open") != null, true);
   assert.equal(desktop.document.querySelector("[data-dialog-error]").getAttribute("data-code"), "invalid_lead");
   assert.equal(desktop.document.querySelector("[data-dialog-error]").textContent.includes("root:master"), false);
   click(desktop.document.querySelector("dialog").querySelector("button"));
@@ -2912,9 +2935,8 @@ test("action notes use bilingual outcomes and keep wire codes for diagnostics", 
   await assert.rejects(changeTaskStatus(desktop.app.api, missingNoteTask, 'open', ''), { code: 'note_required' });
   assert.equal(desktop.root.querySelector("[data-task='project:shop:030']").querySelector("[data-action='send-back']").disabled, true);
   click(desktop.root.querySelector("[data-task='project:shop:029']").querySelector("[data-action='accept']"));
-  await waitFor(() => noteText(desktop) === "The task is done.", "The task status was shown as a wire value.");
-  assert.equal(desktop.root.querySelector("[data-action-note]").getAttribute("data-code"), "done");
-  assert.notEqual(noteText(desktop), "Approved");
+  await waitFor(() => desktop.root.querySelector("[data-map-toast]")?.textContent.includes("Task accepted"), "The accepted task presentation was not shown.");
+  assert.match(desktop.root.querySelector("[data-action='map-undo']").className, /ghost/);
 
   desktop.app.language = "es";
   await waitFor(() => desktop.root.querySelector("[data-task='project:shop:029']")?.querySelector("[data-action='undo']"), "Undo did not appear.");
@@ -4175,8 +4197,12 @@ test("a failed connection stays open and retries the same targets", async (t) =>
   desktop.app.mapState.onConnect({ source: source.id, target: master.id });
   await waitFor(() => desktop.document.querySelector("dialog")?.getAttribute("open") != null, "The connection dialog did not open.");
   click(desktop.document.querySelector("button.primary"));
-  await waitFor(() => desktop.document.querySelector("[data-dialog-error]")?.textContent.includes("not valid"), "A rejected connection did not stay in the dialog.");
+  await waitFor(() => desktop.document.querySelector("[data-dialog-error]")?.textContent.includes("not valid"), "A rejected connection did not reopen with its failure note.");
   assert.equal(desktop.document.querySelector("dialog").getAttribute("open") != null, true);
+  assert.equal(desktop.document.querySelector("[data-dialog-error]").getAttribute("data-code"), "invalid_lead");
+  assert.equal(desktop.app.mapState.pendingConnect, null);
+  assert.equal(desktop.root.querySelector("[data-pending-edge]"), null);
+  assert.equal(desktop.app.mapState.selection.has(master.id), true);
   assert.equal(writes.length, 0);
   click(desktop.document.querySelector("dialog").querySelector("button"));
   await waitFor(() => desktop.document.querySelector("dialog") == null, "Cancel did not close the dialog.");
@@ -4185,13 +4211,15 @@ test("a failed connection stays open and retries the same targets", async (t) =>
   await waitFor(() => desktop.document.querySelector("button.primary"), "The connection dialog did not return.");
   fixture.control.setFault({ method: "PUT", path: `/api/v1/units/${target.id}/lead`, dropAfterCommit: true });
   click(desktop.document.querySelector("button.primary"));
-  await waitFor(() => desktop.document.querySelector("[data-dialog-error]")?.textContent.includes("not known yet"), "An unknown connection result did not stay open.");
+  await waitFor(() => desktop.document.querySelector("[data-dialog-error]")?.textContent.includes("not known yet"), "An unknown connection result did not reopen for retry.");
   assert.equal(desktop.document.querySelector("dialog").getAttribute("open") != null, true);
+  assert.equal(desktop.app.mapState.selection.has(target.id), true);
   const retry = desktop.document.querySelector("dialog").querySelector("button.primary");
-  assert.equal(retry.children.some((child) => child.textContent === "Retry"), true);
+  assert.equal(retry.textContent, "Retry");
   click(retry);
   await waitFor(() => desktop.document.querySelector("dialog") == null, "A resolved connection did not close.");
   assert.equal(writes.length, 2);
+  assert.equal(writes[0].path, writes[1].path);
   assert.equal(writes[0].key, writes[1].key);
   assert.deepEqual(writes[0].body, writes[1].body);
 });
@@ -4263,7 +4291,7 @@ test('a new empty cluster has one chat and no agent or reporting change until Ne
   assert.equal(desktop.launches.length, 0); assert.equal((await request(desktop.app.api, 'GET', '/settings/agents')).data.defaultRunsIn, null);
 });
 
-test("connection direction waits for the authoritative commit and Undo restores the recorded lead", async (t) => {
+test("R13 connection closes the dialog, draws immediately and Undo restores the recorded lead", async (t) => {
   const fixture = await createGuiFixture();
   t.after(() => fixture.close());
   let release;
@@ -4290,6 +4318,7 @@ test("connection direction waits for the authoritative commit and Undo restores 
   click(dialog.querySelector("button.primary"));
   await waitFor(() => writes.length === 1, "The connection was not submitted.");
   assert.equal(writes[0].leadId, source.id);
+  assert.equal(desktop.document.querySelector("dialog"), null);
   assert.equal(desktop.root.querySelector("[data-pending-edge]") != null, true);
   assert.equal(desktop.root.querySelector("[data-action='map-undo']"), null);
   assert.equal(desktop.app.unitList.catalog.find((unit) => unit.id === target.id).leadId, target.leadId);
@@ -5722,6 +5751,88 @@ async function openedBoardDesktop(t, onFetch) {
   return { ...desktop, fixture, board };
 }
 
+test('R6 comment metadata separates the short time and reports submitted recipients once', async t => {
+  const desktop = await openedBoardDesktop(t), current = desktop.app.editors.current;
+  current.threads = [{ id: 'thread-r6', messages: [{ id: 'message-r6', authorId: 'root:master', at: '2026-10-10T12:00:00.000Z', text: 'A comment.' }] }];
+  current.notices = [
+    { unitId: 'project:shop:executor-shop', state: 'submitted' },
+    { unitId: 'env:web:overlord-web', state: 'submitted' },
+  ];
+  renderShell(desktop.app);
+  const line = desktop.root.querySelector('[data-comment-message="message-r6"]');
+  assert.equal(line.querySelector('.comment-author').textContent, 'You');
+  assert.equal(line.querySelector('time').textContent, '12:00');
+  const statuses = desktop.root.querySelectorAll('[data-notice]');
+  assert.equal(statuses.length, 1);
+  assert.equal(statuses[0].textContent, 'Sent to executor-shop and overlord-web.');
+  assert.equal(desktop.root.querySelector('[data-notice="queued"]'), null);
+  const css = await readFile('gui/app/styles.css', 'utf8');
+  assert.match(css, /\.comment-line time \{ display: block;/);
+});
+
+test('R9 plan cards use the chat scroll area and the Overseer notice wraps its actions', async () => {
+  const { document } = createTestDocument(720);
+  const styles = await readFile('gui/app/styles.css', 'utf8');
+  const notice = renderContext(document, { session: { id: 'overseer' }, context: { percent: 80, generationId: 'g1', dismissed: false } }, 'en', () => {});
+  assert.equal(notice.querySelector('.context-notice').querySelectorAll('button').length, 3);
+  assert.match(styles, /\.chat-panel\.has-plans \.transcript \{ max-height: none; overflow: visible; \}/);
+  assert.match(styles, /\.context-notice \.action-row \{ display: flex; flex-wrap: wrap;/);
+  assert.match(styles, /\.context-notice \.action-row \.btn \{ min-width: 0; flex: 1 1 96px;/);
+});
+
+test('R10 Runs in never renders a null model or effort as a label', () => {
+  assert.equal(runsInLabel({ client: 'codex', model: null, effort: 'high', mode: null }, [{ id: 'codex', title: 'Codex', models: [] }]), 'Codex, High');
+});
+
+test('R10 History replaces Comments and places the current version first with readable metadata', async t => {
+  const desktop = await openedBoardDesktop(t), current = desktop.app.editors.current;
+  current.historyOpen = true;
+  current.history = [
+    { id: 'older', by: 'project:shop:executor-shop', at: '2026-10-10T10:00:00.000Z', operation: 'board-edit', current: false },
+    { id: 'current', by: 'root:master', at: '2026-10-10T12:00:00.000Z', operation: 'restore', current: true },
+  ];
+  renderShell(desktop.app);
+  const column = desktop.root.querySelector('[data-editor-column="comments"]');
+  const rows = column.querySelectorAll('.history-row');
+  assert.equal(column.querySelector('h2').textContent, 'History');
+  assert.equal(rows[0].getAttribute('data-history-id'), 'current');
+  assert.ok(rows[0].querySelector('.history-current'));
+  const rendered = rows.map(row => row.textContent).join(' ');
+  assert.equal(rendered.includes('root:master'), false);
+  assert.equal(rendered.includes('project:shop:'), false);
+  assert.equal(rendered.includes('2026-10-10T'), false);
+  assert.ok(desktop.root.querySelector('.shared-library'));
+  assert.equal(desktop.root.querySelector('[data-action="editor-history"]').getAttribute('aria-pressed'), 'true');
+});
+
+test('R10 look controls and placeholders use themed contrast tokens', async () => {
+  const css = await readFile('gui/app/styles.css', 'utf8');
+  assert.match(css, /--focus: 2px solid var\(--accent\)/);
+  assert.match(css, /\.look-preview-radio \{ border-color: var\(--ring\) !important;/);
+  assert.match(css, /scrollbar-color: var\(--line2\) var\(--panel\)/);
+  assert.match(css, /input::placeholder, textarea::placeholder \{ color: var\(--mute\); opacity: 1;/);
+  assert.match(css, /\.settings-panel input\[type="checkbox"\].*appearance: none/);
+  assert.match(css, /\[data-look="txmska"\][\s\S]*?--ring: #a855f7/);
+});
+
+test('R13 session progress names the failed client and offers Retry only after failure', async t => {
+  const desktop = await openedBoardDesktop(t), selected = desktop.app.unitList.catalog.find(unit => unit.id === 'project:shop:executor-shop');
+  desktop.app.mode = 'map';
+  desktop.app.editors.current = null;
+  desktop.app.store.selected.unitId = selected.id;
+  desktop.app.sessionRequest = { requestId: 'start-r13', unitId: selected.id, state: 'starting', client: 'claude-code', machine: 'DESKTOP' };
+  renderShell(desktop.app);
+  assert.equal(desktop.root.querySelectorAll('[data-start-step]').length, 3);
+  assert.equal(desktop.root.querySelector('[data-action="retry-session"]'), null);
+  assert.ok(desktop.root.querySelector('[data-action="cancel-start"]'));
+  desktop.app.sessionRequest = { ...desktop.app.sessionRequest, state: 'failed', error: { code: 'launch_failed', step: 'launch' } };
+  renderShell(desktop.app);
+  const progress = desktop.root.querySelector('[data-session-progress]');
+  assert.match(progress.querySelector('[role="alert"]').textContent, /Claude Code could not start at launch/);
+  assert.ok(progress.querySelector('[data-action="retry-session"]'));
+  assert.equal(progress.querySelector('[data-action="cancel-start"]'), null);
+});
+
 function boardEvent(host, type, target, x, y, more = {}) {
   for (const handler of host.listeners.get(type) ?? []) handler({ target, pointerId: 1, button: 0, offsetX: x, offsetY: y, clientX: x, clientY: y, preventDefault() {}, ...more });
 }
@@ -5771,6 +5882,8 @@ test("Draw stores pen and marker strokes, cancels previews and erases through no
   const { app, root } = desktop, editor = app.editors.current;
   click(root.querySelector("button[data-board-tool='draw']"));
   await waitFor(() => !editor.boardDraft && editor.authoritative.document.screens.some((screen) => screen.root.sketch), "The hand frame did not save.");
+  assert.equal(editor.conflict, null, "The board's own saved sketch was reported as an outside change.");
+  assert.equal(root.querySelector("[data-board-overlay='conflict']"), null);
   const frame = editor.authoritative.document.screens.find((screen) => screen.root.sketch);
   assert.deepEqual([frame.x, frame.y, frame.w, frame.h, frame.root.radius, frame.root.dash], [350, 120, 300, 560, 18, "6 5"]);
   const stroke = async (tool, end) => {
@@ -6205,9 +6318,27 @@ function accessibilityMatrix(rules) {
   return rows;
 }
 
+function accessibilityControlMatrix(rules) {
+  const rows = [];
+  for (const look of ["modern", "high-contrast", "nebula", "txmska", "coffee-cat", "ntk"]) {
+    const palette = accessibilityPalette(rules, look);
+    for (const indicator of ["ring", "accent"]) for (const surface of ["panel", "ground"]) {
+      const raw = palette[`--${indicator}`], background = accessibilityColor(palette[`--${surface}`]);
+      const foreground = accessibilityComposite(accessibilityColor(raw), background);
+      rows.push({ look, indicator, surface, raw, background, foreground, ratio: accessibilityRatio(foreground, background) });
+    }
+  }
+  return rows;
+}
+
 function accessibilityEvidenceRow(row) {
   const rgb = color => color.slice(0, 3).map(value => value.toFixed(6)).join(", ");
   return `| ${row.look} | ${row.role} | ${row.surface} | ${row.raw} | ${rgb(row.background)} | ${rgb(row.foreground)} | ${row.ratio.toFixed(6)} |`;
+}
+
+function accessibilityControlEvidenceRow(row) {
+  const rgb = color => color.slice(0, 3).map(value => value.toFixed(6)).join(", ");
+  return `| ${row.look} | ${row.indicator} | ${row.surface} | ${row.raw} | ${rgb(row.background)} | ${rgb(row.foreground)} | ${row.ratio.toFixed(6)} |`;
 }
 
 test("T062 measures exact six-look text and alpha surfaces and retains its evidence", async () => {
@@ -6219,6 +6350,13 @@ test("T062 measures exact six-look text and alpha surfaces and retains its evide
   for (const row of rows) {
     assert.ok(row.ratio >= 4.5, `${row.look} ${row.role} ${row.surface}: ${row.ratio}`);
     assert.ok(evidence.includes(accessibilityEvidenceRow(row)), `Missing measured pair: ${row.look} ${row.role} ${row.surface}`);
+  }
+  const controls = accessibilityControlMatrix(rules);
+  assert.equal(controls.length, 24);
+  const controlEvidence = await readFile(new URL("./gui-browser.md", import.meta.url), "utf8");
+  for (const row of controls) {
+    assert.ok(row.ratio >= 3, `${row.look} ${row.indicator}/${row.surface}: ${row.ratio}`);
+    assert.ok(controlEvidence.includes(accessibilityControlEvidenceRow(row)), `Missing non-text pair: ${row.look} ${row.indicator}/${row.surface}`);
   }
   for (const selector of [".comment-send:disabled", ".comment-preference.no-agents", ".settings-panel .btn:disabled"]) {
     assert.equal(rules.find(rule => rule.selectors.includes(selector)).values.opacity, "1", selector);

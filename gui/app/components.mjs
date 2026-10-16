@@ -116,7 +116,7 @@ export function labeledField(document, label, hint, control) {
   );
 }
 
-export function showDialog(document, { title, body, confirm, cancel, retry, onConfirm }) {
+export function showDialog(document, { title, body, confirm, cancel, retry, onConfirm, error: initialError }) {
   const invoker = document.activeElement;
   const dialog = document.createElement("dialog");
   dialog.className = "dialog";
@@ -146,18 +146,19 @@ export function showDialog(document, { title, body, confirm, cancel, retry, onCo
         showConfirm(retry || "Retry");
         const note = element(document, "p", { class: "action-note", "data-dialog-error": "true", role: "alert", text: error?.message || "The action failed." });
         if (error?.code) note.setAttribute("data-code", error.code);
-        if (typeof dialog.insertBefore === "function") dialog.insertBefore(note, actions);
-        else {
-          const index = dialog.children.indexOf(actions);
-          note.parent = dialog;
-          dialog.children.splice(index < 0 ? dialog.children.length : index, 0, note);
-        }
+        insertDialogError(dialog, actions, note);
       }
     });
     actions.append(confirmButton);
   }
   cancelButton.addEventListener("click", () => dialog.close());
-  dialog.append(heading, copy, actions);
+  dialog.append(heading, copy);
+  if (initialError) {
+    const note = element(document, "p", { class: "action-note", "data-dialog-error": "true", role: "alert", text: initialError.message });
+    if (initialError.code) note.setAttribute("data-code", initialError.code);
+    insertDialogError(dialog, actions, note);
+  }
+  dialog.append(actions);
   dialog.addEventListener("close", () => {
     dialog.remove();
     const action = invoker?.getAttribute?.("data-action");
@@ -172,6 +173,15 @@ export function showDialog(document, { title, body, confirm, cancel, retry, onCo
   dialog.showModal();
   cancelButton.focus();
   return dialog;
+}
+
+function insertDialogError(dialog, actions, note) {
+  if (typeof dialog.insertBefore === "function") dialog.insertBefore(note, actions);
+  else {
+    const index = dialog.children.indexOf(actions);
+    note.parent = dialog;
+    dialog.children.splice(index < 0 ? dialog.children.length : index, 0, note);
+  }
 }
 
 export function showError(document, { title, message, close }) {

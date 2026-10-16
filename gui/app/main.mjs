@@ -1562,7 +1562,7 @@ function renderWaitingRecord(app, t, record = app.waitingRecord) {
     const phone = app.store.audience === "phone";
     const noteDraft = inputDrafts(app).notes.get(record.task.id);
     const taskBusy = activityPending(app, `task:${record.task.id}`) || activityPending(app, `undo:${record.task.id}`);
-    block.append(renderTask(document, record.task, t, (item, status, note) => setTaskStatus(app, item, status, note), !phone && caps.includes("task.undo") ? (item) => undoSelected(app, item) : null, noteDraft?.value ?? "", (value, start, end) => {
+    block.append(renderTask(document, record.task, t, (item, status, note) => status === "open" ? confirmSendBack(app, item, note) : setTaskStatus(app, item, status, note), !phone && caps.includes("task.undo") ? (item) => undoSelected(app, item) : null, noteDraft?.value ?? "", (value, start, end) => {
       inputDrafts(app).notes.set(record.task.id, { value, start: Number.isInteger(start) ? start : value.length, end: Number.isInteger(end) ? end : value.length });
       syncViewerDirty(app);
     }, phone ? canAccept(record.task) : canSendBack(record.task), taskBusy));
@@ -6421,74 +6421,88 @@ function showMapToast(app, label, undo, until = null) {
 function mapToast(app, t) {
   const toast = app.mapToast;
   const node = element(app.root.ownerDocument, "div", { class: "map-toast", role: "status", "data-map-toast": "true", text: toast.label });
-  if (toast.undo && app.api.now() < toast.until) node.append(mapButton(app, "map-undo", t("undo"), () => settle(app, toast.key, t("working"), async (record) => {
+  if (toast.undo && app.api.now() < toast.until) node.append(element(app.root.ownerDocument, "button", { type: "button", class: "btn ghost", "data-action": "map-undo", text: t("undo"), onclick: () => settle(app, toast.key, t("working"), async (record) => {
     await toast.undo(record);
     if (app.mapToast === toast) app.mapToast = null;
     renderShell(app);
-  })));
+  }) }));
   return node;
 }
 
-function confirmConnection(app, sourceId, targetIds) {
+function confirmConnection(app, sourceId, targetIds, retained = null, priorError = null) {
   const source = unitById(app, sourceId);
   const targets = targetIds.map((id) => unitById(app, id)).filter(Boolean);
   if (!source || !targets.length) return;
-  const operations = new Map();
-  const done = new Set();
-  const previous = targets.map((target) => ({ id: target.id, leadId: target.leadId ?? null }));
+  const state = retained ?? {
+    operations: new Map(),
+    done: new Set(),
+    previous: targets.map((target) => ({ id: target.id, leadId: target.leadId ?? null })),
+  };
   const body = targets.map((target) => text(app.language, "finalConnectScope", { unit: unitDisplayName(target), lead: unitDisplayName(source) })).join(" ");
   const dialog = showDialog(app.root.ownerDocument, {
     title: text(app.language, "finalConnectTitle", { unit: targets.map(unitDisplayName).join(", ") }),
     body,
-    confirm: text(app.language, "connect"),
+    confirm: text(app.language, priorError ? "retry" : "connect"),
     cancel: text(app.language, "cancel"),
     retry: text(app.language, "retry"),
-    onConfirm: async () => {
-      const pending = targets.filter((target) => !done.has(target.id));
-      app.connectionSaving = { leadId: source.id, targets: targets.map((target) => target.id) };
-      app.store.selected.unitId = targets[0].id;
-      app.store.selected.groupId = null;
-      app.mapState.selection = new Set([targets[0].id]);
-      app.mapState.pendingConnect = { source: source.id, target: targets[0].id };
-      renderShell(app);
-      const results = await connectUnits(app.api, source, pending, operations);
-      const failed = [];
-      for (const result of results) {
-        if (result.operation) operations.set(result.id, result.operation);
-        if (result.error) failed.push(result);
-        else done.add(result.id);
-      }
-      if (failed.length) {
+    error: priorError,
+    onConfirm: () => {
+      const saveConnection = async () => {
+        const pending = targets.filter((target) => !state.done.has(target.id));
+        app.connectionSaving = { leadId: source.id, targets: targets.map((target) => target.id) };
+        app.store.selected.unitId = targets[0].id;
+        app.store.selected.groupId = null;
+        app.mapState.selection = new Set([targets[0].id]);
+        app.mapState.pendingConnect = { source: source.id, target: targets[0].id };
+        renderShell(app);
+        const results = await connectUnits(app.api, source, pending, state.operations);
+        const failed = [];
+        for (const result of results) {
+          if (result.operation) state.operations.set(result.id, result.operation);
+          if (result.error) failed.push(result);
+          else state.done.add(result.id);
+        }
+        if (failed.length) {
+          const error = new Error(failed.map((result) => connectCause(app, targets.find((item) => item.id === result.id), result)).join(" "));
+          error.code = failed.some((result) => result.uncertain) ? "unknown_result" : (failed[0].error?.code ?? "request_failed");
+          throw error;
+        }
+        showOutcome(app, targets.map((target) => text(app.language, "unitConnected", { unit: target.unit, lead: source.unit })).join(" "), "connected");
         app.connectionSaving = null;
         app.mapState.pendingConnect = null;
-        if (app.unitList) await reloadList(app.unitList);
-        renderShell(app);
-        const error = new Error(failed.map((result) => connectCause(app, targets.find((item) => item.id === result.id), result)).join(" "));
-        error.code = failed.some((result) => result.uncertain) ? "unknown_result" : (failed[0].error?.code ?? "request_failed");
-        throw error;
-      }
-      showOutcome(app, targets.map((target) => text(app.language, "unitConnected", { unit: target.unit, lead: source.unit })).join(" "), "connected");
-      app.connectionSaving = null;
-      app.mapState.pendingConnect = null;
-      const undoOperations = new Map();
-      const undone = new Set();
-      showMapToast(app, text(app.language, "saved"), async () => {
-        for (const before of previous) {
-          if (undone.has(before.id)) continue;
-          let operation = undoOperations.get(before.id);
-          if (!operation) {
-            const current = (await request(app.api, "GET", "/units/:unitId", { params: { unitId: before.id } })).data;
-            if (current.leadId !== source.id) throw new ApiError(409, "revision_conflict", text(app.language, "revisionConflict"));
-            operation = createOperation({ method: "PUT", path: "/units/:unitId/lead", params: { unitId: before.id }, body: { leadId: before.leadId, confirmed: true, expectedRevision: current.revision } });
-            undoOperations.set(before.id, operation);
+        const undoOperations = new Map();
+        const undone = new Set();
+        showMapToast(app, text(app.language, "saved"), async () => {
+          for (const before of state.previous) {
+            if (undone.has(before.id)) continue;
+            let operation = undoOperations.get(before.id);
+            if (!operation) {
+              const current = (await request(app.api, "GET", "/units/:unitId", { params: { unitId: before.id } })).data;
+              if (current.leadId !== source.id) throw new ApiError(409, "revision_conflict", text(app.language, "revisionConflict"));
+              operation = createOperation({ method: "PUT", path: "/units/:unitId/lead", params: { unitId: before.id }, body: { leadId: before.leadId, confirmed: true, expectedRevision: current.revision } });
+              undoOperations.set(before.id, operation);
+            }
+            await request(app.api, operation.method, operation.path, { operation });
+            undone.add(before.id);
           }
-          await request(app.api, operation.method, operation.path, { operation });
-          undone.add(before.id);
+          await reloadList(app.unitList);
+        });
+        if (app.unitList) await reloadList(app.unitList);
+        if (!app.disposed) renderShell(app);
+      };
+      saveConnection().catch(async (error) => {
+        app.connectionSaving = null;
+        app.mapState.pendingConnect = null;
+        if (app.unitList) await reloadList(app.unitList).catch(() => {});
+        if (!app.disposed) {
+          app.store.selected.unitId = targets[0].id;
+          app.store.selected.groupId = null;
+          app.mapState.selection = new Set([targets[0].id]);
+          renderShell(app);
+          confirmConnection(app, sourceId, targetIds, state, { code: error?.code ?? "request_failed", message: error?.message ?? actionText(app.language, "request_failed") });
         }
-        await reloadList(app.unitList);
       });
-      if (app.unitList) await reloadList(app.unitList);
-      if (!app.disposed) renderShell(app);
+      return true;
     },
   });
   dialog.className += " connection-dialog";
@@ -6578,8 +6592,8 @@ function openSessionForm(app, unit) {
 
 function confirmStop(app, sessionId) {
   showDialog(app.root.ownerDocument, {
-    title: text(app.language, "stopSession"),
-    body: text(app.language, "sessionStopping"),
+    title: text(app.language, "stopSessionTitle"),
+    body: text(app.language, "stopSessionBody"),
     confirm: text(app.language, "stopSession"),
     cancel: text(app.language, "cancel"),
     retry: text(app.language, "retry"),
@@ -7350,16 +7364,26 @@ function renderInspector(app, t, selected) {
     if (folded) trackDisclosure(app, folded, keepId("unit", selected.id));
     panel.append(card);
     const tracked = app.sessionRequest;
-    if (tracked?.unitId === selected.id && ['queued', 'starting', 'canceling', 'failed'].includes(tracked.state)) {
+    if (tracked?.unitId === selected.id && ['queued', 'starting', 'canceling', 'failed', 'expired'].includes(tracked.state)) {
       const progress = element(document, 'section', { 'data-session-progress': tracked.requestId });
-      if (tracked.state !== 'failed') {
-        const mark = progressMark(document, t(SESSION_COPY[tracked.state]));
-        mark.querySelector('.spinner')?.setAttribute('style', 'width:18px;height:18px');
-        progress.append(mark);
+      const failed = tracked.state === 'failed' || tracked.state === 'expired';
+      const clientId = tracked.client || selected.runsIn?.client || text(app.language, 'unknown');
+      const client = String(clientId).replace(/[_-]+/g, ' ').replace(/\b\w/g, letter => letter.toUpperCase());
+      const machine = tracked.machine || selected.machine || text(app.language, 'unknown');
+      const steps = [
+        ['request', text(app.language, 'startStepSent'), 'done'],
+        ['client', text(app.language, 'startStepStarting', { client, machine }), tracked.state === 'starting' || tracked.state === 'canceling' ? 'working' : failed ? 'failed' : 'todo'],
+        ['connected', text(app.language, 'startStepConnected'), 'todo'],
+      ];
+      for (const [step, label, state] of steps) {
+        const row = element(document, 'p', { class: `session-start-step is-${state}`, 'data-start-step': step, text: label });
+        if (state === 'working') row.append(element(document, 'span', { class: 'spinner', 'aria-hidden': 'true' }));
+        progress.append(row);
       }
-      else progress.append(element(document, 'p', { text: t(tracked.error?.code === 'launch_ambiguous' ? 'launchAmbiguous' : 'sessionFailed') }));
-      progress.append(element(document, 'button', { type: 'button', class: 'btn ghost', 'data-action': 'cancel-start', text: t('cancelStart'), onclick: () => cancelSessionStart(app) }));
-      progress.append(element(document, 'button', { type: 'button', class: 'btn', 'data-action': 'retry-session', text: t('retry'), onclick: () => recheckTracked(app) }));
+      if (failed) progress.append(element(document, 'p', { role: 'alert', text: t('startStepFailed', { client, step: tracked.error?.step || text(app.language, 'sessionStarting') }) }));
+      else progress.append(progressMark(document, t(SESSION_COPY[tracked.state])));
+      if (['queued', 'starting', 'canceling'].includes(tracked.state)) progress.append(element(document, 'button', { type: 'button', class: 'btn ghost', 'data-action': 'cancel-start', text: t('cancelStart'), onclick: () => cancelSessionStart(app) }));
+      if (failed) progress.append(element(document, 'button', { type: 'button', class: 'btn', 'data-action': 'retry-session', text: t('retry'), onclick: () => recheckTracked(app) }));
       if (tracked.state === 'failed' && tracked.error?.code !== 'launch_ambiguous') progress.append(element(document, 'button', { type: 'button', class: 'btn', 'data-action': 'choose-client', text: t('chooseClient'), onclick: () => openSessionForm(app, selected) }));
       panel.append(progress);
     }
@@ -7406,7 +7430,7 @@ function renderInspector(app, t, selected) {
     const noteDraft = inputDrafts(app).notes.get(task.id);
     const phone = app.store.audience === "phone";
     const taskBusy = activityPending(app, `task:${task.id}`) || activityPending(app, `undo:${task.id}`);
-    cards.append(renderTask(document, task, t, (item, status, note) => setTaskStatus(app, item, status, note), !phone && caps.includes("task.undo") ? (item) => undoSelected(app, item) : null, noteDraft?.value ?? "", (value, start, end) => {
+    cards.append(renderTask(document, task, t, (item, status, note) => status === "open" ? confirmSendBack(app, item, note) : setTaskStatus(app, item, status, note), !phone && caps.includes("task.undo") ? (item) => undoSelected(app, item) : null, noteDraft?.value ?? "", (value, start, end) => {
       inputDrafts(app).notes.set(task.id, { value, start: Number.isInteger(start) ? start : value.length, end: Number.isInteger(end) ? end : value.length });
       syncViewerDirty(app);
     }, phone ? canAccept(task) : canSendBack(task), taskBusy));
@@ -7536,12 +7560,30 @@ function revokeSelectedGrant(app, unit, grant) {
   });
 }
 
+function confirmSendBack(app, task, note) {
+  showDialog(app.root.ownerDocument, {
+    title: text(app.language, "sendBackTaskTitle"),
+    body: text(app.language, "sendBackTaskBody"),
+    confirm: text(app.language, "sendBack"),
+    cancel: text(app.language, "cancel"),
+    retry: text(app.language, "retry"),
+    onConfirm: async () => { setTaskStatus(app, task, "open", note); return true; },
+  });
+}
+
 function setTaskStatus(app, task, status, note) {
   settle(app, `task:${task.id}`, text(app.language, "working"), async (record) => {
     const result = await changeTaskStatus(app.api, task, status, note, record.operation);
     record.operation = result.operation ?? record.operation;
     if (status === "open") clearInputDraft(app, "note", task.id);
-    showOutcome(app, taskText(app.language, result.data.task.status), result.data.task.status);
+    if (status === "done") {
+      showMapToast(app, text(app.language, "taskAccepted"), async (undoRecord) => {
+        const undone = await undoTask(app.api, result.data.task, undoRecord.operation);
+        undoRecord.operation = undone.operation ?? undoRecord.operation;
+        replaceTask(app, undone.data.task);
+        await refreshWaiting(app);
+      });
+    } else showOutcome(app, taskText(app.language, result.data.task.status), result.data.task.status);
     replaceTask(app, result.data.task);
     await refreshWaiting(app);
     return result;
