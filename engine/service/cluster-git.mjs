@@ -59,15 +59,19 @@ async function readOptions(directory, options) {
     '-c', `filter.${name}.process=`, '-c', `filter.${name}.required=false`]) };
 }
 
+function checked(options) {
+  return options?.cache ? { cache: options.cache } : {};
+}
+
 export async function readRepositoryIdentity(directory, options = {}) {
   options = { ...options, deadline: options.deadline ?? Date.now() + 30000, readBudget: options.readBudget ?? { remaining: 1048576 } };
-  await assertNoLinks(directory);
+  await assertNoLinks(directory, checked(options));
   const root = await realpath(directory).catch(unavailable);
   if (!(await lstat(root)).isDirectory()) unavailable();
   const top = (await gitRead(root, ['rev-parse', '--show-toplevel'], options)).trim();
   const common = (await gitRead(root, ['rev-parse', '--git-common-dir'], options)).trim();
   if (!path.isAbsolute(top) || !common || /[\r\n\0]/.test(top + common)) unavailable();
-  await assertNoLinks(top); await assertNoLinks(path.resolve(root, common));
+  await assertNoLinks(top, checked(options)); await assertNoLinks(path.resolve(root, common), checked(options));
   const topLevel = await realpath(top).catch(unavailable), commonDir = await realpath(path.resolve(root, common)).catch(unavailable);
   if (pathKey(topLevel) !== pathKey(root)) unavailable();
   const output = await gitRead(root, ['worktree', 'list', '--porcelain', '-z'], options);
@@ -82,7 +86,7 @@ export async function readRepositoryIdentity(directory, options = {}) {
     const branch = fields.find(field => field.startsWith('branch refs/heads/'))?.slice(18) ?? null;
     if (!/^[a-f0-9]{40,64}$/.test(head ?? '') || branch === null && !fields.includes('detached')) unavailable();
     const candidate = first.slice(9);
-    await assertNoLinks(candidate);
+    await assertNoLinks(candidate, checked(options));
     const actual = await realpath(candidate).catch(() => null);
     if (!actual) continue;
     if (worktrees.some(tree => pathKey(tree.path) === pathKey(actual))) unavailable();

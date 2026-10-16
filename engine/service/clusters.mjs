@@ -194,17 +194,19 @@ export async function clusterChoices(context, unitId) {
 }
 
 // Shared identities are journaled with their chats; absolute directories exist only in this owner's ledger.
-export async function prepareRepositoryClusters(context, projects, { remove = false } = {}) {
+export async function prepareRepositoryClusters(context, projects, { remove = false, cache = null } = {}) {
   const records = await rawClusters(context), mapping = await readClusterMappings(context), entries = [], events = [], undoEvents = [], clusters = [];
   const links = structuredClone(mapping.record.links), known = new Map(records.map(item => [item.cluster.id, item]));
   for (const project of projects) {
     const projectPath = project.eligible === false ? null : project.localPath;
     let identity = null;
     if (projectPath) {
-      await assertNoLinks(projectPath);
-      identity = await readRepositoryIdentity(projectPath, context.settingsOwner ?? context).catch(error => {
-        if (error.code === 'git_unavailable') return null; throw error;
-      });
+      await assertNoLinks(projectPath, cache ? { cache } : {});
+      identity = project.identity?.id && project.identity.path
+        ? project.identity
+        : await readRepositoryIdentity(projectPath, { ...(context.settingsOwner ?? context), ...(cache ? { cache } : {}) }).catch(error => {
+          if (error.code === 'git_unavailable') return null; throw error;
+        });
     }
     let current = records.find(item => item.cluster.link.kind === 'repository' && item.cluster.link.projectId === project.name);
     if (!current && identity) current = records.find(item => links[mappingKey(item.cluster.link)]?.repositoryId === identity.id);

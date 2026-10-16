@@ -1010,16 +1010,17 @@ export async function answerDiscoveryOffer(context, offerId, input) {
     if (input.repositoryIds.some(id => !record.repositories.some(project => project.repositoryId === id))) fail(422, 'invalid_body', 'Worktrees cannot be imported as repositories.');
     const selected = input.confirmed ? record.repositories.filter(project => input.repositoryIds.includes(project.repositoryId)) : [];
     const projects = [], used = new Set((context.projects ?? []).map(project => project.name.toLowerCase()));
+    const cache = new Set();
     for (const project of selected) {
-      const identity = await readRepositoryIdentity(project.path, ownerOf(context));
+      const identity = await readRepositoryIdentity(project.path, { ...ownerOf(context), cache });
       if (identity.id !== project.repositoryId) fail(409, 'cluster_changed', 'A discovered repository changed before acceptance.');
       let name = project.name.replace(/[^A-Za-z0-9._-]/g, '-');
       if (!/^[A-Za-z0-9]/.test(name)) name = `repo-${name}`;
       name = name.slice(0, 80);
       if (used.has(name.toLowerCase())) name = `${name.slice(0, 64)}-${identity.id.slice(0, 8)}`;
-      used.add(name.toLowerCase()); projects.push({ name, title: project.name, localPath: identity.path });
+      used.add(name.toLowerCase()); projects.push({ name, title: project.name, localPath: identity.path, identity });
     }
-    const prepared = await prepareRepositoryClusters(context, projects);
+    const prepared = await prepareRepositoryClusters(context, projects, { cache });
     const result = { clusters: prepared.clusters, dismissed: true };
     await commitChange(context, { id: randomUUID(), entries: [...prepared.entries, { resource: 'discovery-offer', recordPath: saved.file,
       beforeRevision: revisionOf(saved.bytes), beforeBytes: saved.bytes, afterBytes: bytes({ ...record, dismissed: true }), private: true }],

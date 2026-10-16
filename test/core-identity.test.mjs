@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 import {
@@ -310,4 +310,24 @@ test('a crash after the first file or before the receipt recovers once', async (
   await assert.rejects(exclusiveRecord(fixture.store, path.join(fixture.paths.mind, 'user', 'exclusive.txt'), Buffer.from('again')));
   assert.equal((await readFile(path.join(fixture.paths.mind, 'user', 'exclusive.txt'))).toString(), 'only');
   assertContained(fixture);
+});
+
+test('a path check remembers ancestors it already verified', async () => {
+  const root = await import('node:os').then(os => os.tmpdir());
+  const base = path.join(root, `hivem1nd-links-${process.pid}`);
+  const shop = path.join(base, 'Web', 'shop');
+  const blog = path.join(base, 'Web', 'blog');
+  await mkdir(shop, { recursive: true });
+  await mkdir(blog, { recursive: true });
+  const seen = [];
+  const cache = new Set();
+  const stat = async item => { seen.push(item); return lstat(item); };
+  await assertNoLinks(shop, { cache, stat });
+  const drive = path.parse(shop).root;
+  assert.ok(seen.includes(drive));
+  seen.length = 0;
+  await assertNoLinks(blog, { cache, stat });
+  assert.equal(seen.includes(drive), false);
+  assert.equal(seen.includes(path.join(base, 'Web')), false);
+  assert.ok(seen.includes(blog));
 });

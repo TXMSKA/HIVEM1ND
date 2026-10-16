@@ -124,11 +124,12 @@ export async function resolveExisting(target, lib = path) {
   }
 }
 
-export async function assertNoLinks(target, { root = null, lib = path } = {}) {
+export async function assertNoLinks(target, { root = null, lib = path, cache = null, stat = lstat } = {}) {
   const resolved = lib.resolve(target);
   if (root && !inside(lib.resolve(root), resolved, lib)) {
     throw new CoreError(422, 'invalid_path', 'The path must stay inside its root.');
   }
+  if (cache?.has(resolved)) return resolved;
   const stop = lib.parse(resolved).root;
   const chain = [];
   let current = resolved;
@@ -138,14 +139,16 @@ export async function assertNoLinks(target, { root = null, lib = path } = {}) {
     current = lib.dirname(current);
   }
   for (const item of chain.reverse()) {
+    if (cache?.has(item)) continue;
     let stats;
     try {
-      stats = await lstat(item);
+      stats = await stat(item);
     } catch (error) {
       if (error?.code === 'ENOENT') continue;
       throw error;
     }
     if (stats.isSymbolicLink()) throw new CoreError(422, 'unsafe_path', 'Refusing to follow a link.');
+    if (cache && stats.isDirectory()) cache.add(item);
   }
   return resolved;
 }
