@@ -6202,7 +6202,10 @@ function decorateHierarchy(app, host) {
         title.style.paddingLeft = `${row.depth * 16}px`;
         const branch = element(document, 'code', { class: 'hierarchy-branch', text: row.worktree.branch ?? '' });
         branch.style.gridColumn = '4';
-        node.replaceChildren(title, branch);
+        // A worktree reads as a checkout of its repository: the branch glyph, its folder, its branch.
+        const mark = icon(document, 'graph');
+        mark.style.gridColumn = '2';
+        node.replaceChildren(mark, title, branch);
       } else if (row.id === "section:clusters") {
         const heading = element(document, "div", { class: "my-groups-heading", "data-my-groups": "true" }, element(document, "span", { text: startText(app.language, "clusters") }));
         if (app.layout !== "phone" && app.store.capabilities.includes("chat.manage")) {
