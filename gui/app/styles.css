@@ -1554,3 +1554,12 @@ html { scrollbar-color: var(--line2) var(--panel); scrollbar-width: thin; }
 .plan-action.is-primary { background: var(--accent); color: var(--accent-ink); }
 [data-look="high-contrast"] .plan-action { padding: 6px 11px; border: 1px solid var(--line2); border-radius: 8px; font-weight: 700; }
 [data-look="high-contrast"] .plan-action.is-primary { border-color: var(--accent); }
+
+/* Composer as the board draws it: one rounded field with Send inside, the hint below. */
+.composer-field { display: grid; gap: 6px; }
+.composer-row { display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 12px; border-radius: 11px; background: var(--card); border: 1px solid var(--line2); }
+.composer-row > .composer { flex: 1; min-width: 0; border: 0; background: transparent; padding: 6px 0; outline: none; }
+.composer-row:focus-within { border-color: var(--ring); }
+.composer-send { flex: none; display: inline-grid; place-items: center; width: 32px; height: 32px; border: 0; border-radius: 8px; background: var(--accent); color: var(--accent-ink); }
+.composer-send .icon { width: 15px; height: 15px; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }

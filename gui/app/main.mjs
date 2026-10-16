@@ -7031,17 +7031,25 @@ function chatPanel(app, t) {
       thread.composer = draft.value;
       syncViewerDirty(app);
     });
+    // The board's composer: the field names who it goes to, with Send inside it and the hint below.
     const send = element(document, "button", {
       type: "button",
-      class: "btn primary",
+      class: "composer-send",
       "data-action": "send",
-      style: "min-height:32px",
+      "aria-label": t("send"),
+      title: t("send"),
       onclick: () => submitComposer(app, composer),
-    }, t("send"));
+    }, icon(document, "send"));
     const name = group ? t("messageTheGroup") : directUnit ? t("messageUnit", { unit: directUnit.alias || directUnit.unit }) : t("composerLabel");
     const hint = group ? startText(app.language, 'goesToLead') : directUnit ? startText(app.language, 'readsNext') : t("composerHint");
     composer.setAttribute("aria-label", name);
-    panel.append(labeledField(document, name, hint, composer), send);
+    composer.setAttribute("placeholder", name);
+    const hintId = `composer-hint-${thread.chat.id}`;
+    composer.setAttribute("aria-describedby", hintId);
+    panel.append(element(document, "label", { class: "field composer-field" },
+      element(document, "span", { class: "field-label visually-hidden", text: name }),
+      element(document, "div", { class: "composer-row" }, composer, send),
+      element(document, "p", { class: "field-hint", id: hintId, text: hint })));
   }
   if (app.mailbox) panel.append(renderMailbox(app, t));
   else if (app.mailboxNote) panel.append(element(document, "p", { class: "action-note", "data-mailbox": "true", text: app.mailboxNote }));
