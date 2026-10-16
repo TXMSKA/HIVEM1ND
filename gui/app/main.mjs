@@ -5662,10 +5662,24 @@ function renderFooter(app, t) {
   const syncState = app.settingsSync?.state ?? (app.store.settings?.service?.syncState === "error" ? "error" : app.sync);
   const syncKey = syncCopy(syncState);
   const time = formatClock(app.language, app.readAt);
+  // Sync shows only when it is doing something or needs attention; a saved, idle M1ND says nothing extra.
+  const quietSync = ['local', 'idle', 'published', undefined, null].includes(syncState) || syncKey === 'syncLocal';
+  const serviceText = app.serviceStopped ? recoveryText(app, 'stopped', { machine }) : ['connecting', 'reconnecting'].includes(app.store.stream?.state) ? t('reconnecting') : t("serviceRunning", { machine });
+  const serviceState = app.serviceStopped ? 'out' : ['connecting', 'reconnecting'].includes(app.store.stream?.state) ? 'waiting' : 'working';
+  const machines = element(document, "span", { class: "foot-machines" });
+  for (const item of app.store.view?.machines ?? []) {
+    const seen = item.heartbeatAt ? formatClock(app.language, item.heartbeatAt) : '';
+    machines.append(element(document, "span", { class: "foot-machine", "data-machine": item.id, "data-answers": String(item.answers !== false) },
+      icon(document, item.id === machine ? "map" : "phone"),
+      element(document, "span", { text: item.answers === false ? t("machineNotAnswering", { machine: item.id }) : t("machineSeen", { machine: item.id, time: seen }).trim() })));
+  }
   const footer = element(document, "footer", { class: "foot" },
-    element(document, "span", { "data-service-machine": machine, text: app.serviceStopped ? recoveryText(app, 'stopped', { machine }) : ['connecting', 'reconnecting'].includes(app.store.stream?.state) ? t('reconnecting') : t("serviceRunning", { machine }) }),
-    element(document, "span", { "data-sync": syncState ?? "", "data-pending": String(app.settingsSync?.pendingChanges ?? ""), text: t(syncKey) }),
+    element(document, "span", { class: "foot-service", "data-service-machine": machine },
+      element(document, "span", { class: "status-dot", "data-status": serviceState, "aria-hidden": "true" }),
+      element(document, "span", { text: serviceText })),
+    quietSync ? null : element(document, "span", { "data-sync": syncState ?? "", "data-pending": String(app.settingsSync?.pendingChanges ?? ""), text: t(syncKey) }),
     element(document, "span", { text: t("lastRead", { time }) }),
+    machines,
   );
   if (Number.isInteger(app.settingsSync?.pendingChanges)) {
     footer.append(element(document, "span", { "data-pending-changes": String(app.settingsSync.pendingChanges), text: cardinal(app.language, "pendingChanges", app.settingsSync.pendingChanges) }));

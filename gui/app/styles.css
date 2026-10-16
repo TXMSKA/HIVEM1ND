@@ -202,6 +202,10 @@ button, input { font: inherit; color: inherit; }
   justify-content: space-between;
   overflow-x: auto;
 }
+.foot-service, .foot-machines, .foot-machine { display: inline-flex; align-items: center; gap: 7px; }
+.foot-machines { gap: 14px; }
+.foot-machine .icon { width: 14px; height: 14px; }
+.foot-machine[data-answers="false"] { color: var(--error); }
 
 .brand {
   display: inline-flex;
