@@ -5488,7 +5488,13 @@ for (const end of ['Cancel', 'timeout']) test(`ordinary waiting reports elapsed 
   t.mock.timers.enable({ apis: ['setTimeout'] });
   click(desktop.root.querySelector('[data-look="high-contrast"]'));
   for (let turn = 0; turn < 20; turn += 1) await Promise.resolve();
-  assert.match(desktop.root.querySelector('[data-activity="settings"]').querySelector('strong').textContent, /Taking longer than usual/);
+  const notice = desktop.root.querySelector('[data-activity="settings"]');
+  assert.match(notice.querySelector('strong').textContent, /Taking longer than usual/);
+  assert.equal(notice.querySelector('p'), null);
+  const region = notice.parent;
+  assert.equal(region.getAttribute('data-overlay'), 'true');
+  assert.equal(String(region.className).includes('notice-area'), true);
+  assert.equal(region.parent.className.includes('shell'), true);
   now += 12000;
   t.mock.timers.tick(12000);
   assert.match(desktop.root.querySelector('[data-activity="settings"]').querySelector('p').textContent, /12 s/);
@@ -5517,6 +5523,8 @@ for (const end of ['Cancel', 'timeout']) test(`ordinary waiting reports elapsed 
     assert.equal(requests.length, 2);
     assert.equal(requests[0], requests[1]);
   }
+  const css = await readFile(new URL('../gui/app/styles.css', import.meta.url), 'utf8');
+  assert.match(css, /\.notice-area \{[^}]*position:\s*absolute/);
   t.mock.timers.reset();
 });
 
@@ -6997,4 +7005,42 @@ test('every agent inspector keeps the header, tabs, facts, and composer in separ
   if (started) assert.equal(transcript.children[0], started);
   const css = await readFile(new URL('../gui/app/styles.css', import.meta.url), 'utf8');
   assert.match(css, /\.inspector-body\.agent-inspector > \.chat-panel\.agent-conversation \{[^}]*overflow:\s*hidden/);
+});
+
+test('a slow chat load shows one notice above the composer', async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.unitList?.catalog?.length && desktop.root.querySelector('.map'), 'The map did not open.');
+  let release = () => {};
+  const gate = new Promise(resolve => { release = resolve; });
+  t.after(() => release());
+  const fetchRequest = desktop.app.api.fetch;
+  desktop.app.api.fetch = (input, init) => String(input).includes('/messages') ? gate.then(() => fetchRequest(input, init)) : fetchRequest(input, init);
+  const executor = desktop.app.unitList.catalog.find(unit => unit.role === 'executor' && !unit.removed);
+  desktop.app.activeHandlers.onActivate({ id: executor.id, kind: 'unit', unit: executor }, 'double');
+  const ready = () => {
+    const keys = [...(desktop.app.activity?.keys() ?? [])];
+    return keys.some(key => key.startsWith('chat-load:')) && keys.some(key => key.startsWith('open-chat:') || key.startsWith('direct:'));
+  };
+  for (let attempt = 0; attempt < 80 && !ready(); attempt += 1) await delay(25);
+  if (!ready()) throw new Error(JSON.stringify({
+    keys: [...(desktop.app.activity?.keys() ?? [])],
+    pending: desktop.app.pendingChat, opening: desktop.app.chatOpening,
+    selected: desktop.app.store.selected.unitId, thread: desktop.app.thread?.chat?.kind ?? null,
+  }));
+  const region = desktop.root.querySelector('[data-activity-region]');
+  const keys = [...region.children].map(node => node.getAttribute('data-activity')).filter(Boolean);
+  assert.equal(keys.some(key => key.startsWith('open-chat:') || key.startsWith('direct:')), false);
+  assert.equal(keys.filter(key => key.startsWith('chat-load:')).length, 1);
+  const field = [...region.parent.children].find(node => String(node.className).split(/\s+/).includes('field'));
+  assert.ok(field);
+  assert.ok([...region.parent.children].indexOf(region) < [...region.parent.children].indexOf(field));
+  assert.equal(region.getAttribute('data-overlay'), null);
+  const texts = [];
+  const visit = node => { if (node.textContent) texts.push(node.textContent); for (const child of node.children ?? []) visit(child); };
+  visit(region);
+  assert.equal(texts.some(text => /\b0 s\b/.test(text)), false);
+  release();
 });

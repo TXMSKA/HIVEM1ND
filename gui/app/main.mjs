@@ -5460,9 +5460,43 @@ function activityPending(app, key) {
   return app.activity?.get(key)?.phase === "pending";
 }
 
+function chatWrapper(key) {
+  return key.startsWith('open-chat:') || key.startsWith('direct:') || key === 'group-chat' || key.startsWith('group-chat:');
+}
+
+function activityNotices(records) {
+  const loadingChat = records.some(record => record.phase === 'pending' && record.key.startsWith('chat-load:'));
+  if (!loadingChat) return records;
+  return records.filter(record => record.phase !== 'pending' || !chatWrapper(record.key));
+}
+
+function activityAnnouncement(app, record) {
+  const seconds = Number(record.elapsed) || 0;
+  const waiting = seconds >= 1 ? `. ${sendText(app, 'waiting', { seconds })}` : '';
+  return `${record.label}. ${sendText(app, 'takingLonger')}${waiting}`;
+}
+
+function composerField(shell) {
+  for (const panel of shell.querySelectorAll?.('.chat-panel') ?? []) {
+    const field = [...(panel.children ?? [])].find(child => String(child.className ?? '').split(/\s+/).includes('field'));
+    if (field) return field;
+  }
+  return null;
+}
+
+function placeBefore(anchor, node) {
+  const parent = anchor?.parentNode ?? anchor?.parent;
+  if (!parent?.children) return false;
+  const kids = [...parent.children];
+  const index = kids.indexOf(anchor);
+  for (const kid of kids) kid.remove();
+  parent.append(...(index < 0 ? [...kids, node] : [...kids.slice(0, index), node, ...kids.slice(index)]));
+  return true;
+}
+
 function paintActivity(app, shell) {
   const here = noteScope(app);
-  const records = [...(app.activity?.values() ?? [])].filter((record) => (record.scope ?? here) === here);
+  const records = activityNotices([...(app.activity?.values() ?? [])].filter((record) => (record.scope ?? here) === here));
   const pending = records.filter((record) => record.phase === "pending");
   const failed = records.filter((record) => record.phase === "error");
   if (!pending.length && !failed.length) return;
@@ -5470,11 +5504,12 @@ function paintActivity(app, shell) {
   const region = element(document, "div", { class: "activity", "data-activity-region": "true" });
   if (pending.length) shell.setAttribute("aria-busy", "true");
   for (const record of pending) {
-    const notice = element(document, "div", { "data-activity": record.key, style: "display:flex;align-items:center;background:var(--waiting-soft);padding:10px 12px;border-radius:14px;gap:10px" });
-    notice.append(element(document, "span", { class: "spinner", "aria-hidden": "true", style: "width:15px;height:15px" }), element(document, "div", {},
-      element(document, "strong", { style: "font-size:13px;font-weight:700", text: sendText(app, "takingLonger") }),
-      element(document, "p", { style: "font-size:12px", text: sendText(app, "waiting", { seconds: record.elapsed ?? 0 }) }),
-    ), element(document, "button", { type: "button", class: "btn ghost", "data-action": "cancel-activity", "data-activity": record.key, text: text(app.language, "cancel"), onclick: () => record.cancel?.() }));
+    const copy = element(document, "div", {}, element(document, "strong", { text: sendText(app, "takingLonger") }));
+    if ((Number(record.elapsed) || 0) >= 1) copy.append(element(document, "p", { text: sendText(app, "waiting", { seconds: record.elapsed }) }));
+    const notice = element(document, "div", { class: "slow-notice", "data-activity": record.key });
+    notice.append(element(document, "span", { class: "spinner", "aria-hidden": "true" }), copy, element(document, "button", {
+      type: "button", class: "btn ghost", "data-action": "cancel-activity", "data-activity": record.key, text: text(app.language, "cancel"), onclick: () => record.cancel?.(),
+    }));
     region.append(notice);
   }
   for (const record of failed) {
@@ -5488,6 +5523,10 @@ function paintActivity(app, shell) {
       onclick: () => record.retry?.(),
     }));
   }
+  const field = here === "unit" ? composerField(shell) : null;
+  if (field && placeBefore(field, region)) return;
+  region.className += " notice-area";
+  region.setAttribute("data-overlay", "true");
   shell.append(region);
 }
 
@@ -5815,8 +5854,8 @@ function syncLiveRegions(app) {
   releaseSettledAction(app);
   ensureLive(app);
   const visible = outcomeVisible(app);
-  const pending = [...(app.activity?.values() ?? [])].filter(record => record.phase === "pending" && (record.scope ?? noteScope(app)) === noteScope(app));
-  const status = pending.length ? pending.map(record => record.announcement ??= `${record.label}. ${sendText(app, "takingLonger")}. ${sendText(app, "waiting", { seconds: record.elapsed ?? 0 })}`).join(" ")
+  const pending = activityNotices([...(app.activity?.values() ?? [])].filter(record => record.phase === "pending" && (record.scope ?? noteScope(app)) === noteScope(app)));
+  const status = pending.length ? pending.map(record => activityAnnouncement(app, record)).join(" ")
     : visible && app.actionTone !== "error" ? app.actionNote : "";
   const error = visible && app.actionTone === "error" ? app.actionNote : "";
   if (app.liveStatus.textContent !== status) app.liveStatus.textContent = status;

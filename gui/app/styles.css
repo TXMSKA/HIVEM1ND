@@ -130,6 +130,7 @@ button, input { font: inherit; color: inherit; }
 }
 
 .shell {
+  position: relative;
   height: 100%;
   min-height: 0;
   max-width: 100%;
@@ -1392,6 +1393,13 @@ button.plan-assignment { min-height: 32px; padding: 0; border: 0; background: tr
 .agent-conversation[data-agent-tab="work"] > .field,
 .agent-conversation[data-agent-tab="work"] > .btn,
 .agent-conversation[data-agent-tab="work"] > .action-row { display: none; }
+.chat-panel > .activity { flex: none; margin: 0 16px 8px; }
+.notice-area { position: absolute; z-index: 6; left: 16px; right: 16px; bottom: 42px; display: grid; gap: 8px; margin: 0; }
+.slow-notice { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 14px; background: var(--waiting-soft); }
+.slow-notice > div { min-width: 0; }
+.slow-notice strong { font-size: 13px; font-weight: 700; }
+.slow-notice p { margin: 4px 0 0; font-size: 12px; color: var(--body); }
+.slow-notice .spinner { width: 15px; height: 15px; flex: none; }
 .session-tabs { display: flex; padding: 0 16px; border-bottom: 1px solid var(--line); }
 .session-tab { min-width: 64px; min-height: 36px; padding: 8px 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--mute); }
 .session-tab[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
