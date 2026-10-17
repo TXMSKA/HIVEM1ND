@@ -252,6 +252,8 @@ button, input { font: inherit; color: inherit; }
 .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .btn.ghost { background: transparent; border-color: var(--line); }
 .btn.quiet { background: transparent; border-color: transparent; color: var(--body); }
+/* A disabled control keeps opacity 1 for its contrast floor; it reads as unavailable through the quiet surface and muted text. */
+.btn:disabled:not([aria-busy="true"]), .btn.primary:disabled:not([aria-busy="true"]) { background: var(--card2); border-color: var(--line); color: var(--mute); cursor: default; }
 
 .mode[aria-pressed="true"], .tab[aria-pressed="true"] {
   background: var(--card2);
