@@ -61,6 +61,7 @@ export const START_COPY=Object.freeze({
   pending:['Pending','Pendiente'],busy:['In progress','En curso'],done:['Done','Finalizado'],stuck:['Needs attention','Requiere atención'],failed:['Failed','Falló'],
   clusterLinks:['Cluster links','Enlaces de clústeres'],removeLink:['Remove link','Quitar el vínculo'],removeHint:['The link leaves the cluster list. Files and work stay. Undo is available for 10 s.','El vínculo se quita de la lista de clústeres. Se conservan los archivos y el trabajo. Deshacer está disponible durante 10 s.'],
   unavailable:['This action is unavailable for the current connection. Work is kept.','Esta acción no está disponible con la conexión actual. Se conserva el trabajo.'],
+  noConnectedAgent:['No agent is connected on this machine.','No hay ningún agente conectado en esta máquina.'],connectAgent:['Connect an agent','Conectar un agente'],
   working:['Working','Procesando'],readM1nd:['Read the M1ND','Leer el M1ND'],sendMessage:['Send a message','Enviar un mensaje'],readMessages:['Read messages','Leer mensajes'],
   confirmPlan:['Confirm plan start','Confirmar el inicio del plan'],reportStep:['Report a step','Informar un paso'],reportTask:['Report a task','Informar una tarea'],
   dispatchTask:['Dispatch a task','Asignar una tarea'],requestMessages:['Request more messages','Solicitar más mensajes'],agreeMessages:['Agree more messages','Acordar más mensajes'],

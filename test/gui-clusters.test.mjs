@@ -100,6 +100,20 @@ test('Overseer and New agent forms contain only their choices, fresh is checked 
   assert.equal(created, 0);
 });
 
+test('with no agent connected the Runs in field is closed, says so and leads to connecting one', () => {
+  for (const [language, sentence] of [['en', /No agent is connected on this machine\./], ['es', /No hay ningún agente conectado en esta máquina\./]]) {
+    let connected = 0, opened = 0;
+    const view = renderAgentForm(document, { language, kind: 'overseer', agentKind: 'external', cluster: null, clients: [], choice: null, fresh: true },
+      { onConnect: () => connected++, onPicker: () => opened++ });
+    const runs = nodes(view).find(node => node.attributes?.['data-action'] === 'open-runs-picker');
+    assert.equal(runs.disabled, true);
+    assert.match(copy(view), sentence);
+    assert.doesNotMatch(copy(view), /current connection|conexión actual/);
+    nodes(view).find(node => node.attributes?.['data-action'] === 'connect-agent').listeners.click();
+    assert.equal(connected, 1); assert.equal(opened, 0);
+  }
+});
+
 test('canonical nested clusters keep aliases and exact lead links without a root person or legacy sections', () => {
   const clusters = [cluster('Web', 'folder'), ...Array.from({ length: 19 }, (_, i) => cluster(`repo-${i}`, 'repository', 'Web', i === 0 ? ['root:lead', 'root:executor'] : []))];
   const units = [unit('root:master', 'master'), unit('root:overseer', 'overseer'), unit('root:lead', 'overlord', 'repo-0'), { ...unit('root:executor', 'executor', 'repo-0', 'root:lead'), alias: 'Cart' }];

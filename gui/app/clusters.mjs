@@ -216,8 +216,12 @@ export function renderAgentForm(document, model, actions) {
         return node;
       })));
   } else root.append(options(document, ['executor', 'overlord'].map(id => ({ id, label: t(id) })), model.role, actions.onRole));
-  root.append(element(document, 'label', { class: 'start-runs-field' }, element(document, 'span', { text: t('runsIn') }),
-    button(document, runsInLabel(model.choice, model.clients, model.language) || t('unavailable'), 'open-runs-picker', actions.onPicker)));
+  // With no agent connected the picker has nothing to offer, so the field says so and leads to Settings, Agents.
+  const none = !(model.clients ?? []).length;
+  const runs = button(document, none ? t('noConnectedAgent') : runsInLabel(model.choice, model.clients, model.language) || t('unavailable'), 'open-runs-picker', actions.onPicker);
+  runs.disabled = none;
+  root.append(element(document, 'label', { class: 'start-runs-field' }, element(document, 'span', { text: t('runsIn') }), runs));
+  if (none && actions.onConnect) root.append(button(document, t('connectAgent'), 'connect-agent', actions.onConnect));
   if (overseer) root.append(tick(document, t('fresh'), model.fresh, actions.onFresh, { 'data-start-fresh': 'true' }),
     element(document, 'p', { class: 'start-hint', text: t('freshHint') }));
   else root.append(element(document, 'p', { class: 'start-hint', text: t(model.cluster.link.kind === 'repository' ? 'agentScope' : model.cluster.link.kind === 'folder' ? 'folderScope' : 'unlinkedScope', { name: model.cluster.title }) }));

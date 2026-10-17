@@ -3846,6 +3846,7 @@ async function openStartAgent(app, cluster, overseer = false) {
       onKind: kind => { model.agentKind = kind; model.choice = initialRunsIn(clients, null, kind); flow.paint(); },
       onRole: role => { model.role = role; flow.paint(); }, onFresh: value => { model.fresh = value; },
       onPicker: () => openRunsPicker(app, model, () => { model.agentKind = model.choice?.client === 'lyra' ? 'local' : 'external'; flow.paint(); }, flow.dialog.querySelector('[data-action="open-runs-picker"]')),
+      onConnect: () => { flow.dialog.close(); settingsState(app).tab = 'agents'; navigate(app, 'settings'); },
       onCancel: cancel,
       onCreate: () => flow.run('create-agent', async () => {
         let result;
