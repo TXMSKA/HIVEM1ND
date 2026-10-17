@@ -32,6 +32,22 @@ test('directory and worktree file fold into one canonical repository without cha
   assert.deepEqual(await legacyTreeInventory(fixture.home), before);
 });
 
+test('a linked worktree Git refuses to read is left out instead of failing the repository and discovery', async t => {
+  const { fixture, directory, git } = await repository(t);
+  const worktree = path.join(fixture.home, 'Web', 'shop-foreign'); git('worktree', 'add', '-b', 'foreign', worktree);
+  // Git answers 128 in the foreign worktree, as it does for a folder with dubious ownership.
+  const gitRunner = (command, args, settings) => new Promise((resolve) => {
+    if (path.resolve(settings.cwd).toLowerCase() === path.resolve(worktree).toLowerCase()) return resolve({ stdout: '', stderr: 'fatal: detected dubious ownership', code: 128 });
+    execFile(command, args, settings, (error, stdout, stderr) => resolve({ stdout, stderr, code: error ? error.code ?? 1 : 0 }));
+  });
+  const identity = await readRepositoryIdentity(directory, { gitRunner });
+  assert.equal(identity.path, directory);
+  assert.deepEqual(identity.worktrees.map(tree => tree.path), [directory]);
+  const discovered = await discoverProjects([directory], { gitRunner });
+  assert.equal(discovered.length, 1);
+  assert.equal(discovered[0].path, directory);
+});
+
 test('clean, dirty, renamed, detached, binary and credential remote reads stay read-only', async t => {
   const { directory, git, context, cluster } = await repository(t);
   const query = { machine: context.paths.machine };

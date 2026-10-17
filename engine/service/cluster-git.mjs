@@ -90,7 +90,10 @@ export async function readRepositoryIdentity(directory, options = {}) {
     const actual = await realpath(candidate).catch(() => null);
     if (!actual) continue;
     if (worktrees.some(tree => pathKey(tree.path) === pathKey(actual))) unavailable();
-    const candidateCommon = (await gitRead(actual, ['rev-parse', '--git-common-dir'], options)).trim();
+    // A linked worktree Git refuses to read (another owner, a broken link) is left out; the repository stays readable.
+    const candidateCommon = pathKey(actual) === pathKey(root) ? (await gitRead(actual, ['rev-parse', '--git-common-dir'], options)).trim()
+      : await gitRead(actual, ['rev-parse', '--git-common-dir'], options).then(value => value.trim(), () => undefined);
+    if (candidateCommon === undefined) continue;
     if (!candidateCommon || pathKey(await realpath(path.resolve(actual, candidateCommon)).catch(unavailable)) !== pathKey(commonDir)) unavailable();
     worktrees.push({ id: uuidV8(['git-worktree', pathKey(actual)]), path: actual, branch });
   }
