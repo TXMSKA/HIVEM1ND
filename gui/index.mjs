@@ -156,7 +156,8 @@ export async function startGui(input = {}) {
   if (hostOrigin != null && !originOf(hostOrigin)) fail(422, 'invalid_body', 'The host origin must be one http or https origin.');
   if (input.look != null && !['modern', 'high-contrast', 'nebula', 'txmska', 'coffee-cat', 'ntk'].includes(input.look)) fail(422, 'invalid_body', 'The look is not supported.');
   if (input.language != null && !['en', 'es'].includes(input.language)) fail(422, 'invalid_body', 'The language is not supported.');
-  const confineRoot = input.confineRoot ?? (input.env?.LOCALAPPDATA ? path.dirname(input.env.LOCALAPPDATA) : input.env?.XDG_DATA_HOME ? path.dirname(input.env.XDG_DATA_HOME) : null);
+  // Only a caller that asks for confinement gets it: a real M1ND may live anywhere, OneDrive included.
+  const confineRoot = input.confineRoot ?? null;
   const service = await connectService({ ...input, mindPath, confineRoot });
   let token = null;
   let stream = null;

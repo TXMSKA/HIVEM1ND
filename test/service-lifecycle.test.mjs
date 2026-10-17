@@ -648,6 +648,37 @@ test('the HTTP event stream stays up beside the service guard', async (t) => {
   assert.equal(opened, 200);
 });
 
+test('a GUI host serves a M1ND that lives outside the folder above local app data, as one in OneDrive', async (t) => {
+  const fixture = await makeCoreFixture();
+  const { startGui, closeGuiHost } = await import('../gui/index.mjs');
+  const hosts = [];
+  t.after(async () => {
+    for (const host of hosts) await host.stop();
+    await closeGuiHost();
+    await dispose(fixture);
+  });
+  const originPath = path.join(fixture.root, 'gui-origin');
+  const assetDir = path.join(fixture.root, 'gui-assets');
+  await mkdir(originPath, { recursive: true });
+  await mkdir(assetDir, { recursive: true });
+  await writeFile(path.join(assetDir, 'index.html'), '<!doctype html><title>HIVEM1ND</title>\n');
+  await writeFile(fixture.paths.configFile, `${JSON.stringify({
+    format: 'hivem1nd-service-config-v1',
+    mindPath: fixture.paths.mind,
+    machine: fixture.machine,
+    origin: { kind: 'folder', path: originPath },
+    stagingPath: fixture.paths.staging,
+    port: 0,
+  })}\n`);
+  // The parent of LOCALAPPDATA no longer holds the M1ND; the service still writes to it.
+  const env = { ...fixture.env, LOCALAPPDATA: path.join(fixture.root, 'profile', 'AppData', 'Local') };
+  const host = await startGui({ mindPath: fixture.paths.mind, env, cosmicPath: path.join(fixture.env.LOCALAPPDATA, 'Cosmic'), home: path.join(fixture.root, 'home'),
+    platform: fixture.platform, machine: fixture.machine, now: () => fixture.clock.now, aclRunner: stubAclRunner(), assetDir, guardPort: await freePort(), userKey: fixture.root });
+  hosts.push(host);
+  await host.setTheme('nebula');
+  assert.equal((await call(host.origin, host.token)).json.data.look, 'nebula');
+});
+
 test('two GUI hosts share one service and keep separate viewers', async (t) => {
   const fixture = await makeCoreFixture();
   const { startGui, closeGuiHost } = await import('../gui/index.mjs');
