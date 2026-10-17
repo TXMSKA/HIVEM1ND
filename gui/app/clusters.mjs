@@ -298,6 +298,12 @@ export function startDialog(document, { view, render, language, anchor = null, o
     if (event.shiftKey && document.activeElement === controls[0]) { event.preventDefault(); controls.at(-1)?.focus(); }
     else if (!event.shiftKey && document.activeElement === controls.at(-1)) { event.preventDefault(); controls[0]?.focus(); }
   });
+  // A click outside the picker closes it, as a menu does.
+  if (view === 'picker') dialog.addEventListener('click', event => {
+    if (event.target !== dialog) return;
+    const box = dialog.getBoundingClientRect?.();
+    if (box && (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom)) close();
+  });
   dialog.addEventListener('close', () => {
     dialog.remove(); onClose?.();
     const action = invoker?.getAttribute?.('data-action');
@@ -310,7 +316,12 @@ export function startDialog(document, { view, render, language, anchor = null, o
     const viewport = document.defaultView;
     if (rect && viewport) {
       dialog.style.margin = '0';
-      dialog.style.left = `${Math.max(16, Math.min(viewport.innerWidth - (view === 'picker' ? 560 : 320) - 16, rect.right - (view === 'picker' ? 560 : 320)))}px`;
+      // The picker opens under its field, edge to edge with it; other anchored dialogs end at their button's right edge.
+      const width = view === 'picker' ? Math.max(480, Math.min(rect.width, viewport.innerWidth - 32)) : 320;
+      if (view === 'picker') dialog.style.width = `${width}px`;
+      // Without room to the right of the field the picker ends at the field's right edge instead.
+      const start = view === 'picker' && rect.left + width <= viewport.innerWidth - 16 ? rect.left : rect.right - width;
+      dialog.style.left = `${Math.max(16, Math.min(viewport.innerWidth - width - 16, start))}px`;
       dialog.style.top = `${Math.max(16, Math.min(viewport.innerHeight - dialog.getBoundingClientRect().height - 16, rect.bottom + 8))}px`;
     }
   }
