@@ -871,9 +871,11 @@ class SetupSession {
     }
 
     await this.createMindLayout();
-    await this.writeDisplaySettings();
+    const display = await this.writeDisplaySettings();
     const applied = await applyInstallPlan(plan, this.answers.conflicts);
     const managedFiles = { ...(this.machineRecord?.managedFiles ?? {}), ...applied.managedFiles };
+    // Setup wrote this file, so uninstall may remove it while its bytes are unchanged.
+    if (display) managedFiles[display.file] = display.hash;
     for (const filePath of plan.retired) delete managedFiles[filePath];
     for (const conflict of plan.conflicts) {
       if (this.answers.conflicts[conflict.path] === 'keep') delete managedFiles[conflict.path];
@@ -1244,11 +1246,15 @@ class SetupSession {
 
   // A new or migrated M1ND without display settings opens in the language chosen in setup; a joined one is never written.
   async writeDisplaySettings() {
-    if (this.answers.attach || this.checkpoint?.mode === 'join') return;
+    if (this.answers.attach || this.checkpoint?.mode === 'join') return null;
     const file = path.join(this.mindPath, 'user', 'gui', 'settings.json');
-    if (await lstat(file).catch(error => { if (error.code === 'ENOENT') return null; throw error; })) return;
+    const content = `${canonicalJson({ format: 'hivem1nd-settings-v1', look: 'modern', language: normalizeLanguage(this.answers.language), sendToAgent: true })}\n`;
+    // A resumed setup finds the file it wrote before and still records it; any other existing file is the person's.
+    const existing = await readTextIfPresent(file);
+    if (existing !== null) return existing === content ? { file, hash: hashContent(content) } : null;
     await mkdir(path.dirname(file), { recursive: true });
-    await atomicWriteFile(file, `${canonicalJson({ format: 'hivem1nd-settings-v1', look: 'modern', language: normalizeLanguage(this.answers.language), sendToAgent: true })}\n`, { root: this.mindPath });
+    await atomicWriteFile(file, content, { root: this.mindPath });
+    return { file, hash: hashContent(content) };
   }
 
   async createMindLayout() {
