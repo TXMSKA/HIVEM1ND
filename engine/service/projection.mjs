@@ -1,6 +1,6 @@
 import { lstat, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { CLIENTS, CoreError, canonicalJson, canonicalTaskId, hashBytes, hashText, isUuid, parseTaskId, parseUnitId, resolvePerson, resolveUnit, uuidV8, validateRole } from './identity.mjs';
+import { CLIENTS, CoreError, ROLES, canonicalJson, canonicalTaskId, hashBytes, hashText, isUuid, parseTaskId, parseUnitId, resolvePerson, resolveUnit, uuidV8, validateRole } from './identity.mjs';
 import { leadApproved } from './tasks.mjs';
 import { isMachineCopy, machineNames, stateRunsIn, stateUnitId } from './state.mjs';
 import { projectGroup } from './groups.mjs';
@@ -706,6 +706,12 @@ function idleLimits() {
   };
 }
 
+// A 2.x state file names no role; its unit name starts with it, as executor-shop or overseer.
+function legacyRole(unit) {
+  const name = String(unit ?? '');
+  return ROLES.find(role => role !== 'master' && (name === role || name.startsWith(`${role}-`))) ?? null;
+}
+
 function readUnit(bytes, relative, issues) {
   const blank = {
     id: null, unit: path.basename(relative, '.md'), alias: null, removed: false, role: null, scope: null, leadId: null, job: null, model: null, clusterId: null,
@@ -719,7 +725,7 @@ function readUnit(bytes, relative, issues) {
   try {
     const headers = headerMap(bytes);
     const id = parseUnitId(stateUnitId(bytes, relative));
-    const role = validateRole(headers.get('role'));
+    const role = validateRole(headers.get('role') || legacyRole(headers.get('unit') || id.unit));
     const state = headers.get('state');
     if (state !== 'in' && state !== 'out') throw new CoreError(422, 'corrupt_resource', 'The state is not valid.');
     return {
