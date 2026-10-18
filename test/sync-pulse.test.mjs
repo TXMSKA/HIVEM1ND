@@ -627,3 +627,22 @@ test('an idle hour writes no pack and a beat writes only its own metadata', asyn
   assert.equal(await readFile(servicePath, 'utf8'), before);
   assert.equal(await readHead(origin, fixture.machine), null);
 });
+
+test('publishing many staged changes compresses each object once, not once per change', async (t) => {
+  const { sync, origin, clock, io, pulse } = await pulseWorld(t);
+  const ids = [];
+  for (let index = 0; index < 150; index += 1) ids.push((await stageNote(sync, `note-${index}.txt`, stamp(clock.now())))[0].id);
+  const zlib = (await import('node:zlib')).default;
+  const { syncBuiltinESMExports } = await import('node:module');
+  const original = zlib.brotliCompressSync;
+  let compressions = 0;
+  zlib.brotliCompressSync = function (...args) { compressions += 1; return original.apply(this, args); };
+  syncBuiltinESMExports();
+  t.after(() => { zlib.brotliCompressSync = original; syncBuiltinESMExports(); });
+  await pulse.changed(ids);
+  await clock.advance(2000);
+  assert.equal(io.pack, 1);
+  assert.equal((await publishedPacks(origin)).length, 1);
+  assert.ok(compressions <= 160, `objects were compressed ${compressions} times for 150 changes`);
+  assert.equal((await listStaged(sync)).length, 0);
+});

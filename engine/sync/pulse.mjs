@@ -2,7 +2,7 @@ import path from 'node:path';
 import { CoreError, canonicalJson, hashBytes } from '../service/identity.mjs';
 import { readBytes } from '../service/store.mjs';
 import { chargeMetadata, claimLimitNotice, limitsFor, reservePublication, retryAtFor, SYNC_BYTES_MAX, MESSAGE_MAX } from './limits.mjs';
-import { countLogicalMessages, decodePack, encodePack, packFileName, resolveDependencies, validateHead } from './pack.mjs';
+import { countLogicalMessages, decodePack, encodePack, MAX_AGGREGATE_BYTES, MAX_INDEX_ITEMS, packFileName, resolveDependencies, validateHead } from './pack.mjs';
 import { listMachineNames, prepareServiceBeat, publishBeat, publishPack, readHead, readOriginPack, writeDurable } from './origin.mjs';
 import { ackPublished, clearSyncFailure, listStaged, readObject, recordSyncFailure } from './store.mjs';
 
@@ -89,15 +89,24 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
     const sequence = await nextPreparedSequence(head);
     const committed = await committedObjects(head, objects);
     const groups = groupChanges(staged);
+    const compressed = new Map();
     const chosen = [];
     const issues = [];
     let deferredIndex = groups.length;
+    // A pack grows by adding each group's own size instead of encoding every larger pack again: the separate packs
+    // together are never smaller than the merged one, and re-encoding the chosen objects for every group compressed
+    // a large first publication once per group, which held the service for hours.
+    let chosenBytes = 0;
+    let chosenMessages = 0;
+    let chosenChanges = 0;
+    let chosenRaw = 0;
+    const chosenHashes = new Set();
     for (let index = 0; index < groups.length; index += 1) {
       const group = groups[index];
       const count = logical(group, objects);
       let alone;
       try {
-        alone = packFor([group], sequence, head, objects, committed);
+        alone = packFor([group], sequence, head, objects, committed, compressed);
       } catch (error) {
         if (error?.code !== 'pack_too_large') throw error;
         issues.push(group);
@@ -107,20 +116,22 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
         issues.push(group);
         continue;
       }
-      let trial = alone;
-      try {
-        if (chosen.length > 0) trial = packFor([...chosen, group], sequence, head, objects, committed);
-      } catch (error) {
-        if (error?.code !== 'pack_too_large') throw error;
-        deferredIndex = index;
-        break;
-      }
-      const messages = logical(chosen.flat(), objects) + count;
-      if (messages > remainingMessages || trial.bytes > remainingBytes) {
+      const fresh = [...new Set(group.filter((change) => change.operation === 'put' && !committed.has(change.hash)
+        && !chosenHashes.has(change.hash)).map((change) => change.hash))];
+      const raw = fresh.reduce((sum, hash) => sum + (objects.get(hash)?.length ?? 0), 0);
+      const bytes = chosen.length > 0 ? chosenBytes + alone.bytes : alone.bytes;
+      const messages = chosenMessages + count;
+      if (messages > remainingMessages || bytes > remainingBytes || chosenChanges + group.length > MAX_INDEX_ITEMS
+        || chosenRaw + raw > MAX_AGGREGATE_BYTES) {
         deferredIndex = index;
         break;
       }
       chosen.push(group);
+      chosenBytes = bytes;
+      chosenMessages = messages;
+      chosenChanges += group.length;
+      chosenRaw += raw;
+      for (const hash of fresh) chosenHashes.add(hash);
     }
     if (issues.length > 0) await rememberIssues(issues.flat().map((change) => change.id));
     const deferred = groups.slice(deferredIndex).filter((group) => !issues.includes(group));
@@ -131,7 +142,7 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
       else if (first === null) first = now();
       return { published: recovered.published, packs: recovered.published ? 1 : 0, ids: recovered.ids, issues: issues.flat().map((change) => change.id) };
     }
-    const packed = packFor(chosen, sequence, head, objects, committed);
+    const packed = packFor(chosen, sequence, head, objects, committed, compressed);
     try {
       await reservePublication(ledger, {
         id: `publication:${packed.hash}`,
@@ -342,10 +353,11 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
   return { changed, flush, resume, beat, close };
 }
 
-function packFor(groups, sequence, head, objects, committed) {
+function packFor(groups, sequence, head, objects, committed, compressed = null) {
   const changes = groups.flat();
   const blobs = objectsFor(changes, objects);
   const body = encodePack({
+    compressed,
     machine: changes[0].machine,
     sequence,
     changes,

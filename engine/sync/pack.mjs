@@ -101,7 +101,7 @@ export function validateChange(change, owner = null) {
   };
 }
 
-export function encodePack({ machine, sequence, changes, objects = [], dependencies = [], transactions = [], encryption = { algorithm: 'none' } }) {
+export function encodePack({ machine, sequence, changes, objects = [], dependencies = [], transactions = [], encryption = { algorithm: 'none' }, compressed = null }) {
   const owner = validateMachineName(machine);
   assertSequence(sequence);
   assertEncryption(encryption);
@@ -128,12 +128,17 @@ export function encodePack({ machine, sequence, changes, objects = [], dependenc
   for (const hash of included) {
     const raw = available.get(hash);
     if (hashBytes(raw) !== hash) throw new CoreError(422, 'corrupt_resource', 'The object bytes do not match the declared hash.');
-    const compressed = compressObject(raw);
+    // A caller that sizes several packs from the same objects passes one map, so each object is compressed once.
+    let packed = compressed?.get(hash);
+    if (!packed) {
+      packed = compressObject(raw);
+      compressed?.set(hash, packed);
+    }
     aggregate += raw.length;
     if (aggregate > MAX_AGGREGATE_BYTES) throw new CoreError(413, 'pack_too_large', 'The pack expands past 64 MB.');
-    objectEntries.push({ hash, offset, compressedBytes: compressed.length, rawBytes: raw.length });
-    blobs.push(compressed);
-    offset += compressed.length;
+    objectEntries.push({ hash, offset, compressedBytes: packed.length, rawBytes: raw.length });
+    blobs.push(packed);
+    offset += packed.length;
   }
   const transactionList = validateTransactions(transactions, normalized);
   const index = {
