@@ -1166,8 +1166,9 @@ class SetupSession {
     const packageJson = JSON.parse(await readFile(path.join(this.kitPath, 'package.json'), 'utf8'));
     if (this.checkpoint?.mode === 'migrate') {
       for (const entry of this.checkpointProof.inventory ?? []) {
-        if (entry.kind === 'file' && !entry.path.startsWith('user/') && (packageJson.files ?? []).some(prefix =>
-          entry.path === prefix || prefix.endsWith('/') && entry.path.startsWith(prefix))) existingManaged[path.join(this.mindPath, entry.path)] = entry.sha256;
+        // Outside user/ a 2.x M1ND holds only the old kit (its files, package.json and node_modules). In the copy that
+        // is upgraded it is replaced without a question; the original M1ND keeps every byte.
+        if (entry.kind === 'file' && !entry.path.startsWith('user/') && !entry.path.startsWith('.migration/')) existingManaged[path.join(this.mindPath, entry.path)] = entry.sha256;
       }
     }
     const peerHashes = await readPeerHashes(this.mindPath, this.hostname);

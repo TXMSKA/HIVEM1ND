@@ -896,6 +896,21 @@ test('quarantining many closed legacy registrations does not hash the whole M1ND
   assert.equal((await readdir(path.join(fixture.mindPath, '.migration', 'legacy-relay', 'sessions'))).length, 60);
 });
 
+test('a migrated copy replaces the old kit outside user without asking, and the original keeps its bytes', async context => {
+  const fixture = await checkpointFixture(context);
+  const nl = String.fromCharCode(10);
+  await writeFile(path.join(fixture.sourcePath, 'package.json'), '{"name":"hivem1nd","version":"2.0.1"}' + nl);
+  await mkdir(path.join(fixture.sourcePath, 'node_modules', 'old-dependency'), { recursive: true });
+  await writeFile(path.join(fixture.sourcePath, 'node_modules', 'old-dependency', 'index.js'), 'module.exports = 1;' + nl);
+  await writeFile(path.join(fixture.sourcePath, 'rules.md'), 'Rules of 2.x.' + nl);
+  const before = await legacyTreeInventory(fixture.sourcePath);
+  const session = await confirmedSetup(fixture.options);
+  const result = await session.install();
+  assert.equal(result.completed, true, JSON.stringify(session.checkpoint?.error));
+  assert.equal(await readFile(path.join(fixture.mindPath, 'rules.md'), 'utf8'), 'Current rules.' + nl);
+  assert.deepEqual(await legacyTreeInventory(fixture.sourcePath), before);
+});
+
 test('changed partial copy entries block resume without changing either tree', async context => {
   const fixture = await checkpointFixture(context);
   let copiedPath;
