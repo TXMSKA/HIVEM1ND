@@ -53,6 +53,9 @@ test("a failed setup install clears the Retry spinner", async () => {
   assert.equal(button.querySelector(".button-spinner"), null);
   assert.equal(button.disabled, false);
   assert.equal(document.getElementById("step-form").getAttribute("aria-busy"), "false");
+  // The step's own failure notice explains the stop; the raw request error is not shown above it.
+  assert.equal(document.getElementById("status-message").hidden, true);
+  assert.equal(document.getElementById("status-message").textContent, "");
 });
 
 function createWizardDocument() {

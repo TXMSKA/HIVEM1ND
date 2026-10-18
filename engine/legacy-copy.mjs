@@ -20,7 +20,8 @@ export async function legacyTreeInventory(sourcePath) {
       const state = await lstat(input);
       const relative = path.relative(root, input).split(path.sep).join('/');
       if (state.isSymbolicLink() || !state.isDirectory() && !state.isFile()) {
-        throw new CoreError(422, 'unsafe_path', 'Refusing an unsupported or linked legacy entry.');
+        // The entry is named so setup can tell the person which one stops the migration.
+        throw Object.assign(new CoreError(422, 'unsafe_path', 'Refusing an unsupported or linked legacy entry.'), { legacyPath: input });
       }
       if (state.isDirectory()) {
         entries.push({ path: relative, kind: 'directory' });

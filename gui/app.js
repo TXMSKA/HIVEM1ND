@@ -212,8 +212,12 @@ async function runInstall() {
   let pending = true;
   const install = api('install', { method: 'POST', body: { confirm: true, conflicts } }).finally(() => { pending = false; });
   const poll = (async () => { while (pending) { await new Promise(resolve => setTimeout(resolve, 1000)); if (pending) render(await api('step')); } })();
+  let failed = null;
   try { await install; }
+  catch (error) { failed = error; }
   finally { await poll; setBusy(false); render(await api('step')); }
+  // A failed step already explains itself in its own notice; the raw request error is shown only without one.
+  if (failed && !currentStep.failure) throw failed;
 }
 elements['step-form'].addEventListener('submit', async event => {
   event.preventDefault(); if (busy || !elements['step-form'].reportValidity()) return;

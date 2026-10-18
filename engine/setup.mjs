@@ -818,8 +818,17 @@ class SetupSession {
       const deniedMessage = spanish
         ? `No se pudo completar la fase ${this.checkpoint.phase} de la instalación: se denegó el acceso a ${target ?? 'un archivo o una carpeta del destino'}. Revisar los permisos de esa carpeta.`
         : `Setup could not complete the ${this.checkpoint.phase} phase: access to ${target ?? 'a file or folder in the destination'} was denied. Check the permissions of that folder.`;
-      this.checkpoint.error = { code, message: error.safeSetupMessage ?? (denied ? deniedMessage : spanish
-        ? `No se pudo completar la fase ${this.checkpoint.phase} de la instalación.` : `Setup could not complete the ${this.checkpoint.phase} phase.`) };
+      // Known migration stops say what stopped them in the person's language; nothing was copied or closed.
+      const open = (this.checkpointProof.sessions ?? []).filter(session => session.binding?.machine === this.hostname && session.status !== 'closed');
+      const causeMessage = typeof error?.legacyPath === 'string' ? (spanish
+        ? `La migración se detuvo: el M1ND anterior tiene un enlace o un elemento que no es un archivo en ${error.legacyPath}, y la migración no sigue enlaces. Quitarlo o moverlo fuera del M1ND y reintentar. No se copió nada.`
+        : `Migration stopped: the previous M1ND has a link or an entry that is not a file at ${error.legacyPath}, and migration does not follow links. Remove it or move it out of the M1ND, then retry. Nothing was copied.`)
+        : error?.code === 'legacy_closure_required' ? (spanish
+          ? `La migración se detuvo: no se pudieron cerrar las sesiones de HIVEM1ND 2.x de esta máquina (${open.length}). No se cerró ninguna y no se copió nada.`
+          : `Migration stopped: the HIVEM1ND 2.x sessions on this machine (${open.length}) could not be closed. None was closed and nothing was copied.`)
+        : null;
+      this.checkpoint.error = { code, message: error.safeSetupMessage ?? (denied ? deniedMessage : causeMessage ?? (spanish
+        ? `No se pudo completar la fase ${this.checkpoint.phase} de la instalación.` : `Setup could not complete the ${this.checkpoint.phase} phase.`)) };
       await this.saveCheckpoint();
       this.currentStep = 7;
       await this.persistDraft(7);
