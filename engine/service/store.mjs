@@ -228,6 +228,12 @@ export async function withLocalChanges(store, operation) {
   });
 }
 
+// Work started from a timer or watcher belongs to no caller: it must take local-observation itself instead of
+// inheriting the lease of whatever call happened to schedule it.
+export function withoutLocalChanges(operation) {
+  return localChanges.exit(operation);
+}
+
 async function readBytesRaw(filePath) {
   const resolved = path.resolve(filePath);
   try {

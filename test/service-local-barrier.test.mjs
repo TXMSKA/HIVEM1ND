@@ -3,7 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readBytes, revisionOf, withLocalChanges } from '../engine/service/store.mjs';
+import { readBytes, revisionOf, withLocalChanges, withoutLocalChanges } from '../engine/service/store.mjs';
 import { createChat, patchChat, postChat } from '../engine/service/chats.mjs';
 import { patchSettings } from '../engine/service/units.mjs';
 import { openLedger } from '../engine/sync/limits.mjs';
@@ -122,4 +122,18 @@ test('same-clock unit and chat rewrites keep distinct changes and atomic message
   const fanout = staged.find(change => change.target.path === `user/relay/fanout/${posted.message.id}.json`);
   assert.equal(typeof message.transactionId, 'string');
   assert.equal(message.transactionId, fanout.transactionId);
+});
+
+test('work a timer starts inside a local observation waits for it instead of sharing its lease', { timeout: 5000 }, async (t) => {
+  const fixture = await makeCoreFixture();
+  t.after(() => dispose(fixture));
+  const order = [];
+  let scheduled;
+  await withLocalChanges(fixture.store, async () => {
+    scheduled = new Promise((resolve) => setTimeout(() => resolve(withoutLocalChanges(() => withLocalChanges(fixture.store, async () => { order.push('timer'); }))), 0));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    order.push('first');
+  });
+  await scheduled;
+  assert.deepEqual(order, ['first', 'timer']);
 });

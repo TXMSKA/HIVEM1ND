@@ -3,7 +3,7 @@ import { lstat, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { hashBytes } from './identity.mjs';
 import { assertNoLinks, resolveTarget } from './paths.mjs';
-import { readBytes, withLocalChanges } from './store.mjs';
+import { readBytes, withLocalChanges, withoutLocalChanges } from './store.mjs';
 import { observeExternal, readComments, readEditor } from './editors.mjs';
 import { eligibleTargets, observationSnapshot, observeLocalChange, settleAppliedMarker, targetKey } from '../sync/store.mjs';
 
@@ -30,7 +30,8 @@ export async function watchLocalChanges(runtime, onChanges) {
     if (timer || running) return;
     timer = setTimeout(() => {
       timer = null;
-      running = drain().catch(report).finally(() => {
+      // A drain scheduled during the startup reconcile must wait for it, not run beside it under its lease.
+      running = withoutLocalChanges(() => drain()).catch(report).finally(() => {
         running = null;
         if (dirty && !closed) schedule();
       });
