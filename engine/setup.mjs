@@ -347,6 +347,8 @@ class SetupSession {
     const keys = ['progressFolder', 'progressLegacy', 'progressRegistration', 'progressStart', 'progressOpen'];
     const completed = new Set(this.checkpoint?.completed ?? []);
     const phase = this.checkpoint?.phase;
+    // Without a migration there is no previous M1ND to copy, so its row is left out instead of ticked.
+    const migrating = this.checkpoint ? this.checkpoint.mode === 'migrate' : Boolean(this.detectedLegacyPath) && this.answers.migrateLegacy !== false;
     return keys.map((key, index) => {
       const group = phases[index];
       const done = group.every(value => completed.has(value));
@@ -357,7 +359,7 @@ class SetupSession {
         + (state === 'busy' && this.phaseStartedAt ? Date.now() - this.phaseStartedAt : 0);
       return { id: ['folder', 'legacy', 'registration', 'start', 'open'][index], label: text(this.answers.language, key),
         state, elapsedSeconds: duration > 0 ? Math.ceil(duration / 1000) : null };
-    });
+    }).filter(row => migrating || row.id !== 'legacy');
   }
 
   async setLanguage(value) {
