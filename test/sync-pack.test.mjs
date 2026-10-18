@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { canonicalJson, hashBytes, uuidV8 } from '../engine/service/identity.mjs';
 import { countLogicalMessages, decodePack, decompressObject, encodePack, isDeterministicNotice, packFileName, validateHead } from '../engine/sync/pack.mjs';
-import { ackPublished, eligibleTargets, observationSnapshot, observeLocalChange, openSync, readObject, resolveIncoming, stageBaselines, stageTransaction } from '../engine/sync/store.mjs';
+import { ackPublished, eligibleTargets, listStaged, observationSnapshot, observeLocalChange, openSync, readObject, resolveIncoming, stageBaselines, stageTransaction, withVersionBatch } from '../engine/sync/store.mjs';
 import { withLocalChanges } from '../engine/service/store.mjs';
 import { assertContained, dispose, makeCoreFixture } from './core-fixture.mjs';
 
@@ -589,4 +589,43 @@ test('observing many new files reads each staged change once, not once per file'
     assert.equal((await observeLocalChange(sync, { kind: 'mind', path: relative }, { bytes })).staged, true);
   }
   assert.ok(stagedReads < 1000, `staged changes were read ${stagedReads} times for 200 new files`);
+});
+
+test('a local reconcile pass writes the sync version record once, and a restart still matches its staged changes', async (t) => {
+  const fixture = await makeCoreFixture();
+  t.after(() => dispose(fixture));
+  const notes = path.join(fixture.paths.mind, 'user', 'notes');
+  await mkdir(notes, { recursive: true });
+  const fs = (await import('node:fs')).default;
+  const { syncBuiltinESMExports } = await import('node:module');
+  const original = fs.promises.open;
+  let versionWrites = 0;
+  fs.promises.open = function (target, flags, ...rest) {
+    if (String(target).includes('sync-versions') && flags && flags !== 'r') versionWrites += 1;
+    return original.call(this, target, flags, ...rest);
+  };
+  syncBuiltinESMExports();
+  t.after(() => { fs.promises.open = original; syncBuiltinESMExports(); });
+  const sync = syncOf(fixture);
+  const observe = async (index) => {
+    const relative = `user/notes/note-${index}.md`;
+    const bytes = Buffer.from(`Note ${index}.`);
+    await writeFile(path.join(fixture.paths.mind, ...relative.split('/')), bytes);
+    return observeLocalChange(sync, { kind: 'mind', path: relative }, { bytes });
+  };
+  await withLocalChanges(fixture.store, () => withVersionBatch(sync, async () => {
+    for (let index = 0; index < 150; index += 1) assert.equal((await observe(index)).staged, true);
+  }));
+  assert.ok(versionWrites <= 2, `the version record was written ${versionWrites} times in one pass`);
+  const versions = JSON.parse(await readFile(path.join(fixture.paths.localDirectory, 'sync-versions.json'), 'utf8'));
+  assert.equal(Object.keys(versions.targets).length, 150);
+  // A pass that dies before its write leaves staged changes that the next start recognizes instead of staging again.
+  await withLocalChanges(fixture.store, () => withVersionBatch(sync, async () => {
+    assert.equal((await observe(150)).staged, true);
+    sync.versionsDraft.dirty = false;
+  }));
+  const restarted = syncOf(fixture);
+  const again = await observeLocalChange(restarted, { kind: 'mind', path: 'user/notes/note-150.md' }, { bytes: Buffer.from('Note 150.') });
+  assert.equal(again.staged, false);
+  assert.equal((await listStaged(restarted)).length, 151);
 });

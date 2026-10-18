@@ -5,7 +5,7 @@ import { hashBytes } from './identity.mjs';
 import { assertNoLinks, resolveTarget } from './paths.mjs';
 import { readBytes, withLocalChanges, withoutLocalChanges } from './store.mjs';
 import { observeExternal, readComments, readEditor } from './editors.mjs';
-import { eligibleTargets, observationSnapshot, observeLocalChange, settleAppliedMarker, targetKey } from '../sync/store.mjs';
+import { eligibleTargets, observationSnapshot, observeLocalChange, settleAppliedMarker, targetKey, withVersionBatch } from '../sync/store.mjs';
 
 export async function watchLocalChanges(runtime, onChanges) {
   const context = {
@@ -152,7 +152,7 @@ export async function watchLocalChanges(runtime, onChanges) {
   }
 
   async function reconcile(baseline = false) {
-    return withLocalChanges(context.store, () => reconcileLocal(baseline));
+    return withLocalChanges(context.store, () => withVersionBatch(runtime.sync, () => reconcileLocal(baseline)));
   }
 
   async function reconcileLocal(baseline) {

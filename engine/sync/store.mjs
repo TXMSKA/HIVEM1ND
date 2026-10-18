@@ -479,7 +479,9 @@ async function stageUnlocked(sync, entries, options = {}, retainedVersion = null
       deleted: item.change.operation === 'delete',
     };
   }
-  await atomicWrite(sync.store, versionPath(sync), Buffer.from(`${canonicalJson(versions)}\n`, 'utf8'));
+  await saveVersions(sync, versions);
+  // A marker goes only after the version that replaces it is on disk.
+  if (settledKeys.length) await flushVersions(sync);
   for (const key of settledKeys) await removeFile(sync, markerPath(sync, key));
   return prepared.map((item) => item.change);
 }
@@ -732,12 +734,44 @@ async function stagedChanges(sync) {
 }
 
 async function readVersions(sync) {
+  if (sync.versionsDraft?.versions) return sync.versionsDraft.versions;
   const parsed = await readJson(sync, versionPath(sync));
   if (!parsed) return { format: 'hivem1nd-sync-versions-v1', targets: {} };
   if (parsed.format !== 'hivem1nd-sync-versions-v1' || !parsed.targets || typeof parsed.targets !== 'object') {
     throw new CoreError(422, 'corrupt_resource', 'The sync version record is not valid.');
   }
+  if (sync.versionsDraft) sync.versionsDraft.versions = parsed;
   return parsed;
+}
+
+// Inside a local reconcile pass every writer holds local-observation, so the version record can live in memory
+// and be written once at the end. Rewriting the whole growing record for every staged file made the first start
+// of a large M1ND take tens of minutes. A staged change without its version entry is matched again on restart.
+export async function withVersionBatch(sync, operation) {
+  if (sync.versionsDraft) return operation();
+  sync.versionsDraft = { versions: null, dirty: false };
+  try {
+    return await operation();
+  } finally {
+    await flushVersions(sync);
+    sync.versionsDraft = null;
+  }
+}
+
+async function saveVersions(sync, versions) {
+  if (sync.versionsDraft) {
+    sync.versionsDraft.versions = versions;
+    sync.versionsDraft.dirty = true;
+    return;
+  }
+  await atomicWrite(sync.store, versionPath(sync), Buffer.from(`${canonicalJson(versions)}\n`, 'utf8'));
+}
+
+async function flushVersions(sync) {
+  const draft = sync.versionsDraft;
+  if (!draft?.dirty) return;
+  await atomicWrite(sync.store, versionPath(sync), Buffer.from(`${canonicalJson(draft.versions)}\n`, 'utf8'));
+  draft.dirty = false;
 }
 
 function markerBody(marker, extra = {}) {
@@ -785,7 +819,9 @@ async function machineFromMarkerId(sync, key, marker) {
 async function writeVersion(sync, key, value) {
   const versions = await readVersions(sync);
   versions.targets[key] = value;
-  await atomicWrite(sync.store, versionPath(sync), Buffer.from(`${canonicalJson(versions)}\n`, 'utf8'));
+  await saveVersions(sync, versions);
+  // Callers remove the applied marker next, so this version is written now.
+  await flushVersions(sync);
 }
 
 async function readJson(sync, file) {
