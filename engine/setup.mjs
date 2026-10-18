@@ -686,10 +686,14 @@ class SetupSession {
     if (this.checkpoint.mode !== 'migrate') return;
     await mkdir(path.dirname(this.mindPath), { recursive: true });
     const partial = await lstat(this.mindPath).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+    // Saving the whole growing proof, with its ACL, after every file made a large M1ND take hours. The proof is saved
+    // every two seconds and on any failure; an entry copied after the last save is verified by its hash on resume.
+    const copied = new Set(this.checkpointProof.copied.map(item => item.path));
+    let savedAt = Date.now();
     await copyLegacyTree(this.legacySourcePath, this.mindPath, { inventory: this.checkpointProof.inventory,
       completed: this.checkpointProof.copied, resume: Boolean(partial), onCheckpoint: async entry => {
-        if (!this.checkpointProof.copied.some(item => item.path === entry.path)) this.checkpointProof.copied.push(entry);
-        await this.saveCheckpoint();
+        if (!copied.has(entry.path)) { copied.add(entry.path); this.checkpointProof.copied.push(entry); }
+        if (Date.now() - savedAt >= 2000) { await this.saveCheckpoint(); savedAt = Date.now(); }
         await this.copyCheckpoint?.(entry);
       } });
     await this.destinationProof();

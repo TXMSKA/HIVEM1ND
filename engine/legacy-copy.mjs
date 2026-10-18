@@ -70,6 +70,7 @@ export async function copyLegacyTree(sourcePath, destinationPath, options = {}) 
     await mkdir(destination, { recursive: false });
   }
   let files = 0;
+  const completed = new Set((options.completed ?? []).map(item => JSON.stringify(item)));
   for (const entry of inventory) {
     const input = path.join(source, entry.path);
     const output = path.join(destination, entry.path);
@@ -81,7 +82,7 @@ export async function copyLegacyTree(sourcePath, destinationPath, options = {}) 
     }
     const before = createHash('sha256').update(await readFile(input)).digest('hex');
     if (before !== entry.sha256) throw new CoreError(409, 'legacy_changed', 'A legacy entry changed during the copy.');
-    if (!options.completed?.some(item => JSON.stringify(item) === JSON.stringify(entry))) {
+    if (!completed.has(JSON.stringify(entry))) {
       try { await copyFile(input, output, constants.COPYFILE_EXCL); }
       catch (error) { if (!options.resume || error.code !== 'EEXIST') throw error; }
     }

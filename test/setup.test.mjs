@@ -863,6 +863,20 @@ test('failed copy resumes only verified checkpoint entries', async context => {
   assert.deepEqual(await legacyTreeInventory(fixture.sourcePath), before);
 });
 
+test('copying a large M1ND saves its progress in batches, not once per file', async context => {
+  const fixture = await checkpointFixture(context);
+  const bulk = path.join(fixture.sourcePath, 'user', 'projects', 'bulk');
+  await mkdir(bulk, { recursive: true });
+  for (let index = 0; index < 400; index += 1) await writeFile(path.join(bulk, `note-${index}.md`), `Note ${index}.` + String.fromCharCode(10));
+  const session = await confirmedSetup(fixture.options);
+  let saves = 0;
+  const save = session.saveCheckpoint.bind(session);
+  session.saveCheckpoint = async () => { saves += 1; return save(); };
+  assert.equal((await session.install()).completed, true);
+  assert.ok(saves < 100, `the copy saved its progress ${saves} times for over 400 files`);
+  assert.equal((await readFile(path.join(fixture.mindPath, 'user', 'projects', 'bulk', 'note-399.md'), 'utf8')).startsWith('Note 399.'), true);
+});
+
 test('changed partial copy entries block resume without changing either tree', async context => {
   const fixture = await checkpointFixture(context);
   let copiedPath;
