@@ -326,7 +326,7 @@ test('the real wizard retries only service startup and opens its authenticated v
   assert.match(pending.failure.headline, /could not complete the start phase/);
   assert.equal(pending.failure.headline, first.service.error);
   assert.deepEqual(pending.progress.map(row => [row.id, row.state]), [
-    ['folder', 'done'], ['legacy', 'done'], ['registration', 'done'], ['start', 'fail'], ['open', 'todo'],
+    ['folder', 'done'], ['registration', 'done'], ['start', 'fail'], ['open', 'todo'],
   ]);
   assert.equal(starts, 1);
   assert.deepEqual(opened, []);
