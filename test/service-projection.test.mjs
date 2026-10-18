@@ -919,3 +919,25 @@ test('a locally registered zero-unit project appears with provenance without cre
   await writeFile(path.join(directory, 'product.json'), JSON.stringify({ ...provenance, removed: true }));
   assert.deepEqual((await readProjection(context)).projects, []);
 });
+
+test('a migrated 2.x M1ND keeps its seats and tasks: role from the unit name, task folders and free statuses', async (t) => {
+  const fixture = await mind(t);
+  const root = fixture.paths.mind;
+  const context = { paths: fixture.paths, now: () => NOW, principal: { unitId: 'root:master', audience: 'desktop' } };
+  await writeFile(path.join(root, 'user', 'state', 'overseer.md'), stateFile({ unit: 'overseer', state: 'in', machine: 'DESKTOP', date: '2026-10-18 05:03' }));
+  await writeFile(path.join(root, 'user', 'state', 'executor-shop.md'), stateFile({ unit: 'executor-shop', state: 'out', machine: 'DESKTOP' }));
+  await writeFile(path.join(root, 'user', 'state', 'builder-cursor.md'), stateFile({ unit: 'builder-cursor', state: 'out' }));
+  await writeFile(path.join(root, 'user', 'tasks', '001-working.md'), stateFile({ id: '001', status: 'working', from: 'user', to: 'overseer', date: '2026-10-10 07:10' }, '## Request\nKeep going.\n'));
+  await writeFile(path.join(root, 'user', 'tasks', '001-brief.md'), '# Brief for task 001\n\nNo headers here.\n');
+  await mkdir(path.join(root, 'user', 'tasks', '001'), { recursive: true });
+  await writeFile(path.join(root, 'user', 'tasks', '001', 'audit.md'), '# Audit kept beside the task\n');
+  const view = await readProjection(context);
+  const ids = view.units.map(unit => unit.id);
+  assert.ok(ids.includes('root:overseer'));
+  assert.equal(view.units.find(unit => unit.id === 'root:overseer').role, 'overseer');
+  assert.equal(view.units.find(unit => unit.unit === 'executor-shop').role, 'executor');
+  assert.deepEqual(view.tasks.map(task => [task.number, task.status]), [['001', 'open']]);
+  const flagged = view.issues.map(issue => issue.path);
+  assert.equal(flagged.some(item => item.includes('tasks/')), false, 'briefs and task folders are not broken tasks');
+  assert.equal(flagged.includes('user/state/builder-cursor.md'), true, 'a seat with no 3.0 role is still reported');
+});

@@ -844,8 +844,9 @@ function readTask(bytes, relative, units, issues, aliases = []) {
     // A file in tasks/ without an id header is a brief or a report kept beside a task, not a task.
     if (!headers.get('id') && !headers.get('task-id')) return null;
     const id = parseTaskId(canonicalTaskId(headers.get('id') || headers.get('task-id') || '', relative));
-    const status = headers.get('status');
-    if (!['open', 'review', 'done', 'closed'].includes(status)) throw new Error('status');
+    // A 2.x task may carry a status in its own words (working, pending, a sentence); it is still unfinished work.
+    const written = headers.get('status');
+    const status = ['open', 'review', 'done', 'closed'].includes(written) ? written : 'open';
     const body = bodyText(bytes);
     const sections = taskSections(body);
     const toId = personId(headers.get('to-id') || headers.get('to'), units, aliases, id.scope);
