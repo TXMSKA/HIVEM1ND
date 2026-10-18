@@ -247,3 +247,27 @@ for (const existing of [false, true]) test(`restart stages an imported ${existin
   const removed = (await listStaged(restarted.runtime.sync)).find(item => item.target.path === target.path && item.operation === 'delete');
   assert.equal(removed?.baseHash, change.hash);
 });
+
+test('a bulk of observed files at boot announces one view change instead of rebuilding the projection per file', async t => {
+  let projections = 0;
+  const original = fsPromises.open;
+  const { fixture } = await boot(t, async (context) => {
+    for (let index = 0; index < 250; index += 1) {
+      const sessionId = randomUUID();
+      const directory = path.join(context.paths.mind, 'user', 'relay', 'session-status', sessionId);
+      await mkdir(directory, { recursive: true });
+      await writeFile(path.join(directory, `${randomUUID()}.json`), JSON.stringify({ format: 'hivem1nd-session-status-v1', sessionId, state: 'stopped' }));
+    }
+    fsPromises.open = function (target, ...rest) {
+      if (String(target).endsWith(path.join('user', 'gui', 'resources.json'))) projections += 1;
+      return original.call(this, target, ...rest);
+    };
+    syncBuiltinESMExports();
+    t.after(() => { fsPromises.open = original; syncBuiltinESMExports(); });
+  });
+  fsPromises.open = original;
+  syncBuiltinESMExports();
+  assert.ok(projections < 50, `the projection was read ${projections} times for 250 observed files`);
+  const views = fixture.store.events.filter(event => event.name === 'view.changed' && event.data?.collections?.includes('sessions'));
+  assert.ok(views.length >= 1);
+});

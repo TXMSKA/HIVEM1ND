@@ -1042,6 +1042,9 @@ async function emitObserved(runtime, changes) {
   return emitChanges(runtime, { machine: runtime.paths.machine, sequence: changes.map(change => change.id).join(':'), changes }, true);
 }
 
+const BULK_EVENT_LIMIT = 200;
+const BULK_COLLECTIONS = ['approvals', 'chats', 'clusters', 'editors', 'groups', 'leads', 'machines', 'mailboxes', 'messages', 'plans', 'projects', 'runs', 'sessions', 'squads', 'tasks', 'units', 'waiting'];
+
 async function emitChanges(runtime, result, local = false) {
   if (!runtime?.bus) return;
   const selected = latestImported(result.changes ?? []);
@@ -1057,7 +1060,11 @@ async function emitChanges(runtime, result, local = false) {
   const events = [];
   const collections = new Set();
   const seen = new Map();
-  for (const change of selected) {
+  // Each detailed event reads the projection again, so a bulk change such as the first observation of a migrated
+  // M1ND announced one view change instead of rebuilding the whole projection once per file for hours.
+  const bulk = selected.length > BULK_EVENT_LIMIT;
+  if (bulk) for (const name of BULK_COLLECTIONS) collections.add(name);
+  for (const change of bulk ? [] : selected) {
     try {
       const built = await eventsForImported(runtime, context, change);
       for (const event of built.events) {
