@@ -308,7 +308,8 @@ async function loadMind(context) {
   const tasks = [];
   for (const scope of scopes) {
     for (const relative of await filesUnder(mind, scope.tasks)) {
-      if (!relative.endsWith('.md') || relative.includes('.conflict-')) continue;
+      // A task is a file directly in tasks/; a folder beside it holds that task's briefs and evidence.
+      if (!relative.endsWith('.md') || relative.includes('.conflict-') || relative.slice(scope.tasks.length + 1).includes('/')) continue;
       const task = readTask(await readSafe(mind, relative), relative, units, issues, context.aliases ?? []);
       if (task) tasks.push(task);
     }
@@ -840,6 +841,8 @@ function readTask(bytes, relative, units, issues, aliases = []) {
   if (!bytes) return null;
   try {
     const headers = headerMap(bytes);
+    // A file in tasks/ without an id header is a brief or a report kept beside a task, not a task.
+    if (!headers.get('id') && !headers.get('task-id')) return null;
     const id = parseTaskId(canonicalTaskId(headers.get('id') || headers.get('task-id') || '', relative));
     const status = headers.get('status');
     if (!['open', 'review', 'done', 'closed'].includes(status)) throw new Error('status');
