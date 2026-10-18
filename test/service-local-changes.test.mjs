@@ -92,7 +92,12 @@ test('external Void A to B to A records both transitions in atomic document/hist
     fixture.clock.now += 1000;
     await writeFile(file, bytes);
     await until(async () => (await readFile(history, 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).length === index + 1);
-    await until(async () => (await listStaged(core.runtime.sync)).filter(change => change.target.path === 'docs/reverted.json').length === index + 2);
+    await until(async () => {
+      const staged = await listStaged(core.runtime.sync);
+      const documents = staged.filter(change => change.target.path === 'docs/reverted.json').sort((left, right) => left.at.localeCompare(right.at));
+      return documents.length === index + 2 && documents.slice(1).every(document => document.transactionId
+        && staged.some(change => change.transactionId === document.transactionId && change.target.path === 'docs/reverted.versions.jsonl'));
+    });
   }
   const lines = (await readFile(history, 'utf8')).trim().split('\n').map(JSON.parse);
   assert.deepEqual(lines.map(line => [line.before, line.after, line.by]), [['A', 'B', 'outside'], ['B', 'A', 'outside']]);
@@ -152,7 +157,12 @@ test('external Void replacement records one atomic document/history group, prese
   assert.equal(lines[0].before, 'Before');
   assert.equal(lines[0].after, 'Outside');
   const currentHash = hashBytes(await readFile(file));
-  await until(async () => (await listStaged(core.runtime.sync)).some(change => change.target.path === 'docs/note.json' && change.hash === currentHash && change.transactionId));
+  // The two files of a group are written one after the other; the group is checked once both are staged.
+  await until(async () => {
+    const staged = await listStaged(core.runtime.sync);
+    const document = staged.find(change => change.target.path === 'docs/note.json' && change.hash === currentHash && change.transactionId);
+    return document && staged.some(change => change.transactionId === document.transactionId && change.target.path === 'docs/note.versions.jsonl');
+  });
   const changes = await listStaged(core.runtime.sync);
   const body = changes.find(change => change.target.path === 'docs/note.json' && change.hash === currentHash);
   assert.ok(body?.transactionId);
