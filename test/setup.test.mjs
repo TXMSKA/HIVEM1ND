@@ -934,6 +934,31 @@ test('reopening a failed service step preserves completed copy and migration', a
   assert.deepEqual(await legacyTreeInventory(fixture.sourcePath), sourceBefore);
 });
 
+test('a stopped migration names its cause in the chosen language and a new M1ND opens in that language', async context => {
+  const closure = await checkpointFixture(context);
+  await addLegacySession(closure);
+  const stopped = await confirmedSetup({ ...closure.options, language: 'es', legacyControl: null }, { closeLegacy: true });
+  await assert.rejects(stopped.install(), { code: 'legacy_closure_required' });
+  assert.equal(stopped.checkpoint.error.message, 'La migración se detuvo: no se pudieron cerrar las sesiones de HIVEM1ND 2.x de esta máquina (1). No se cerró ninguna y no se copió nada.');
+  const linked = await checkpointFixture(context);
+  const outside = path.join(linked.root, 'outside');
+  await mkdir(outside, { recursive: true });
+  const link = path.join(linked.sourcePath, 'user', 'linked');
+  await symlink(outside, link, process.platform === 'win32' ? 'junction' : 'dir');
+  const refused = await confirmedSetup({ ...linked.options, language: 'en' });
+  await assert.rejects(refused.install(), { code: 'unsafe_path' });
+  assert.match(refused.checkpoint.error.message, /^Migration stopped: the previous M1ND has a link/);
+  assert.equal(refused.checkpoint.error.message.includes(link), true);
+  const fresh = await makeFixture(context);
+  const session = await createSetupSession({ kitPath: KIT_PATH, mindPath: fresh.mindPath, homeDir: fresh.homeDir, hostname: 'TESTBOX', env: { PATH: '' }, language: 'es' });
+  await session.answer({});
+  await session.answer({ mindPath: fresh.mindPath });
+  await session.answer({ confirm: true });
+  assert.equal((await session.getStep()).progress.some(row => row.id === 'legacy'), false, 'no previous M1ND, no copy row');
+  assert.equal((await session.install()).completed, true);
+  assert.equal(JSON.parse(await readFile(path.join(fresh.mindPath, 'user', 'gui', 'settings.json'), 'utf8')).language, 'es');
+});
+
 test('unsupported or unsaved legacy shutdown leaves both trees unchanged', async context => {
   for (const mode of ['unsupported', 'unsaved', 'mismatched']) {
     const fixture = await checkpointFixture(context);

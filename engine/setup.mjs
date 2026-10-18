@@ -15,7 +15,7 @@ import {
 } from './discovery.mjs';
 import { configureOwnedService } from './service/install.mjs';
 import { assertLocalStaging, assertNoLinks, defaultMind, mindKeyFor, oneDriveRoots, MIND_DIRECTORY_NAME } from './service/paths.mjs';
-import { CoreError } from './service/identity.mjs';
+import { canonicalJson, CoreError } from './service/identity.mjs';
 import { protectLocalFile } from './service/security.mjs';
 import { copyLegacyTree, legacyTreeInventory } from './legacy-copy.mjs';
 import { legacySessions, verifiedLegacyStop, writeLegacyClosure } from './relay/local-wake.mjs';
@@ -858,6 +858,7 @@ class SetupSession {
     }
 
     await this.createMindLayout();
+    await this.writeDisplaySettings();
     const applied = await applyInstallPlan(plan, this.answers.conflicts);
     const managedFiles = { ...(this.machineRecord?.managedFiles ?? {}), ...applied.managedFiles };
     for (const filePath of plan.retired) delete managedFiles[filePath];
@@ -1225,6 +1226,15 @@ class SetupSession {
       skillsRoots: [],
       peerHashes,
     });
+  }
+
+  // A new or migrated M1ND without display settings opens in the language chosen in setup; a joined one is never written.
+  async writeDisplaySettings() {
+    if (this.answers.attach || this.checkpoint?.mode === 'join') return;
+    const file = path.join(this.mindPath, 'user', 'gui', 'settings.json');
+    if (await lstat(file).catch(error => { if (error.code === 'ENOENT') return null; throw error; })) return;
+    await mkdir(path.dirname(file), { recursive: true });
+    await atomicWriteFile(file, `${canonicalJson({ format: 'hivem1nd-settings-v1', look: 'modern', language: normalizeLanguage(this.answers.language), sendToAgent: true })}\n`, { root: this.mindPath });
   }
 
   async createMindLayout() {
