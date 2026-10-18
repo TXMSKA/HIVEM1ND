@@ -659,6 +659,14 @@ class SetupSession {
       .some(key => state.binding?.[key] !== binding[key])) throw new CoreError(409, 'legacy_closure_required', 'The legacy session closure could not be verified.');
   }
 
+  // A move updates the destination proof by its two entries; hashing the whole M1ND again after each of hundreds of
+  // legacy registrations made the migrate phase take hours.
+  async recordQuarantine(from, to, sha256) {
+    this.checkpointProof.destination = (this.checkpointProof.destination ?? []).filter(entry => entry.path !== from && entry.path !== to);
+    this.checkpointProof.destination.push({ path: to, kind: 'file', sha256 });
+    await this.saveCheckpoint();
+  }
+
   async quarantineLegacy(from, target) {
     await assertNoLinks(from);
     await assertNoLinks(target);
@@ -669,7 +677,7 @@ class SetupSession {
     if (!input && output && pending?.from === relative(from) && pending.to === relative(target) && hashContent(output) === pending.sha256) {
       if (pending.from === '.migration/migration-3.0.0.json') this.checkpointProof.legacyProgressPrepared = true;
       delete this.checkpointProof.pendingMove;
-      await this.destinationProof();
+      await this.recordQuarantine(pending.from, pending.to, pending.sha256);
       return;
     }
     if (!input || output) throw new CoreError(409, 'checkpoint_changed', 'Legacy Relay evidence could not be moved safely.');
@@ -678,8 +686,9 @@ class SetupSession {
     await mkdir(path.dirname(target), { recursive: true });
     await rename(from, target);
     if (relative(from) === '.migration/migration-3.0.0.json') this.checkpointProof.legacyProgressPrepared = true;
+    const moved = this.checkpointProof.pendingMove;
     delete this.checkpointProof.pendingMove;
-    await this.destinationProof();
+    await this.recordQuarantine(moved.from, moved.to, moved.sha256);
   }
 
   async copyLegacy() {

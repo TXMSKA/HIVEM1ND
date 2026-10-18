@@ -877,6 +877,25 @@ test('copying a large M1ND saves its progress in batches, not once per file', as
   assert.equal((await readFile(path.join(fixture.mindPath, 'user', 'projects', 'bulk', 'note-399.md'), 'utf8')).startsWith('Note 399.'), true);
 });
 
+test('quarantining many closed legacy registrations does not hash the whole M1ND once per file', async context => {
+  const fixture = await checkpointFixture(context);
+  for (let index = 0; index < 60; index += 1) {
+    const id = `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`;
+    const record = await addLegacySession(fixture, 'TESTBOX', { registrationId: id, sessionId: id, nativeSessionId: `native-${index}` });
+    const statuses = path.join(fixture.sourcePath, 'user', 'relay', 'session-status', record.sessionId);
+    await mkdir(statuses, { recursive: true });
+    await writeFile(path.join(statuses, `${id}.json`), JSON.stringify({ format: 'hivem1nd-session-status-v1', sessionId: record.sessionId,
+      machine: 'TESTBOX', state: 'stopped', reason: 'native-acknowledged', at: '2026-10-14T00:00:00.000Z' }));
+  }
+  const session = await confirmedSetup(fixture.options);
+  let proofs = 0;
+  const proof = session.destinationProof.bind(session);
+  session.destinationProof = async () => { proofs += 1; return proof(); };
+  assert.equal((await session.install()).completed, true, JSON.stringify(session.checkpoint?.error));
+  assert.ok(proofs < 20, `the whole M1ND was hashed ${proofs} times for 60 registrations`);
+  assert.equal((await readdir(path.join(fixture.mindPath, '.migration', 'legacy-relay', 'sessions'))).length, 60);
+});
+
 test('changed partial copy entries block resume without changing either tree', async context => {
   const fixture = await checkpointFixture(context);
   let copiedPath;
