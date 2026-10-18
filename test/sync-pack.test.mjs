@@ -565,3 +565,28 @@ test('observation compares current state rather than historical staged bytes or 
   assert.equal(repeated.staged, true);
   assert.equal(repeated.change.baseHash, hashBytes(second));
 });
+
+test('observing many new files reads each staged change once, not once per file', async (t) => {
+  const fixture = await makeCoreFixture();
+  t.after(() => dispose(fixture));
+  const notes = path.join(fixture.paths.mind, 'user', 'notes');
+  await mkdir(notes, { recursive: true });
+  const fs = (await import('node:fs')).default;
+  const { syncBuiltinESMExports } = await import('node:module');
+  const original = fs.promises.open;
+  let stagedReads = 0;
+  fs.promises.open = function (target, ...rest) {
+    if (String(target).includes(path.join('staging', 'changes'))) stagedReads += 1;
+    return original.call(this, target, ...rest);
+  };
+  syncBuiltinESMExports();
+  t.after(() => { fs.promises.open = original; syncBuiltinESMExports(); });
+  const sync = syncOf(fixture);
+  for (let index = 0; index < 200; index += 1) {
+    const relative = `user/notes/note-${index}.md`;
+    const bytes = Buffer.from(`Note ${index}.`);
+    await writeFile(path.join(fixture.paths.mind, ...relative.split('/')), bytes);
+    assert.equal((await observeLocalChange(sync, { kind: 'mind', path: relative }, { bytes })).staged, true);
+  }
+  assert.ok(stagedReads < 1000, `staged changes were read ${stagedReads} times for 200 new files`);
+});

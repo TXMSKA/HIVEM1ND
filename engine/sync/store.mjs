@@ -712,12 +712,22 @@ async function stagedChanges(sync) {
     if (error?.code === 'ENOENT') return [];
     throw error;
   }
+  // A staged change file is written once under its id and never rewritten, so each one is parsed once. Reading every
+  // staged change again for every new file made the first start of a large M1ND take hours.
+  const cache = sync.stagedCache ??= new Map();
+  const present = new Set();
   const changes = [];
   for (const name of names) {
     if (!name.endsWith('.json') || isTemporaryName(name)) continue;
-    const parsed = await readJson(sync, path.join(directory, name));
-    if (parsed) changes.push(parsed);
+    present.add(name);
+    if (!cache.has(name)) {
+      const parsed = await readJson(sync, path.join(directory, name));
+      if (!parsed) continue;
+      cache.set(name, Object.freeze(parsed));
+    }
+    changes.push(cache.get(name));
   }
+  for (const name of cache.keys()) if (!present.has(name)) cache.delete(name);
   return changes;
 }
 
