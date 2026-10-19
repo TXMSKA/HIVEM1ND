@@ -8,7 +8,7 @@ const HOST = "127.0.0.1";
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_REQUESTS_PER_MINUTE = 240;
 const UI_KEYS = [
-  "back", "continue", "install", "installing", "loading", "language", "searchLanguages",
+  "back", "continue", "install", "installing", "loading", "language", "searchLanguages", "legacySessionsOne", "legacySessionsOther",
   "browse", "add", "attachAuto", "attachOnDemand", "noFiles", "filesCountOne", "filesCountOther",
   "firstCommand", "actionCreate", "actionUpdate", "actionUnchanged", "actionAppend", "actionConflict",
   "documentTitle", "environmentPlaceholder", "reportSaved",

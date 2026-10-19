@@ -100,7 +100,9 @@ input[type=checkbox]:checked::before { width: 8px; height: 4px; border: solid va
 .mode-dialog::backdrop { background: var(--scrim); }
 .mode-dialog h2 { margin: 0 0 6px; font-size: 18px; font-weight: 700; }
 .mode-dialog p { margin: 0 0 18px; color: var(--muted); font-size: 13.5px; line-height: 1.5; }
-.legacy-sessions { display: grid; gap: 8px; margin-bottom: 18px; }
+.legacy-fold { margin-bottom: 18px; }
+.legacy-fold > summary { cursor: pointer; padding: 10px 12px; border-radius: 12px; background: var(--card); font-size: 13px; font-weight: 700; }
+.legacy-sessions { display: grid; gap: 8px; margin-top: 8px; max-height: 240px; overflow-y: auto; }
 .legacy-session { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; background: var(--card); font-size: 13px; }
 .legacy-session svg { width: 15px; height: 15px; }
 .legacy-session span { margin-left: auto; color: var(--muted); font-size: 12px; }

@@ -58,6 +58,27 @@ test("a failed setup install clears the Retry spinner", async () => {
   assert.equal(document.getElementById("status-message").textContent, "");
 });
 
+test("the 2.x sessions to close start folded under their count", async () => {
+  const document = createWizardDocument();
+  const session = new Map([["hivem1nd.session", "test-token"]]);
+  const sessions = Array.from({ length: 30 }, (_, index) => ({ unit: `executor-${index}`, client: "codex", machine: "MOTHERSHIP", local: true }));
+  const step = { ...failedStep, id: "location", number: 2, failure: null, progress: [], fields: [{ id: "mindPath", type: "text", label: "Folder", required: true }],
+    values: { mindPath: "C:/M1ND" }, languages: [{ value: "en", label: "English" }], relayPlus: { title: "Relay+", badge: "Soon", body: "", disabled: true },
+    legacy: { confirmation: true, closeTitle: "Close HIVEM1ND 2.x first", closeCopy: "Close them.", action: "Sessions closed, migrate", offline: "", sessions },
+    ui: { ...failedStep.ui, onMachine: "{client} on {machine}", legacySessionsOne: "1 open 2.x session", legacySessionsOther: "{count} open 2.x sessions", cancel: "Cancel" } };
+  const source = await readFile(new URL("../gui/app.js", import.meta.url), "utf8");
+  const start = new AsyncFunction("document", "location", "sessionStorage", "history", "fetch", "window", "CSS", "setTimeout", source);
+  await start(document, { hash: "#session=test-token", assign() {} },
+    { getItem: (key) => session.get(key) ?? null, setItem: (key, value) => session.set(key, String(value)) }, { replaceState() {} },
+    async () => ({ ok: true, status: 200, json: async () => ({ data: step }) }), {}, { escape: (value) => String(value) }, (fn) => setTimeout(fn, 0));
+  const fold = document.getElementById("legacy-sessions");
+  assert.ok(fold, `dialog ${document.getElementById("mode-dialog").open}, message ${document.getElementById("status-message").textContent}`);
+  assert.equal(fold.tag, "details");
+  assert.equal(fold.open, false);
+  assert.equal(fold.querySelector("summary").textContent, "30 open 2.x sessions");
+  assert.equal(fold.querySelectorAll(".legacy-session").length, 30);
+});
+
 function createWizardDocument() {
   const nodes = new Map();
   const tags = {
@@ -110,6 +131,7 @@ function createWizardDocument() {
         for (const kid of kids) { if (kid) { kid.parent = this; this.children.unshift(kid); } }
       },
       replaceChildren(...kids) { this.children = []; this.append(...kids); },
+      after(kid) { const list = this.parent?.children; if (!list) return; kid.parent = this.parent; list.splice(list.indexOf(this) + 1, 0, kid); },
       focus() {},
       showModal() { this.open = true; },
       close() { this.open = false; },

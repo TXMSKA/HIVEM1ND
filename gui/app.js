@@ -124,13 +124,17 @@ function renderLegacyDialog(step) {
   elements['mode-dialog-title'].textContent = legacy.closeTitle;
   elements['mode-dialog-copy'].textContent = legacy.closeCopy;
   document.getElementById('legacy-sessions')?.remove();
-  const list = el('div', 'legacy-sessions'); list.id = 'legacy-sessions';
+  // The sessions start folded under their count; a long list would otherwise push the action out of view.
+  const fold = document.createElement('details'); fold.setAttribute('id', 'legacy-sessions'); fold.className = 'legacy-fold';
+  const count = legacy.sessions.length;
+  fold.append(el('summary', '', (count === 1 ? ui().legacySessionsOne : ui().legacySessionsOther).replace('{count}', String(count))));
+  const list = el('div', 'legacy-sessions'); fold.append(list);
   const clients = { codex: 'Codex', claude: 'Claude Code', cursor: 'Cursor', opencode: 'OpenCode', copilot: 'GitHub Copilot', vscode: 'GitHub Copilot' };
   for (const item of legacy.sessions) {
     const row = el('div', 'legacy-session'); row.append(icon('term'), el('strong', '', item.unit), el('span', '', ui().onMachine.replace('{client}', clients[item.client] ?? item.client).replace('{machine}', item.machine))); list.append(row);
   }
   if (legacy.sessions.some(item => !item.local)) list.append(el('p', 'offline-legacy', legacy.offline));
-  elements['mode-dialog-copy'].after(list);
+  elements['mode-dialog-copy'].after(fold);
   elements['mode-dialog-close'].textContent = legacy.action;
   elements['mode-dialog-close'].onclick = () => closeLegacy(true);
   let cancel = document.getElementById('cancel-legacy');
