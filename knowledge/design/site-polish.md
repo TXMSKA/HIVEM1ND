@@ -35,9 +35,6 @@ Small additions that separate a site that works from a site that feels finished.
 - **Response time promise.** Next to a contact form, how long an answer takes.
 - **Work shown, not adjectives.** Case studies, real reviews and a visible face where trust is part of the sale. Real ones or none.
 - **Map and directions.** Only when there is a physical address to visit.
+- **Light and dark.** It depends on the product, decided by the one rule in [tokens.md](tokens.md), Themes: a product used for long stretches, at night or by people who expect to choose ships both with the System, Light and Dark control; a site whose scene settles one theme ships that theme alone, with no toggle.
 - **Page transitions.** A short, consistent transition between pages, such as a cross-fade, when navigation would otherwise flash. It is skipped under reduced motion and never delays the content.
 - **Social links.** In the footer, to the profiles the business actually keeps up. Share buttons only on content that people do share.
-
-## Usually not needed
-
-- **Light and dark toggle.** On a site that ships one theme, a toggle adds a second full theme to maintain for a preference the design already made. When the site ships both, the choice follows the one rule in [tokens.md](tokens.md), Themes.
