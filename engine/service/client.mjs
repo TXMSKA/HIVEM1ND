@@ -1,13 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
+import { createConnection } from 'node:net';
 import { lstat, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import { localCosmic, mindKeyFor } from './paths.mjs';
 import path from 'node:path';
 import { CoreError, parseUnitId } from './identity.mjs';
-import { readOwnedServiceBridge, restartService, runConfiguredService, stopService } from './service.mjs';
-import { dispatchLocal, dispatchNative } from './bridge.mjs';
 
+// service.mjs and bridge.mjs each pull in the whole service. Hooks and MCP servers only talk to it, so they load them on use.
 const sessions = new Map();
 
 export async function connectService(options = {}) {
@@ -42,7 +42,7 @@ export async function connectService(options = {}) {
     });
     session = { mindPath, pending, handle: null, refs: 0, closes: new Set(), viewers: new Set(), recovery: null };
     sessions.set(key, session);
-    runConfiguredService({
+    import('./service.mjs').then(({ runConfiguredService }) => runConfiguredService({
       mindPath,
       platform: options.platform,
       env: options.env,
@@ -56,7 +56,7 @@ export async function connectService(options = {}) {
       guardPort: options.guardPort,
       assetDir: options.assetDir,
       port: options.port,
-    }).then((handle) => {
+    })).then((handle) => {
       session.handle = handle;
       resolveHandle(handle);
     }, (error) => {
@@ -70,6 +70,7 @@ export async function connectService(options = {}) {
   if (!record?.origin || !secret || handle.bootstrapState?.valid === false) {
     if (session.refs === 0 && sessions.get(key) === session) {
       sessions.delete(key);
+      const { stopService } = await import('./service.mjs');
       await stopService(handle);
     }
     throw new CoreError(503, 'bootstrap_unavailable', 'The bootstrap file could not be protected.');
@@ -81,6 +82,7 @@ export async function connectService(options = {}) {
   } catch (error) {
     if (session.refs === 0 && sessions.get(key) === session) {
       sessions.delete(key);
+      const { stopService } = await import('./service.mjs');
       await stopService(handle);
     }
     throw error;
@@ -96,12 +98,14 @@ export async function connectService(options = {}) {
     mindPath,
     closed: false,
     async readiness() {
+      const { readOwnedServiceBridge } = await import('./service.mjs');
       const owned = await readOwnedServiceBridge({ ...options, mindPath });
       if (owned.descriptor && session.handle?.http && !session.handle.http.server.listening) return { state: 'stopped' };
       return { state: owned.absent ? 'stopped' : owned.descriptor ? 'running' : 'unknown' };
     },
     async recover() {
       session.recovery ??= (async () => {
+        const { readOwnedServiceBridge, restartService, runConfiguredService } = await import('./service.mjs');
         if (session.handle?.restarting) await session.handle.restarting;
         const owned = await readOwnedServiceBridge({ ...options, mindPath });
         if (owned.unrelated) throw new CoreError(409, 'service_mind_conflict', 'Another M1ND owns the service lock.');
@@ -128,6 +132,7 @@ export async function connectService(options = {}) {
         for (const close of session.closes) close();
         session.closes.clear();
         sessions.delete(key);
+        const { stopService } = await import('./service.mjs');
         await stopService(session.handle);
       }
     },
@@ -145,7 +150,10 @@ export async function closeAttachedServices() {
     session.viewers?.clear();
     for (const close of session.closes) close();
     session.closes.clear();
-    if (session.handle) await stopService(session.handle);
+    if (session.handle) {
+      const { stopService } = await import('./service.mjs');
+      await stopService(session.handle);
+    }
   }
 }
 
@@ -181,8 +189,10 @@ export async function relayPolicy(options, input) {
   if (env.HIVEM1ND_SERVICE_BRIDGE || env.HIVEM1ND_SERVICE_GRANT) {
     return dispatchNative(env.HIVEM1ND_SERVICE_BRIDGE, env.HIVEM1ND_SERVICE_GRANT, 'policy', input);
   }
+  const { readOwnedServiceBridge } = await import('./service.mjs');
   const owned = await readOwnedServiceBridge(options);
   if (!owned.descriptor) throw new CoreError(503, 'service_unavailable', 'The configured service is not running for this mind.');
+  const { dispatchLocal } = await import('./bridge.mjs');
   return dispatchLocal(owned.descriptor, 'policy', input);
 }
 
@@ -289,6 +299,59 @@ export async function connectNativeService({ env = process.env, nativeSessionId 
 
 export function nativeHook({ env = process.env, nativeSessionId, client, event, evidence = null }) {
   return dispatchNative(env.HIVEM1ND_SERVICE_BRIDGE, env.HIVEM1ND_SERVICE_GRANT, 'hook', { nativeSessionId, client, event, ...(evidence ? { evidence } : {}) });
+}
+
+// The native side of the owner bridge, kept here so a hook or MCP process does not load the bridge's service closure to speak to it.
+export async function dispatchNative(endpoint, secret, operation, binding = {}) {
+  if (typeof endpoint !== 'string' || typeof secret !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(secret)) {
+    throw new CoreError(503, 'native_login_unverified', 'The native service binding is unavailable.');
+  }
+  const id = randomUUID();
+  return new Promise((resolve, reject) => {
+    const socket = createConnection(endpoint);
+    let data = '';
+    let answered = false;
+    let ownerPending = false;
+    const silent = () => socket.destroy(new CoreError(503, 'service_unavailable', 'The native bridge did not answer.'));
+    // A host attach that never acknowledges ends at 3s. Any other call can still be reading, so its answer is waited on longer.
+    const firstWait = operation === 'attach' && binding.hostSessionId !== undefined ? 3000 : 30000;
+    let timer = setTimeout(silent, firstWait);
+    socket.setEncoding('utf8');
+    socket.once('connect', () => socket.write(`${JSON.stringify({ id, operation, secret, binding })}\n`));
+    socket.on('data', (chunk) => {
+      data += chunk;
+      if (Buffer.byteLength(data, 'utf8') > 100000) socket.destroy(new CoreError(422, 'invalid_body', 'The bridge response is too large.'));
+      while (data.includes('\n')) {
+        const end = data.indexOf('\n');
+        const line = data.slice(0, end);
+        data = data.slice(end + 1);
+        try {
+          const message = JSON.parse(line);
+          if (message.id !== id || message.error) throw new CoreError(403, message.error ?? 'invalid_binding', 'The native bridge rejected the binding.');
+          if (operation === 'attach' && binding.hostSessionId !== undefined && message.pending === true && Object.keys(message).length === 2) {
+            // A verified owner may be waiting for durable registration and wake locks under load.
+            // The wait stays bounded: a pending owner has 30 s more to answer.
+            if (!ownerPending) {
+              ownerPending = true;
+              clearTimeout(timer);
+              timer = setTimeout(silent, 30000);
+            }
+            continue;
+          }
+          answered = true;
+          resolve(message.result);
+        } catch (error) { reject(error); }
+        socket.destroy();
+        return;
+      }
+    });
+    socket.once('error', reject);
+    socket.once('close', () => { clearTimeout(timer); if (!answered) reject(new CoreError(503, 'service_unavailable', 'The native bridge closed without a complete response.')); });
+    socket.once('end', () => {
+      if (!answered) reject(new CoreError(503, 'service_unavailable', 'The native bridge closed without a complete response.'));
+      socket.destroy();
+    });
+  });
 }
 
 export async function request(client, spec) {

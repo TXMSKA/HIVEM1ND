@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import { connectNativeService } from '../service/client.mjs';
-import { toolSchemas } from '../service/mcp.mjs';
 
 const MAX_LINE_CHARS = 1_048_576;
 const SUPPORTED_PROTOCOLS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
@@ -43,8 +42,18 @@ function tool(name, description, properties = {}, required = []) {
   return { name, description, inputSchema: { type: 'object', properties, required, additionalProperties: false } };
 }
 
+const RELAY_TOOL_NAMES = new Set(RELAY_TOOLS.map((entry) => entry.name));
+let serviceToolSchemas = null;
+
+// The editor and plan tool definitions live in the service module, which loads the whole service.
+// A listing or a call that needs them loads it first; the Relay tools above never do.
+async function loadServiceToolSchemas() {
+  serviceToolSchemas ??= (await import('../service/mcp.mjs')).toolSchemas;
+}
+
+// Callers load the service tool schemas first.
 function editorTools() {
-  return toolSchemas().map((entry) => ({
+  return serviceToolSchemas().map((entry) => ({
     ...entry,
     inputSchema: {
       ...entry.inputSchema,
@@ -82,8 +91,12 @@ async function callMethod(relay, name, args, defaults = {}) {
   return relay[method](input);
 }
 
-export function validateToolArguments(name, args) {
-  const definition = advertisedTools().find((candidate) => candidate.name === name);
+export async function validateToolArguments(name, args) {
+  let definition = RELAY_TOOLS.find((candidate) => candidate.name === name);
+  if (!definition) {
+    await loadServiceToolSchemas();
+    definition = editorTools().find((candidate) => candidate.name === name);
+  }
   if (!definition) throw Object.assign(new Error(`Unknown Relay tool: ${name}`), { code: 'INVALID_ARGUMENTS' });
   if (!args || typeof args !== 'object' || Array.isArray(args)) throw Object.assign(new Error('Tool arguments must be an object.'), { code: 'INVALID_ARGUMENTS' });
   const schema = definition.inputSchema;
@@ -144,7 +157,9 @@ async function* boundedLines(stream) {
 export async function serveRelayMcp({ mindPath, sessionId, nativeSessionId, client, stdin = process.stdin, stdout = process.stdout, stderr = process.stderr, env = process.env, operations = null, forwardEditor = null, serviceConnector = connectNativeService }) {
   if (!mindPath) throw new Error('mindPath is required');
   let service = null;
-  const editors = new Set(editorTools().filter((entry) => entry.name.startsWith('blueprint_') || entry.name.startsWith('void_')).map((entry) => entry.name));
+  let editors = null;
+  const isEditor = (name) => !RELAY_TOOL_NAMES.has(name)
+    && (editors ??= new Set(editorTools().filter((entry) => entry.name.startsWith('blueprint_') || entry.name.startsWith('void_')).map((entry) => entry.name))).has(name);
   try {
   for await (const line of boundedLines(stdin)) {
     if (line === null) { stdout.write(`${JSON.stringify(rpcError(null, -32700, 'Request exceeds the maximum size'))}\n`); continue; }
@@ -171,14 +186,17 @@ export async function serveRelayMcp({ mindPath, sessionId, nativeSessionId, clie
         }
         response = { protocolVersion: params.protocolVersion, capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'hivem1nd-relay', version: '3.0.0' } };
       } else if (method === 'ping') response = {};
-      else if (method === 'tools/list') response = { tools: advertisedTools() };
-      else if (method === 'tools/call') {
+      else if (method === 'tools/list') {
+        await loadServiceToolSchemas();
+        response = { tools: advertisedTools() };
+      } else if (method === 'tools/call') {
         if (id === undefined) continue;
-        const args = validateToolArguments(params.name, params.arguments ?? {});
+        if (!RELAY_TOOL_NAMES.has(params.name)) await loadServiceToolSchemas();
+        const args = await validateToolArguments(params.name, params.arguments ?? {});
         const requestId = typeof args.requestId === 'string' && args.requestId ? args.requestId : randomUUID();
         operationId = requestId;
         const forwarded = MUTATING_TOOLS.has(params.name) || params.name.startsWith('plan_') ? { ...args, requestId } : args;
-        if (editors.has(params.name)) {
+        if (isEditor(params.name)) {
           if (typeof forwardEditor === 'function') response = await forwardEditor(params.name, forwarded);
           else {
             service ??= await serviceConnector({ env, nativeSessionId, client });

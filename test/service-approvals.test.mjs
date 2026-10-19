@@ -373,14 +373,14 @@ async function childWorld(t) {
   return { fixture, context, master, parent, pattern: { client: 'cursor', machine: 'DESKTOP', unitId, runMode: 'chat', taskId: null }, creates: () => creates };
 }
 
-test('session.open has an exact bounded shape and never permits standing authority or shell input', () => {
+test('session.open has an exact bounded shape and never permits standing authority or shell input', async () => {
   const pattern = { client: 'codex', machine: 'DESKTOP', unitId: UNIT, runMode: 'chat', taskId: null };
   assert.equal(normalizeAction('session.open', pattern).alwaysAllowed, false);
   assert.deepEqual(normalizeAction('session.open', pattern).pattern, pattern);
   for (const extra of ['executable', 'cwd', 'environment', 'shell']) assert.throws(() => normalizeAction('session.open', { ...pattern, [extra]: 'foreign' }), { code: 'invalid_body' });
   assert.throws(() => normalizeAction('session.open', { ...pattern, runMode: 'task' }), { code: 'task_required' });
-  assert.deepEqual(validateToolArguments('session_open', pattern), pattern);
-  assert.throws(() => validateToolArguments('session_open', { ...pattern, executable: 'foreign' }), { code: 'INVALID_ARGUMENTS' });
+  assert.deepEqual(await validateToolArguments('session_open', pattern), pattern);
+  await assert.rejects(validateToolArguments('session_open', { ...pattern, executable: 'foreign' }), { code: 'INVALID_ARGUMENTS' });
 });
 
 test('one approved session.open launches one child and replayed or synced answers cannot launch another', async (t) => {

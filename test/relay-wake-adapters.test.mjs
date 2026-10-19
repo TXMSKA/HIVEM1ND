@@ -11,15 +11,15 @@ import { createRelay } from '../engine/relay/store.mjs';
 import { helpText, runCli } from '../cli/index.mjs';
 import { makeRelayMind } from './relay-test-fixture.mjs';
 
-test('every registered wake module exposes the same interface and supplies CLI help', () => {
+test('every registered wake module exposes the same interface and supplies CLI help', async () => {
   for (const [client, adapter] of Object.entries(WAKE_ADAPTERS)) {
     for (const method of ['capability', 'attachIdentity', 'validateRuntime', 'sendPointer', 'spawnWorker']) {
       assert.equal(typeof adapter[method], 'function', client + '.' + method);
     }
     assert.equal(typeof adapter.workerDependency, 'string'); assert.equal(typeof adapter.label, 'string');
     assert.ok(Array.isArray(adapter.helpLines));
-    assert.ok(helpText().includes(client));
-    for (const line of adapter.helpLines) assert.ok(helpText().includes(line));
+    assert.ok((await helpText()).includes(client));
+    for (const line of adapter.helpLines) assert.ok((await helpText()).includes(line));
   }
   assert.equal(getWakeAdapter('__proto__'), null); assert.equal(getWakeAdapter('toString'), null); assert.equal(getWakeAdapter('unknown'), null);
 });

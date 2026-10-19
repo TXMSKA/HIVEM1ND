@@ -136,57 +136,8 @@ export function createNativeLaunch(bridge, request) {
   };
 }
 
-export async function dispatchNative(endpoint, secret, operation, binding = {}) {
-  if (typeof endpoint !== 'string' || typeof secret !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(secret)) {
-    throw new CoreError(503, 'native_login_unverified', 'The native service binding is unavailable.');
-  }
-  const id = randomUUID();
-  return new Promise((resolve, reject) => {
-    const socket = createConnection(endpoint);
-    let data = '';
-    let answered = false;
-    let ownerPending = false;
-    const silent = () => socket.destroy(new CoreError(503, 'service_unavailable', 'The native bridge did not answer.'));
-    // A host attach that never acknowledges ends at 3s. Any other call can still be reading, so its answer is waited on longer.
-    const firstWait = operation === 'attach' && binding.hostSessionId !== undefined ? 3000 : 30000;
-    let timer = setTimeout(silent, firstWait);
-    socket.setEncoding('utf8');
-    socket.once('connect', () => socket.write(`${JSON.stringify({ id, operation, secret, binding })}\n`));
-    socket.on('data', (chunk) => {
-      data += chunk;
-      if (Buffer.byteLength(data, 'utf8') > 100000) socket.destroy(new CoreError(422, 'invalid_body', 'The bridge response is too large.'));
-      while (data.includes('\n')) {
-        const end = data.indexOf('\n');
-        const line = data.slice(0, end);
-        data = data.slice(end + 1);
-        try {
-          const message = JSON.parse(line);
-          if (message.id !== id || message.error) throw new CoreError(403, message.error ?? 'invalid_binding', 'The native bridge rejected the binding.');
-          if (operation === 'attach' && binding.hostSessionId !== undefined && message.pending === true && Object.keys(message).length === 2) {
-            // A verified owner may be waiting for durable registration and wake locks under load.
-            // The wait stays bounded: a pending owner has 30 s more to answer.
-            if (!ownerPending) {
-              ownerPending = true;
-              clearTimeout(timer);
-              timer = setTimeout(silent, 30000);
-            }
-            continue;
-          }
-          answered = true;
-          resolve(message.result);
-        } catch (error) { reject(error); }
-        socket.destroy();
-        return;
-      }
-    });
-    socket.once('error', reject);
-    socket.once('close', () => { clearTimeout(timer); if (!answered) reject(new CoreError(503, 'service_unavailable', 'The native bridge closed without a complete response.')); });
-    socket.once('end', () => {
-      if (!answered) reject(new CoreError(503, 'service_unavailable', 'The native bridge closed without a complete response.'));
-      socket.destroy();
-    });
-  });
-}
+// The native side lives in client.mjs so a hook or MCP process reaches the bridge without loading the service.
+export { dispatchNative } from './client.mjs';
 
 export async function handleNativeHook({ controller, credentials, binding }) {
   const allowed = {

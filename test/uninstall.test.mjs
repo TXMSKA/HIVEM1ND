@@ -12,10 +12,10 @@ import { uninstall } from '../engine/uninstall.mjs';
 
 const KIT_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-test('help and argument parsing document the uninstall command', () => {
-  assert.match(helpText(), /\buninstall\b/);
-  assert.match(helpText(), /--dry-run/);
-  assert.match(helpText(), /--remove-mind/);
+test('help and argument parsing document the uninstall command', async () => {
+  assert.match((await helpText()), /\buninstall\b/);
+  assert.match((await helpText()), /--dry-run/);
+  assert.match((await helpText()), /--remove-mind/);
   assert.deepEqual(
     parseArgs(['uninstall', '--dry-run', '--remove-mind', '--mind-path', 'C:/mind']).options,
     { dryRun: true, removeMind: true, mindPath: 'C:/mind' },

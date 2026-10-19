@@ -5,7 +5,6 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { existsSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { WAKE_ADAPTERS, getWakeAdapter } from '../engine/relay/wake-adapters.mjs';
 import { formatBytes } from '../engine/measure.mjs';
 import { relayLine } from '../engine/texts.mjs';
 import { defaultMind, MIND_DIRECTORY_NAME } from '../engine/service/paths.mjs';
@@ -25,7 +24,9 @@ export class CliUsageError extends Error {
   }
 }
 
-export function helpText() {
+// The wake adapters load only for the help text and `relay wake`, so a hook or `relay mcp` process starts without them.
+export async function helpText() {
+  const { WAKE_ADAPTERS } = await import('../engine/relay/wake-adapters.mjs');
   return `HIVEM1ND ${VERSION}
 
 Usage:
@@ -1226,7 +1227,7 @@ async function readInput(stream, maximum = 262144) {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-function relayWakeBinding(options, hostname = os.hostname(), adapters = WAKE_ADAPTERS) {
+function relayWakeBinding(options, hostname, adapters, getWakeAdapter) {
   if (!options.unit) throw new CliUsageError('Relay wake requires an explicit --unit.');
   if (!options.nativeSessionId) throw new CliUsageError('Relay wake requires --native-session-id.');
   const client = options.client ?? 'claude';
@@ -1239,6 +1240,7 @@ async function runRelayWake(options, dependencies, output, errorOutput) {
   const env = dependencies.env ?? process.env;
   const hostname = options.hostname ?? os.hostname();
   const client = options.client ?? 'claude';
+  const { WAKE_ADAPTERS, getWakeAdapter } = await import('../engine/relay/wake-adapters.mjs');
   const adapters = dependencies.wakeAdapters ?? WAKE_ADAPTERS;
   const adapter = getWakeAdapter(client, adapters);
   if (!adapter) throw new CliUsageError('Unsupported Relay wake client.');
@@ -1247,7 +1249,7 @@ async function runRelayWake(options, dependencies, output, errorOutput) {
     platform: dependencies.platform ?? process.platform, aclRunner: dependencies.aclRunner, userKey: dependencies.userKey, guardPort: dependencies.guardPort };
   if (env.HIVEM1ND_SERVICE_BRIDGE || env.HIVEM1ND_SERVICE_GRANT || await shared.serviceMind(serviceOptions)) {
     if (options.wakeAction === 'watch') throw new CliUsageError('The shared service owns this wake binding; a separate watcher cannot be started.');
-    const binding = relayWakeBinding(options, hostname, adapters);
+    const binding = relayWakeBinding(options, hostname, adapters, getWakeAdapter);
     const action = options.wakeAction === 'attach' && (options.hours || options.extended || options.unlimited || options.maxHandoffs || options.maxDailyHandoffs) ? 'enable' : options.wakeAction;
     const result = await (dependencies.relayPolicy ?? shared.relayPolicy)(serviceOptions, {
       action, binding,
@@ -1327,7 +1329,7 @@ async function runRelayWake(options, dependencies, output, errorOutput) {
     return 0;
   }
 
-  const binding = relayWakeBinding(options, hostname, adapters);
+  const binding = relayWakeBinding(options, hostname, adapters, getWakeAdapter);
   if (options.wakeAction === 'watch') {
     const capability = adapter.capability(runtime);
     if (!capability.available) throw new CliUsageError(client + ' wake is unavailable: ' + capability.reason + '.');
@@ -1377,7 +1379,7 @@ async function runRelayWake(options, dependencies, output, errorOutput) {
 }
 
 async function runRelay(options, dependencies, output) {
-  if (options.help) { output.write(`${helpText()}\n`); return 0; }
+  if (options.help) { output.write(`${await helpText()}\n`); return 0; }
   const { action } = options;
   if (action === "diagnose") {
     const { diagnoseRelayClients, RELAY_CLIENTS } = await import("../engine/relay/config.mjs");
@@ -1487,7 +1489,7 @@ async function runRelay(options, dependencies, output) {
 
 async function runTask(options, dependencies, output, errorOutput) {
   if (options.help) {
-    output.write(`${helpText()}\n`);
+    output.write(`${await helpText()}\n`);
     return 0;
   }
   if (!options.mindPath) {
@@ -1566,7 +1568,7 @@ export async function runCli(argv, dependencies = {}) {
       return 0;
     }
     if (parsed.help) {
-      output.write(`${helpText()}\n`);
+      output.write(`${await helpText()}\n`);
       return 0;
     }
     if (parsed.command === "init") {

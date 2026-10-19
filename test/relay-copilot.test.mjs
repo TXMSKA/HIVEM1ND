@@ -60,7 +60,7 @@ test('Copilot capability needs an explicit absolute project directory and a plai
   assert.equal(copilotWakeCapability({ env: { ...env, RELAY_COPILOT_CLI: 'a\nb' } }).available, false);
 });
 
-test('Copilot is one registry entry with the shared interface, explicit attachment and CLI help', () => {
+test('Copilot is one registry entry with the shared interface, explicit attachment and CLI help', async () => {
   const adapter = getWakeAdapter('copilot');
   assert.equal(adapter, WAKE_ADAPTERS.copilot);
   for (const method of ['capability', 'attachIdentity', 'validateRuntime', 'sendPointer', 'spawnWorker']) assert.equal(typeof adapter[method], 'function');
@@ -69,8 +69,8 @@ test('Copilot is one registry entry with the shared interface, explicit attachme
   assert.notEqual(adapter.acceptsDeferred, true);
   assert.throws(() => adapter.attachIdentity({ env: {} }), /explicit --native-session-id/);
   assert.deepEqual(adapter.attachIdentity({ nativeSessionId: 'target' }), { nativeSessionId: 'target', sessionId: 'target', requireRegistration: true });
-  for (const line of adapter.helpLines) assert.ok(helpText().includes(line));
-  assert.ok(helpText().includes('copilot'));
+  for (const line of adapter.helpLines) assert.ok((await helpText()).includes(line));
+  assert.ok((await helpText()).includes('copilot'));
 });
 
 test('Copilot resumes only the exact session, starts the documented ACP server, denies approvals and closes', async () => {

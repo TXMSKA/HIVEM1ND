@@ -72,8 +72,8 @@ test("help documents every v1 command", async () => {
   for (const command of ["init", "evolve", "check", "pylon", "swarm"]) {
     assert.match(output.read(), new RegExp(`\\b${command}\\b`));
   }
-  assert.match(helpText(), /--gui/);
-  assert.match(helpText(), /--check-only/);
+  assert.match((await helpText()), /--gui/);
+  assert.match((await helpText()), /--check-only/);
 });
 
 test("invalid commands and parameters return usage errors", async () => {

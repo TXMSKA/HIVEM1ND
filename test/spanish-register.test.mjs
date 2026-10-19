@@ -212,7 +212,7 @@ test('the finite product inventory uses M1ND before interpolation in both langua
     assertVisibleCopy(language, Object.entries(terminal[language]).map(([key, value]) => [`cli/index.mjs terminalCopy.${language}.${key}`, value]));
   }
   assertVisibleCopy('en', await safeCoreCopy());
-  const help = helpText();
+  const help = await helpText();
   assertVisibleCopy('en', help.split('\n').map((line, index) => [`cli/index.mjs helpText line ${index + 1}`, line]));
   for (const spelling of ['--mind-path', '--remove-mind']) assert.ok(help.includes(spelling), spelling);
   assert.ok(help.includes('The M1ND folder .m1nd'));

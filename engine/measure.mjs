@@ -1,8 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-import { getWakeAdapter } from "./relay/wake-adapters.mjs";
-
 // Where a mind starts to be worth cleaning. The defaults sit above the sizes of a healthy mind
 // and below the ones that make a session read pages of history before it can start.
 export const PREFERENCES_MAX_BYTES = 20 * 1024;
@@ -127,6 +125,8 @@ function modelRows(content) {
 // such as `(seat)`, so only its first word is compared, against the registry the wake itself reads.
 async function measureModels(userPath) {
   const content = await readText(path.join(userPath, "models.md"));
+  // Loaded here so that formatBytes, which the CLI imports at start, does not load every wake adapter.
+  const { getWakeAdapter } = await import("./relay/wake-adapters.mjs");
   const unregistered = [];
   for (const row of content === null ? [] : modelRows(content)) {
     const client = row.client.split(/\s+/)[0];
