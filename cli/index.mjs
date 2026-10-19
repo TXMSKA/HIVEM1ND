@@ -56,7 +56,8 @@ Relay options:
   --unit <name>            Explicit unit name, including user
   --event <name>           Native hook event name
   --hours <4|5|6|7|8|12|24> Bounded wake window (12/24 require --extended)
-  --max-handoffs <1-100> Maximum submitted Relay pointers (default 20)
+  --max-handoffs <1-100> Maximum Relay pointers the session leaves unanswered (default 20)
+  --max-daily-handoffs <1-1000> Maximum Relay pointers per local calendar day, answered or not (default 200)
   --to <unit> --subject <text> --body <text>
   --reply-to <id> --thread-id <id> --reply-requested
   --priority <normal|urgent> --attachment <path> (repeatable)
@@ -221,7 +222,7 @@ const RELAY_VALUE_FLAGS = new Map([
   ["--reply-to", "replyTo"], ["--thread-id", "threadId"], ["--limit", "limit"], ["--activity", "activity"], ["--quota", "quota"],
   ["--attachment", "attachments"], ["--id", "ids"],
   ["--hours", "hours"],
-  ["--max-handoffs", "maxHandoffs"], ["--machine", "machine"],
+  ["--max-handoffs", "maxHandoffs"], ["--max-daily-handoffs", "maxDailyHandoffs"], ["--machine", "machine"],
 ]);
 const RELAY_ACTIONS = new Set(["in", "register", "send", "inbox", "read", "history", "threads", "status", "events", "reminder", "delivery", "mcp", "hook", "wake", "configure", "unconfigure", "diagnose"]);
 
@@ -259,6 +260,7 @@ function parseRelayArgs(tokens) {
   if (options.priority !== undefined && !["normal", "urgent"].includes(options.priority)) throw new CliUsageError("--priority must be normal or urgent.");
   if (options.hours !== undefined && !["4", "5", "6", "7", "8", "12", "24"].includes(options.hours)) throw new CliUsageError("--hours must be 4 through 8, 12 or 24.");
   if (options.maxHandoffs !== undefined && (!/^\d+$/.test(options.maxHandoffs) || Number(options.maxHandoffs) < 1 || Number(options.maxHandoffs) > 100)) throw new CliUsageError("--max-handoffs must be between 1 and 100.");
+  if (options.maxDailyHandoffs !== undefined && (!/^\d+$/.test(options.maxDailyHandoffs) || Number(options.maxDailyHandoffs) < 1 || Number(options.maxDailyHandoffs) > 1000)) throw new CliUsageError("--max-daily-handoffs must be between 1 and 1000.");
   if (["12", "24"].includes(options.hours) && !options.extended) throw new CliUsageError("--hours 12 or --hours 24 requires --extended.");
   if (options.extended && !["12", "24"].includes(options.hours)) throw new CliUsageError("--extended is only valid with --hours 12 or --hours 24.");
   if (options.unlimited && (options.hours !== undefined || !options.manualConsent)) throw new CliUsageError("--unlimited requires --manual-consent and cannot be combined with --hours.");
@@ -1013,7 +1015,10 @@ async function runRelayWake(options, dependencies, output, errorOutput) {
         throw new CliUsageError(adapter.label + ' wake requires an existing exact registration for the selected target and unit.');
       }
     } else {
-      await relay.register({ unit: options.unit, nativeSessionId, client });
+      // A Claude session records its host conversation, so the same conversation under a new session ID finds its unit again.
+      const hostSessionId = client === 'claude' && typeof env.CLAUDE_CODE_HOST_SESSION_ID === 'string' && env.CLAUDE_CODE_HOST_SESSION_ID
+        ? env.CLAUDE_CODE_HOST_SESSION_ID : null;
+      await relay.register({ unit: options.unit, nativeSessionId, client, ...(hostSessionId ? { hostSessionId } : {}) });
     }
     const policy = await controller.enable({
       ...binding,
@@ -1021,6 +1026,7 @@ async function runRelayWake(options, dependencies, output, errorOutput) {
       ...(options.extended ? { extended: true } : {}),
       ...(options.unlimited ? { unlimited: true, manualConsent: true } : {}),
       ...(options.maxHandoffs ? { maxHandoffs: Number(options.maxHandoffs) } : {}),
+      ...(options.maxDailyHandoffs ? { maxDailyHandoffs: Number(options.maxDailyHandoffs) } : {}),
     });
     if (identity.activity) await controller.observeActivity(binding, { activity: identity.activity });
     if (identity.warning) errorOutput.write(`${identity.warning}\n`);
@@ -1074,6 +1080,7 @@ async function runRelayWake(options, dependencies, output, errorOutput) {
       ...(options.extended ? { extended: true } : {}),
       ...(options.unlimited ? { unlimited: true, manualConsent: true } : {}),
       ...(options.maxHandoffs ? { maxHandoffs: Number(options.maxHandoffs) } : {}),
+      ...(options.maxDailyHandoffs ? { maxDailyHandoffs: Number(options.maxDailyHandoffs) } : {}),
     });
     output.write(`${formatResult(policy)}\n`);
   } else if (options.wakeAction === 'disable') {

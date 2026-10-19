@@ -1,11 +1,12 @@
 import './relay-local-state.mjs';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough, Readable } from 'node:stream';
 import test from 'node:test';
 import { serveRelayMcp } from '../engine/relay/mcp.mjs';
+import { createRelay } from '../engine/relay/store.mjs';
 import { WAKE_ADAPTERS } from '../engine/relay/wake-adapters.mjs';
 import { makeRelayMind } from './relay-test-fixture.mjs';
 
@@ -142,4 +143,121 @@ test('delivery_status answers for messages the registered unit sent and rejects 
     assert.equal(line.result.isError, true);
     assert.equal(line.result.structuredContent.code, 'INVALID_ARGUMENTS');
   }
+});
+
+test('status answers with counts, the caller and the units waiting by default, and lists every unit only in pages on request', async (context) => {
+  const mindPath = await fixture(context);
+  for (const unit of ['executor-app', 'executor-web', 'executor-db']) {
+    await writeFile(path.join(mindPath, 'user', 'state', `${unit}.md`), `unit: ${unit}\nstate: in\nmachine: RELAYTEST\n\nWorking.\n`);
+  }
+  const elsewhere = await createRelay({ mindPath, hostname: 'OTHERBOX', sessionId: 'other-box', client: 'codex' });
+  await elsewhere.register({ unit: 'executor-web', nativeSessionId: 'web-native' });
+  const call = (id, name, args = {}) => ({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } });
+  const { lines } = await run(mindPath, [
+    call(1, 'register', { unit: 'overseer', nativeSessionId: 'native-1', client: 'codex' }),
+    call(2, 'send_message', { to: 'executor-app', subject: 'Question', body: 'Answer this.', replyRequested: true }),
+    call(3, 'send_message', { to: 'executor-db', subject: 'Note', body: 'For the record.' }),
+    call(4, 'status'),
+    call(5, 'status', { detail: true, limit: 2 }),
+    call(6, 'status', { detail: true, limit: 2, offset: 2 }),
+    call(7, 'status', { machine: 'OTHERBOX', detail: true }),
+    call(8, 'status', { unit: 'executor-app' }),
+    call(9, 'status', { limit: 0 }),
+  ]);
+  const summary = lines[3].result.structuredContent;
+  assert.equal(summary.units, undefined, 'the default answer lists no unit entries');
+  assert.deepEqual(summary.counts, { units: 4, registeredUnits: 2, registrations: 2, machines: { OTHERBOX: 1, RELAYTEST: 1 }, unread: 2, waiting: 1 });
+  assert.equal(summary.self.unit, 'overseer');
+  assert.equal(summary.self.registration.nativeSessionId, 'native-1');
+  assert.deepEqual(summary.attention.map((item) => [item.unit, item.unread, item.waiting]), [['executor-app', 1, 1], ['executor-db', 1, 0]]);
+  assert.equal(summary.total, 2);
+  const first = lines[4].result.structuredContent;
+  assert.deepEqual(first.units.map((item) => item.unit), ['executor-app', 'executor-db']);
+  assert.deepEqual([first.total, first.nextOffset], [4, 2]);
+  const second = lines[5].result.structuredContent;
+  assert.deepEqual(second.units.map((item) => item.unit), ['executor-web', 'overseer']);
+  assert.equal(second.nextOffset, null);
+  const other = lines[6].result.structuredContent;
+  assert.deepEqual(other.units.map((item) => [item.unit, item.registeredSessions.map((record) => record.machine)]), [['executor-web', ['OTHERBOX']]]);
+  assert.deepEqual(lines[7].result.structuredContent.attention.map((item) => item.unit), ['executor-app']);
+  assert.equal(lines[7].result.structuredContent.self, null, 'the caller is shown only when its unit is selected');
+  assert.equal(lines[8].result.isError, true);
+});
+
+test('a Relay tool call keeps the wake window of its session open, and the first call after the window ended carries the notice once', async (context) => {
+  const mindPath = await fixture(context);
+  const call = (id, name, args = {}) => ({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } });
+  await run(mindPath, [call(1, 'register', { unit: 'overseer', nativeSessionId: 'native-1', client: 'codex' })]);
+  const { createRelayWakeController } = await import('../engine/relay/wake.mjs');
+  const controller = await createRelayWakeController({ mindPath, hostname: 'RELAYTEST', sink: async () => ({ status: 'submitted' }) });
+  const binding = { unit: 'overseer', nativeSessionId: 'native-1', client: 'codex', machine: 'RELAYTEST' };
+  await controller.enable(binding);
+  const policies = path.join(mindPath, 'user', 'relay', 'wake', 'policies');
+  const [file] = await readdir(policies);
+  const shift = async (startedAt) => {
+    const policy = JSON.parse(await readFile(path.join(policies, file), 'utf8'));
+    await writeFile(path.join(policies, file), JSON.stringify({ ...policy, startedAt: new Date(startedAt).toISOString(), deadlineAt: new Date(startedAt + 4 * 3600_000).toISOString() }));
+  };
+  await shift(Date.now() - 3600_000);
+  const before = Date.now();
+  const used = await run(mindPath, [call(1, 'list_inbox')]);
+  assert.equal(used.lines[0].result.structuredContent.wakeNotice, undefined);
+  assert.ok(Date.parse((await controller.status(binding)).deadlineAt) >= before + 4 * 3600_000, 'the window starts again from the call');
+
+  await shift(Date.now() - 5 * 3600_000);
+  const { lines } = await run(mindPath, [call(1, 'list_inbox'), call(2, 'list_inbox')]);
+  assert.match(lines[0].result.structuredContent.wakeNotice, /^Relay wake for overseer ended at .+ relay wake attach .+--client codex --unit overseer --native-session-id native-1$/);
+  assert.equal(lines[0].result.structuredContent.unit, 'overseer');
+  assert.equal(lines[1].result.structuredContent.wakeNotice, undefined, 'the notice is given once');
+});
+
+test('the MCP server of a chat holds its session, so a later registration of the unit keeps it while an abandoned one is retired', async (context) => {
+  const mindPath = await fixture(context);
+  const sessions = path.join(mindPath, 'user', 'relay', 'sessions');
+  await mkdir(sessions, { recursive: true });
+  const twoHoursAgo = new Date(Date.now() - 2 * 3600_000).toISOString();
+  const old = async (index, nativeSessionId) => {
+    const registrationId = `00000000-0000-4000-8000-00000000000${index}`;
+    await writeFile(path.join(sessions, `${registrationId}.json`), JSON.stringify({ kind: 'registration', registrationId, instanceId: `old-${index}`,
+      unit: 'overseer', scopeId: 'user', nativeSessionId, client: 'codex', machine: 'RELAYTEST', registeredAt: twoHoursAgo,
+      activity: null, activityObservedAt: null, quota: null, quotaObservedAt: null }));
+    return `${registrationId}.json`;
+  };
+  const open = await old(1, 'open-native');
+  const abandoned = await old(2, 'abandoned-native');
+  const stdin = new PassThrough();
+  const stdout = new PassThrough();
+  const server = serveRelayMcp({ mindPath, hostname: 'RELAYTEST', client: 'codex', sessionId: 'open-server', nativeSessionId: 'open-native', stdin, stdout, stderr: new PassThrough() });
+  stdin.end(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'list_inbox', arguments: {} } })}\n`);
+  await server;
+  const relay = await createRelay({ mindPath, hostname: 'RELAYTEST', sessionId: 'new-server', client: 'codex' });
+  await relay.register({ unit: 'overseer', nativeSessionId: 'new-native', activity: 'active' });
+  const left = await readdir(sessions);
+  assert.equal(left.includes(open), true, 'a session whose server still runs is kept');
+  assert.equal(left.includes(abandoned), false);
+  assert.deepEqual(await readdir(path.join(sessions, 'retired')), [abandoned]);
+});
+
+test('a Relay tool call answers the wakes of its session, and the first call after the budget ran out carries the notice once', async (context) => {
+  const mindPath = await fixture(context);
+  const call = (id, name, args = {}) => ({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } });
+  await run(mindPath, [call(1, 'register', { unit: 'overseer', nativeSessionId: 'native-1', client: 'codex' })]);
+  const { createRelayWakeController } = await import('../engine/relay/wake.mjs');
+  const controller = await createRelayWakeController({ mindPath, hostname: 'RELAYTEST', sink: async () => ({ status: 'submitted' }) });
+  const binding = { unit: 'overseer', nativeSessionId: 'native-1', client: 'codex', machine: 'RELAYTEST' };
+  await controller.enable(binding);
+  const policies = path.join(mindPath, 'user', 'relay', 'wake', 'policies');
+  const [file] = await readdir(policies);
+  const edit = async (fields) => {
+    const policy = JSON.parse(await readFile(path.join(policies, file), 'utf8'));
+    await writeFile(path.join(policies, file), JSON.stringify({ ...policy, ...fields }));
+  };
+  await edit({ wakeCount: 12 });
+  await run(mindPath, [call(1, 'list_inbox')]);
+  assert.equal((await controller.status(binding)).wakeCount, 0);
+
+  await edit({ wakeCount: 20, pausedReason: 'handoff-budget-exhausted' });
+  const { lines } = await run(mindPath, [call(1, 'list_inbox'), call(2, 'list_inbox')]);
+  assert.match(lines[0].result.structuredContent.wakeNotice, /^Relay wake for overseer stopped after 20 wakes that this chat did not answer .+relay wake attach .+--native-session-id native-1$/);
+  assert.equal(lines[1].result.structuredContent.wakeNotice, undefined, 'the notice is given once');
 });

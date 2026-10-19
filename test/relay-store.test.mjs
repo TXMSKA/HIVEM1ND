@@ -1,11 +1,12 @@
 import './relay-local-state.mjs';
 import assert from 'node:assert/strict';
-import fsPromises, { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import fsPromises, { mkdtemp, mkdir, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { createRelay } from '../engine/relay/store.mjs';
+import { createRelay, relayLocalStatePath } from '../engine/relay/store.mjs';
 
 async function fixture(context) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-relay-test-'));
@@ -155,6 +156,19 @@ test('a message with invalid headers is skipped and named while the valid ones a
   assert.deepEqual(read.messages.map((message) => message.id), [valid.id]);
   assert.deepEqual(read.malformed, [filename]);
   assert.equal(await readFile(badPath, 'utf8'), bad, 'the malformed file stays where it was written');
+});
+
+test('a new instance that serves a registered native session keeps its unit; another session or machine is not registered', async (context) => {
+  const { mind } = await fixture(context);
+  const first = await createRelay({ mindPath: mind, hostname: 'TESTBOX', sessionId: 'mcp-first', client: 'claude' });
+  await first.register({ unit: 'overseer', nativeSessionId: 'chat-native', activity: 'active' });
+  const restarted = await createRelay({ mindPath: mind, hostname: 'TESTBOX', sessionId: 'mcp-second', client: 'claude', nativeSessionId: 'chat-native' });
+  assert.equal((await restarted.inbox()).unit, 'overseer');
+  assert.equal((await restarted.send({ to: 'overseer', subject: 'Self', body: 'note' })).from, 'overseer');
+  const other = await createRelay({ mindPath: mind, hostname: 'TESTBOX', sessionId: 'mcp-third', client: 'claude', nativeSessionId: 'another-native' });
+  await assert.rejects(other.inbox(), code('NOT_REGISTERED'));
+  const elsewhere = await createRelay({ mindPath: mind, hostname: 'OTHERBOX', sessionId: 'mcp-fourth', client: 'claude', nativeSessionId: 'chat-native' });
+  await assert.rejects(elsewhere.inbox(), code('NOT_REGISTERED'));
 });
 
 test('a session record that is unparseable or briefly unreadable is skipped while the other registrations still list', async (context) => {
@@ -570,7 +584,7 @@ test('delivery status follows a sent message from published through woken, read 
   const published = await alice.delivery({ ids: [sent.id] });
   assert.deepEqual(published, { deliveries: [{
     id: sent.id, to: 'executor-beta', subject: 'Ladder', priority: 'urgent', sentAt: sent.timestamp,
-    stage: 'published', woken: [], read: false, replied: null,
+    stage: 'published', woken: [], read: false, replied: null, wake: { live: false, reason: 'none' },
   }], unknown: [] });
 
   const at = new Date().toISOString();
@@ -673,4 +687,91 @@ test('a chat that registers again as the same unit keeps its record, and a chang
   await tick();
   const other = await (await instance('process-c', 'codex')).register({ unit: 'executor-alpha', nativeSessionId: 'chat-1' });
   assert.notEqual(other.registrationId, back.registrationId, 'another client never shares a record');
+});
+
+test('a chat that registers its unit again after another chat registered it becomes the newest registration of the unit', async (context) => {
+  const { mind } = await fixture(context);
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
+  const instance = async (sessionId) => createRelay({ mindPath: mind, hostname: 'TESTBOX', sessionId, client: 'claude' });
+  const newest = async (relay) => (await relay.wakePersistence.latestUnitRegistration({ unit: 'overseer', client: 'claude', machine: 'TESTBOX' })).nativeSessionId;
+  const chatA = await instance('process-a');
+  const first = await chatA.register({ unit: 'overseer', nativeSessionId: 'chat-a' });
+  await tick();
+  const chatB = await instance('process-b');
+  await chatB.register({ unit: 'overseer', nativeSessionId: 'chat-b' });
+  assert.equal(await newest(chatA), 'chat-b');
+  await tick();
+  const again = await chatA.register({ unit: 'overseer', nativeSessionId: 'chat-a' });
+  assert.notEqual(again.registrationId, first.registrationId);
+  assert.equal(await newest(chatB), 'chat-a');
+  assert.equal((await chatA.register({ unit: 'overseer', nativeSessionId: 'chat-a' })).registrationId, again.registrationId, 'the newest one keeps its record');
+  assert.equal(await (await createRelay({ mindPath: mind, hostname: 'OTHERBOX', client: 'claude' })).wakePersistence.latestUnitRegistration({ unit: 'overseer', client: 'claude', machine: 'TESTBOX' }), null,
+    'another machine never answers for this one');
+});
+
+test('a new registration of a unit retires the older ones of that unit on this machine whose sessions show no sign of life, and only those', async (context) => {
+  const { mind } = await fixture(context);
+  const sessions = path.join(mind, 'user', 'relay', 'sessions');
+  await mkdir(sessions, { recursive: true });
+  const hoursAgo = (hours) => new Date(Date.now() - hours * 3600_000).toISOString();
+  let counter = 0;
+  const old = async (fields) => {
+    counter += 1;
+    const registrationId = `00000000-0000-4000-8000-${String(counter).padStart(12, '0')}`;
+    const record = { kind: 'registration', registrationId, instanceId: `old-process-${counter}`, unit: 'overseer', scopeId: 'user', client: 'claude',
+      machine: 'TESTBOX', registeredAt: hoursAgo(2), activity: null, activityObservedAt: null, quota: null, quotaObservedAt: null, ...fields };
+    await writeFile(path.join(sessions, `${registrationId}.json`), `${JSON.stringify(record)}\n`);
+    return registrationId;
+  };
+  const dead = [await old({ nativeSessionId: 'closed-chat' }), await old({ nativeSessionId: 'closed-chat', registeredAt: hoursAgo(1) }),
+    await old({ nativeSessionId: 'closed-cursor-chat', client: 'cursor', unit: 'Overseer' })];
+  const kept = [
+    await old({ nativeSessionId: 'open-chat' }),
+    await old({ nativeSessionId: 'busy-chat' }), await old({ nativeSessionId: 'busy-chat', activity: 'busy', activityObservedAt: hoursAgo(0.05) }),
+    await old({ nativeSessionId: 'scout-chat', machine: 'SCOUT' }),
+    await old({ nativeSessionId: 'alpha-chat', unit: 'executor-alpha', scopeId: 'project:alpha' }),
+    await old({ nativeSessionId: 'new-chat' }),
+    await old({ nativeSessionId: 'recent-chat', registeredAt: hoursAgo(0.1) }),
+  ];
+  // The MCP server of an open chat holds its session for as long as it runs.
+  const server = await createRelay({ mindPath: mind, hostname: 'TESTBOX', sessionId: 'open-chat-server', client: 'claude', nativeSessionId: 'open-chat' });
+  assert.equal(await server.hold(), true);
+  // A session whose wake worker still runs on this machine is kept as well.
+  kept.push(await old({ nativeSessionId: 'woken-chat' }));
+  const workers = path.join(relayLocalStatePath(await realpath(mind)), 'wake', 'workers');
+  await mkdir(workers, { recursive: true });
+  const leaseKey = createHash('sha256').update(JSON.stringify(['overseer', 'woken-chat', 'claude', 'TESTBOX'])).digest('hex');
+  await writeFile(path.join(workers, `${leaseKey}.json`), JSON.stringify({ kind: 'relay-wake-worker', key: leaseKey, ownerId: 'fixture', pid: process.pid,
+    machine: 'TESTBOX', generation: null, heartbeatAt: new Date().toISOString(), expiresAt: Date.now() + 60_000 }));
+
+  const fresh = await createRelay({ mindPath: mind, hostname: 'TESTBOX', sessionId: 'new-chat-server', client: 'claude' });
+  const registered = await fresh.register({ unit: 'overseer', nativeSessionId: 'new-chat', activity: 'active' });
+  const left = await readdir(sessions);
+  for (const id of dead) assert.equal(left.includes(`${id}.json`), false, `${id} is retired`);
+  for (const id of [...kept, registered.registrationId]) assert.equal(left.includes(`${id}.json`), true, `${id} is kept`);
+  const retired = await readdir(path.join(sessions, 'retired'));
+  assert.deepEqual(retired.sort(), dead.map((id) => `${id}.json`).sort());
+  assert.equal(JSON.parse(await readFile(path.join(sessions, 'retired', `${dead[0]}.json`), 'utf8')).nativeSessionId, 'closed-chat', 'a retired record stays readable');
+  const listed = (await fresh.status({ unit: 'overseer' })).units[0].registeredSessions.map((record) => record.nativeSessionId);
+  assert.equal(listed.includes('closed-chat'), false);
+  assert.equal((await fresh.reminder({ nativeSessionId: 'closed-chat', client: 'claude' })).registered, false);
+  assert.equal((await fresh.reminder({ nativeSessionId: 'open-chat', client: 'claude' })).registered, true);
+});
+
+test('delivery status tells the sender whether the recipient can be woken now', async (context) => {
+  const { mind } = await fixture(context);
+  const alice = await bind(mind, 'executor-alpha', 'wake-alice');
+  await bind(mind, 'executor-beta', 'wake-bob');
+  const sent = await alice.send({ to: 'executor-beta', subject: 'Urgent', body: 'urgent', priority: 'urgent' });
+  const policies = path.join(mind, 'user', 'relay', 'wake', 'policies');
+  await mkdir(policies, { recursive: true });
+  const policy = (deadlineAt, extra = {}) => writeFile(path.join(policies, `${'e'.repeat(64)}.json`), JSON.stringify({
+    kind: 'relay-wake-policy', binding: { unit: 'executor-beta', nativeSessionId: 'bob-native', client: 'claude', machine: 'TESTBOX' },
+    enabled: true, pausedReason: null, deadlineAt, deliveries: {}, ...extra }));
+  await policy(new Date(Date.now() - 60000).toISOString());
+  assert.deepEqual((await alice.delivery({ ids: [sent.id] })).deliveries[0].wake, { live: false, reason: 'expired' });
+  await policy(new Date(Date.now() + 3600000).toISOString());
+  assert.deepEqual((await alice.delivery({ ids: [sent.id] })).deliveries[0].wake, { live: true, reason: null });
+  await policy(new Date(Date.now() + 3600000).toISOString(), { pausedReason: 'handoff-budget-exhausted' });
+  assert.deepEqual((await alice.delivery({ ids: [sent.id] })).deliveries[0].wake, { live: false, reason: 'handoff-budget-exhausted' });
 });

@@ -400,3 +400,16 @@ test('relay wake status reads a binding of another machine only when --machine n
     assert.match(refused.stderr, /--machine is only valid with relay wake status/);
   }
 });
+
+test('wake attach and enable take a daily wake cap within its bounds and pass it to the consent', async () => {
+  assert.equal(parseArgs(['relay', 'wake', 'attach', '--mind-path', 'C:/mind', '--unit', 'overseer', '--max-daily-handoffs', '50']).options.maxDailyHandoffs, '50');
+  for (const value of ['0', '1001', 'many']) {
+    assert.throws(() => parseArgs(['relay', 'wake', 'attach', '--unit', 'overseer', '--max-daily-handoffs', value]), /--max-daily-handoffs must be between 1 and 1000/);
+  }
+  const enabled = [];
+  const controller = { async enable(value) { enabled.push(value); return { enabled: true }; } };
+  const result = await cli(['relay', 'wake', 'enable', '--mind-path', 'C:/mind', '--unit', 'overseer', '--native-session-id', 'native-daily',
+    '--max-handoffs', '30', '--max-daily-handoffs', '50'], { createRelayWakeController: async () => controller });
+  assert.equal(result.code, 0, result.stderr);
+  assert.deepEqual(enabled, [{ unit: 'overseer', nativeSessionId: 'native-daily', client: 'claude', machine: os.hostname(), maxHandoffs: 30, maxDailyHandoffs: 50 }]);
+});
