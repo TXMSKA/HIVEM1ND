@@ -20,6 +20,8 @@ These carry no information and appear whatever the subject.
 - Step labels that are numbers alone, where a verb would say what happens.
 - Monospace used as a costume for technical subject matter rather than for code, commands, paths, identifiers or measurement.
 - Emoji or stray Unicode glyphs standing in for an icon set.
+- A sparkle glyph marking anything as smart or generated, and a check mark as the bullet of every list.
+- A decorative terminal window or code block on a page that sells nothing technical.
 - A badge, pill or capsule around ordinary metadata. A status that changes what the person does next, such as paid or overdue, is state rather than metadata: it is shown as its word in the status colour, with a second cue from [data-display](categories/data-display.md), Live and changing values.
 - Version or build labels, scroll cues, rotated vertical text and decorative crosshair lines on a page that is not about any of them.
 
@@ -28,6 +30,8 @@ These carry no information and appear whatever the subject.
 - A centred hero paragraph followed by a row of identical icon, heading and text cards as the structure of the page.
 - The hero metric template: one big number, a small label, three supporting stats and an accent, when no figure drives a decision.
 - Cards nested inside cards. The inner level becomes spacing. Cards that group one concept each are a valid choice, not a default.
+- A bento grid, or three pricing tiers with the middle one highlighted, reached for before the content asked for that shape.
+- Testimonials, logos or figures that are invented. Real ones or none, as in [site-polish.md](site-polish.md).
 - Borders added to repair a hierarchy that typography failed to establish.
 - Repeated sections that restate one conclusion at equal prominence. Each section answers a new question or it is cut.
 - A modal for a task that needs neither interruption nor protected focus.
@@ -55,6 +59,8 @@ Generated interfaces cluster. Landing on one of these by accident means the axis
 - The card kit: one radius on everything regardless of hierarchy and gradient washes as decoration.
 - A tinted near black such as #0B0B0B or #111 standing in for black.
 - A serif chosen because the brief is creative, or a bookish subject defaulting to cream and serif.
+- Violet on black, rainbow or neon multicolour gradients, untouched default pastels, or a pure #FFFFFF page with no tone of its own.
+- Inter, Geist or Space Grotesk as the face because nothing was chosen, and one stock icon set, such as Lucide, used untouched across the whole interface. Each is fine when picked for the subject; together and by default they are the generated look.
 
 ## Searches
 
