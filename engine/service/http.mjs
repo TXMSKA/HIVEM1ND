@@ -7,7 +7,7 @@ import { CoreError, canonicalJson, hashText, isUuid } from './identity.mjs';
 import { assertNoLinks } from './paths.mjs';
 import { atomicWrite, undoChange, withReceipt } from './store.mjs';
 import { authorize, checkHost, checkLimits, checkOrigin, checkPeer, createSecuritySink, safeError } from './security.mjs';
-import { readCollection, readDetail, readProjection, readSync } from './projection.mjs';
+import { readCollection, readDetail, readProjection, readSync, viewBatch } from './projection.mjs';
 import { connectLead, createUnit, patchLayout, patchSettings, removeUnit, resolveUnitCluster, setUnitAlias, setUnitRunsIn } from './units.mjs';
 import { createChat, deliverNotifications, patchChat, postChat, postMailbox, readChat, readMailbox } from './chats.mjs';
 import { createGroup, listGroups, patchGroup, removeGroup } from './groups.mjs';
@@ -1493,8 +1493,9 @@ async function invoke(route, scope) {
     return { status: 200, body: await readDetail(domain, 'layout') };
   }
   if (route.handler === 'createChat') {
+    const batch = viewBatch(domain);
     for (const id of body?.members ?? []) {
-      if ((await readDetail(domain, 'units', id)).removed) throw new CoreError(422, 'invalid_members', 'An archived unit cannot join an active chat.');
+      if ((await batch.detail('units', id)).removed) throw new CoreError(422, 'invalid_members', 'An archived unit cannot join an active chat.');
     }
     const created = await createChat(domain, body);
     return { status: created.status === 200 ? 200 : 201, body: created.chat };

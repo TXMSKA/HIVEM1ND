@@ -7,7 +7,7 @@ import { authorize } from './security.mjs';
 import { readUnitState as readState, readUnitStates, stateRunsIn } from './state.mjs';
 import { publishDomainEvents } from './events.mjs';
 import { createChat } from './chats.mjs';
-import { paginate, readDetail } from './projection.mjs';
+import { paginate, readDetail, viewBatch } from './projection.mjs';
 import { commitTransaction, readBytes, revisionOf, withLocalChanges, withLocks } from './store.mjs';
 import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
 
@@ -625,13 +625,14 @@ async function commitFilesLocked(context, records, events) {
     }
   }
   const enriched = [];
+  const batch = viewBatch(context);
   for (const event of events) {
     const id = event.name === 'unit.changed' ? event.data?.unit?.id : null;
     if (!id) {
       enriched.push(event);
       continue;
     }
-    enriched.push({ ...event, data: { unit: await readDetail(context, 'units', id) } });
+    enriched.push({ ...event, data: { unit: await batch.detail('units', id) } });
   }
   publishDomainEvents(context, enriched);
 }

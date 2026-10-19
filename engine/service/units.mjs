@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { CoreError, canonicalJson, hashBytes, parseUnitId, replaceHeader, unitStatePath, uuidV8, validateName, validateRole, canonicalScope } from './identity.mjs';
-import { answersFor, readDetail, readProjection } from './projection.mjs';
+import { answersFor, readProjection, viewBatch } from './projection.mjs';
 import { readUnitState as readState, readUnitStates } from './state.mjs';
 import { checkRevision, commitChange, commitTransaction, prepareChangeUndo, readBytes, revisionOf, withLocalChanges, withLocks, withReceipt } from './store.mjs';
 import { prepareUnitMembershipRemoval, projectGroup } from './groups.mjs';
@@ -331,10 +331,11 @@ async function finishLocked(context, prepared, transaction) {
     if (published?.published === true) noteSync(context, 'published');
   }
   const projected = new Map();
+  const batch = viewBatch(context);
   for (const event of prepared.events) {
     const id = event.name === 'unit.changed' ? event.data?.unit?.id : null;
     if (!id || projected.has(id)) continue;
-    projected.set(id, await readDetail(context, 'units', id));
+    projected.set(id, await batch.detail('units', id));
   }
   for (const event of prepared.events) {
     const id = event.name === 'unit.changed' ? event.data?.unit?.id : null;

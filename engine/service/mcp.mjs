@@ -14,7 +14,7 @@ import { carryHostConversation } from '../relay/carry-over.mjs';
 import { recordActivity } from './watch.mjs';
 import { atomicWrite, commitTransaction, readBytes, revisionOf, withLocalChanges, withReceipt } from './store.mjs';
 import { lyraToolDefinitions, validateLyraInput } from './lyra.mjs';
-import { paginate, readCollection, readDetail, readProjection } from './projection.mjs';
+import { paginate, readCollection, readDetail, readProjection, viewBatch } from './projection.mjs';
 import { postMailbox, readMailbox } from './chats.mjs';
 import { loadTask } from './tasks.mjs';
 import { additionsForUnit, readScopedAdditions } from './additions.mjs';
@@ -151,7 +151,8 @@ async function executeLocalTool(context, registration, name, args, id, signal) {
   if (name === 'message_read' && context.localPlanBinding) return callPlanTool(context, 'plan_read', { runId: context.localPlanBinding.runId, messageIds: args.messageIds, requestId: id });
   if (name === 'message_read') return readMailbox(context, registration.unitId, args);
   if (name === 'message_send') {
-    for (const unitId of args.recipientIds) await readDetail(context, 'units', unitId);
+    const batch = viewBatch(context);
+    for (const unitId of args.recipientIds) await batch.detail('units', unitId);
     const messages = [];
     for (const unitId of args.recipientIds) {
       signal?.throwIfAborted(); await verifiedSessionScope(context);
