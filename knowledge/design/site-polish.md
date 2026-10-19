@@ -15,6 +15,9 @@ Small additions that separate a site that works from a site that feels finished.
 - **Skip to content.** One anchor, visible on focus, ahead of the navigation. Proved in [accessibility](protocols/accessibility.md).
 - **Password visibility toggle.** Anywhere there is a login or a signup.
 - **Copy button.** On snippets, identifiers, codes and anything that exists to be pasted elsewhere, with a short confirmation that the copy happened.
+- **Search and sharing basics.** Every page has its own `<title>` and meta description, and an Open Graph image so a shared link shows a real preview. The site serves `robots.txt` and `sitemap.xml`.
+- **Privacy policy.** A page linked from the footer, always, even on a site with no tracking cookies.
+- **Fast first load.** The main content of the first page shows in about two seconds on a mid-range phone: images sized and compressed, the ones below the fold loaded lazily, few font files.
 - **Favicon and app icons.** The site's own mark in the browser tab, with the touch and install icons sized for phones, never the framework's default icon.
 
 ## Build when the site calls for it
@@ -35,6 +38,8 @@ Small additions that separate a site that works from a site that feels finished.
 - **Response time promise.** Next to a contact form, how long an answer takes.
 - **Work shown, not adjectives.** Case studies, real reviews and a visible face where trust is part of the sale. Real ones or none.
 - **Map and directions.** Only when there is a physical address to visit.
+- **Analytics.** Installed before launch when the site has goals to measure, with consent where the jurisdiction asks for it, as in the cookie banner above.
+- **Real contact details.** An email address or phone number that a person answers, on the contact page or in the footer, beside any form.
 - **Light and dark.** It depends on the product, decided by the one rule in [tokens.md](tokens.md), Themes: a product used for long stretches, at night or by people who expect to choose ships both with the System, Light and Dark control; a site whose scene settles one theme ships that theme alone, with no toggle.
 - **Page transitions.** A short, consistent transition between pages, such as a cross-fade, when navigation would otherwise flash. It is skipped under reduced motion and never delays the content.
 - **Social links.** In the footer, to the profiles the business actually keeps up. Share buttons only on content that people do share.
