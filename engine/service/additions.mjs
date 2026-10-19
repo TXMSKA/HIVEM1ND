@@ -728,13 +728,14 @@ export async function additionsForUnit(context, unitId) {
     && [...content.features, ...content.knowledge].some(value => value.additionId === item.record.id && value.included));
 }
 
-export async function additionSyncEligible(context, relative) {
+// A walk passes one memo so the accepted records are read once per walk, not once per file.
+export async function additionSyncEligible(context, relative, memo = null) {
   if (/^user\/machines\/[^/]+\.md$/.test(relative)) {
     const bytes = await readBytes(context.store, path.join(context.paths.mind, ...relative.split('/')));
     if (bytes?.toString('utf8').replaceAll('\\', '/').includes('/additions/repositories/')) return false;
   }
   if (!/^user\/(?:additions|features|knowledge)\//.test(relative)) return true;
-  const records = await acceptedRecords(context);
+  const records = memo ? (memo.records ??= await acceptedRecords(context)) : await acceptedRecords(context);
   const record = records.find(item => relative === `user/additions/${item.record.id}.json` || item.record.files.some(file => file.path === relative));
   if (!record) return true;
   if (record.record.machine !== (context.machine ?? context.paths.machine)) return false;

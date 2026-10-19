@@ -524,12 +524,13 @@ async function prepareTarget(sync, target, authorizedTargets = []) {
 
 async function walkMind(sync, targets) {
   const { additionSyncEligible } = await import('../service/additions.mjs');
+  const memo = { records: null };
   await walkDirectory(sync.paths.mind, '', async (relative, absolute) => {
     if (!relative.startsWith('user/')) return;
     const settingsOwner = /^user\/(?:machines\/([^/]+)\/settings\.json|relay\/settings-(?:requests|results)\/([^/]+)\/)/.exec(relative);
     if (settingsOwner && (settingsOwner[1] ?? settingsOwner[2]) !== sync.machine) return;
     if (isInside(sync.paths.origin, absolute) || isInside(sync.paths.localDirectory, absolute) || isInside(sync.paths.staging, absolute)) return;
-    if (!await additionSyncEligible(sync, relative)) return;
+    if (!await additionSyncEligible(sync, relative, memo)) return;
     try {
       if (relative.startsWith('user/relay/sessions/')) {
         const bytes = await readFile(absolute);
