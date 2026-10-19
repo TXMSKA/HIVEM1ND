@@ -31,7 +31,6 @@ export function createMap({ units = [], groups = [], saved = { nodes: {}, groups
     units,
     groups,
     selectedGroupId: null,
-    labelSizes: new Map(),
     saved: layout,
     positions: placed.positions,
     origins: placed.origins,
@@ -46,11 +45,9 @@ export function createMap({ units = [], groups = [], saved = { nodes: {}, groups
     centered: null,
     host: null,
     document: null,
-    calls: [],
     revision: wrapped.revision ?? null,
     authoritative: { layout: structuredClone(layout), revision: wrapped.revision ?? null },
     pending: new Map(),
-    pendingGroups: new Map(),
     editGeneration: 0,
     inFlight: null,
     layoutObservationGeneration: 0,
@@ -66,7 +63,7 @@ export function createMap({ units = [], groups = [], saved = { nodes: {}, groups
 }
 
 export function adoptInitialLayout(map, saved) {
-  if (!map || map.authoritative?.revision != null || map.pending.size || map.pendingGroups.size || map.inFlight) return false;
+  if (!map || map.authoritative?.revision != null || map.pending.size || map.inFlight) return false;
   const wrapped = layoutRecord(saved);
   if (wrapped.revision == null) return false;
   const layout = wrapped.layout ?? { nodes: {}, groups: {} };
@@ -314,11 +311,6 @@ export function renderMap(document, host, map, labels = {}) {
     children.push(status);
   }
   host.replaceChildren(...children);
-  for (const node of nodes) {
-    const label = host.querySelector(`[data-unit-id="${node.id}"]`)?.querySelector?.(".map-label");
-    const size = label?.getBoundingClientRect?.();
-    if (size?.width) map.labelSizes.set(node.id, { width: size.width, height: size.height });
-  }
   for (const zone of personalZones(map)) {
     const box = svg.querySelector(`[data-group-zone="${zone.group.id}"]`);
     const screen = toScreen(zone.bounds, rect, map.view);
@@ -830,21 +822,12 @@ export function queueLayoutPatch(map, id, position) {
   });
 }
 
-export function queueGroupPatch(map, id, group) {
-  const previous = map.pendingGroups.get(id);
-  map.editGeneration += 1;
-  map.pendingGroups.set(id, { group: { ...group }, generation: map.editGeneration, base: previous?.base ?? null });
-}
-
 export async function flushLayout(map) {
-  if (map.inFlight || map.refreshing || map.pending.size + map.pendingGroups.size === 0) return;
+  if (map.inFlight || map.refreshing || map.pending.size === 0) return;
   const batch = new Map(map.pending);
-  const groups = new Map(map.pendingGroups);
   for (const edit of batch.values()) edit.needsRetry = false;
-  for (const edit of groups.values()) edit.needsRetry = false;
   const body = { expectedRevision: map.authoritative.revision };
-  if (batch.size) body.nodes = Object.fromEntries([...batch].map(([id, edit]) => [id, edit.position]));
-  if (groups.size) body.groups = Object.fromEntries([...groups].map(([id, edit]) => [id, edit.group]));
+  body.nodes = Object.fromEntries([...batch].map(([id, edit]) => [id, edit.position]));
   const operation = makeOperation(map, "PATCH", "/layout", body);
   const observedAtDispatch = map.layoutObservationGeneration;
   map.inFlight = operation;
@@ -862,9 +845,6 @@ export async function flushLayout(map) {
     for (const [id, edit] of batch) {
       if (map.pending.get(id)?.generation === edit.generation) map.pending.delete(id);
     }
-    for (const [id, edit] of groups) {
-      if (map.pendingGroups.get(id)?.generation === edit.generation) map.pendingGroups.delete(id);
-    }
     renderPositions(map, overlay(map.authoritative.layout.nodes, map.pending));
     map.persistState = "saved";
     map.retryOperation = null;
@@ -876,10 +856,8 @@ export async function flushLayout(map) {
     map.inFlight = null;
     map.onPersist?.();
   }
-  const followUp = !map.layoutConflict && !map.retryOperation && (
-    [...map.pending.values()].some((edit) => edit.needsRetry || !edit.retried)
-    || [...map.pendingGroups.values()].some((edit) => !edit.retried)
-  );
+  const followUp = !map.layoutConflict && !map.retryOperation
+    && [...map.pending.values()].some((edit) => edit.needsRetry || !edit.retried);
   if (followUp) await flushLayout(map);
 }
 

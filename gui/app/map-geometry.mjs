@@ -221,24 +221,6 @@ export function fitBounds(points, rect, padding = 48) {
   };
 }
 
-export function groupOutline(points, pad = 48) {
-  if (!points.length) return null;
-  let minX = Infinity;
-  let minY = Infinity;
-  let maxX = -Infinity;
-  let maxY = -Infinity;
-  for (const point of points) {
-    minX = Math.min(minX, point.x);
-    minY = Math.min(minY, point.y);
-    maxX = Math.max(maxX, point.x);
-    maxY = Math.max(maxY, point.y);
-  }
-  const x = (minX + maxX) / 2;
-  const y = (minY + maxY) / 2;
-  const radius = Math.max(...points.map((point) => Math.hypot(point.x - x, point.y - y))) + pad;
-  return { x, y, radius };
-}
-
 export function scopeCollapsed(saved, key) {
   if (!scopeKey(key)) return false;
   return Boolean(saved?.groups?.[key]?.collapsed);

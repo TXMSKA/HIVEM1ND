@@ -7,7 +7,6 @@ export function createThread(chat = null) {
     messages: [],
     nextCursor: null,
     anchorId: null,
-    anchorOffset: 0,
     composer: "",
     pendingSends: new Map(),
     error: null,
@@ -258,33 +257,8 @@ export async function openMailbox(api, unitId, state = "unread", cursor = null) 
   return request(api, "GET", `/mailboxes/${encodeURIComponent(unitId)}/messages`, { query });
 }
 
-export async function loadMailboxes(api) {
-  return request(api, "GET", "/mailboxes", { query: { limit: "50" } });
-}
-
 export async function loadMailboxMessage(api, unitId, messageId) {
   return request(api, "GET", `/mailboxes/${encodeURIComponent(unitId)}/messages/${encodeURIComponent(messageId)}`);
-}
-
-export function postMailbox(api, unitId, draft, retained = null) {
-  const operation = retained ?? createOperation({
-    method: "POST",
-    path: "/mailboxes/:unitId/messages",
-    params: { unitId },
-    body: {
-      body: draft.body ?? "",
-      subject: draft.subject ?? "",
-      replyTo: draft.replyTo ?? null,
-      attachments: draft.attachments ?? [],
-      priority: draft.priority ?? "normal",
-    },
-  });
-  const task = request(api, "POST", operation.path, { operation }).catch((error) => {
-    if (error && typeof error === "object") error.operation = operation;
-    throw error;
-  });
-  task.operation = operation;
-  return task;
 }
 
 export function canMarkMailbox(audience, capabilities, unitId) {

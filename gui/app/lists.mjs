@@ -212,8 +212,7 @@ function renderRow(document, list, row, handlers) {
   node.textContent = row.text ?? row.label ?? "";
   node.addEventListener("click", (event) => {
     list.focusId = row.id;
-    if (row.kind === "group") handlers.onToggle?.(row.groupId);
-    else if (row.kind === "more") handlers.onReveal?.(row.groupId, row.count);
+    if (row.kind === "more") handlers.onReveal?.(row.groupId, row.count);
     else if (event.detail > 1) handlers.onActivate?.(row, "double");
     else handlers.onActivate?.(row, "single");
   });
@@ -247,8 +246,7 @@ function bindWindow(host, list) {
     else if (event.key === "Enter") {
       const row = rows.find((item) => item.id === list.focusId);
       if (!row) return;
-      if (row.kind === "group") host.listHandlers?.onToggle?.(row.groupId);
-      else if (row.kind === "more") host.listHandlers?.onReveal?.(row.groupId, row.count);
+      if (row.kind === "more") host.listHandlers?.onReveal?.(row.groupId, row.count);
       else host.listHandlers?.onActivate?.(row, "keyboard");
     } else return;
     event.preventDefault?.();

@@ -2,7 +2,7 @@ import { createOperation, perform, request } from "./api.mjs";
 import { boardDocument, loadAssets, releaseAssets } from "./blueprint.mjs";
 import { collectPages } from "./lists.mjs";
 import { loadProposals } from "./void.mjs";
-import { element, icon } from "./components.mjs";
+import { element, icon, pathIcon } from "./components.mjs";
 
 export function createEditors() {
   return {
@@ -71,7 +71,6 @@ export async function loadCatalog(api, editors, kind, query = libraryState(edito
   editors.catalog = page.items;
   editors.catalogTotal = page.total;
   editors.catalogIssues = [...page.issues, ...folders.issues].filter((issue, index, issues) => issues.findIndex((entry) => entry.project === issue.project && entry.code === issue.code) === index);
-  editors.catalogNext = page.nextCursor;
   editors.catalogKind = kind;
   editors.loadedKind = kind;
   state.folders = folders.items;
@@ -210,11 +209,8 @@ export function renderLibrary(document, { kind, project = null, data, actions, t
 
 function libraryIcon(document, name) {
   if (["close", "board", "text", "attachedAgents", "openComments"].includes(name)) return icon(document, { board: "blueprint", text: "document", attachedAgents: "person", openComments: "chats", close: "close" }[name]);
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("viewBox", "0 0 24 24"); svg.setAttribute("class", "icon"); svg.setAttribute("aria-hidden", "true");
-  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
   const paths = { filters: "M4 6h16M7 12h10M10 18h4", "folder-plus": "M3 7V5h7l2 3h9v12H3zM12 11v6M9 14h6", folder: "M3 7V5h7l2 3h9v12H3z", plus: "M12 5v14M5 12h14", search: "M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14M15 15l6 6", more: "M5 12h.1M12 12h.1M19 12h.1", check: "M5 12l4 4L19 6", rename: "M4 16 16 4l4 4L8 20H4z", duplicate: "M8 8h12v12H8zM16 8V4H4v12h4", move: "M3 7V5h7l2 3h9v12H3zM9 14h8M14 11l3 3-3 3", delete: "M4 6h16M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7M14 10v7", changedThisWeek: "M5 5v5h5M5 10a8 8 0 1 1 0 5M12 8v5h4" };
-  path.setAttribute("d", paths[name]); svg.append(path); return svg;
+  return pathIcon(document, paths[name]);
 }
 
 export async function openEditor(api, editors, summary) {

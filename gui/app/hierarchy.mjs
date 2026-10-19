@@ -124,7 +124,6 @@ export function activateUnit(app, unit, kind) {
   app.store.selected.unitId = unit.id;
   app.store.selected.groupId = null;
   if (app.mapState) { app.mapState.selectedGroupId = null; app.mapState.selection = new Set([unit.id]); }
-  app.activated = { id: unit.id, kind };
   if (kind === 'double') { app.pendingCenter = unit.id; app.pendingChat = { unitId: unit.id, create: app.layout !== 'phone' }; }
 }
 

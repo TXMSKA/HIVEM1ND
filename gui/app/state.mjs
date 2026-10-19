@@ -6,7 +6,6 @@ export function createStore() {
   return {
     indexes: { units: new Map(), groups: new Map(), chats: new Map(), tasks: new Map(), editors: new Map(), plans: new Map(), runs: new Map() },
     sessionViews: new Map(),
-    messages: new Map(),
     selected: { unitId: null, groupId: null, chatId: null, taskId: null, resourceId: null },
     viewport: { x: 0, y: 0, scale: 1 },
     drafts: new Map(),
@@ -137,7 +136,6 @@ export async function applyEvent(store, api, event) {
     if (data.runId) for (const view of store.sessionViews.values()) {
       if (view.session.runId === data.runId) view.workStale = true;
     }
-    if (event.name === 'message.created' && data.message?.id) store.messages.set(data.message.id, data.message);
     const response = await request(api, 'GET', '/view'); store.view = response.data; indexView(store, response.data);
     return { applied: true };
   }
@@ -338,9 +336,6 @@ function resourceOf(event) {
   if ((event.name === "blueprint.changed" || event.name === "void.changed") && data.resourceId) {
     const path = event.name === "void.changed" ? `/void/texts/${encodeURIComponent(data.resourceId)}` : `/blueprint/boards/${encodeURIComponent(data.resourceId)}`;
     return { key: `editor:${data.resourceId}`, id: data.resourceId, resourceId: data.resourceId, revision: data.revision ?? null, path, conflict: true };
-  }
-  if (event.name === "message.created" && data.message?.id) {
-    return { key: `message:${data.message.id}`, revision: null, apply: (store) => store.messages.set(data.message.id, data.message) };
   }
   return null;
 }

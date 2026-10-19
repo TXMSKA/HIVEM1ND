@@ -1,5 +1,5 @@
 import { createOperation, request } from "./api.mjs";
-import { element, icon, labelDialog, labeledField } from "./components.mjs";
+import { element, icon, labelDialog, labeledField, pathIcon } from "./components.mjs";
 import { formatShortTime, formatWhen, limitsUsage } from "./i18n.mjs";
 import { encodeHomeQr } from "./qr.mjs";
 import { renderQr } from "./qr-render.mjs";
@@ -264,12 +264,7 @@ function renderMachinePicker(document, model, t, actions) {
 }
 
 function machineIcon(document, local) {
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("class", "icon"); svg.setAttribute("viewBox", "0 0 24 24"); svg.setAttribute("aria-hidden", "true");
-  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  path.setAttribute("d", local ? "M3 4h18v12H3zM12 16v4M8 20h8" : "M5 4h14v12H5zM5 16l-3 4h20l-3-4");
-  svg.append(path);
-  return svg;
+  return pathIcon(document, local ? "M3 4h18v12H3zM12 16v4M8 20h8" : "M5 4h14v12H5zM5 16l-3 4h20l-3-4");
 }
 
 function settingsSection(document, title, ...children) {
@@ -609,6 +604,7 @@ export const LOOK_OPTIONS = Object.freeze([
   { id: 'nebula', label: 'Nebula' }, { id: 'txmska', label: 'Waves' },
   { id: 'coffee-cat', label: 'Toxic' }, { id: 'ntk', label: 'Kinetic' },
 ]);
+export const LOOK_IDS = Object.freeze(LOOK_OPTIONS.map((look) => look.id));
 export function renderLookPreview(document, look, selected, onChoose) {
   const button = element(document, 'button', { type: 'button', class: 'look-choice',
     'data-action': `settings-look-${look.id}`,

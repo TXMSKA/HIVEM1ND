@@ -1,4 +1,4 @@
-import { element, labelDialog, progressMark } from './components.mjs';
+import { element, icon, labelDialog, progressMark } from './components.mjs';
 export const ADD_COPY = Object.freeze({
   title: ['Add to M1ND', 'Agregar al M1ND'],
   add: ['Add', 'Agregar'],
@@ -38,13 +38,10 @@ export const ADD_COPY = Object.freeze({
   checkUpdates: ['Check for updates', 'Comprobar actualizaciones'],
   removeTitle: ['Remove {name}?', '¿Quitar {name}?'],
   removeContent: ['Its added content and access are removed. Kit content and source files stay. Undo is available for 10 s.', 'Se quitan el contenido agregado y su acceso. Se conservan el contenido del kit y los archivos de origen. Deshacer está disponible durante 10 s.'],
-  removeRepository: ['The repository link is removed. The cluster, agents and files stay. Undo is available for 10 s.', 'Se quita el vínculo del repositorio. Se conservan el clúster, los agentes y los archivos. Deshacer está disponible durante 10 s.'],
   projectOrigin: ['Cluster from {source}', 'Clúster de {source}'],
   noUnits: ['No agents yet', 'Todavía no hay agentes'],
-  repoPinned: ['The repository is pinned at commit {pin}. Add its first agent to start working on it.', 'El repositorio está fijado al commit {pin}. Agregar el primer agente para comenzar a trabajar.'],
   newUnit: ['New agent in {project}', 'Nuevo agente en {project}'],
-  repoAdded: ['{project} added', '{project} agregado'], newUnitShort: ['New agent', 'Nuevo agente'],
-  newProject: ['new', 'nuevo'],
+  repoAdded: ['{project} added', '{project} agregado'],
   failureHint: ['The selection is kept. Retry checks the saved operation before sending it again.', 'Se conserva la selección. Reintentar comprueba la operación guardada antes de volver a enviarla.'],
   error_source_unavailable: ['The source could not be read. Check the link and retry.', 'No se pudo leer el origen. Comprobar el enlace y reintentar.'],
   error_source_timeout: ['The source did not answer in 30 s.', 'El origen no respondió en 30 s.'],
@@ -75,10 +72,9 @@ export function addText(language, key, values = {}) {
   return pair[language === 'es' ? 1 : 0].replace(/\{([A-Za-z]+)\}/g, (_, name) => String(values[name] ?? ''));
 }
 function plus(document) {
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('aria-hidden', 'true'); svg.setAttribute('class', 'add-plus');
-  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  path.setAttribute('d', 'M12 5v14M5 12h14'); svg.append(path); return svg;
+  const svg = icon(document, 'plus');
+  svg.setAttribute('class', 'add-plus');
+  return svg;
 }
 export function addButton(document, language, onOpen, content = false) {
   const button = element(document, 'button', { type: 'button', class: content ? 'btn primary add-content' : 'add-button',

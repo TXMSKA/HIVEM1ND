@@ -1,6 +1,6 @@
 import { perform, request } from "./api.mjs";
 import { element, icon } from "./components.mjs";
-import { assetIdentity, boundaryInsideTag, createTextAnchor, plainCaretFromSource, plainOffsets, plainText, rangeRequest, renderMarkup, runMetadata, sourceBoundary, tokenizeMarkup, validLink, validUtf16Boundary } from "./markup.mjs";
+import { assetIdentity, createTextAnchor, plainCaretFromSource, plainOffsets, plainText, rangeRequest, renderMarkup, runMetadata, sourceBoundary, tokenizeMarkup, validLink, validUtf16Boundary } from "./markup.mjs";
 
 export function renderDocument(document, host, editor) {
   host.replaceChildren();
@@ -42,33 +42,6 @@ export function rememberTextDraft(editor, resourceId, k, lang, value) {
   editor.draftText = value;
   editor.dirty = true;
   return value;
-}
-
-export function beginTextEdit(editor, k, lang) {
-  const source = editor.document?.pages?.find((page) => page.k === k)?.[lang] ?? editor.authoritative?.document?.pages?.find((page) => page.k === k)?.[lang] ?? "";
-  const existing = textDraft(editor, editor.resourceId, k, lang);
-  return rememberTextDraft(editor, editor.resourceId, k, lang, existing === undefined ? source : existing);
-}
-
-export function sourceReplacement(current, value) {
-  const currentText = String(current ?? "");
-  const nextText = String(value ?? "");
-  let start = 0;
-  while (start < currentText.length && start < nextText.length && currentText[start] === nextText[start]) start += 1;
-  let end = currentText.length;
-  let valueEnd = nextText.length;
-  while (end > start && valueEnd > start && currentText[end - 1] === nextText[valueEnd - 1]) {
-    end -= 1;
-    valueEnd -= 1;
-  }
-  if (!safeSourceBoundary(currentText, start) || !safeSourceBoundary(currentText, end) || !safeSourceBoundary(nextText, start) || !safeSourceBoundary(nextText, valueEnd)) {
-    return { start: 0, end: currentText.length, replacement: nextText };
-  }
-  return { start, end, replacement: nextText.slice(start, valueEnd) };
-}
-
-function safeSourceBoundary(source, offset) {
-  return validUtf16Boundary(source, offset) && !boundaryInsideTag(source, offset);
 }
 
 export function selectedPlainRange(selection) {
@@ -268,10 +241,6 @@ export function showTools(state) {
 export function textAnchor(editor, k, lang, plainStart, plainEnd) {
   const source = textDraft(editor, editor.resourceId, k, lang) ?? (editor.authoritative?.document ?? editor.document).pages.find((page) => page.k === k)[lang];
   return createTextAnchor(source, k, lang, plainStart, plainEnd);
-}
-
-export function visibleText(source) {
-  return plainText(source);
 }
 
 export const TEXT_FORMATS = ["bold", "italic", "strikethrough", "h1", "h2", "h3", "list", "quote", "code", "link", "table", "image", "comment"];

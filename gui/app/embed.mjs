@@ -1,3 +1,5 @@
+import { LOOK_IDS } from "./settings.mjs";
+
 export function startEmbedChannel(viewer, actions, transport) {
   const channel = {
     viewer,
@@ -31,7 +33,7 @@ export async function handleParentMessage(channel, event) {
   if (!viewer?.embedded || !viewer.hostOrigin || !parent) return;
   if (event.source !== parent || event.origin !== viewer.hostOrigin) return;
   if (message?.contract !== "hivem1nd-embed-v1" || message.viewerId !== viewer.viewerId) return;
-  if (message.type === "set-look" && ["modern", "high-contrast", "nebula", "txmska", "coffee-cat", "ntk"].includes(message.value)) {
+  if (message.type === "set-look" && LOOK_IDS.includes(message.value)) {
     await channel.actions.patchViewer({ look: message.value });
   } else if (message.type === "set-language" && ["en", "es"].includes(message.value)) {
     await channel.actions.patchViewer({ language: message.value });

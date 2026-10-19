@@ -19,7 +19,6 @@ import {
   createThread,
   incomingMessage,
   loadMailboxMessage,
-  loadMailboxes,
   loadMessages,
   manageChat,
   markMailboxRead,
@@ -28,17 +27,15 @@ import {
   findDirectChat,
   openDirectChat,
   openGroupChat,
-  openMailbox,
-  postMailbox,
   postMessage,
   retryMessage,
+  sentLineState,
   postVisibleReads,
   updateNearBottom,
 } from "./chats.mjs";
 import { addNode, addBoardFrame, appendBoardNode, boardBounds, boardColors, boardCommentAnchor, boardDocument, dragNodeGeometry, editedBoard, hitBoardNode, indexNodes, loadAssets, parentPoint, patchNode, releaseAssets, removeNode, renderBoard, replaceBoard, setBoardDraft, sketchStroke, touchedStrokes, uploadAsset } from "./blueprint.mjs";
-import * as editorUi from "./editors.mjs";
 import { ApiError, clearCredentials, createApi, createOperation, dispose as disposeApi, fetchAsset, operationId, perform, request } from "./api.mjs";
-import { clusterGlyph, element, icon, labelDialog, labeledField, progressMark, runAction, setBusy, showDialog, showError } from "./components.mjs";
+import { clusterGlyph, element, icon, labelDialog, labeledField, pathIcon, progressMark, runAction, setBusy, showDialog, showError } from "./components.mjs";
 import {
   applyWatch,
   createComment,
@@ -46,6 +43,7 @@ import {
   createEditors,
   createResource,
   libraryState,
+  renderEditorHistory,
   renderLibrary,
   libraryChange,
   duplicateEditor,
@@ -72,12 +70,12 @@ import {
 } from "./editors.mjs";
 import { activateUnit, buildHierarchy, collapseNewClusters, flattenVisibleHierarchy, hierarchyDisclosure, hierarchyIcon, listedWorktrees, pathFolder, readableIdentity, revealGroup, toggleGroup, unitDisplayName, unitsForTree } from "./hierarchy.mjs";
 import { checkoutFacts, openTaskDetail, renderApproval, renderGrants, renderMachine, renderSession, renderTask, renderUnit, renderWaiting } from "./inspector.mjs";
-import { cardinal, DICTIONARIES, formatClock, formatNumber, formatShortTime, formatWhen, text } from "./i18n.mjs";
+import { cardinal, formatClock, formatNumber, formatShortTime, text } from "./i18n.mjs";
 import { collectPages, createPagedList, loadAll, reloadList, renderWindow, setQuery, windowRange } from "./lists.mjs";
 import { adoptInitialLayout, applyRemoteLayout, centerUnit, createMap, keepLocalPosition, renderMap, retrySavedLayout, settlePositions, useIncomingPosition } from "./map.mjs";
 import { dispose as disposeEmbed, publishDirty, publishReady, startEmbedChannel } from "./embed.mjs";
 import { PHONE_NAV, exchangeCode, exchangeHomeFragment, logout, renderCodeEntry, renderPhone } from "./phone.mjs";
-import { applyIssueChange, applyServiceBeat, applySettingsRead, applySyncSnapshot, armExpiry, clearGrant, closeHome, noteHomeChange, openHome, renderClientReview, renderSettings, saveSettings, takeGrant } from "./settings.mjs";
+import { applyIssueChange, applyServiceBeat, applySettingsRead, applySyncSnapshot, armExpiry, clearGrant, closeHome, LOOK_IDS, noteHomeChange, openHome, renderClientReview, renderSettings, saveSettings, takeGrant } from "./settings.mjs";
 import { acceptStreamEvent, createStore, loadSnapshot } from "./state.mjs";
 import { answerProposal, captureTextSelection, createTextFinder, documentSaver, draftSnapshot, editProposal, enterFocus, formatSelection, highlightFind, leaveFocus, loadProposals, moveFocus, noteProposal, proposalComment, proposalPassage, proposalStale, rememberTextDraft, renderDocument, renderProposal, replaceMatches, undoReplace, replaceVisible, restoreTextSelection, selectedPlainRange, showTools, TEXT_FORMATS, textAnchor, textDraft, textDraftKey } from "./void.mjs";
 import { assetIdentity, plainCaretFromSource, plainOffsets, plainText, sourceBoundary, tokenizeMarkup, validUtf16Boundary } from "./markup.mjs";
@@ -192,7 +190,6 @@ const OPENING_COPY = {
   empty: ["Your M1ND is empty", "El M1ND está vacío"],
   coordinates: ["The Overseer coordinates every other unit. Create it first; then add Overlords and Executors from the Map.", "El Overseer coordina las demás unidades. Crearlo primero y agregar después Overlords y Executors desde el Mapa."],
   create: ["Create the Overseer", "Crear el Overseer"],
-  goesHere: ["The Overseer goes here", "El Overseer se coloca aquí"],
   timeout: ["{path} did not answer in 30 s. The drive may be offline, or another program may hold the folder.", "{path} no respondió en 30 s. La unidad puede estar desconectada o la carpeta puede estar bloqueada por otro programa."],
   counts: ["{units} units, {groups} groups, {chats} chats, {boards} boards", "{units} unidades, {groups} grupos, {chats} chats, {boards} tableros"],
   connecting: ["Connecting to the service", "Conectando con el servicio"],
@@ -242,7 +239,7 @@ function browserLanguages(env, document) {
 }
 
 function applyChoice(app, choice) {
-  app.look = ["modern", "high-contrast", "nebula", "txmska", "coffee-cat", "ntk"].includes(choice.look) ? choice.look : "modern";
+  app.look = LOOK_IDS.includes(choice.look) ? choice.look : "modern";
   app.language = choice.language === "es" ? "es" : "en";
   try { app.startStorage?.setItem("hivem1nd:language", app.language); } catch { /* Storage can be unavailable in a private viewer. */ }
 }
@@ -550,7 +547,7 @@ function paintShell(app) {
 
 function inputDrafts(app) {
   if (!app.inputDrafts) {
-    app.inputDrafts = { chats: new Map(), notes: new Map(), nodes: new Map(), resources: new Map(), mail: new Map(), fields: new Map(), disclosures: new Map(), focus: null };
+    app.inputDrafts = { chats: new Map(), notes: new Map(), nodes: new Map(), resources: new Map(), fields: new Map(), disclosures: new Map(), focus: null };
   }
   return app.inputDrafts;
 }
@@ -586,7 +583,7 @@ function editorFormsDirty(editor) {
 function aggregateDirty(app) {
   if ([...(app.chatThreads?.values() ?? [])].some((thread) => thread.pendingSends.size)) return true;
   const drafts = inputDrafts(app);
-  for (const name of ["chats", "notes", "nodes", "resources", "mail"]) {
+  for (const name of ["chats", "notes", "nodes", "resources"]) {
     for (const value of drafts[name]?.values() ?? []) {
       const text = typeof value === "string" ? value : value?.value;
       if (text) return true;
@@ -858,7 +855,6 @@ async function onStream(app, event) {
     applyMessageRead(app.chatThreads?.get(data.chatId) ?? app.thread, data);
     const thread = app.chatThreads?.get(data.chatId) ?? app.thread;
     if (thread?.chat?.id === data.chatId && data.readerId !== "root:master" && !data.deliveries) await loadMessages(app.api, thread);
-    noteMailboxRead(app, dataOf(event));
   }
   if (event?.name === "message.created") {
     const data = dataOf(event);
@@ -1092,7 +1088,6 @@ export function renderBar(app, t, counts) {
     "data-action": "toggle-inspector",
     "aria-label": t(app.inspectorOpen ? "closeInspector" : "openInspector"),
     onclick: () => {
-      app.inspectorTouched = true;
       app.inspectorOpen = !app.inspectorOpen;
       renderShell(app);
     },
@@ -1520,7 +1515,6 @@ function renderWaitingSurface(app, t) {
 
 function openWaitingItem(app, item) {
   if (!item) return;
-  app.waitingItemId = item.id;
   if (item.kind === 'plan' && item.planId && app.layout !== 'phone') {
     const plan = app.store.indexes.plans.get(item.planId);
     app.waitingOpen = false; app.mode = 'map';
@@ -1662,7 +1656,6 @@ function renderCollection(app, t) {
         if (kind === 'double') app.pendingClusterFlight = row.groupId;
       } else if (row.kind === "chat") {
         app.store.selected.chatId = row.id;
-        app.activated = { id: row.id, kind };
       } else if (row.unit) {
         if (app.layout !== "phone") {
           if (kind === "single" && app.lastUnitClick?.id === row.unit.id && app.api.now() - app.lastUnitClick.at < 500) kind = "double";
@@ -1677,10 +1670,6 @@ function renderCollection(app, t) {
         const chat = app.chatList?.catalog?.find((item) => item.id === row.id) ?? app.chatList?.items?.find((item) => item.id === row.id);
         if (chat) showChat(app, chat);
       }
-      renderShell(app);
-    },
-    onToggle: (groupId) => {
-      toggleGroup(app.hierarchy, groupId);
       renderShell(app);
     },
     onReveal: (groupId, count) => {
@@ -2155,8 +2144,7 @@ function boardToolbar(app, document, editor, t) {
   const paths = { select: "M5 3v16l4-5 4 7 3-2-4-7h7z", frame: "M4 4h16v16H4z", text: "M4 5h16M12 5v15M8 20h8", draw: "M4 20l4-1L20 7l-4-4L4 15z", comment: "M4 5h16v12H9l-5 4z" };
   for (const tool of ["select", "frame", "text", "draw", "comment"]) {
     const label = t(`board${tool[0].toUpperCase()}${tool.slice(1)}`);
-    const glyph = document.createElementNS("http://www.w3.org/2000/svg", "svg"); glyph.setAttribute("viewBox", "0 0 24 24"); glyph.setAttribute("class", "icon"); glyph.setAttribute("aria-hidden", "true");
-    const path = document.createElementNS("http://www.w3.org/2000/svg", "path"); path.setAttribute("d", paths[tool]); glyph.append(path);
+    const glyph = pathIcon(document, paths[tool]);
     tools.append(element(document, "button", { type: "button", class: "board-tool", "data-board-tool": tool, "aria-label": label, title: label,
       "aria-pressed": String((editor.boardTool ?? "select") === tool), disabled: tool !== "select" && (!canEditResources(app) || editor.authoritative.readOnly) ? "" : null,
       onclick: () => {
@@ -2459,9 +2447,7 @@ function voidSurface(app, document, editor, t) {
       else { editor.sourceMode = false; scheduleVoidFind(app); }
       renderShell(app);
     }, { "aria-pressed": String(Boolean(app.voidFind?.open)), class: "btn void-find-toggle" });
-    const searchIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg'), searchPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    searchIcon.setAttribute('class', 'icon'); searchIcon.setAttribute('viewBox', '0 0 24 24'); searchIcon.setAttribute('aria-hidden', 'true');
-    searchPath.setAttribute('d', 'M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14M15 15l6 6'); searchIcon.append(searchPath); findButton.replaceChildren(searchIcon);
+    findButton.replaceChildren(pathIcon(document, 'M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14M15 15l6 6'));
     tools.append(findButton);
     tools.append(button("toggle-source", t("sourceLabel"), () => { editor.captureSelection(); editor.sourceMode = !editor.sourceMode; editor.restoreCaret = true; renderShell(app); }, { "aria-pressed": String(sourceMode) }));
     tools.append(button("enter-focus", t("focus"), () => { editor.captureSelection(); editor.restoreCaret = true; enterFocus(app.voidState); app.mode = "focus"; renderShell(app); }));
@@ -2490,7 +2476,8 @@ function voidSurface(app, document, editor, t) {
     const valid = !sourceMode && editable && selection?.anchorNode && body.contains?.(selection.anchorNode) && body.contains?.(selection.focusNode);
     editor.visibleSelection = valid ? selectedPlainRange(selection) : null;
     formatBar.hidden = !editor.visibleSelection;
-    if (formatBar.hidden) formatBar.setAttribute("hidden", ""); else formatBar.removeAttribute("hidden");
+    if (formatBar.hidden) { formatBar.setAttribute("hidden", ""); return; }
+    formatBar.removeAttribute("hidden");
     const rect = selection?.rangeCount ? selection.getRangeAt?.(0)?.getBoundingClientRect?.() : null;
     const ground = surface.getBoundingClientRect?.();
     if (rect && ground && formatBar.style?.setProperty) {
@@ -2892,11 +2879,7 @@ function renderEditorSurfaces(app, t) {
   const surfaces = { catalog, resource, comments: commentsColumn };
   if (!current) return surfaces;
   if (!current.authoritative.readOnly) {
-    const historyLabel = (key) => {
-      if (Object.hasOwn(DICTIONARIES[app.language] ?? DICTIONARIES.en, key)) return t(key);
-      return { history: ["History", "Historial"], restoreVersion: ["Restore", "Restaurar"], currentVersion: ["Current", "Actual"] }[key][app.language === "es" ? 1 : 0];
-    };
-    tools.append(element(document, "button", { type: "button", class: "btn", "data-action": "editor-history", text: historyLabel("history"), "aria-expanded": String(Boolean(current.historyOpen)), "aria-pressed": String(Boolean(current.historyOpen)), onclick: async () => {
+    tools.append(element(document, "button", { type: "button", class: "btn", "data-action": "editor-history", text: t("history"), "aria-expanded": String(Boolean(current.historyOpen)), "aria-pressed": String(Boolean(current.historyOpen)), onclick: async () => {
       current.historyOpen = !current.historyOpen;
       if (current.historyOpen) await loadHistory(app.api, editors).catch((error) => { editors.error = error; });
       renderShell(app);
@@ -2909,22 +2892,14 @@ function renderEditorSurfaces(app, t) {
         } catch (error) { app.actionNote = actionText(app.language, error.code); }
         renderShell(app);
       };
-      const panel = editorUi.renderEditorHistory?.(document, current.history ?? [], t, onRestore, {
+      const panel = renderEditorHistory(document, current.history ?? [], t, onRestore, {
         author: item => {
           const unit = unitById(app, item.by);
           return item.by === "root:master" || item.by === "root:person" ? text(app.language, "person")
             : unit ? unitDisplayName(unit) : readableIdentity(item.by, text(app.language, "person"));
         },
         time: item => formatShortTime(app.language, item.at),
-      })
-        ?? element(document, "section", { class: "editor-history", "aria-label": historyLabel("history") }, element(document, "h2", { text: historyLabel("history") }));
-      if (!editorUi.renderEditorHistory) {
-        for (const item of current.history ?? []) {
-          const row = element(document, "article", { class: "history-row", "data-history-id": item.id }, element(document, "p", { text: `${item.by} · ${item.at}` }));
-          row.append(item.current ? element(document, "span", { class: "history-current", text: historyLabel("currentVersion") }) : element(document, "button", { type: "button", class: "btn", text: historyLabel("restoreVersion"), "data-action": "restore-history", onclick: () => onRestore(item) }));
-          panel.append(row);
-        }
-      }
+      });
       for (const button of panel.querySelectorAll("button")) {
         const historyId = button.closest("[data-history-id]")?.getAttribute("data-history-id");
         button.disabled = !canEditResources(app) || current.dirty || Boolean(current.historyPending) || Boolean(current.historyOperation && !current.historyOperation.path.endsWith(`/${historyId}/restore`));
@@ -4079,16 +4054,6 @@ function unitConversation(app, unitId) {
     app.unitTabs.set(unitId, view);
   }
   return view;
-}
-
-function keepFirst(scroll, selector, nodes) {
-  const first = scroll.querySelector(selector);
-  if (first?.parent === scroll || first?.parentNode === scroll) first.remove();
-  for (const node of nodes) scroll.append(node);
-  if (!first) return;
-  const rest = [...scroll.children];
-  for (const node of rest) node.remove();
-  scroll.append(first, ...rest);
 }
 
 function unitWork(document, view, language, t) {
@@ -5552,7 +5517,7 @@ function activityNotices(records) {
 function quietActivity(key, records = []) {
   const name = String(key ?? '');
   if (name.startsWith('chat-load:') && records.some(record => record.phase === 'pending' && /^(?:open-chat:|direct:)/.test(record.key))) return false;
-  return /^(?:chat-load:|inspector:|group-chat(?::|$)|mailboxes$|mailbox(?::|$)|catalog:|direct:|open-chat:|waiting:|read:|approval:|task:|grant:|undo:|cancel-start:|changes:|editor:|library:)/.test(name);
+  return /^(?:chat-load:|inspector:|group-chat(?::|$)|catalog:|direct:|open-chat:|waiting:|read:|approval:|task:|grant:|undo:|cancel-start:|changes:|editor:|library:)/.test(name);
 }
 
 function activityAnnouncement(app, record) {
@@ -5756,7 +5721,7 @@ function endPhoneAccess(app) {
   for (const value of Object.values(app.inputDrafts ?? {})) value?.clear?.();
   app.activity?.clear();
   app.store = { ...createStore(), audience: 'phone', signedOut: 410 };
-  for (const key of ['unitList', 'chatList', 'waitingList', 'activeList', 'activeRows', 'activeHandlers', 'thread', 'inputDrafts', 'inspectorData', 'waitingRecord', 'mailbox', 'pendingChat', 'actionNote', 'phoneCode']) app[key] = null;
+  for (const key of ['unitList', 'chatList', 'waitingList', 'activeList', 'activeRows', 'activeHandlers', 'thread', 'inputDrafts', 'inspectorData', 'waitingRecord', 'pendingChat', 'actionNote', 'phoneCode']) app[key] = null;
   app.bootReading = false;
   app.bootFailed = false;
   app.phoneEnded = true;
@@ -5959,10 +5924,6 @@ function releaseSettledAction(app) {
   if (chatId && app.thread.error == null && !chatFailed && app.actionKey === `chat:${chatId}`) {
     clearMatchedError(app, `chat:${chatId}`);
   }
-  const mailboxId = app.mailbox?.unitId;
-  if (mailboxId && !app.mailbox.pending && app.mailbox.optimistic?.failed !== true && app.actionKey === `mailbox:${mailboxId}`) {
-    clearMatchedError(app, `mailbox:${mailboxId}`);
-  }
 }
 
 function syncLiveRegions(app) {
@@ -6152,14 +6113,7 @@ function unitNameNode(document, unit) {
 }
 
 function folderIcon(document, plus = false) {
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("viewBox", "0 0 24 24");
-  svg.setAttribute("aria-hidden", "true");
-  svg.setAttribute("class", "icon");
-  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  path.setAttribute("d", `M3 7V4h7l2 3h9v13H3z${plus ? "M12 11v6M9 14h6" : ""}`);
-  svg.append(path);
-  return svg;
+  return pathIcon(document, `M3 7V4h7l2 3h9v13H3z${plus ? "M12 11v6M9 14h6" : ""}`);
 }
 
 export function mapButton(app, action, label, onClick, attributes = {}) {
@@ -6701,11 +6655,8 @@ function openChoiceForm(app, kind, title, build, onConfirm, opener = null) {
   const inputs = [...form.querySelectorAll("input, select, textarea")];
   const enabled = inputs.filter((control) => !control.disabled);
   const setFieldsBusy = (busy) => {
-    if (!["unit", "group", "selection-lead", "library-create", "library-folder", "library-move", "settings-find"].includes(kind)) return;
-    for (const control of enabled) {
-      const immutable = kind === "unit" && form.created && control.getAttribute("name") !== "groupId";
-      control.disabled = busy || Boolean(immutable);
-    }
+    if (!["selection-lead", "library-create", "library-folder", "library-move", "settings-find"].includes(kind)) return;
+    for (const control of enabled) control.disabled = busy;
   };
   cancel.addEventListener("click", () => dialog.close());
   confirm.addEventListener("click", async () => {
@@ -6726,7 +6677,7 @@ function openChoiceForm(app, kind, title, build, onConfirm, opener = null) {
     setFieldsBusy(true);
     confirm.setAttribute("aria-busy", "true");
     const label = confirm.textContent;
-    confirm.replaceChildren(progressMark(document, kind === "unit" ? text(app.language, "creatingUnit") : label));
+    confirm.replaceChildren(progressMark(document, label));
     try {
       const accepted = await onConfirm(form);
       if (accepted !== true) {
@@ -6968,8 +6919,7 @@ function chatPanel(app, t) {
       Object.assign(row.style, { background: "var(--me)", color: "var(--me-text)", padding: "10px 14px", borderRadius: "18px", fontSize: "14.5px", ...(message.failed ? { border: "1px solid var(--error)" } : {}) });
       const meta = article.querySelector(".bubble-meta");
       Object.assign(meta.style, { fontFamily: "var(--mono)", fontSize: "12px", fontWeight: "700", color: "var(--mute)" });
-      const state = message.failed ? "notConfirmed" : message.pending ? "sending" : message.delivery?.state === "read" ? "readReceipt" : message.delivery?.state === "delivered" ? "deliveredReceipt" : "storedReceipt";
-      const at = state === "readReceipt" ? message.delivery.readAt : state === "deliveredReceipt" ? message.delivery.deliveredAt : null;
+      const { key: state, at } = sentLineState(message);
       const label = sendText(app, state, { time: at ? formatClock(app.language, at) : "" });
       const status = message.pending && !message.failed ? progressMark(document, label) : element(document, "span", { text: label });
       status.setAttribute("data-send-state", state);
@@ -7086,18 +7036,7 @@ function chatPanel(app, t) {
       element(document, "div", { class: "composer-row" }, composer, send),
       element(document, "p", { class: "field-hint", id: hintId, text: hint })));
   }
-  if (app.mailbox) panel.append(renderMailbox(app, t));
-  else if (app.mailboxNote) panel.append(element(document, "p", { class: "action-note", "data-mailbox": "true", text: app.mailboxNote }));
   return panel;
-}
-
-function noteMailboxRead(app, data) {
-  const box = app.mailbox;
-  if (!box?.unitId || data?.mailboxId !== box.unitId) return;
-  if (data.readerId && data.readerId !== "root:master") return;
-  const ids = new Set(data.messageIds ?? []);
-  for (const item of box.items ?? []) if (ids.has(item.id)) item.read = true;
-  if (box.detail && ids.has(box.detail.id)) box.detail = { ...box.detail, read: true };
 }
 
 function dropPendingReads(thread) {
@@ -7122,104 +7061,6 @@ function syncChatReads(app) {
     thread.readPause = true;
     noteAction(app, error, `read:${thread.chat.id}`);
   });
-}
-
-function renderMailbox(app, t) {
-  const document = app.root.ownerDocument;
-  const box = app.mailbox;
-  const section = element(document, "section", { class: "mailbox", "data-mailbox-view": "true" });
-  const list = element(document, "div", { class: "mailbox-list", "data-mailbox-list": "true" });
-  for (const item of box.list ?? []) {
-    list.append(element(document, "button", {
-      type: "button",
-      class: "btn",
-      "data-mailbox-unit": item.unitId,
-      text: `${item.unitId} ${item.unread ?? 0}`,
-      onclick: () => openMailboxUnit(app, item.unitId),
-    }));
-  }
-  section.append(list);
-  if (box.unitId) {
-    const history = element(document, "div", { class: "mailbox-history", "data-mailbox-history": box.unitId });
-    history.append(element(document, "p", { text: t("mailboxHistory") }));
-    const visibleMail = [...(box.items ?? [])];
-    if (box.optimistic) visibleMail.unshift(box.optimistic);
-    if (!visibleMail.length && !box.pending) {
-      const canPost = (app.store.capabilities ?? []).includes("chat.post");
-      history.append(element(document, "p", { "data-empty": "mailbox", text: t(canPost ? "mailboxEmpty" : "mailboxEmptyRead") }));
-    }
-    for (const message of visibleMail) {
-      if (message.pending) {
-        const row = element(document, "p", {
-          "data-mailbox-message": message.id,
-          "data-pending": message.failed ? "failed" : "true",
-          text: message.body || "",
-        });
-        if (!message.failed) row.append(progressMark(document, t("sending")));
-        else row.append(element(document, "button", {
-          type: "button",
-          class: "btn",
-          "data-action": "retry-mailbox",
-          text: t("retry"),
-          onclick: () => sendMailbox(app, { value: message.body }),
-        }));
-        history.append(row);
-        continue;
-      }
-      history.append(element(document, "button", {
-        type: "button",
-        class: "btn",
-        "data-mailbox-message": message.id,
-        "data-read": message.read ? "true" : "false",
-        text: message.body || message.subject || message.id,
-        onclick: () => openMailboxDetail(app, message.id),
-      }));
-    }
-    if (box.nextCursor) {
-      history.append(element(document, "button", {
-        type: "button",
-        class: "btn",
-        "data-action": "mailbox-older",
-        text: t("loadOlder"),
-        onclick: () => openMailboxUnit(app, box.unitId, box.nextCursor),
-      }));
-    }
-    section.append(history);
-  }
-  if (box.detail) {
-    section.append(element(document, "article", {
-      "data-mailbox-detail": box.detail.id,
-      text: box.detail.body || box.detail.subject || "",
-    }));
-    if (canMarkMailbox(app.store.audience, app.store.capabilities, box.unitId)) {
-      section.append(element(document, "button", {
-        type: "button",
-        class: "btn",
-        "data-action": "mark-read",
-        text: t("markRead"),
-        onclick: () => markOpenMailbox(app),
-      }));
-    }
-  }
-  if (box.unitId && (app.store.capabilities ?? []).includes("chat.post")) {
-    const compose = element(document, "input", { class: "composer", "data-mailbox-compose": "true", "data-keep": keepId("mail", box.unitId), "aria-label": t("mailboxCompose") });
-    compose.value = box.composer ?? "";
-    compose.addEventListener("input", () => {
-      box.composer = compose.value;
-      rememberFormDraft(app, "mail", box.unitId, compose.value);
-    });
-    const sending = Boolean(box.pending);
-    section.append(compose, element(document, "button", {
-      type: "button",
-      class: "btn primary",
-      "data-action": "send-mailbox",
-      "aria-busy": sending ? "true" : "false",
-      disabled: sending ? "" : null,
-      onclick: () => sendMailbox(app, compose),
-    }, sending ? progressMark(document, t("sending")) : t("send")));
-  }
-  if (box.note) section.append(element(document, "p", { class: "action-note", "data-mailbox": "true", text: box.note }));
-  return section;
 }
 
 function takePendingChat(app) {
@@ -7305,7 +7146,6 @@ function loadOlder(app) {
   if (app.thread) {
     app.thread.nearBottom = false;
     if (measuredId) app.thread.anchorId = measuredId;
-    app.thread.anchorOffset = measuredOffset;
   }
   const older = Boolean(app.thread.nextCursor);
   track(app, `older:${app.thread.chat.id}`, text(app.language, "loadingConversation"), async () => {
@@ -7313,94 +7153,11 @@ function loadOlder(app) {
   }).then(() => {
     if (app.disposed || !measuredId) return;
     app.thread.anchorId = measuredId;
-    app.thread.anchorOffset = measuredOffset;
     app.thread.nearBottom = false;
     const next = app.root.querySelector?.(".transcript");
     const node = next?.querySelector?.(`[data-message="${measuredId}"]`);
     if (next && node) next.scrollTop += (node.offsetTop ?? 0) - measuredOffset;
   }).catch((error) => noteAction(app, error));
-}
-
-function inspectMailbox(app) {
-  settle(app, "mailboxes", text(app.language, "loadingList"), async () => {
-    const result = await loadMailboxes(app.api);
-    const composer = app.mailbox?.composer ?? "";
-    app.mailbox = {
-      list: result.data.items ?? [],
-      unitId: null,
-      items: [],
-      nextCursor: null,
-      detail: null,
-      composer,
-      note: "",
-    };
-  });
-}
-
-function openMailboxUnit(app, unitId, cursor = null) {
-  settle(app, `mailbox:${unitId}`, text(app.language, "loadingList"), async () => {
-    const result = await openMailbox(app.api, unitId, "all", cursor);
-    const incoming = result.data.items ?? [];
-    app.mailbox.unitId = unitId;
-    app.mailbox.items = cursor ? [...(app.mailbox.items ?? []), ...incoming] : incoming;
-    app.mailbox.nextCursor = result.data.nextCursor ?? null;
-    if (!cursor) app.mailbox.detail = null;
-  });
-}
-
-function openMailboxDetail(app, messageId) {
-  const unitId = app.mailbox?.unitId;
-  if (!unitId) return;
-  settle(app, `mailbox-message:${messageId}`, text(app.language, "loadingDetails", { name: messageId }), async () => {
-    const result = await loadMailboxMessage(app.api, unitId, messageId);
-    app.mailbox.detail = result.data;
-  });
-}
-
-function markOpenMailbox(app) {
-  const box = app.mailbox;
-  if (!box?.detail || !canMarkMailbox(app.store.audience, app.store.capabilities, box.unitId)) return;
-  const messageId = box.detail.id;
-  settle(app, `read:${messageId}`, text(app.language, "working"), async (record) => {
-    const result = await markMailboxRead(app.api, box.unitId, [messageId], record.operation);
-    const read = new Set(result.data.readIds ?? []);
-    for (const item of box.items ?? []) if (read.has(item.id)) item.read = true;
-    if (box.detail && read.has(box.detail.id)) box.detail = { ...box.detail, read: true };
-    box.note = text(app.language, "markedRead");
-  });
-}
-
-function sendMailbox(app, compose) {
-  const box = app.mailbox;
-  if (!box?.unitId || box.pending) return;
-  const saved = box.optimistic?.failed ? box.optimistic.body : compose.value;
-  box.composer = saved;
-  const task = postMailbox(app.api, box.unitId, { body: saved }, box.operation);
-  box.operation = task.operation;
-  box.pending = true;
-  if (!box.optimistic || box.optimistic.id !== `pending:${task.operation.id}`) {
-    box.optimistic = { id: `pending:${task.operation.id}`, body: saved, pending: true, failed: false };
-  } else {
-    box.optimistic.pending = true;
-    box.optimistic.failed = false;
-  }
-  if (!app.disposed) renderShell(app);
-  task.then((result) => {
-    box.pending = false;
-    box.operation = null;
-    box.optimistic = null;
-    if (box.composer === saved) box.composer = "";
-    releaseFormDraft(app, "mail", box.unitId, saved);
-    box.items = [result.data, ...(box.items ?? [])];
-    box.detail = result.data;
-    clearMatchedError(app, `mailbox:${box.unitId}`);
-    if (!app.disposed) renderShell(app);
-  }).catch((error) => {
-    box.pending = false;
-    if (box.optimistic) box.optimistic.failed = true;
-    box.operation = error?.operation ?? box.operation;
-    noteAction(app, error, `mailbox:${box.unitId}`);
-  });
 }
 
 function firstMessageComposer(app, t, unit) {
@@ -7825,7 +7582,6 @@ async function recheckTracked(app) {
       const answer = await request(app.api, "GET", "/approvals/:approvalId/answers/:answerId", {
         params: { approvalId: app.answerApprovalId, answerId: app.answerId },
       });
-      app.answerState = answer.data.state ?? null;
       const approval = await request(app.api, "GET", "/approvals/:approvalId", {
         params: { approvalId: app.answerApprovalId },
       });

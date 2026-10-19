@@ -1,3 +1,5 @@
+const LAMP = "M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9V16h7v-2.1A6 6 0 0 0 12 3z";
+
 const ICONS = {
   map: "M9 4 3 6v14l6-2 6 2 6-2V4l-6 2zM9 4v14M15 6v14",
   hierarchy: "M12 5a2.5 2.5 0 1 0 0 .1M5 19a2.5 2.5 0 1 0 0 .1M19 19a2.5 2.5 0 1 0 0 .1M12 7.5V11M12 11.5 6 17M12 11.5l6 5.5",
@@ -13,7 +15,7 @@ const ICONS = {
   send: "M4 12 20 4l-6 16-3-7z",
   minus: "M5 12h14",
   move: "M12 3v18M3 12h18M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3",
-  bulb: "M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9V16h7v-2.1A6 6 0 0 0 12 3z",
+  bulb: LAMP,
   blueprint: "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z",
   document: "M6 3h9l3 3v15H6zM15 3v4h4",
   focus: "M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5",
@@ -26,7 +28,7 @@ const ICONS = {
   person: [{ tag: "circle", cx: "12", cy: "8", r: "4" }, { tag: "path", d: "M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8" }],
   adjutant: [{ tag: "circle", cx: "9", cy: "8", r: "4" }, { tag: "path", d: "M2 21c0-4 3-7 7-7s7 3 7 7" }, { tag: "path", d: "M16 11l2 2 4-4" }],
   executor: [{ tag: "rect", x: "3", y: "4", width: "18", height: "16", rx: "2" }, { tag: "path", d: "M7 9l3 3-3 3M13 15h4" }],
-  genesis: "M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9V16h7v-2.1A6 6 0 0 0 12 3z",
+  genesis: LAMP,
   executive: [{ tag: "path", d: "M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12" }, { tag: "circle", cx: "16", cy: "6", r: "2" }, { tag: "circle", cx: "10", cy: "12", r: "2" }, { tag: "circle", cx: "18", cy: "18", r: "2" }],
 };
 
@@ -43,15 +45,27 @@ export function element(document, tag, attributes = {}, ...children) {
   return node;
 }
 
+// A 24 by 24 glyph drawn by one path, for the drawings that are not in the ICONS table.
+export function pathIcon(document, d, className = "icon") {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("class", className);
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", d);
+  svg.append(path);
+  return svg;
+}
+
 export function icon(document, name) {
   const spec = ICONS[name];
   if (!spec) throw new Error(`Unknown icon: ${name}`);
+  if (typeof spec === "string") return pathIcon(document, spec);
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute("viewBox", "0 0 24 24");
   svg.setAttribute("aria-hidden", "true");
   svg.setAttribute("class", "icon");
-  const parts = typeof spec === "string" ? [{ tag: "path", d: spec }] : spec;
-  for (const part of parts) {
+  for (const part of spec) {
     const node = document.createElementNS("http://www.w3.org/2000/svg", part.tag);
     for (const [key, value] of Object.entries(part)) {
       if (key !== "tag") node.setAttribute(key, value);

@@ -172,10 +172,6 @@ export async function setUnitAlias(api, unit, alias, retained = null) {
 export function createGroup(api, title, members, retained = null) {
   return commit(api, retained ?? createOperation({ method: 'POST', path: '/groups', body: { title, members } }));
 }
-export function patchGroup(api, group, change, retained = null) {
-  return commit(api, retained ?? createOperation({ method: 'PATCH', path: '/groups/:groupId', params: { groupId: group.id },
-    body: { ...change, expectedRevision: group.revision } }));
-}
 export function removeGroup(api, group, retained = null) {
   return commit(api, retained ?? createOperation({ method: 'DELETE', path: '/groups/:groupId', params: { groupId: group.id },
     body: { confirmed: true, expectedRevision: group.revision } }));

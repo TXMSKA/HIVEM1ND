@@ -1,6 +1,6 @@
 import { canAccept, canSendBack } from "./actions.mjs";
 import { clientLabel, clusterLead } from './clusters.mjs';
-import { element, icon, labeledField, progressMark } from "./components.mjs";
+import { element, icon, labeledField, pathIcon, progressMark } from "./components.mjs";
 import { formatWhen } from "./i18n.mjs";
 import { readableIdentity, unitDisplayName } from './hierarchy.mjs';
 import { startText } from './start-copy.mjs';
@@ -22,14 +22,9 @@ export function renderCluster(document, model, actions = {}) {
   const root = element(document, 'section', { class: 'cluster-inspector', 'data-cluster-inspector': cluster.id });
   const action = (key, id, run, glyph = null) => element(document, 'button', { type: 'button', class: glyph ? 'icon-button' : 'btn',
     'data-action': id, 'aria-label': t(key), title: t(key), onclick: run }, glyph ? icon(document, glyph) : t(key));
-  const glyph = path => {
-    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('class', 'icon'); svg.setAttribute('aria-hidden', 'true');
-    const shape = document.createElementNS('http://www.w3.org/2000/svg', 'path'); shape.setAttribute('d', path); svg.append(shape); return svg;
-  };
-  const add = action('newAgent', 'new-agent', actions.onNewAgent, 'executor'); add.replaceChildren(glyph('M12 5v14M5 12h14'));
-  const more = action('moreMenu', 'cluster-more', actions.onMore, 'settings'); more.replaceChildren(glyph('M5 12h.1M12 12h.1M19 12h.1'));
-  root.append(element(document, 'header', { class: 'cluster-heading' }, element(document, 'span', { class: 'cluster-avatar', 'aria-hidden': 'true' }, glyph('M3 7V4h7l2 3h9v13H3z')),
+  const add = action('newAgent', 'new-agent', actions.onNewAgent, 'executor'); add.replaceChildren(icon(document, 'plus'));
+  const more = action('moreMenu', 'cluster-more', actions.onMore, 'settings'); more.replaceChildren(pathIcon(document, 'M5 12h.1M12 12h.1M19 12h.1'));
+  root.append(element(document, 'header', { class: 'cluster-heading' }, element(document, 'span', { class: 'cluster-avatar', 'aria-hidden': 'true' }, icon(document, 'folder')),
     element(document, 'div', {}, element(document, 'h2', { text: cluster.title }), element(document, 'p', { text: t(kind === 'repository' ? 'repoCluster' : kind === 'folder' ? 'folder' : 'unlinkedCluster') })),
     add, more));
   const facts = element(document, 'section', { class: 'cluster-git', 'data-cluster-git': cluster.id });
