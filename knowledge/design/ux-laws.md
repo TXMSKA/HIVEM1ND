@@ -26,13 +26,13 @@ Twenty heuristics from usability and human-computer interaction research, each w
 
 - **Jakob's law.** People expect a product to behave like the products they already use. Follow the familiar patterns of the domain and do not reinvent navigation without a reason.
 - **Postel's law.** Be strict in what is emitted and tolerant in what is accepted. Take imperfect input, then validate and normalize it internally, while keeping output unambiguous.
-- **Tesler's law.** Complexity is conserved: it moves between the system and the person, it does not disappear. Absorb it in intelligent defaults rather than pushing it onto the reader.
+- **Tesler's law.** Complexity is conserved: it moves between the system and the person, it does not disappear. Absorb it in intelligent defaults rather than pushing it onto the reader: one choice of country fills the dialling code, the currency and the time zone, instead of four selects.
 
 ## Time and memory of the flow
 
 - **Doherty threshold.** A response under roughly 400 milliseconds feels continuous. Give immediate feedback on every activation, and show a skeleton or progress indicator when the work takes longer.
 - **Serial position effect.** The first and last items in a sequence are recalled best. Put what matters at the start and at the end of a list or a flow.
-- **Peak-end rule.** An experience is judged by its most intense moment and by how it ended. Design the hardest step and the closing state, success or failure, with the most care.
+- **Peak-end rule.** An experience is judged by its most intense moment and by how it ended. Design the hardest step and the closing state, success or failure, with the most care. A purchase ends on the outcome, such as the order confirmed and the day it arrives, not on a reference number.
 - **Zeigarnik effect.** Unfinished work stays on the mind. Show incomplete progress, through steps or checklists, to pull toward completion.
 - **Goal-gradient effect.** Effort increases as the end comes into view. Make remaining distance visible, and give early progress for free where it is honest to do so.
 - **Aesthetic-usability effect.** A design that looks better is perceived as more usable, which buys tolerance for real friction. Spend polish on the states that matter most, but never trade clarity for appearance.
