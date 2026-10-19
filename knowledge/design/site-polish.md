@@ -15,6 +15,7 @@ Small additions that separate a site that works from a site that feels finished.
 - **Skip to content.** One anchor, visible on focus, ahead of the navigation. Proved in [accessibility](protocols/accessibility.md).
 - **Password visibility toggle.** Anywhere there is a login or a signup.
 - **Copy button.** On snippets, identifiers, codes and anything that exists to be pasted elsewhere, with a short confirmation that the copy happened.
+- **Favicon and app icons.** The site's own mark in the browser tab, with the touch and install icons sized for phones, never the framework's default icon.
 
 ## Build when the site calls for it
 
@@ -34,6 +35,8 @@ Small additions that separate a site that works from a site that feels finished.
 - **Response time promise.** Next to a contact form, how long an answer takes.
 - **Work shown, not adjectives.** Case studies, real reviews and a visible face where trust is part of the sale. Real ones or none.
 - **Map and directions.** Only when there is a physical address to visit.
+- **Page transitions.** A short, consistent transition between pages, such as a cross-fade, when navigation would otherwise flash. It is skipped under reduced motion and never delays the content.
+- **Social links.** In the footer, to the profiles the business actually keeps up. Share buttons only on content that people do share.
 
 ## Usually not needed
 
