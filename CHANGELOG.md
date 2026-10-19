@@ -1,6 +1,9 @@
 # Changelog
 
-## 2.0.2 - 2026-10-13
+## 2.1.0 - 2026-10-19
+
+Relay fixes collected from the live use of 2.0, released together. 2.0.2 was never published; its changes are part of this release.
+
 
 - The carry-over of 2.0.1 now works in the Claude desktop app, which does not run user hooks. Every Claude session starts the Relay MCP server, and that process receives `CLAUDE_CODE_SESSION_ID` and `CLAUDE_CODE_HOST_SESSION_ID`, the ID of the conversation that stays the same when the desktop app moves it to a new session. Registrations record that host conversation (`hostSessionId`); at startup the server of an unregistered session finds the earlier session of the same conversation, or reads the session transcript for registrations made before this version, registers the new session as the same unit, moves the wake consent with the same window and starts the wake worker, before any tool call and before a message arrives. A registration made by hand in the same conversation also takes the wake the earlier session still holds, and `relay wake attach` records the host conversation. A registered session's hook reads nothing more than before.
 - A chat keeps its Relay registration when its client starts the MCP server again. Each server process was a new Relay instance and found only the registrations it had made itself, so after a session's process was restarted under the same native session ID, `read_inbox` answered `NOT_REGISTERED` until the chat registered again by hand; 2.0.1 retried such a call only for Claude and only after the error. The server now answers for the newest registration on this machine of the native session it serves: `CLAUDE_CODE_SESSION_ID` for Claude, or `--native-session-id` for any client.
