@@ -3,7 +3,7 @@ import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { CoreError, canonicalJson, hashBytes, isUuid, parseTaskId, parseUnitId, replaceHeader } from './identity.mjs';
 import { readCluster, rawClusters, clusterOwner } from './clusters.mjs';
-import { readDetail, paginate } from './projection.mjs';
+import { readDetail, readProjection, detailReader, paginate } from './projection.mjs';
 import { readUnitState } from './state.mjs';
 import { connectedClients } from './settings.mjs';
 import { launchBoundary, launchChoice, validateRunsIn } from './runs-in.mjs';
@@ -49,8 +49,13 @@ export async function listPlans(context, query = {}) {
   return paginate(items, { ...query, filters: { clusterId: query.clusterId ?? null, q: query.q ?? null }, snapshot: canonicalJson(items.map(item => item.revision)) });
 }
 
-async function membersOf(context, cluster) {
-  const all = (await rawClusters(context)).map(item => item.cluster);
+// Reads a unit out of one projection: the first lookup builds it and every later one, of any cluster, reuses it.
+function unitReader(context) {
+  let reader = null;
+  return async id => (reader ??= detailReader(context, await readProjection(context)))('units', id);
+}
+async function membersOf(context, cluster, { clusters = null, readUnit = unitReader(context) } = {}) {
+  const all = (clusters ?? await rawClusters(context)).map(item => item.cluster);
   const ids = new Set([cluster.id]);
   let changed = true;
   while (changed) { changed = false; for (const item of all) if (!item.deleted && ids.has(item.parentId) && !ids.has(item.id)) { ids.add(item.id); changed = true; } }
@@ -58,7 +63,7 @@ async function membersOf(context, cluster) {
   for (const item of all) if (ids.has(item.id) && !item.deleted) for (const id of item.members) members.add(id);
   const units = [];
   for (const id of members) {
-    const unit = await readDetail(context, 'units', id);
+    const unit = await readUnit(id);
     if (!unit.removed && unit.role !== 'master' && unit.machine === context.paths.machine) units.push(unit);
   }
   return units;
@@ -199,8 +204,9 @@ const summary = plan => ({ planId: plan.id, revision: plan.revision, chatId: pla
 // The clusters whose lead is this unit: the Overlord nobody above it leads, or the only Executor of a cluster without an Overlord.
 export async function leadClusterIds(context, unitId) {
   const owner = { ...context, principal: { audience: 'desktop', unitId }, credential: null }, ids = [];
-  for (const { cluster } of await rawClusters(owner)) {
-    if (!cluster.deleted && planLeadOf(await membersOf(owner, cluster))?.id === unitId) ids.push(cluster.id);
+  const clusters = await rawClusters(owner), readUnit = unitReader(owner);
+  for (const { cluster } of clusters) {
+    if (!cluster.deleted && planLeadOf(await membersOf(owner, cluster, { clusters, readUnit }))?.id === unitId) ids.push(cluster.id);
   }
   return ids;
 }

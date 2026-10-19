@@ -13,6 +13,7 @@ const VIEW_LIMIT = 16000000;
 const OBSERVATION_MS = 15 * 60 * 1000;
 const BEAT_MS = 180000;
 const FUTURE_MS = 30000;
+const READ_AHEAD = 32;
 const STATUS_ORDER = ['unknown', 'out', 'quota', 'waiting', 'working', 'idle'];
 const TASK_ORDER = ['review', 'open', 'done', 'closed'];
 
@@ -201,17 +202,29 @@ export async function readDetail(context, name, id, scope = {}) {
     if (context.principal?.audience === 'agent' && !chatMember(chat, context.principal.unitId)) throw new CoreError(404, 'chat_not_found', 'The record does not exist.');
     return chat;
   }
-  const view = await readProjection(context);
-  if (name === 'layout') return { layout: view.layout, revision: view.layoutRevision };
-  if (name === 'settings') return { settings: view.settings, revision: view.settingsRevision };
-  if (name === 'messages') {
-    const foundMessage = visibleToPrincipal(view.messages, 'messages', view, context.principal).find((item) => item.id === id && messageInScope(item, scope));
-    if (!foundMessage) throw new CoreError(404, 'message_not_found', 'The record does not exist.');
-    return foundMessage;
-  }
-  const found = visibleToPrincipal(name === 'units' ? view.allUnits : collectionItems(view, name, {}), name, view, context.principal).find((item) => item.id === id);
-  if (!found) throw new CoreError(404, `${name.replace(/s$/, '')}_not_found`, 'The record does not exist.');
-  return found;
+  return detailReader(context, await readProjection(context))(name, id, scope);
+}
+
+// Reads records out of one view already built, with the visibility, scope and errors of readDetail. Chats are not read here:
+// readDetail takes them from projectChat. A caller with several ids builds the view once and looks each id up in it.
+export function detailReader(context, view) {
+  const visible = new Map();
+  const visibleItems = (name, items) => {
+    if (!visible.has(name)) visible.set(name, visibleToPrincipal(items, name, view, context.principal));
+    return visible.get(name);
+  };
+  return (name, id, scope = {}) => {
+    if (name === 'layout') return { layout: view.layout, revision: view.layoutRevision };
+    if (name === 'settings') return { settings: view.settings, revision: view.settingsRevision };
+    if (name === 'messages') {
+      const foundMessage = visibleItems(name, view.messages).find((item) => item.id === id && messageInScope(item, scope));
+      if (!foundMessage) throw new CoreError(404, 'message_not_found', 'The record does not exist.');
+      return foundMessage;
+    }
+    const found = visibleItems(name, name === 'units' ? view.allUnits : collectionItems(view, name, {})).find((item) => item.id === id);
+    if (!found) throw new CoreError(404, `${name.replace(/s$/, '')}_not_found`, 'The record does not exist.');
+    return found;
+  };
 }
 
 function visibleToPrincipal(items, name, view, principal) {
@@ -265,6 +278,7 @@ async function loadMind(context) {
   const scopes = await scopeRoots(mind);
   const units = [];
   const machineSuffixes = await machineNames(mind);
+  const stateFiles = [];
   for (const scope of scopes) {
     const files = await filesUnder(mind, scope.state);
     const siblings = new Map();
@@ -276,44 +290,50 @@ async function loadMind(context) {
     for (const relative of files) {
       if (!relative.endsWith('.md') || relative.includes('.conflict-')) continue;
       if (isMachineCopy(path.basename(relative), siblings.get(path.dirname(relative)), machineSuffixes)) continue;
-      units.push(readUnit(await readSafe(mind, relative), relative, issues));
+      stateFiles.push(relative);
     }
   }
+  await eachFile(mind, stateFiles, (bytes, relative) => units.push(readUnit(bytes, relative, issues)));
   const observed = [];
-  for (const relative of await filesUnder(mind, 'user/relay/sessions')) {
-    if (!relative.endsWith('.json') || relative.includes('.conflict-')) continue;
-    observed.push(...readSession(await readSafe(mind, relative), relative, now, issues));
-  }
+  const sessionFiles = (await filesUnder(mind, 'user/relay/sessions')).filter((relative) => relative.endsWith('.json') && !relative.includes('.conflict-'));
+  await eachFile(mind, sessionFiles, (bytes, relative) => observed.push(...readSession(bytes, relative, now, issues)));
   const sessions = mergeSessions(observed, await readStatuses(mind, issues), await readWake(mind, issues));
   for (const unit of units) {
     unit.sessionIds = sessions.filter((session) => session.unitId === unit.id && session.state !== 'stopped').map((session) => session.id);
   }
   const allReceipts = await readReceipts(mind, issues);
   const receipts = allReceipts.get(context.principal?.unitId || 'root:master') ?? new Map();
-  const messages = [];
+  const messageFiles = [];
   for (const scope of scopes) {
     for (const bucket of [scope.inbox, scope.archive]) {
       for (const relative of await filesUnder(mind, bucket)) {
         if (!relative.endsWith('.md') || relative.includes('/read/') || relative.includes('.conflict-')) continue;
-        const message = readMessageFile(await readSafe(mind, relative), relative, issues, receipts, units, context.aliases ?? []);
-        if (message) messages.push(message);
+        messageFiles.push(relative);
       }
     }
   }
   for (const relative of await filesUnder(mind, 'user/relay/chats')) {
     if (!relative.endsWith('.md') || relative.endsWith('/chat.md') || relative.includes('/read/') || relative.includes('.conflict-')) continue;
-    const message = readMessageFile(await readSafe(mind, relative), relative, issues, receipts, units, context.aliases ?? []);
-    if (message) messages.push(message);
+    messageFiles.push(relative);
   }
-  const tasks = [];
+  const messages = [];
+  await eachFile(mind, messageFiles, (bytes, relative) => {
+    const message = readMessageFile(bytes, relative, issues, receipts, units, context.aliases ?? []);
+    if (message) messages.push(message);
+  });
+  const taskFiles = [];
   for (const scope of scopes) {
     for (const relative of await filesUnder(mind, scope.tasks)) {
       // A task is a file directly in tasks/; a folder beside it holds that task's briefs and evidence.
       if (!relative.endsWith('.md') || relative.includes('.conflict-') || relative.slice(scope.tasks.length + 1).includes('/')) continue;
-      const task = readTask(await readSafe(mind, relative), relative, units, issues, context.aliases ?? []);
-      if (task) tasks.push(task);
+      taskFiles.push(relative);
     }
   }
+  const tasks = [];
+  await eachFile(mind, taskFiles, (bytes, relative) => {
+    const task = readTask(bytes, relative, units, issues, context.aliases ?? []);
+    if (task) tasks.push(task);
+  });
   const undone = await readUndo(mind, issues);
   const actor = context.principal?.unitId ?? null;
   for (const task of tasks) {
@@ -323,16 +343,21 @@ async function loadMind(context) {
   const approvals = await readPendingApprovals(mind, issues, now);
   const catalog = await readJsonRecord(mind, 'user/gui/resources.json', 'hivem1nd-resources-v1', issues);
   const chats = await readChats(mind, messages, issues, context.principal?.unitId || 'root:master');
+  let requestListing = null;
+  const collect = (map, key, item) => map.has(key) ? map.get(key).push(item) : map.set(key, [item]);
+  const messagesById = new Map();
+  for (const message of messages) collect(messagesById, message.id, message);
   for (const relative of await filesUnder(mind, 'user/relay/preloads')) {
     if (!relative.endsWith('.json')) continue;
     const bytes = await readSafe(mind, relative);
     let marker; try { marker = JSON.parse(bytes); } catch { continue; }
     if (!isUuid(marker.requestId) || marker.messageId !== marker.requestId || relative !== `user/relay/preloads/${marker.requestId}.json`) continue;
-    const requestFiles = (await filesUnder(mind, 'user/relay/requests')).filter(file => file.endsWith(`/${marker.requestId}.json`));
+    requestListing ??= await filesUnder(mind, 'user/relay/requests');
+    const requestFiles = requestListing.filter(file => file.endsWith(`/${marker.requestId}.json`));
     const requestBytes = requestFiles.length === 1 ? await readSafe(mind, requestFiles[0]) : null;
     let request; try { request = JSON.parse(requestBytes); } catch { continue; }
     if (request.format !== 'hivem1nd-session-request-v1' || request.id !== marker.requestId) continue;
-    for (const preload of messages.filter(message => message.id === marker.messageId && message.toId === request.unitId && message.requestId === request.id)) {
+    for (const preload of (messagesById.get(marker.messageId) ?? []).filter(message => message.toId === request.unitId && message.requestId === request.id)) {
       preload.channel = 'bootstrap'; preload.body = ''; preload.subject = '';
     }
     const resultFiles = await filesUnder(mind, `user/relay/request-results/${request.id}`);
@@ -346,19 +371,37 @@ async function loadMind(context) {
         references: ['rules.md', ...(unit?.role ? [`roles/${unit.role}.md`] : []), ...(unit?.path ? [unit.path] : [])] };
     }
   }
-  for (const message of messages) {
-    const chatId = chatIdFromPath(message.path);
-    message.chatIds = chats.filter(chat => chat.id === chatId || chat.kind === 'direct'
-      && message.fromId !== message.toId && !message.toId?.startsWith('chat:') && chat.members.includes(message.fromId) && chat.members.includes(message.toId)).map(chat => chat.id);
-    const members = chatId ? chats.find((chat) => chat.id === chatId)?.members ?? [] : [message.toId];
+  const chatsById = new Map(), chatOrder = new Map(), directByMember = new Map();
+  chats.forEach((chat, index) => {
+    collect(chatsById, chat.id, chat);
+    chatOrder.set(chat, index);
+    if (chat.kind !== 'direct') return;
+    for (const member of new Set(chat.members)) if (typeof member === 'string') collect(directByMember, member, chat);
+  });
+  // Most messages have no delivery receipt, so the folder is listed once and only the receipts that exist are read.
+  let fanoutNames = null;
+  if (messages.length > 0) {
+    try { fanoutNames = new Set((await readdir(path.join(mind, 'user', 'relay', 'fanout'))).map((name) => name.toLowerCase())); }
+    catch (error) { if (error?.code === 'ENOENT') fanoutNames = new Set(); }
+  }
+  const readFanout = async (message) => {
     const relative = `user/relay/fanout/${message.id}.json`;
-    let notices = [];
+    if (fanoutNames && !fanoutNames.has(`${message.id}.json`.toLowerCase()) && !/[\\/]/.test(message.id)) return { notices: [] };
     try {
       const bytes = await readSafe(mind, relative);
-      if (bytes) notices = JSON.parse(bytes.toString('utf8')).notices ?? [];
+      return { notices: bytes ? JSON.parse(bytes.toString('utf8')).notices ?? [] : [] };
     } catch {
-      issues.push({ path: relative, code: 'corrupt_resource', message: 'The delivery receipt could not be projected.' });
+      return { notices: [], issue: { path: relative, code: 'corrupt_resource', message: 'The delivery receipt could not be projected.' } };
     }
+  };
+  await eachRead(messages, readFanout, ({ notices, issue }, message) => {
+    const chatId = chatIdFromPath(message.path);
+    const sameId = chatsById.get(chatId) ?? [];
+    const pairs = message.fromId !== message.toId && !message.toId?.startsWith('chat:')
+      ? (directByMember.get(message.fromId) ?? []).filter(chat => chat.members.includes(message.toId)) : [];
+    message.chatIds = (sameId.length && pairs.length ? [...new Set([...sameId, ...pairs])].sort((left, right) => chatOrder.get(left) - chatOrder.get(right)) : sameId.length ? sameId : pairs).map(chat => chat.id);
+    const members = chatId ? sameId[0]?.members ?? [] : [message.toId];
+    if (issue) issues.push(issue);
     const recipients = message.recipientIds ?? (notices.length ? notices.map(notice => notice.unitId) : members.filter(id => id && id !== message.fromId));
     message.recipientIds = [...new Set(recipients)];
     message.authorId = message.fromId;
@@ -368,19 +411,20 @@ async function loadMind(context) {
     const deliveredAt = recipients.length && submitted.every(validReceiptTime) ? submitted.sort().at(-1) : null;
     const readAt = recipients.length && read.every(validReceiptTime) ? read.sort().at(-1) : null;
     message.delivery = { state: readAt ? 'read' : deliveredAt ? 'delivered' : 'stored', deliveredAt, readAt };
-  }
+  });
   const groups = [];
-  for (const relative of await filesUnder(mind, 'user/gui/groups')) {
-    if (!relative.endsWith('.json') || relative.includes('.conflict-')) continue;
-    try { groups.push(projectGroup(await readSafe(mind, relative), path.posix.basename(relative, '.json'))); }
+  const groupFiles = (await filesUnder(mind, 'user/gui/groups')).filter((relative) => relative.endsWith('.json') && !relative.includes('.conflict-'));
+  await eachFile(mind, groupFiles, (bytes, relative) => {
+    try { groups.push(projectGroup(bytes, path.posix.basename(relative, '.json'))); }
     catch { issues.push({ path: relative, code: 'corrupt_resource', message: 'The group could not be projected.' }); }
-  }
+  });
   groups.sort((left, right) => left.title.localeCompare(right.title) || left.id.localeCompare(right.id));
   const recipientReceipts = [];
   for (const unit of units) for (const [key, ids] of allReceipts) if (key.endsWith(`:${unit.id}`)) {
     for (const [messageId, at] of ids) if (validReceiptTime(at)) recipientReceipts.push({ readerId: unit.id, messageId });
   }
-  const unread = unreadByAgent(messages.filter(message => !chats.some(chat => chat.archived && chat.id === chatIdFromPath(message.path))), recipientReceipts);
+  const archivedChats = new Set(chats.filter(chat => chat.archived).map(chat => chat.id));
+  const unread = unreadByAgent(messages.filter(message => !archivedChats.has(chatIdFromPath(message.path))), recipientReceipts);
   for (const unit of units) {
     const choices = groups.filter(group => !group.deleted && group.members.includes(unit.id)).map(group => group.id).sort();
     unit.clusterChoices = choices;
@@ -890,6 +934,7 @@ async function readChats(mind, messages, issues, reader) {
     if (error?.code === 'ENOENT') return chats;
     throw error;
   }
+  const byDirectory = messagesByChatDirectory(messages);
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const relative = `user/relay/chats/${entry.name}/chat.md`;
@@ -899,7 +944,7 @@ async function readChats(mind, messages, issues, reader) {
       const headers = headerMap(bytes);
       const id = headers.get('id') || entry.name;
       const members = parseList(headers.get('members'), relative, issues);
-      const own = messages.filter((message) => message.path?.includes(`/chats/${entry.name}/`) && !message.path.endsWith('/chat.md')).sort(messageOrder);
+      const own = (byDirectory.get(entry.name) ?? []).sort(messageOrder);
       chats.push({
         id,
         title: headers.get('title') || '',
@@ -919,6 +964,26 @@ async function readChats(mind, messages, issues, reader) {
     }
   }
   return chats;
+}
+
+// The messages whose path holds `/chats/<name>/`, by name and in message order, without a scan of all of them for each chat.
+function messagesByChatDirectory(messages) {
+  const byName = new Map();
+  for (const message of messages) {
+    const file = message.path;
+    if (!file || file.endsWith('/chat.md')) continue;
+    const seen = new Set();
+    for (let at = file.indexOf('/chats/'); at >= 0; at = file.indexOf('/chats/', at + 1)) {
+      const end = file.indexOf('/', at + '/chats/'.length);
+      if (end < 0) break;
+      const name = file.slice(at + '/chats/'.length, end);
+      if (seen.has(name)) continue;
+      seen.add(name);
+      if (!byName.has(name)) byName.set(name, []);
+      byName.get(name).push(message);
+    }
+  }
+  return byName;
 }
 
 async function readMachines(context, now, issues) {
@@ -1319,10 +1384,9 @@ function mergeSessions(observed, statuses, wakes) {
 
 async function readStatuses(mind, issues) {
   const statuses = [];
-  for (const relative of await filesUnder(mind, 'user/relay/session-status')) {
-    if (!relative.endsWith('.json')) continue;
-    const bytes = await readSafe(mind, relative);
-    if (!bytes) continue;
+  const files = (await filesUnder(mind, 'user/relay/session-status')).filter((relative) => relative.endsWith('.json'));
+  await eachFile(mind, files, (bytes, relative) => {
+    if (!bytes) return;
     try {
       const record = JSON.parse(bytes.toString('utf8'));
       if (!record.sessionId || !record.state) throw new Error('status');
@@ -1330,16 +1394,15 @@ async function readStatuses(mind, issues) {
     } catch {
       issues.push({ path: relative, code: 'corrupt_resource', message: 'The session status could not be projected.' });
     }
-  }
+  });
   return statuses;
 }
 
 async function readWake(mind, issues) {
   const policies = [];
-  for (const relative of await filesUnder(mind, 'user/relay/wake/policies')) {
-    if (!relative.endsWith('.json')) continue;
-    const bytes = await readSafe(mind, relative);
-    if (!bytes) continue;
+  const files = (await filesUnder(mind, 'user/relay/wake/policies')).filter((relative) => relative.endsWith('.json'));
+  await eachFile(mind, files, (bytes, relative) => {
+    if (!bytes) return;
     try {
       const record = JSON.parse(bytes.toString('utf8'));
       const binding = record.binding ?? {};
@@ -1355,16 +1418,15 @@ async function readWake(mind, issues) {
     } catch {
       issues.push({ path: relative, code: 'corrupt_resource', message: 'The wake policy could not be projected.' });
     }
-  }
+  });
   return policies;
 }
 
 async function readReceipts(mind, issues) {
   const byReader = new Map();
-  for (const relative of await filesUnder(mind, 'user')) {
-    if (!relative.includes('/read/') || !relative.endsWith('.json')) continue;
-    const bytes = await readSafe(mind, relative);
-    if (!bytes) continue;
+  const files = (await filesUnder(mind, 'user')).filter((relative) => relative.includes('/read/') && relative.endsWith('.json'));
+  await eachFile(mind, files, (bytes, relative) => {
+    if (!bytes) return;
     try {
       const record = JSON.parse(bytes.toString('utf8'));
       const reader = typeof record.unitId === 'string' ? record.unitId : 'root:master';
@@ -1388,7 +1450,7 @@ async function readReceipts(mind, issues) {
     } catch {
       issues.push({ path: relative, code: 'corrupt_resource', message: 'The read receipt could not be projected.' });
     }
-  }
+  });
   return byReader;
 }
 
@@ -1424,20 +1486,19 @@ async function readPendingApprovals(mind, issues, now) {
 
 async function readUndo(mind, issues) {
   const grouped = new Map();
-  for (const relative of await filesUnder(mind, 'user/relay/task-undo')) {
-    if (!relative.endsWith('.json')) continue;
-    const bytes = await readSafe(mind, relative);
-    if (!bytes) continue;
+  const files = (await filesUnder(mind, 'user/relay/task-undo')).filter((relative) => relative.endsWith('.json'));
+  await eachFile(mind, files, (bytes, relative) => {
+    if (!bytes) return;
     try {
       const record = JSON.parse(bytes.toString('utf8'));
-      if (!record?.taskId) continue;
+      if (!record?.taskId) return;
       const list = grouped.get(record.taskId) ?? [];
       list.push(record);
       grouped.set(record.taskId, list);
     } catch {
       issues.push({ path: relative, code: 'corrupt_resource', message: 'The undo record could not be projected.' });
     }
-  }
+  });
   const latest = new Map();
   for (const [taskId, records] of grouped) {
     const reversed = new Set(records.filter((record) => record.kind === 'undo' && record.undoOf).map((record) => record.undoOf));
@@ -1461,16 +1522,15 @@ function taskUndoAvailable(task, record, actor) {
 }
 
 async function readApprovals(mind, issues) {
-  for (const relative of await filesUnder(mind, 'user/relay/approvals')) {
-    if (!relative.endsWith('.json')) continue;
-    const bytes = await readSafe(mind, relative);
-    if (!bytes) continue;
+  const files = (await filesUnder(mind, 'user/relay/approvals')).filter((relative) => relative.endsWith('.json'));
+  await eachFile(mind, files, (bytes, relative) => {
+    if (!bytes) return;
     try {
       JSON.parse(bytes.toString('utf8'));
     } catch {
       issues.push({ path: relative, code: 'corrupt_resource', message: 'The approval could not be projected.' });
     }
-  }
+  });
 }
 
 function taskSections(body) {
@@ -1530,6 +1590,26 @@ async function readSafe(root, relative) {
     if (error?.code === 'ENOENT') return null;
     throw error;
   }
+}
+
+// Starts up to READ_AHEAD reads at once and hands the results to `visit` in the order of `items`, so what is built from them does
+// not depend on which read finished first. A read that fails is raised when its turn comes.
+async function eachRead(items, read, visit) {
+  const reads = [];
+  let started = 0;
+  for (let index = 0; index < items.length; index++) {
+    for (; started < items.length && started < index + READ_AHEAD; started++) {
+      reads[started] = read(items[started]);
+      reads[started].catch(() => {});
+    }
+    const result = await reads[index];
+    reads[index] = null;
+    visit(result, items[index]);
+  }
+}
+
+function eachFile(root, relatives, visit) {
+  return eachRead(relatives, (relative) => readSafe(root, relative), visit);
 }
 
 function boundLimit(limit) {

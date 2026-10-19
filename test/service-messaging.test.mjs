@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createChat, deliverNotifications, patchChat, postChat, postMailbox, queueNotice, readChat, readMailbox, recoverMailboxReads, recoverNotifications } from '../engine/service/chats.mjs';
 import { readCollection, readDetail, readProjection } from '../engine/service/projection.mjs';
+import { syncBuiltinESMExports } from 'node:module';
 import { composeCore } from '../engine/service/service.mjs';
 import { openLedger } from '../engine/sync/limits.mjs';
 import { recoverTransactions } from '../engine/service/store.mjs';
@@ -493,4 +494,96 @@ test('a chat counts only the messages of others as unread and a receipt clears o
   assert.equal((await readChat(context, chat.id, { messageIds: [second.message.id] })).unread, 0);
   assert.equal(await unread(context), 0);
   assert.equal(await unread(agent), 1, "the agent still has the person's question unread");
+});
+
+// Counts the fs.promises calls of the given names whose first argument passes `matches`, while `action` runs.
+async function countCalls(names, matches, action) {
+  const fs = (await import('node:fs')).default;
+  const originals = new Map(), calls = Object.fromEntries(names.map((name) => [name, []]));
+  for (const name of names) {
+    originals.set(name, fs.promises[name]);
+    fs.promises[name] = function (target, ...rest) {
+      if (matches(String(target))) calls[name].push(String(target));
+      return originals.get(name).call(this, target, ...rest);
+    };
+  }
+  syncBuiltinESMExports();
+  try { await action(); } finally {
+    for (const [name, original] of originals) fs.promises[name] = original;
+    syncBuiltinESMExports();
+  }
+  return calls;
+}
+
+test('marking several chat messages read builds the view twice, however many ids it names', async (t) => {
+  const { context, fixture } = await world(t), unitId = 'project:shop:executor-shop';
+  const agent = { ...context, principal: { audience: 'agent', unitId } };
+  const { chat } = await createChat(context, { members: [unitId] });
+  const ids = [];
+  for (let index = 0; index < 6; index += 1) {
+    fixture.clock.now += 1000;
+    ids.push((await postChat(context, chat.id, { body: `Question ${index}` })).message.id);
+  }
+  let result;
+  const layout = path.join('user', 'gui', 'layout.json');
+  const calls = await countCalls(['readFile'], (target) => target.endsWith(layout), async () => {
+    result = await readChat(agent, chat.id, { messageIds: ids.slice(0, 5) });
+  });
+  assert.deepEqual(result.readIds, ids.slice(0, 5));
+  assert.equal(result.unread, 1);
+  assert.deepEqual(result.deliveries.map((item) => item.messageId), ids.slice(0, 5));
+  assert.equal(result.deliveries.every((item) => item.delivery.state === 'read'), true);
+  await assert.rejects(() => readChat(agent, chat.id, { messageIds: [ids[5], 'missing'] }), (error) => error.code === 'message_not_found');
+  // One view for the lookups and the unread count, one after the receipt; the old code built one more per id.
+  assert.equal(calls.readFile.length, 2, `the view was built ${calls.readFile.length} times for 5 ids`);
+});
+
+test('marking several mailbox messages read opens each inbox file once, not once per id', async (t) => {
+  const { context, fixture } = await world(t);
+  const ids = [];
+  for (let index = 0; index < 12; index += 1) {
+    fixture.clock.now += 1000;
+    ids.push((await postMailbox(context, 'root:master', { body: `Note ${index}`, subject: `Subject ${index}` })).message.id);
+  }
+  const inbox = path.join('user', 'inbox', 'master');
+  const wanted = ids.slice(-6);
+  let result;
+  const calls = await countCalls(['open', 'readdir'], (target) => target.includes(inbox), async () => {
+    result = await readMailbox(context, 'root:master', { messageIds: wanted });
+  });
+  assert.deepEqual(result.readIds, wanted);
+  assert.deepEqual(result.alreadyReadIds, []);
+  assert.equal((await readdir(path.join(fixture.paths.mind, inbox))).length, 6);
+  // The inbox holds 12 files; the old code opened them again for every id (57 opens for these six).
+  assert.ok(calls.open.length <= 12, `${calls.open.length} inbox files were opened`);
+  assert.ok(calls.readdir.length <= 3, `the inbox was listed ${calls.readdir.length} times`);
+  await assert.rejects(() => readMailbox(context, 'root:master', { messageIds: [ids[0], ids[0], 'missing'] }), (error) => error.code === 'message_not_found');
+  assert.equal((await readdir(path.join(fixture.paths.mind, inbox))).length, 6);
+  const reply = await postMailbox(context, 'root:master', { body: 'Answer', replyTo: ids[0] });
+  assert.equal(reply.message.replyTo, ids[0]);
+  await assert.rejects(() => postMailbox(context, 'root:master', { body: 'Answer', replyTo: wanted[0] }), (error) => error.code === 'invalid_reply');
+  await assert.rejects(() => postMailbox(context, 'root:master', { body: 'Answer', replyTo: randomUUID() }), (error) => error.code === 'invalid_reply');
+});
+
+test('delivering the notices of one message reads its fanout file and does not list the fanout folder', async (t) => {
+  const { context, fixture } = await world(t);
+  const chat = await createChat(context, { members: ['project:shop:executor-shop', 'env:web:overlord-web'] });
+  const posted = [];
+  for (let index = 0; index < 4; index += 1) {
+    fixture.clock.now += 1000;
+    posted.push((await postChat(context, chat.chat.id, { body: `Post ${index}` })).message.id);
+  }
+  const fanout = path.join('user', 'relay', 'fanout');
+  const every = await deliverNotifications(context);
+  let one;
+  const calls = await countCalls(['readdir'], (target) => target.endsWith(fanout), async () => {
+    one = await deliverNotifications(context, posted[2]);
+  });
+  assert.equal(one.length, 2);
+  assert.deepEqual(one, every.filter((notice) => notice.key.startsWith(`${posted[2]}:`)));
+  assert.equal(calls.readdir.length, 0, 'the fanout folder was listed to find one file');
+  assert.deepEqual(await deliverNotifications(context, randomUUID()), []);
+  assert.deepEqual(await deliverNotifications(context, '../fanout/escape'), []);
+  const listed = await countCalls(['readdir'], (target) => target.endsWith(fanout), () => deliverNotifications(context));
+  assert.equal(listed.readdir.length, 1, 'a delivery for every message still lists the folder');
 });

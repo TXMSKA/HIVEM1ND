@@ -10,6 +10,8 @@ import { openLedger } from '../engine/sync/limits.mjs';
 import { clearInboundFailure, clearSyncFailure, openSync, recordInboundFailure, recordSyncFailure, stageTransaction } from '../engine/sync/store.mjs';
 import { revisionOf } from '../engine/service/store.mjs';
 import { request as httpRequest } from 'node:http';
+import { syncBuiltinESMExports } from 'node:module';
+import { leadClusterIds } from '../engine/service/plans.mjs';
 import { clientRecords, probeClients } from '../engine/service/adapters.mjs';
 import { composeCore, writeBeat } from '../engine/service/service.mjs';
 import { connectLead, createUnit, patchLayout, patchSettings, setUnitAlias } from '../engine/service/units.mjs';
@@ -941,4 +943,148 @@ test('a migrated 2.x M1ND keeps its seats and tasks: role from the unit name, ta
   assert.equal(flagged.some(item => item.includes('tasks/')), false, 'briefs and task folders are not broken tasks');
   assert.equal(flagged.includes('user/state/builder-cursor.md'), false);
   assert.equal(view.units.find(unit => unit.unit === 'builder-cursor').role, 'agent', 'a seat with no 3.0 role is shown as an agent');
+});
+
+// Counts the fs.promises calls of the given names whose first argument passes `matches`, while `action` runs.
+async function countCalls(names, matches, action) {
+  const fs = (await import('node:fs')).default;
+  const originals = new Map(), calls = Object.fromEntries(names.map((name) => [name, []]));
+  for (const name of names) {
+    originals.set(name, fs.promises[name]);
+    fs.promises[name] = function (target, ...rest) {
+      if (matches(String(target))) calls[name].push(String(target));
+      return originals.get(name).call(this, target, ...rest);
+    };
+  }
+  syncBuiltinESMExports();
+  try { await action(); } finally {
+    for (const [name, original] of originals) fs.promises[name] = original;
+    syncBuiltinESMExports();
+  }
+  return calls;
+}
+
+// Runs `action` with every readFile held back by `delay(file)` milliseconds; returns how many reads were in flight at most.
+async function peakReads(delay, action) {
+  const fs = (await import('node:fs')).default;
+  const original = fs.promises.readFile;
+  let active = 0, peak = 0;
+  fs.promises.readFile = async function (target, ...rest) {
+    active += 1;
+    peak = Math.max(peak, active);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, delay(String(target))));
+      return await original.call(this, target, ...rest);
+    } finally { active -= 1; }
+  };
+  syncBuiltinESMExports();
+  try { await action(); } finally {
+    fs.promises.readFile = original;
+    syncBuiltinESMExports();
+  }
+  return peak;
+}
+
+function inboxMessage(id, subject, extra = '') {
+  return stateFile({ id, from: 'executor-shop', 'from-id': 'project:shop:executor-shop', to: 'master', 'to-id': 'root:master', timestamp: '2026-10-10T11:00:00.000Z', subject, ...(extra ? { 'recipient-ids': extra } : {}) }, `Body of ${subject}\n`);
+}
+
+test('the view reads only the delivery receipts that exist, not one file per message', async (t) => {
+  const fixture = await mind(t);
+  const root = fixture.paths.mind;
+  const context = { paths: fixture.paths, now: () => NOW, principal: { unitId: 'root:master', audience: 'desktop' } };
+  await writeFile(path.join(root, 'user', 'state', 'executor-shop.md'), stateFile({ unit: 'executor-shop', 'unit-id': 'project:shop:executor-shop', role: 'executor', state: 'in', machine: 'DESKTOP' }));
+  const ids = Array.from({ length: 5 }, () => randomUUID());
+  for (const [index, id] of ids.entries()) await writeFile(path.join(root, 'user', 'inbox', 'master', `${index}-${id}.md`), inboxMessage(id, `Message ${index}`));
+  await mkdir(path.join(root, 'user', 'relay', 'fanout'), { recursive: true });
+  for (const id of ids.slice(0, 2)) {
+    await writeFile(path.join(root, 'user', 'relay', 'fanout', `${id}.json`), JSON.stringify({ format: 'hivem1nd-fanout-v1', messageId: id, notices: [{ key: `${id}:root:master`, unitId: 'root:master', state: 'submitted', resourceId: id, submittedAt: '2026-10-10T11:00:05.000Z' }] }));
+  }
+  await writeFile(path.join(root, 'user', 'relay', 'fanout', `${ids[2]}.json`), '{ not json');
+  let view;
+  const fanout = path.join('relay', 'fanout');
+  const calls = await countCalls(['readFile', 'readdir'], (target) => target.includes(fanout), async () => { view = await readProjection(context); });
+  const stateOf = (id) => view.messages.find((message) => message.id === id).delivery.state;
+  assert.deepEqual(ids.map(stateOf), ['delivered', 'delivered', 'stored', 'stored', 'stored']);
+  assert.deepEqual(view.issues.filter((issue) => issue.path.includes('fanout')), [{ path: `user/relay/fanout/${ids[2]}.json`, code: 'corrupt_resource', message: 'The delivery receipt could not be projected.' }]);
+  assert.ok(calls.readdir.length <= 2, `the fanout folder was listed ${calls.readdir.length} times`);
+  assert.equal(calls.readFile.length, 3, `${calls.readFile.length} delivery receipts were read for 5 messages, 3 of which have one`);
+});
+
+test('files are read in parallel and the view does not depend on which read finishes first', async (t) => {
+  const fixture = await mind(t);
+  const root = fixture.paths.mind;
+  const context = { paths: fixture.paths, now: () => NOW, principal: { unitId: 'root:master', audience: 'desktop' } };
+  await writeFile(path.join(root, 'user', 'state', 'executor-shop.md'), stateFile({ unit: 'executor-shop', 'unit-id': 'project:shop:executor-shop', role: 'executor', state: 'in', machine: 'DESKTOP' }));
+  for (let index = 0; index < 90; index += 1) {
+    const id = randomUUID();
+    // Every thirtieth message is broken, so the order of the issues shows the order the files were handled in.
+    await writeFile(path.join(root, 'user', 'inbox', 'master', `${String(index).padStart(3, '0')}-${id}.md`), inboxMessage(id, `Message ${index}`, index % 30 === 7 ? '[broken' : ''));
+  }
+  const plain = await readProjection(context);
+  assert.equal(plain.messages.length, 87);
+  assert.equal(plain.issues.filter((issue) => issue.message === 'The message could not be projected.').length, 3);
+  let delayed;
+  const slowFirst = (file) => (Number(/(\d{3})-[0-9a-f-]{36}\.md$/.exec(file)?.[1] ?? 0) % 9);
+  const peak = await peakReads(slowFirst, async () => { delayed = await readProjection(context); });
+  assert.deepEqual(delayed, plain);
+  assert.ok(peak > 1, `files were read one at a time (peak ${peak})`);
+  assert.ok(peak <= 32, `${peak} reads were in flight at once`);
+});
+
+test('a message belongs to the chat of its folder and to the direct chat of its two units', async (t) => {
+  const fixture = await mind(t);
+  const root = fixture.paths.mind;
+  const context = { paths: fixture.paths, now: () => NOW, principal: { unitId: 'root:master', audience: 'desktop' } };
+  const executor = 'project:shop:executor-shop', lead = 'env:web:overlord-web';
+  await writeFile(path.join(root, 'user', 'state', 'executor-shop.md'), stateFile({ unit: 'executor-shop', 'unit-id': executor, role: 'executor', state: 'in', machine: 'DESKTOP' }));
+  await writeFile(path.join(root, 'user', 'state', 'overlord-web.md'), stateFile({ unit: 'overlord-web', 'unit-id': lead, role: 'overlord', state: 'in', machine: 'DESKTOP' }));
+  const direct = randomUUID(), group = randomUUID(), archived = randomUUID();
+  const chatFile = (id, title, kind, members, extra = {}) => stateFile({ id, title, kind, members: JSON.stringify(members), pinned: 'false', listed: 'true', created: '2026-10-10T10:00:00.000Z', ...extra }, '');
+  for (const [id, title, kind, members, extra] of [[direct, 'Direct', 'direct', ['root:master', executor, lead]], [group, 'Group', 'group', ['root:master', executor]], [archived, 'Old', 'group', ['root:master', executor], { archived: 'true' }]]) {
+    await mkdir(path.join(root, 'user', 'relay', 'chats', id), { recursive: true });
+    await writeFile(path.join(root, 'user', 'relay', 'chats', id, 'chat.md'), chatFile(id, title, kind, members, extra));
+  }
+  const post = (chat, id, from, timestamp) => writeFile(path.join(root, 'user', 'relay', 'chats', chat, `${id}.md`), stateFile({ id, from, 'from-id': from, 'to-id': `chat:${chat}`, timestamp, 'recipient-ids': '["root:master"]' }, `In ${chat}\n`));
+  const [first, second, third, old] = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
+  await post(group, first, executor, '2026-10-10T11:00:00.000Z');
+  await post(group, second, 'root:master', '2026-10-10T11:05:00.000Z');
+  await post(archived, old, executor, '2026-10-10T11:06:00.000Z');
+  await writeFile(path.join(root, 'user', 'inbox', 'master', `${third}.md`), stateFile({ id: third, from: 'executor-shop', 'from-id': executor, 'to-id': lead, timestamp: '2026-10-10T11:10:00.000Z' }, 'Between two units.\n'));
+  const view = await readProjection({ ...context, principal: { unitId: 'root:master', audience: 'desktop' } });
+  const message = (id) => view.messages.find((item) => item.id === id);
+  assert.deepEqual(message(first).chatIds, [group]);
+  assert.deepEqual(message(old).chatIds, [archived]);
+  assert.deepEqual(message(third).chatIds, [direct]);
+  const chat = (id) => view.chats.find((item) => item.id === id);
+  assert.equal(chat(group).lastMessage.id, second);
+  assert.equal(chat(group).unread, 1);
+  assert.equal(chat(direct).lastMessage, null);
+  assert.equal(view.chats.some((item) => item.id === archived), false);
+  assert.equal(view.counts.unread, 3, 'the archived chat adds nothing to the unread count');
+});
+
+test('the clusters a unit leads are found with one projection, not one per member', async (t) => {
+  const fixture = await mind(t);
+  const root = fixture.paths.mind;
+  const context = { store: fixture.store, paths: fixture.paths, now: () => NOW, principal: { unitId: 'root:master', audience: 'desktop' } };
+  const units = ['alpha', 'beta', 'gamma', 'delta'].map((name) => `project:shop:${name}`);
+  for (const id of units) await writeFile(path.join(root, 'user', 'state', `${id.split(':')[2]}.md`), stateFile({ unit: id.split(':')[2], 'unit-id': id, role: 'executor', state: 'in', machine: 'DESKTOP' }));
+  const cluster = async (title, members, parentId = null) => {
+    const id = randomUUID();
+    await mkdir(path.join(root, 'user', 'gui', 'groups'), { recursive: true });
+    await writeFile(path.join(root, 'user', 'gui', 'groups', `${id}.json`), JSON.stringify({ format: 'hivem1nd-cluster-v1', id, title, members, parentId, link: { kind: 'none' }, chatId: id, deleted: false, createdAt: '2026-10-01T00:00:00.000Z' }));
+    return id;
+  };
+  const wide = await cluster('Wide', [units[0], units[1], units[2]]);
+  const alone = await cluster('Alone', [units[2]], wide);
+  const other = await cluster('Other', [units[3]]);
+  const layout = path.join('user', 'gui', 'layout.json');
+  let ids;
+  const calls = await countCalls(['readFile'], (target) => target.endsWith(layout), async () => { ids = await leadClusterIds(context, units[2]); });
+  // Wide has three units and no Overlord, so nobody leads it; the nested cluster has only gamma.
+  assert.deepEqual(ids, [alone]);
+  assert.deepEqual(await leadClusterIds(context, units[3]), [other]);
+  assert.deepEqual(await leadClusterIds(context, units[0]), []);
+  assert.equal(calls.readFile.length, 1, `the view was built ${calls.readFile.length} times for the members of three clusters`);
 });

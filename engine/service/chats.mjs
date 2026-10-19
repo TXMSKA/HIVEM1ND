@@ -117,7 +117,7 @@ export async function postMailbox(context, unitId, input) {
   const recipient = parseUnitId(unitId);
   if (!(await unitExists(context, unitId))) throw new CoreError(422, 'unknown_unit', 'The recipient does not exist.');
   if (input?.replyTo) {
-    const reply = await findInbox(context, recipient, input.replyTo);
+    const reply = (await findInbox(context, recipient, [input.replyTo])).get(input.replyTo);
     if (!reply) throw new CoreError(422, 'invalid_reply', 'The reply target is not in this mailbox.');
   }
   const message = await buildMessage(context, input, {
@@ -160,9 +160,12 @@ export async function readChat(context, chatId, input) {
     await callPlanTool(context, 'plan_read', { runId: binding.runId, messageIds: ids, requestId: context.receipt?.requestId ?? randomUUID() });
     return { chatId, readIds: ids, unread: await unreadChat(context, chatId, reader) };
   }
-  const { readDetail } = await import('./projection.mjs');
+  const { detailReader, readProjection } = await import('./projection.mjs');
+  // One projection serves the lookup of every id and the unread count.
+  const view = await readProjection(context);
+  const detail = detailReader(context, view);
   for (const id of ids) {
-    const message = await readDetail(context, 'messages', id, { chatId });
+    const message = detail('messages', id, { chatId });
     if (message.channel !== 'message') {
       throw new CoreError(404, 'message_not_found', 'A message in the receipt does not exist.');
     }
@@ -171,11 +174,11 @@ export async function readChat(context, chatId, input) {
   const record = { format: 'hivem1nd-chat-read-v1', chatId, unitId: reader, machine: context.paths.machine, messageIds: ids, at: stamp(context) };
   const relative = `user/relay/chats/${chatId}/read/${Buffer.from(reader).toString('base64url')}/${context.paths.machine}/${receiptId}.json`;
   let deliveries;
-  const unread = await unreadChat(context, chatId, reader, ids);
+  const unread = await unreadChat(context, chatId, reader, ids, view);
   await commitOne(context, relative, null, Buffer.from(`${canonicalJson(record)}\n`), async () => {
-    const { readProjection } = await import('./projection.mjs');
-    const messages = (await readProjection(context)).messages;
-    deliveries = ids.map((messageId) => ({ messageId, delivery: messages.find((message) => message.id === messageId).delivery }));
+    const messages = new Map();
+    for (const message of (await readProjection(context)).messages) if (!messages.has(message.id)) messages.set(message.id, message);
+    deliveries = ids.map((messageId) => ({ messageId, delivery: messages.get(messageId).delivery }));
     return [{ name: 'message.read', data: { chatId, mailboxId: null, readerId: reader, messageIds: ids, unread, deliveries } }];
   });
   return { chatId, readIds: ids, unread, deliveries };
@@ -211,12 +214,12 @@ export async function readMailbox(context, unitId, input) {
   if (context.principal?.audience === 'agent' && author(context) !== parsed.id) throw new CoreError(403, 'forbidden', 'An agent reads only its own mailbox.');
   if (context.principal?.audience === 'phone' && parsed.id !== 'root:master') throw new CoreError(403, 'forbidden', 'Phone reads only the master mailbox.');
   const ids = requireIds(input?.messageIds);
-  const found = [];
-  for (const id of ids) {
-    const match = await findInbox(context, parsed, id);
+  const matches = await findInbox(context, parsed, ids);
+  const found = ids.map((id) => {
+    const match = matches.get(id);
     if (!match) throw new CoreError(404, 'message_not_found', 'A mailbox message does not exist.');
-    found.push(match);
-  }
+    return match;
+  });
   const alreadyReadIds = [];
   const moving = [];
   for (const item of found) {
@@ -302,11 +305,14 @@ export async function deliverNotifications(context, messageId = null) {
 async function deliverNotificationsLocked(context, messageId) {
   const directory = path.join(context.paths.mind, 'user', 'relay', 'fanout');
   let names = [];
-  try {
-    names = await readdir(directory);
-  } catch (error) {
-    if (error?.code === 'ENOENT') return [];
-    throw error;
+  if (typeof messageId === 'string' && /^[\w.-]+$/.test(messageId)) names = [`${messageId}.json`];
+  else {
+    try {
+      names = await readdir(directory);
+    } catch (error) {
+      if (error?.code === 'ENOENT') return [];
+      throw error;
+    }
   }
   const results = [];
   for (const name of names) {
@@ -566,13 +572,13 @@ function parseChat(bytes, id) {
   };
 }
 
-async function unreadChat(context, chatId, reader, extra = []) {
+async function unreadChat(context, chatId, reader, extra = [], view = null) {
   const directory = path.join(context.paths.mind, 'user', 'relay', 'chats', chatId);
   const read = new Set(extra);
   const receiptRoot = path.join(directory, 'read', Buffer.from(reader).toString('base64url'));
   await collectReceipts(receiptRoot, read);
   const { readProjection } = await import('./projection.mjs');
-  const messages = (await readProjection(context)).messages;
+  const messages = (view ?? await readProjection(context)).messages;
   const ids = new Set(messages.filter(message => message.channel === 'message' && message.chatIds?.includes(chatId) && message.fromId !== reader && !read.has(message.id)).map(message => message.id));
   return ids.size;
 }
@@ -626,7 +632,10 @@ async function inboxCount(context, parsed) {
   }
 }
 
-async function findInbox(context, parsed, id) {
+// The first message of the inbox with each id, as a map. Each directory is listed once and reading stops when every id is found.
+async function findInbox(context, parsed, ids) {
+  const wanted = new Set(ids);
+  const found = new Map();
   const dirs = [inboxDirectory(parsed), `user/inbox/${parsed.unit}`];
   for (const relativeDir of dirs) {
     const directory = path.join(context.paths.mind, ...relativeDir.split('/'));
@@ -642,10 +651,13 @@ async function findInbox(context, parsed, id) {
       const relative = `${relativeDir}/${name}`;
       const bytes = await readBytes(context.store, absolute(context, relative));
       if (!bytes) continue;
-      if (headerMap(bytes).get('id') === id) return { id, name, relative, bytes };
+      const id = headerMap(bytes).get('id');
+      if (!wanted.has(id) || found.has(id)) continue;
+      found.set(id, { id, name, relative, bytes });
+      if (found.size === wanted.size) return found;
     }
   }
-  return null;
+  return found;
 }
 
 async function removeSources(context, relatives) {
