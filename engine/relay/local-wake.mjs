@@ -59,7 +59,7 @@ export async function legacySessions(sourcePath) {
         && status.state === 'stopped' && status.reason === 'native-acknowledged' && Number.isFinite(Date.parse(status.at))
         && Date.parse(status.at) >= Date.parse(registeredAt)) ended = true;
     }
-    if (!ended) active.push({ binding, file, sessionId });
+    if (!ended) active.push({ binding, file, sessionId, registeredAt });
   }
   return active;
 }

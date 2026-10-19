@@ -47,9 +47,9 @@ import { detectLanguage, LANGUAGES, option, relayLine, text } from './texts.mjs'
 const ADDRESS_STYLES = new Set(['impersonal', 'formal', 'explanatory', 'swarm']);
 const SETUP_PHASES = ['prepare', 'close-legacy', 'copy', 'migrate', 'configure', 'start', 'open', 'ready'];
 const SETUP_COPY = {
-  en: { joinTitle: 'Join this M1ND', join: 'Join', closeTitle: 'Close HIVEM1ND 2.x first', close: 'Close them and migrate',
+  en: { joinTitle: 'Join this M1ND', join: 'Join', closeTitle: 'Close HIVEM1ND 2.x first', close: 'Sessions closed, migrate',
     offline: 'A session on an offline machine closes the next time that machine starts HIVEM1ND.', review: 'Review changes in Settings' },
-  es: { joinTitle: 'Unirse a este M1ND', join: 'Unirse', closeTitle: 'Cerrar HIVEM1ND 2.x primero', close: 'Cerrar las sesiones y migrar',
+  es: { joinTitle: 'Unirse a este M1ND', join: 'Unirse', closeTitle: 'Cerrar HIVEM1ND 2.x primero', close: 'Sesiones cerradas, migrar',
     offline: 'Una sesión en una máquina desconectada se cierra la próxima vez que esa máquina inicia HIVEM1ND.', review: 'Revisar cambios en Configuración' },
 };
 
@@ -279,7 +279,7 @@ class SetupSession {
         base.action = base.join.action;
         this.alertedMind = normalizePath(this.mindPath);
       } else if (this.detectedLegacyPath) {
-        const sessions = await legacySessions(this.detectedLegacyPath);
+        const sessions = recentLegacy(await legacySessions(this.detectedLegacyPath), Date.now());
         base.fields.push(field('migrateLegacy', 'boolean', text(language, 'migrateLegacy'), false));
         base.values.migrateLegacy = this.answers.migrateLegacy !== false;
         base.legacy = { sourcePath: this.detectedLegacyPath, title: text(language, 'migrateLegacy'),
@@ -388,7 +388,7 @@ class SetupSession {
       this.answers.migrateLegacy = values.migrateLegacy ?? this.answers.migrateLegacy ?? true;
       this.legacySourcePath = !this.answers.attach && this.answers.migrateLegacy ? this.detectedLegacyPath : null;
       if (values.closeLegacy === false) { this.legacyConfirmation = false; await this.persistDraft(); return this.getStep(); }
-      if (this.legacySourcePath && (await legacySessions(this.legacySourcePath)).length && values.closeLegacy !== true) {
+      if (this.legacySourcePath && recentLegacy(await legacySessions(this.legacySourcePath), Date.now()).length && values.closeLegacy !== true) {
         this.legacyConfirmation = true;
         await this.persistDraft();
         return this.getStep();
@@ -559,7 +559,7 @@ class SetupSession {
       if (this.checkpointProof.activeMigration?.version === '2.0.0-experimental.4') await verifyInterruptedCoordinatorMigration(this);
       if (checkpoint.completed.includes('close-legacy')) {
         for (const session of this.checkpointProof.sessions ?? []) {
-          if (session.binding.machine === this.hostname && session.status === 'closed') await this.verifyClosedSession(session.binding);
+          if (session.binding.machine === this.hostname && session.status === 'closed' && !session.closedBy) await this.verifyClosedSession(session.binding);
         }
       }
       for (const entry of this.checkpointProof.destination ?? []) {
@@ -629,7 +629,10 @@ class SetupSession {
       if (exists) throw new CoreError(409, 'destination_exists', 'The migration destination must be a new folder.');
       this.checkpointProof.sourceVersion = source.version;
       this.checkpointProof.inventory = await legacyTreeInventory(this.legacySourcePath);
-      this.checkpointProof.sessions = await legacySessions(this.legacySourcePath);
+      // A registration older than a week belongs to a chat long gone; only recent ones are listed and confirmed.
+      const recent = new Set(recentLegacy(await legacySessions(this.legacySourcePath), Date.now()).map(session => session.file));
+      this.checkpointProof.sessions = (await legacySessions(this.legacySourcePath)).map(session => recent.has(session.file)
+        ? session : { ...session, status: 'closed', closedBy: 'stale' });
       this.checkpointProof.copied = [];
     } else {
       await this.createMindLayout();
@@ -640,15 +643,23 @@ class SetupSession {
   async closeLegacy() {
     if (this.checkpoint.mode !== 'migrate') return;
     const sessions = this.checkpointProof.sessions;
-    if (sessions.some(session => session.binding.machine === this.hostname && session.status !== 'closed') && this.answers.closeLegacy !== true) {
+    const open = sessions.filter(session => session.status !== 'closed' && (session.binding.machine === this.hostname || !this.legacyControl));
+    if (open.length && this.answers.closeLegacy !== true) {
       throw new CoreError(409, 'legacy_closure_required', SETUP_COPY[this.answers.language].closeTitle);
     }
     for (const session of sessions) {
-      if (session.binding.machine !== this.hostname) session.status = 'required';
-      else if (session.status !== 'closed') {
+      if (session.status === 'closed') {
+        if (!session.closedBy && session.binding.machine === this.hostname) await this.verifyClosedSession(session.binding);
+      } else if (!this.legacyControl) {
+        // No client offers a channel to close a 2.x chat, so the person closes them and confirms it here. The copy never
+        // adopts their registrations or wake policies, which stay quarantined, and the previous M1ND is not written.
+        session.status = 'closed';
+        session.closedBy = 'person';
+      } else if (session.binding.machine !== this.hostname) session.status = 'required';
+      else {
         await verifiedLegacyStop(session.binding, { machine: this.hostname, control: this.legacyControl });
         session.status = 'closed';
-      } else await this.verifyClosedSession(session.binding);
+      }
       await this.saveCheckpoint();
     }
   }
@@ -1760,6 +1771,12 @@ function validateLooseName(value, fallback) {
 
 function normalizePreference(value) {
   return String(value ?? '').replace(/\s+/g, ' ').trim().replace(/[.\s]+$/, '');
+}
+
+const RECENT_LEGACY_MS = 7 * 24 * 60 * 60 * 1000;
+
+function recentLegacy(sessions, now) {
+  return sessions.filter(session => !(Date.parse(session.registeredAt ?? '') < now - RECENT_LEGACY_MS));
 }
 
 function normalizeLanguage(value) {

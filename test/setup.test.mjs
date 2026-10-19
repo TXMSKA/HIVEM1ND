@@ -723,7 +723,7 @@ async function checkpointFixture(context, version = '2.0.0') {
 async function addLegacySession(fixture, machine = 'TESTBOX', overrides = {}) {
   const record = { kind: 'registration', registrationId: '11111111-1111-4111-8111-111111111111',
     sessionId: '33333333-3333-4333-8333-333333333333', unit: 'executor', unitId: 'root:executor', client: 'host',
-    machine, nativeSessionId: 'native-one', registeredAt: '2026-10-13T00:00:00.000Z', pid: 999999, ...overrides };
+    machine, nativeSessionId: 'native-one', registeredAt: new Date().toISOString(), pid: 999999, ...overrides };
   const directory = path.join(fixture.sourcePath, 'user', 'relay', 'sessions');
   await mkdir(directory, { recursive: true });
   await writeFile(path.join(directory, `${record.registrationId}.json`), JSON.stringify(record));
@@ -985,7 +985,9 @@ test('reopening a failed service step preserves completed copy and migration', a
 test('a stopped migration names its cause in the chosen language and a new M1ND opens in that language', async context => {
   const closure = await checkpointFixture(context);
   await addLegacySession(closure);
-  const stopped = await confirmedSetup({ ...closure.options, language: 'es', legacyControl: null }, { closeLegacy: true });
+  const unsaved = ownedLegacyControl();
+  unsaved.save = async binding => ({ binding, saved: false });
+  const stopped = await confirmedSetup({ ...closure.options, language: 'es', legacyControl: unsaved }, { closeLegacy: true });
   await assert.rejects(stopped.install(), { code: 'legacy_closure_required' });
   assert.equal(stopped.checkpoint.error.message, 'La migración se detuvo: no se pudieron cerrar las sesiones de HIVEM1ND 2.x de esta máquina (1). No se cerró ninguna y no se copió nada.');
   const linked = await checkpointFixture(context);
@@ -1007,12 +1009,36 @@ test('a stopped migration names its cause in the chosen language and a new M1ND 
   assert.equal(JSON.parse(await readFile(path.join(fresh.mindPath, 'user', 'gui', 'settings.json'), 'utf8')).language, 'es');
 });
 
-test('unsupported or unsaved legacy shutdown leaves both trees unchanged', async context => {
-  for (const mode of ['unsupported', 'unsaved', 'mismatched']) {
+test('without a close channel the person confirms the recent 2.x sessions closed, and older ones are not asked about', async context => {
+  const fixture = await checkpointFixture(context);
+  const recent = await addLegacySession(fixture, 'TESTBOX', { registeredAt: new Date().toISOString() });
+  await addLegacySession(fixture, 'SECOND', { registrationId: '22222222-2222-4222-8222-222222222222', sessionId: '44444444-4444-4444-8444-444444444444',
+    nativeSessionId: 'native-two', registeredAt: new Date().toISOString() });
+  await addLegacySession(fixture, 'TESTBOX', { registrationId: '55555555-5555-4555-8555-555555555555', sessionId: '66666666-6666-4666-8666-666666666666',
+    nativeSessionId: 'native-old', registeredAt: '2026-09-01T00:00:00.000Z' });
+  const before = await legacyTreeInventory(fixture.sourcePath);
+  const session = await createSetupSession({ ...fixture.options, legacyControl: null });
+  await session.answer({});
+  await session.answer({ mindPath: session.answers.mindPath });
+  const asked = await session.getStep();
+  assert.equal(asked.legacy.confirmation, true);
+  assert.deepEqual(asked.legacy.sessions.map(item => item.machine).sort(), ['SECOND', 'TESTBOX']);
+  await session.answer({ mindPath: session.answers.mindPath, closeLegacy: true });
+  await session.answer({ confirm: true });
+  assert.equal((await session.install()).completed, true, JSON.stringify(session.checkpoint?.error));
+  const closure = JSON.parse(await readFile(path.join(fixture.mindPath, '.migration', 'legacy-closure.json'), 'utf8'));
+  assert.deepEqual(closure.sessions.map(item => item.status), ['closed', 'closed', 'closed']);
+  assert.equal(session.checkpointProof.sessions.find(item => item.binding.nativeSessionId === recent.nativeSessionId).closedBy, 'person');
+  assert.equal(session.checkpointProof.sessions.find(item => item.binding.nativeSessionId === 'native-old').closedBy, 'stale');
+  assert.deepEqual(await legacyTreeInventory(fixture.sourcePath), before);
+});
+
+test('unsaved or mismatched legacy shutdown leaves both trees unchanged', async context => {
+  for (const mode of ['unsaved', 'mismatched']) {
     const fixture = await checkpointFixture(context);
     await addLegacySession(fixture);
     const before = await legacyTreeInventory(fixture.sourcePath);
-    const control = mode === 'unsupported' ? null : ownedLegacyControl();
+    const control = ownedLegacyControl();
     if (mode === 'unsaved') control.save = async binding => ({ binding, saved: false });
     if (mode === 'mismatched') control.confirm = async binding => ({ binding: { ...binding, nativeSessionId: 'another' }, owned: true, live: true });
     const session = await confirmedSetup({ ...fixture.options, legacyControl: control }, { closeLegacy: true });
@@ -1036,7 +1062,7 @@ test('a closed legacy checkpoint is verified again before copy resume', async co
 
 test('native history selects the newest binding and excludes acknowledged stopped sessions', async context => {
   const fixture = await checkpointFixture(context);
-  const old = await addLegacySession(fixture);
+  const old = await addLegacySession(fixture, 'TESTBOX', { registeredAt: '2026-10-13T00:00:00.000Z' });
   const newer = await addLegacySession(fixture, 'TESTBOX', { registrationId: '22222222-2222-4222-8222-222222222222',
     unit: 'overseer', unitId: 'root:overseer', registeredAt: '2026-10-13T01:00:00.000Z' });
   const sessions = await legacySessions(fixture.sourcePath);
