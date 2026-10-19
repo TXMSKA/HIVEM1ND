@@ -811,16 +811,30 @@ function locale(language) {
   return language === "es" ? "es" : "en";
 }
 
+// One formatter per kind and language: building one costs far more than using it.
+const FORMATTERS = new Map();
+
+function formatter(kind, language, build) {
+  const code = locale(language);
+  const key = `${kind}:${code}`;
+  let cached = FORMATTERS.get(key);
+  if (!cached) {
+    cached = build(code);
+    FORMATTERS.set(key, cached);
+  }
+  return cached;
+}
+
 function pluralForm(language, count) {
   const number = Number(count);
   const safe = Number.isFinite(number) ? number : 0;
-  return new Intl.PluralRules(locale(language)).select(safe) === "one" ? "One" : "Other";
+  return formatter("plural", language, (code) => new Intl.PluralRules(code)).select(safe) === "one" ? "One" : "Other";
 }
 
 export function formatNumber(language, value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return "";
-  return new Intl.NumberFormat(locale(language)).format(number);
+  return formatter("number", language, (code) => new Intl.NumberFormat(code)).format(number);
 }
 
 export function cardinal(language, key, count, variables = {}) {
@@ -846,27 +860,31 @@ export function formatWhen(language, value) {
   if (value == null || value === "") return "";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
-  return new Intl.DateTimeFormat(locale(language), WHEN).format(date);
+  return formatter("when", language, (code) => new Intl.DateTimeFormat(code, WHEN)).format(date);
 }
+
+const CLOCK = {
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+  timeZone: "UTC",
+  timeZoneName: "short",
+};
 
 export function formatClock(language, value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
-  return new Intl.DateTimeFormat(locale(language), {
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-    timeZone: "UTC",
-    timeZoneName: "short",
-  }).format(date);
+  return formatter("clock", language, (code) => new Intl.DateTimeFormat(code, CLOCK)).format(date);
 }
+
+const SHORT_TIME = {
+  hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: "UTC",
+};
 
 export function formatShortTime(language, value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
-  return new Intl.DateTimeFormat(locale(language), {
-    hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: "UTC",
-  }).format(date);
+  return formatter("short", language, (code) => new Intl.DateTimeFormat(code, SHORT_TIME)).format(date);
 }
 
 export function limitsUsage(language, messages = {}, bytes = {}) {
