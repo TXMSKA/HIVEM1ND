@@ -24,7 +24,7 @@ import { closeBridge, createNativeLaunch, dispatchLocal, handleNativeHook, handl
 import { bootstrapConfig } from './install.mjs';
 import { aclRunnerFrom, createCredentialStore, protectBootstrapFiles, verifyBootstrapFiles, wakeBindingLive } from './security.mjs';
 import { createEventBus, publishDomainEvents } from './events.mjs';
-import { projectChat, readDetail, readSync } from './projection.mjs';
+import { projectChat, readDetail, readSync, viewBatch } from './projection.mjs';
 import { createHttpServer } from './http.mjs';
 import { consumeAnswers, consumeRevocations, recoverApprovals } from './approvals.mjs';
 import { deliverNotifications } from './chats.mjs';
@@ -1092,6 +1092,8 @@ async function emitChanges(runtime, result, local = false) {
   // M1ND announced one view change instead of rebuilding the whole projection once per file for hours.
   const bulk = selected.length > BULK_EVENT_LIMIT;
   if (bulk) for (const name of BULK_COLLECTIONS) collections.add(name);
+  // Every change of the batch reads from one view instead of building it once or twice per change.
+  context.batch = viewBatch(context);
   for (const change of bulk ? [] : selected) {
     try {
       const built = await eventsForImported(runtime, context, change);
@@ -1170,7 +1172,7 @@ async function mindImport(runtime, context, change, file) {
     if (change.operation === 'delete') return { events: [], collections: ['chats'] };
     const chatId = message[1];
     const bytes = await bytesAt(runtime.paths.mind, file);
-    const projected = await readDetail(context, 'messages', headerValue(bytes, 'id') || message[2], { chatId });
+    const projected = await detailOf(context, 'messages', headerValue(bytes, 'id') || message[2], { chatId });
     const events = [{
       name: 'message.created',
       operationId: change.id,
@@ -1179,7 +1181,7 @@ async function mindImport(runtime, context, change, file) {
       data: { chatId, mailboxId: null, message: projected },
     }];
     try {
-      const chat = await projectChat(context, chatId);
+      const chat = await chatOf(context, chatId);
       events.push({ name: 'chat.changed', operationId: change.id, chatId, source, data: { chat } });
     } catch (error) {
       if (error?.code !== 'chat_not_found') throw error;
@@ -1189,7 +1191,7 @@ async function mindImport(runtime, context, change, file) {
   const chatMeta = /^user\/relay\/chats\/([^/]+)\/chat\.md$/.exec(file);
   if (chatMeta) {
     if (change.operation === 'delete') return { events: [], collections: ['chats'] };
-    const chat = await projectChat(context, chatMeta[1]);
+    const chat = await chatOf(context, chatMeta[1]);
     return {
       events: [{ name: 'chat.changed', operationId: change.id, chatId: chat.id, source, data: { chat } }],
       collections: ['chats'],
@@ -1199,11 +1201,19 @@ async function mindImport(runtime, context, change, file) {
   if (!fallbackUnit) return { events: [], collections: [] };
   if (change.operation === 'delete') return { events: [], collections: ['units', 'leads', 'squads'] };
   const bytes = await bytesAt(runtime.paths.mind, file);
-  const unit = await readDetail(context, 'units', headerValue(bytes, 'unit-id') || fallbackUnit);
+  const unit = await detailOf(context, 'units', headerValue(bytes, 'unit-id') || fallbackUnit);
   return {
     events: [{ name: 'unit.changed', operationId: change.id, unitId: unit.id, source, data: { unit } }],
     collections: ['units', 'leads', 'squads', 'waiting'],
   };
+}
+
+function detailOf(context, name, id, scope) {
+  return context.batch ? context.batch.detail(name, id, scope) : readDetail(context, name, id, scope);
+}
+
+function chatOf(context, id) {
+  return context.batch ? context.batch.chat(id) : projectChat(context, id);
 }
 
 function stateUnitId(file) {

@@ -3,6 +3,10 @@ import path from 'node:path';
 import { canonicalTaskId, parseTaskId } from './identity.mjs';
 import { assertNoLinks } from './paths.mjs';
 import { projectChat, readCollection, readDetail } from './projection.mjs';
+
+// A batch of imported changes shares one view (context.batch); a single change builds its own.
+const detailOf = (context, name, id, scope) => context.batch ? context.batch.detail(name, id, scope) : readDetail(context, name, id, scope);
+const chatOf = (context, id) => context.batch ? context.batch.chat(id) : projectChat(context, id);
 import { projectGroup } from './groups.mjs';
 import { readApproval } from './approvals.mjs';
 import { projectSessionRequest, readStartRequest } from './adapters.mjs';
@@ -44,7 +48,7 @@ export async function importedSidecarEvents(context, change) {
   if (/^user\/(?:inbox|(?:envs|projects)\/[^/]+\/inbox)\/[^/]+\.md$/.test(file)) {
     if (change.operation === 'delete') return changed([], ['mailboxes', 'messages', 'waiting']);
     const bytes = await bytesAt(context.paths.mind, file);
-    const message = await readDetail(context, 'messages', header(bytes, 'id'));
+    const message = await detailOf(context, 'messages', header(bytes, 'id'));
     return changed([event('message.created', { chatId: null, mailboxId: message.toId, message }, { unitId: message.toId })], ['mailboxes', 'messages', 'waiting']);
   }
   if (/^user\/(?:tasks|(?:envs|projects)\/[^/]+\/tasks)\/[^/]+\.md$/.test(file) || /^user\/relay\/task-undo\/[^/]+\/[^/]+\.json$/.test(file)) {
@@ -53,7 +57,7 @@ export async function importedSidecarEvents(context, change) {
     const record = file.endsWith('.json') ? JSON.parse(bytes) : null;
     const rawId = record?.taskId ?? header(bytes, 'id') ?? header(bytes, 'task-id');
     const id = parseTaskId(canonicalTaskId(rawId, file)).id;
-    const task = await readDetail(context, 'tasks', id);
+    const task = await detailOf(context, 'tasks', id);
     return changed([event('task.changed', { task, changeId: record?.id ?? null, undoOf: record?.undoOf ?? null })], ['tasks', 'waiting', 'units', 'leads', 'squads']);
   }
   const approval = /^user\/relay\/approvals\/([^/]+)\/(request|result|binding|answers\/[^/]+|answer-results\/[^/]+)\.json$/.exec(file);
@@ -65,7 +69,7 @@ export async function importedSidecarEvents(context, change) {
   }
   if (file === 'user/gui/layout.json' || file === 'user/gui/settings.json') {
     const name = file.includes('layout') ? 'layout' : 'settings';
-    const value = await readDetail(context, name);
+    const value = await detailOf(context, name);
     return changed([event(`${name}.changed`, value)], name === 'layout' ? ['units'] : []);
   }
   if (file === 'user/gui/resources.json') return changed([], ['editors']);
@@ -78,7 +82,7 @@ export async function importedSidecarEvents(context, change) {
   const metadata = /^user\/relay\/chats\/([^/]+)\/chat\.md$/.exec(file);
   if (metadata) {
     if (change.operation === 'delete') return changed([], ['chats']);
-    const chat = await projectChat(context, metadata[1]);
+    const chat = await chatOf(context, metadata[1]);
     return changed([event('chat.changed', { chat }, { chatId: chat.id })], ['chats']);
   }
   const binding = /^user\/relay\/editors\/([^/.]+)\.json$/.exec(file);
@@ -107,7 +111,7 @@ export async function importedSidecarEvents(context, change) {
     const value = await jsonAt(context.paths.mind, file);
     const id = value.sessionId;
     if (!id) return changed([], ['sessions', 'units', 'waiting']);
-    const session = clean(await readDetail(context, 'sessions', id));
+    const session = clean(await detailOf(context, 'sessions', id));
     return changed([event('session.changed', { session }, { unitId: session.unitId })], ['sessions', 'units', 'waiting', 'leads', 'squads']);
   }
   const request = /^user\/relay\/requests\/[^/]+\/([^/]+)\.json$/.exec(file);

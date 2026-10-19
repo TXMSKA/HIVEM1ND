@@ -260,7 +260,7 @@ for (const existing of [false, true]) test(`restart stages an imported ${existin
 
 test('a bulk of observed files at boot announces one view change instead of rebuilding the projection per file', async t => {
   let projections = 0;
-  const original = fsPromises.open;
+  const original = fsPromises.readFile;
   const { fixture } = await boot(t, async (context) => {
     for (let index = 0; index < 250; index += 1) {
       const sessionId = randomUUID();
@@ -268,16 +268,36 @@ test('a bulk of observed files at boot announces one view change instead of rebu
       await mkdir(directory, { recursive: true });
       await writeFile(path.join(directory, `${randomUUID()}.json`), JSON.stringify({ format: 'hivem1nd-session-status-v1', sessionId, state: 'stopped' }));
     }
-    fsPromises.open = function (target, ...rest) {
+    fsPromises.readFile = function (target, ...rest) {
       if (String(target).endsWith(path.join('user', 'gui', 'resources.json'))) projections += 1;
       return original.call(this, target, ...rest);
     };
     syncBuiltinESMExports();
-    t.after(() => { fsPromises.open = original; syncBuiltinESMExports(); });
+    t.after(() => { fsPromises.readFile = original; syncBuiltinESMExports(); });
   });
-  fsPromises.open = original;
+  fsPromises.readFile = original;
   syncBuiltinESMExports();
   assert.ok(projections < 50, `the projection was read ${projections} times for 250 observed files`);
   const views = fixture.store.events.filter(event => event.name === 'view.changed' && event.data?.collections?.includes('sessions'));
   assert.ok(views.length >= 1);
+});
+
+test('the events of one batch of observed files read one view, not one per file', async t => {
+  const { fixture } = await boot(t);
+  let projections = 0;
+  const original = fsPromises.readFile;
+  fsPromises.readFile = function (target, ...rest) {
+    if (String(target).endsWith(path.join('user', 'gui', 'resources.json'))) projections += 1;
+    return original.call(this, target, ...rest);
+  };
+  syncBuiltinESMExports();
+  t.after(() => { fsPromises.readFile = original; syncBuiltinESMExports(); });
+  const units = Array.from({ length: 40 }, (_, index) => `agent-${index}`);
+  await mkdir(path.join(fixture.paths.mind, 'user', 'state'), { recursive: true });
+  await Promise.all(units.map(unit => writeFile(path.join(fixture.paths.mind, 'user', 'state', `${unit}.md`), `unit: ${unit}\nstate: in\nmachine: ${fixture.machine}\n\nReady.\n`)));
+  const changed = () => new Set(fixture.store.events.filter(event => event.name === 'unit.changed').map(event => event.data?.unit?.id));
+  await until(async () => units.every(unit => changed().has(`root:${unit}`)));
+  fsPromises.readFile = original;
+  syncBuiltinESMExports();
+  assert.ok(projections < 20, `the projection was read ${projections} times for 40 observed state files`);
 });

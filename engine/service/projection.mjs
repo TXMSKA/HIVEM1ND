@@ -227,6 +227,37 @@ export function detailReader(context, view) {
   };
 }
 
+// One view for reads made at the same moment, such as the events of one imported pack: it is built on the first read
+// and every later read looks its record up in it. Chats come from the same load projectChat uses.
+export function viewBatch(context) {
+  let pending = null;
+  let reader = null;
+  const view = () => (pending ??= readProjection(context).then((built) => {
+    reader = detailReader(context, built);
+    return built;
+  }));
+  return {
+    async detail(name, id, scope = {}) {
+      if (name === 'chats') return readDetail(context, name, id, scope);
+      await view();
+      return reader(name, id, scope);
+    },
+    async chat(id) {
+      let built;
+      try {
+        built = await view();
+      } catch (error) {
+        // projectChat has no size limit, so a view too large to send still yields its chats.
+        if (error?.code === 'view_too_large') return projectChat(context, id);
+        throw error;
+      }
+      const chat = built.allChats.find((item) => item.id === id);
+      if (!chat) throw new CoreError(404, 'chat_not_found', 'The chat does not exist.');
+      return chat;
+    },
+  };
+}
+
 function visibleToPrincipal(items, name, view, principal) {
   if (principal?.audience !== 'agent') return items;
   const unitId = principal.unitId;
