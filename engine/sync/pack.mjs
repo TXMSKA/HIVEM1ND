@@ -109,18 +109,19 @@ export function encodePack({ machine, sequence, changes, objects = [], dependenc
   if (normalized.length > MAX_INDEX_ITEMS) throw new CoreError(413, 'pack_too_large', 'The pack lists too many changes.');
   const available = objectMap(objects);
   const dependencyList = dependencies.map(validateDependency);
-  const included = [];
+  const dependencyHashes = new Set(dependencyList.map((item) => item.hash));
+  const unique = new Set();
   for (const change of normalized) {
     if (change.operation !== 'put') continue;
     if (available.has(change.hash)) {
-      if (!included.includes(change.hash)) included.push(change.hash);
+      unique.add(change.hash);
       continue;
     }
-    if (!dependencyList.some((item) => item.hash === change.hash)) {
+    if (!dependencyHashes.has(change.hash)) {
       throw new CoreError(422, 'invalid_pack', 'A change object is missing from the pack.');
     }
   }
-  included.sort();
+  const included = [...unique].sort();
   let offset = 0;
   const objectEntries = [];
   const blobs = [];
