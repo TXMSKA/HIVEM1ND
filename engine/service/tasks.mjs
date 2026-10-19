@@ -22,6 +22,7 @@ export async function loadTask(context, taskId) {
   const parsed = parseTaskId(taskId);
   const directories = [taskDirectory(parsed.scope)];
   if (directories[0] !== 'user/tasks') directories.push('user/tasks');
+  let aliases;
   for (const relativeDir of directories) {
     const directory = path.join(context.paths.mind, ...relativeDir.split('/'));
     let names = [];
@@ -35,7 +36,7 @@ export async function loadTask(context, taskId) {
       const relative = `${relativeDir}/${name}`;
       const bytes = await readBytes(context.store, absolute(context, relative));
       if (!bytes) continue;
-      const task = describe(bytes, relative, parsed.id, await aliasesFor(context));
+      const task = describe(bytes, relative, parsed.id, aliases ??= await aliasesFor(context));
       if (task?.id === parsed.id) {
         if (!task.toId && task.to) {
           const units = (await readUnitStates(context)).map(({ id }) => ({ unit: parseUnitId(id).unit, unitId: id, scope: parseUnitId(id).scope }));

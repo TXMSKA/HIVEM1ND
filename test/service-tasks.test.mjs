@@ -3,7 +3,9 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { syncBuiltinESMExports } from 'node:module';
 import { readDetail } from '../engine/service/projection.mjs';
+import { readUnitStates } from '../engine/service/state.mjs';
 import { changeStatus, loadTask, recoverTaskChanges, reviewAuthority, undoStatus } from '../engine/service/tasks.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
@@ -288,4 +290,74 @@ test('a task dated in the files.md form with a time becomes reviewable once its 
   const planted = await loadTask(master, TASK);
   planted.date = '2026-10-10 13:4'; planted.status = 'review';
   assert.equal(reviewAuthority(planted).reviewable, false);
+});
+
+// Counts the fs.promises calls of the given names whose first argument passes `matches`, while `action` runs.
+async function countCalls(names, matches, action) {
+  const fs = (await import('node:fs')).default;
+  const originals = new Map(), calls = Object.fromEntries(names.map((name) => [name, []]));
+  for (const name of names) {
+    originals.set(name, fs.promises[name]);
+    fs.promises[name] = function (target, ...rest) {
+      if (matches(String(target))) calls[name].push(String(target));
+      return originals.get(name).call(this, target, ...rest);
+    };
+  }
+  syncBuiltinESMExports();
+  try { await action(); } finally {
+    for (const [name, original] of originals) fs.promises[name] = original;
+    syncBuiltinESMExports();
+  }
+  return calls;
+}
+
+test('loading a task reads the person aliases once, not once per task file it scans', async (t) => {
+  const { fixture, context } = await world(t);
+  const root = fixture.paths.mind;
+  await mkdir(path.join(root, 'user', 'machines'), { recursive: true });
+  await writeFile(path.join(root, 'user', 'machines', 'DESKTOP.md'), 'machine: DESKTOP\nperson: Tom\n\nDesktop.\n');
+  await writeFile(path.join(root, 'user', 'machines', 'LAPTOP.md'), 'machine: LAPTOP\nperson: Tomas\n\nLaptop.\n');
+  const folder = path.join(root, 'user', 'projects', 'shop', 'tasks');
+  await mkdir(folder, { recursive: true });
+  for (let number = 1; number <= 5; number += 1) await writeFile(path.join(folder, `00${number}-other.md`), taskText().replaceAll(`id: ${TASK}`, `id: project:shop:00${number}`));
+  let task;
+  const calls = await countCalls(['readFile'], (target) => target.includes(path.join('user', 'machines')), async () => { task = await loadTask({ ...context, aliases: undefined }, TASK); });
+  assert.equal(task.id, TASK);
+  assert.deepEqual(task.aliases, ['Tom', 'Tomas']);
+  // Five other task files are scanned before this one; the old code read both machine files again for each of the six.
+  assert.equal(calls.readFile.length, 2, `${calls.readFile.length} machine files were read`);
+  await assert.rejects(() => loadTask({ ...context, aliases: undefined }, 'project:shop:099'), (error) => error.code === 'task_not_found');
+});
+
+test('listing the unit states opens each state file once and still finds a unit kept in the old place', async (t) => {
+  const fixture = await makeCoreFixture();
+  t.after(() => dispose(fixture));
+  const root = fixture.paths.mind;
+  const files = {
+    'user/state/overseer.md': state('overseer', 'root:overseer', 'overseer'),
+    'user/projects/shop/state/alpha.md': state('alpha', 'project:shop:alpha', 'executor'),
+    'user/projects/shop/state/beta.md': state('beta', 'project:shop:beta', 'executor'),
+    'user/envs/web/state/lead.md': state('lead', 'env:web:lead', 'overlord'),
+    // A 2.x state file: the unit id names another folder, so the file is read once more where the id says it should be.
+    'user/state/old.md': state('old', 'project:shop:old', 'executor'),
+  };
+  for (const [relative, text] of Object.entries(files)) {
+    await mkdir(path.dirname(path.join(root, ...relative.split('/'))), { recursive: true });
+    await writeFile(path.join(root, ...relative.split('/')), text);
+  }
+  let records;
+  const calls = await countCalls(['open'], (target) => target.startsWith(root) && target.endsWith('.md'), async () => {
+    records = await readUnitStates({ store: fixture.store, paths: fixture.paths });
+  });
+  assert.deepEqual(records.map((record) => [record.id, record.relative]).sort(), [
+    ['env:web:lead', 'user/envs/web/state/lead.md'],
+    ['project:shop:alpha', 'user/projects/shop/state/alpha.md'],
+    ['project:shop:beta', 'user/projects/shop/state/beta.md'],
+    ['project:shop:old', 'user/state/old.md'],
+    ['root:overseer', 'user/state/overseer.md'],
+  ]);
+  assert.equal(records.every((record) => Buffer.isBuffer(record.bytes) && record.absolute === path.join(root, ...record.relative.split('/'))), true);
+  const opened = (relative) => calls.open.filter((target) => target === path.join(root, ...relative.split('/'))).length;
+  for (const relative of Object.keys(files).filter((item) => item !== 'user/state/old.md')) assert.equal(opened(relative), 1, `${relative} was opened ${opened(relative)} times`);
+  assert.equal(opened('user/state/old.md'), 2);
 });

@@ -84,12 +84,15 @@ export async function readUnitStates(context) {
     for (const entry of listed) {
       if (!entry.isFile() || entry.isSymbolicLink() || !entry.name.endsWith('.md') || entry.name.includes('.conflict-') || isMachineCopy(entry.name, siblings, machines)) continue;
       const relative = `${directory}/${entry.name}`;
-      const bytes = await readBytes(context.store, path.join(context.paths.mind, ...relative.split('/')));
+      const absolute = path.join(context.paths.mind, ...relative.split('/'));
+      const bytes = await readBytes(context.store, absolute);
       if (!bytes) continue;
       try {
         const id = stateUnitId(bytes, relative);
         if (records.has(id)) continue;
-        const current = await readUnitState(context, parseUnitId(id));
+        const parsed = parseUnitId(id);
+        // The file listed is the one the unit's own place names, so its bytes are the record: reading it again would return them.
+        const current = parsed.id === id && unitStatePath(parsed) === relative ? { bytes, relative, absolute } : await readUnitState(context, parsed);
         if (current) records.set(id, { ...current, id });
       } catch (error) { if (error?.code !== 'invalid_unit' && error?.code !== 'invalid_name') throw error; }
     }
