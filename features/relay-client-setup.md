@@ -31,6 +31,8 @@ hivem1nd relay reminder --mind-path <mind> --session-id <relay-instance> --nativ
 - `read`: the archive twin `user/relay/archive/<to>/<same name>` exists, which only `read` creates. This is the first stage that shows the recipient fetched the message.
 - `replied`: a message from the recipient carries `reply-to` with this id; `replied` holds its id and timestamp.
 
+Each delivery also carries `wake`: `{ live: true, reason: null }` when a wake policy of the recipient is enabled, not paused and inside its window, so an urgent message can wake it now; otherwise `live` is false and `reason` says why: `expired` (the window ended), `disabled`, the policy's pause reason (such as `handoff-budget-exhausted`), or `none` (the recipient has no wake). A published message with no live wake waits until the recipient's next turn.
+
 `stage` is the furthest of `replied`, `read`, `woken` and `published` that applies. A message can be read without any wake, since a session may read its inbox on its own, so `woken` is not a precondition of `read`. Wake entries and archive twins reach another machine through OneDrive, so a stage reached there shows after the sync delay.
 
 ## Same-day awareness
