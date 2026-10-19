@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { CLIENTS, CoreError, canonicalJson, hashBytes, inboxDirectory, parseTaskId, parseUnitId, uuidV8 } from './identity.mjs';
+import { CLIENTS, CoreError, canonicalJson, hashBytes, inboxDirectory, isUuid, parseTaskId, parseUnitId, uuidV8 } from './identity.mjs';
 import { loadTask } from './tasks.mjs';
 import { answersFor, paginate, readDetail } from './projection.mjs';
 import { publishDomainEvents } from './events.mjs';
@@ -644,7 +644,7 @@ export async function consumeStart(context, requestId) {
     } catch (error) {
       if (error instanceof CoreError && error.code !== 'injected_crash') {
         await writeResult(context, request, 'failed', null, { code: error.code, message: error.message });
-        const journal = (await listJournals(context)).find(item => item.requestId === requestId);
+        const journal = await journalFor(context, requestId);
         if (journal && journal.createAttempted !== true) await writeJournal(context, { ...journal, phase: 'failed' });
       }
       throw error;
@@ -874,7 +874,7 @@ export async function cancelStart(context, requestId) {
 }
 
 async function cancelOwnedStart(context, request) {
-  const journal = (await listJournals(context)).find((item) => item.requestId === request.id);
+  const journal = await journalFor(context, request.id);
   if ((journal?.pid || journal?.executionId) && journal.phase !== 'stopped') {
     if (journal.sessionId) await stopSession(context, journal.sessionId, { confirmed: true });
     else {
@@ -1189,6 +1189,14 @@ async function listJournals(context) {
   return journals;
 }
 
+// A journal is stored as <requestId>.json, so a lookup by request reads that one file instead of every journal.
+async function journalFor(context, requestId) {
+  if (!isUuid(requestId)) return (await listJournals(context)).find((item) => item.requestId === requestId) ?? null;
+  const bytes = await readBytes(context.store, path.join(context.paths.localDirectory, 'session-starts', `${requestId}.json`));
+  const journal = bytes ? JSON.parse(bytes.toString('utf8')) : null;
+  return journal?.requestId === requestId ? journal : null;
+}
+
 async function writeJournal(context, journal) {
   const relative = path.join(context.paths.localDirectory, 'session-starts', `${journal.requestId}.json`);
   const current = await readBytes(context.store, relative);
@@ -1233,7 +1241,7 @@ export async function readStartRequest(context, requestId, options = {}) {
   if (!request) throw new CoreError(404, 'request_not_found', 'The start request does not exist.');
   const snapshot = async () => {
     const result = await latestResult(context, requestId);
-    const current = (await listJournals(context)).find((item) => item.requestId === requestId) ?? null;
+    const current = await journalFor(context, requestId);
     const consumed = current?.createAttempted === true && current?.phase !== 'failed';
     const canceling = !result || result.state !== 'canceled' ? await readJson(context, `user/relay/request-cancellations/${requestId}.json`) : null;
     return { request, result: canceling ? { ...result, state: 'canceling' } : result, now: context.now(), consumed, state: current && !result ? 'starting' : 'queued', current };
