@@ -1,5 +1,4 @@
 import { readdir } from 'node:fs/promises';
-import path from 'node:path';
 import { hashBytes, uuidV8 } from './identity.mjs';
 import { readBytes, revisionOf, withLocalChanges, withLocks } from './store.mjs';
 import { planBytes } from './plans.mjs';

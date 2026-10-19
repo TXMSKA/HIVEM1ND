@@ -25,8 +25,3 @@ export function launchBoundary(report) {
   if (kind === 'supervised') return report.scopeEnforced !== true && ['claude', 'cursor'].includes(report.id) ? kind : null;
   return null;
 }
-export function requireLaunchBoundary(report, message = 'The selected runtime has no verified native boundary.') {
-  const kind = launchBoundary(report);
-  if (!kind) throw new CoreError(409, 'scope_unavailable', message);
-  return kind;
-}

@@ -7,7 +7,7 @@ import { CoreError, canonicalJson, hashText, isUuid } from './identity.mjs';
 import { assertNoLinks } from './paths.mjs';
 import { atomicWrite, undoChange, withReceipt } from './store.mjs';
 import { authorize, checkHost, checkLimits, checkOrigin, checkPeer, createSecuritySink, safeError } from './security.mjs';
-import { readCollection, readDetail, readProjection, readSync, serviceRecord } from './projection.mjs';
+import { readCollection, readDetail, readProjection, readSync } from './projection.mjs';
 import { connectLead, createUnit, patchLayout, patchSettings, removeUnit, resolveUnitCluster, setUnitAlias, setUnitRunsIn } from './units.mjs';
 import { createChat, deliverNotifications, patchChat, postChat, postMailbox, readChat, readMailbox } from './chats.mjs';
 import { createGroup, listGroups, patchGroup, removeGroup } from './groups.mjs';

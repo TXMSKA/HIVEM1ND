@@ -22,13 +22,6 @@ export function openOrigin({ store, paths, now = () => Date.now(), machine } = {
   };
 }
 
-export async function nextSequence(origin) {
-  const head = await readHead(origin, origin.machine);
-  const journal = await readJournal(origin);
-  if (journal?.phase === 'prepared') return journal.sequence;
-  return (head?.sequence ?? 0) + 1;
-}
-
 export async function publishPack(origin, packBytes) {
   const bytes = Buffer.isBuffer(packBytes) ? packBytes : Buffer.from(packBytes);
   const digest = hashBytes(bytes);

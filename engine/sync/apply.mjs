@@ -2,7 +2,7 @@ import { lstat, readFile, readdir, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { CoreError, canonicalJson, hashBytes, isUuid, recordHeaders, replaceHeader, uuidV8 } from '../service/identity.mjs';
 import { assertNoLinks, resolveTarget } from '../service/paths.mjs';
-import { compressObject, countLogicalMessages, decodePack, isDeterministicNotice, sessionVerdict, validateChange, validateHead } from './pack.mjs';
+import { compressObject, countLogicalMessages, isDeterministicNotice, sessionVerdict, validateChange, validateHead } from './pack.mjs';
 import { reserveReceipt } from './limits.mjs';
 import { openLedger } from './limits.mjs';
 import { projectPathSet, resolveIncoming, targetKey } from './store.mjs';
@@ -70,13 +70,6 @@ export function validateOwner({ packMachine, target, record = null, headers = nu
     } else if (headers.machine !== packMachine) ownerError();
   }
   return { state: 'accept', packMachine, format };
-}
-
-export async function preserveConflict(sync, target, bytes, change, roots) {
-  const located = await resolveTarget(sync.paths, target, { projects: sync.projects });
-  const chosen = await chooseConflict(located.absolute, bytes, change);
-  if (!chosen.existing) await writeDurable(sync.store, chosen.absolute, bytes, roots);
-  return { absolute: chosen.absolute, relative: locatedRelative(located, chosen.absolute) };
 }
 
 export async function applyPack(sync, packBytes, options = {}) {
@@ -731,20 +724,6 @@ async function readRegular(file) {
     if (error?.code === 'ENOENT') return null;
     throw error;
   }
-}
-
-async function chooseConflict(absolute, bytes, change) {
-  const stamp = change.at.replace(/[-:]/g, '').replace(/\./g, '');
-  let file = path.join(path.dirname(absolute), `${path.basename(absolute)}.conflict-${change.machine}-${stamp}`);
-  const existing = await readRegular(file);
-  if (existing && !existing.equals(Buffer.from(bytes))) file = `${file}-${change.id}`;
-  return { absolute: file, existing: existing && existing.equals(Buffer.from(bytes)) };
-}
-
-function locatedRelative(located, absolute) {
-  const slash = located.relative.lastIndexOf('/');
-  const prefix = slash === -1 ? '' : located.relative.slice(0, slash + 1);
-  return `${prefix}${path.basename(absolute)}`;
 }
 
 function writeRoots(sync, projects) {
