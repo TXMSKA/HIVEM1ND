@@ -1,4 +1,4 @@
-import { lstat, mkdir, readFile, readdir, rename, unlink } from 'node:fs/promises';
+import { lstat, mkdir, readFile, readdir, rename } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -8,7 +8,6 @@ import {
   discoverContent,
   discoverHomeProjects,
   discoverOtherMinds,
-  discoverPreferenceFiles,
   discoverProjects,
   envValue,
   loadAdapters,
@@ -44,7 +43,6 @@ import {
 } from './records.mjs';
 import { detectLanguage, LANGUAGES, option, relayLine, text } from './texts.mjs';
 
-const ADDRESS_STYLES = new Set(['impersonal', 'formal', 'explanatory', 'swarm']);
 const SETUP_PHASES = ['prepare', 'close-legacy', 'copy', 'migrate', 'configure', 'start', 'open', 'ready'];
 const SETUP_COPY = {
   en: { joinTitle: 'Join this M1ND', join: 'Join', closeTitle: 'Close HIVEM1ND 2.x first', close: 'Sessions closed, migrate',
@@ -52,33 +50,6 @@ const SETUP_COPY = {
   es: { joinTitle: 'Unirse a este M1ND', join: 'Unirse', closeTitle: 'Cerrar HIVEM1ND 2.x primero', close: 'Sesiones cerradas, migrar',
     offline: 'Una sesión en una máquina desconectada se cierra la próxima vez que esa máquina inicia HIVEM1ND.', review: 'Revisar cambios en Configuración' },
 };
-
-const SERVICE_COPY = {
-  en: {
-    originKind: 'Origin',
-    originKindHelp: 'A folder origin stays outside the M1ND. OneDrive is allowed for the origin. Staging stays on the local disk.',
-    originPath: 'Origin folder',
-    originPathHelp: 'Leave this empty to use the local Cosmic origin for this M1ND.',
-    folder: 'Folder',
-    onedrive: 'OneDrive',
-    serviceFailed: 'The service could not start. Installation can be retried without copying the M1ND again.',
-  },
-  es: {
-    originKind: 'Origen',
-    originKindHelp: 'Un origen de carpeta queda fuera del M1ND. OneDrive se permite como origen. El staging queda en el disco local.',
-    originPath: 'Carpeta de origen',
-    originPathHelp: 'Dejar vacío para usar el origen local de Cosmic de este M1ND.',
-    folder: 'Carpeta',
-    onedrive: 'OneDrive',
-    serviceFailed: 'El servicio no pudo iniciarse. Se puede reintentar la instalación sin volver a copiar el M1ND.',
-  },
-};
-
-const CATEGORY_ORDER = [
-  { id: 'planning', labelKey: 'categoryPlanning' },
-  { id: 'quality', labelKey: 'categoryQuality' },
-  { id: 'continuity', labelKey: 'categoryContinuity' },
-];
 
 export async function createSetupSession(options = {}) {
   const kitPath = path.resolve(requireValue(options.kitPath, 'kitPath'));
@@ -1480,10 +1451,6 @@ export function conflictChoiceKey(conflict, choice) {
   return choice === 'replace' ? 'replaceLink' : 'omitLink';
 }
 
-function serviceText(language, key) {
-  return (SERVICE_COPY[language] ?? SERVICE_COPY.en)[key];
-}
-
 function field(id, type, label, required, options, help) {
   const descriptor = { id, type, label, required };
   if (options) descriptor.options = options;
@@ -1493,41 +1460,6 @@ function field(id, type, label, required, options, help) {
 
 function displayAgent(id, adapters) {
   return adapters.find((adapter) => adapter.id === id)?.displayName ?? id;
-}
-
-function normalizeAttach(value) {
-  if (value === 'auto') return 'auto';
-  if (value === 'on-demand') return 'onDemand';
-  throw new SetupValidationError(`Invalid attach mode: ${value}`);
-}
-
-function buildContentCategories(content, language) {
-  const features = content.filter((item) => item.type === 'feature');
-  const categories = [];
-  for (const category of CATEGORY_ORDER) {
-    const items = features.filter((item) => item.category === category.id);
-    if (items.length === 0) continue;
-    categories.push({ id: category.id, label: text(language, category.labelKey), items: items.map(contentItem) });
-  }
-  const ordered = new Set(CATEGORY_ORDER.map((category) => category.id));
-  const remaining = features.filter((item) => !ordered.has(item.category));
-  if (remaining.length > 0) {
-    categories.push({ id: 'other', label: text(language, 'included'), items: remaining.map(contentItem) });
-  }
-  const packs = content.filter((item) => item.type === 'knowledge');
-  if (packs.length > 0) {
-    categories.push({ id: 'knowledge', label: text(language, 'categoryPacks'), items: packs.map(contentItem) });
-  }
-  return categories;
-}
-
-function contentItem(item) {
-  if (item.type !== 'knowledge') return { id: item.id, name: item.name };
-  return { id: item.id, name: item.name, commands: packCommands(item) };
-}
-
-function packCommands(item) {
-  return (item.commands ?? []).map((command) => `/${command}`);
 }
 
 function assignProjectsToRoots(discovered, roots) {
@@ -1673,16 +1605,6 @@ function insertAt(value, index, inserted) {
   return `${value.slice(0, index)}${inserted}${value.slice(index)}`;
 }
 
-async function removeOwnedDraft(mindPath, hostname) {
-  const { filePath, record } = await readMachineRecord(mindPath, hostname);
-  if (!record || record.setup === 'done' || record.machine !== hostname) return;
-  try {
-    await unlink(filePath);
-  } catch (error) {
-    if (error?.code !== 'ENOENT') throw error;
-  }
-}
-
 async function computeMindPresets({ kitPath, homeDir, env }) {
   const presets = [
     { id: 'cosmic', label: 'Cosmic', path: cosmicMind(env, homeDir) },
@@ -1752,25 +1674,9 @@ async function requireDirectory(value, label) {
   }
 }
 
-function requireStringArray(value, label) {
-  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
-    throw new SetupValidationError(`${label} must be an array of strings`);
-  }
-}
-
-function validateRouteName(value, label) {
-  const name = String(value ?? '').trim();
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) throw new SetupValidationError(`Invalid ${label}: ${value}`);
-  return name;
-}
-
 function validateLooseName(value, fallback) {
   const normalized = String(value ?? '').trim().replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
   return normalized || fallback;
-}
-
-function normalizePreference(value) {
-  return String(value ?? '').replace(/\s+/g, ' ').trim().replace(/[.\s]+$/, '');
 }
 
 const RECENT_LEGACY_MS = 7 * 24 * 60 * 60 * 1000;

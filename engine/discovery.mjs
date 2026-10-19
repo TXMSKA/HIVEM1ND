@@ -188,26 +188,6 @@ export async function discoverOtherMinds(selectedMindPath, { kitPath } = {}) {
   return minds.sort((left, right) => left.localeCompare(right));
 }
 
-export async function discoverPreferenceFiles(agentIds, { adapters, homeDir, env = process.env } = {}) {
-  const selected = new Set(agentIds);
-  const paths = [];
-  for (const adapter of adapters) {
-    if (!selected.has(adapter.id) || !adapter.rules) continue;
-    const { rulesPath } = resolveAdapterPaths(adapter, { homeDir, env });
-    const ownedSuffix = { cursor: '.mdc', copilot: '.instructions.md' }[adapter.rules.mode];
-    if (ownedSuffix) {
-      const directory = path.dirname(rulesPath);
-      if (!await isDirectory(directory)) continue;
-      for (const entry of await readdir(directory, { withFileTypes: true })) {
-        if (entry.isFile() && entry.name.endsWith(ownedSuffix)) paths.push(path.join(directory, entry.name));
-      }
-    } else if (await isNonemptyFile(rulesPath)) {
-      paths.push(rulesPath);
-    }
-  }
-  return [...new Set(paths)].sort((left, right) => left.localeCompare(right));
-}
-
 export async function findBinary(binary, env = process.env) {
   const pathValue = envValue(env, 'PATH');
   if (!pathValue) return null;
@@ -265,16 +245,6 @@ function isFixturePath(candidate, kitPath) {
   const fixtureRoot = path.join(path.resolve(kitPath), 'fixtures');
   const relative = path.relative(fixtureRoot, path.resolve(candidate));
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
-}
-
-async function isNonemptyFile(filePath) {
-  try {
-    const state = await lstat(filePath);
-    return state.isFile() && state.size > 0;
-  } catch (error) {
-    if (error?.code === 'ENOENT') return false;
-    throw error;
-  }
 }
 
 async function isDirectory(directory) {

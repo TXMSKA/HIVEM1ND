@@ -102,13 +102,6 @@ async function copyTable(file, name) {
   return runInNewContext(`(${block})`, Object.create(null), { timeout: 1000 });
 }
 
-async function serviceCopy(language) {
-  const table = await copyTable('engine/setup.mjs', 'SERVICE_COPY');
-  assert.deepEqual(Object.keys(table.en), Object.keys(table.es));
-  assert.equal(Object.keys(table[language]).length, 7);
-  return Object.entries(table[language]).map(([key, value]) => [`engine/setup.mjs SERVICE_COPY.${language}.${key}`, value]);
-}
-
 async function guiSourceCopy(language) {
   const opening = await copyTable('gui/app/main.mjs', 'OPENING_COPY');
   return [
@@ -194,7 +187,6 @@ test('every Spanish source is read and holds no voseo and no tuteo', async () =>
   const sources = {
     'the installer texts': [await installerCopy(), 100],
     'the terminal setup': [await terminalCopy(), 25],
-    'the setup service': [await serviceCopy('es'), 7],
     'the GUI source templates': [await guiSourceCopy('es'), 400],
     'the Void pages': [await htmlCopy(), 4],
     'the Void document sample': [await voidDocumentCopy(), 1],
@@ -213,7 +205,7 @@ test('every Spanish source is read and holds no voseo and no tuteo', async () =>
 
 test('the finite product inventory uses M1ND before interpolation in both languages', async () => {
   for (const language of ['en', 'es']) {
-    assertVisibleCopy(language, [...await serviceCopy(language), ...await guiSourceCopy(language)]);
+    assertVisibleCopy(language, await guiSourceCopy(language));
     const setup = await copyTable('engine/setup.mjs', 'SETUP_COPY');
     assertVisibleCopy(language, Object.entries(setup[language]).map(([key, value]) => [`engine/setup.mjs SETUP_COPY.${language}.${key}`, value]));
     const terminal = await copyTable('cli/index.mjs', 'terminalCopy');
