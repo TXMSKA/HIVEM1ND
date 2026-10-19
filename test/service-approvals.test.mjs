@@ -536,3 +536,50 @@ test('a revoked unit grant cannot resume the next request or leak private fields
   assert.equal(next.allow, false);
   assert.deepEqual((await listGrants(master, UNIT)).items, []);
 });
+
+test('the owner applies an answer and a revocation queued by another machine when its service starts', async (t) => {
+  const { startService, stopService } = await import('../engine/service/service.mjs');
+  const { createServer } = await import('node:net');
+  const owner = await service(t, 'LAPTOP');
+  const desktop = await service(t, 'DESKTOP');
+  const created = await requestApproval(owner.context, { action: 'process.run', pattern: pattern(), display: 'Build', alwaysAllowed: true });
+  const source = path.join(owner.fixture.paths.mind, 'user', 'relay', 'approvals', created.approval.id);
+  await cp(source, path.join(desktop.fixture.paths.mind, 'user', 'relay', 'approvals', created.approval.id), { recursive: true });
+  const revision = approvalRevision({ request: await requestBytes(owner.fixture, created.approval.id), answers: [] });
+  const denied = await answerApproval(desktop.master, created.approval.id, { decision: 'deny', expectedRevision: revision });
+  assert.equal(denied.status, 202);
+  const answers = path.join(source, 'answers');
+  await mkdir(answers, { recursive: true });
+  await cp(path.join(desktop.fixture.paths.mind, 'user', 'relay', 'approvals', created.approval.id, 'answers', `${denied.answerId}.json`), path.join(answers, `${denied.answerId}.json`));
+  const grant = { id: randomUUID(), action: 'process.run', pattern: pattern(), grantedAt: '2026-10-10T12:00:00.000Z', grantedBy: 'root:master' };
+  const desktopState = path.join(desktop.fixture.paths.mind, 'user', 'state', 'executor-shop.md');
+  await writeFile(desktopState, stateText('LAPTOP', [grant]));
+  await writeFile(path.join(owner.fixture.paths.mind, 'user', 'state', 'executor-shop.md'), stateText('LAPTOP', [grant]));
+  const pending = await revokeGrant(desktop.master, UNIT, grant.id, { expectedRevision: revisionOf(await readFile(desktopState)) });
+  assert.equal(pending.status, 202);
+  const request = path.join(owner.fixture.paths.mind, 'user', 'relay', 'grant-revocations', 'LAPTOP', `${pending.requestId}.json`);
+  await mkdir(path.dirname(request), { recursive: true });
+  await cp(path.join(desktop.fixture.paths.mind, 'user', 'relay', 'grant-revocations', 'LAPTOP', `${pending.requestId}.json`), request);
+  const origin = path.join(owner.fixture.root, 'origin');
+  await mkdir(origin, { recursive: true });
+  const probe = createServer();
+  await new Promise((resolve) => probe.listen(0, '127.0.0.1', resolve));
+  const guardPort = probe.address().port;
+  await new Promise((resolve) => probe.close(resolve));
+  const started = await startService({
+    store: owner.fixture.store,
+    paths: { ...owner.fixture.paths, origin },
+    now: () => owner.fixture.clock.now,
+    userKey: 'approvals-user',
+    guardPort,
+    env: owner.fixture.env,
+    homeDir: owner.fixture.home,
+    clients: [],
+    listener: async () => ({ close: async () => {} }),
+  });
+  t.after(() => stopService(started, { force: true }));
+  const result = JSON.parse(await readFile(path.join(source, 'result.json'), 'utf8'));
+  assert.equal(result.state, 'denied');
+  const revoked = JSON.parse(await readFile(path.join(owner.fixture.paths.mind, 'user', 'relay', 'grant-revocation-results', `${pending.requestId}.json`), 'utf8'));
+  assert.equal(revoked.state, 'revoked');
+});

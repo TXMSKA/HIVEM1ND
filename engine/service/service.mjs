@@ -26,7 +26,7 @@ import { aclRunnerFrom, createCredentialStore, protectBootstrapFiles, verifyBoot
 import { createEventBus, publishDomainEvents } from './events.mjs';
 import { projectChat, readDetail, readSync } from './projection.mjs';
 import { createHttpServer } from './http.mjs';
-import { recoverApprovals } from './approvals.mjs';
+import { consumeAnswers, consumeRevocations, recoverApprovals } from './approvals.mjs';
 import { deliverNotifications } from './chats.mjs';
 import { resolveActivity } from './watch.mjs';
 import { bytesAt, importedSidecarEvents } from './import-events.mjs';
@@ -98,6 +98,7 @@ export async function startService(options, retained = null) {
       now: options.now ?? (() => Date.now()),
       projects: options.projects ?? [],
     });
+    await applyQueuedDecisions({ store: options.store, paths, now: options.now ?? (() => Date.now()), projects: options.projects ?? [], bus });
     await deliverNotifications({
       store: options.store,
       paths,
@@ -1027,9 +1028,36 @@ async function retryPending(runtime, provider, bindings) {
         ledger: runtime.ledger,
         projects: runtime.sync.projects,
       });
+      await applyImportedDecisions(runtime, applied);
       await emitImported(runtime, applied);
     }
   }
+}
+
+// An approval answered, or a grant revoked, on another machine or from the phone is queued for the machine that owns
+// the agent. The owner applies it when the record arrives by sync and once at start for what arrived while it was off;
+// before, nothing applied it, so the agent waited until its request expired and the grant stayed in force.
+async function applyQueuedDecisions(context, approvalIds = null, revocations = true) {
+  for (const id of approvalIds ?? [null]) {
+    try { await consumeAnswers(context, id); } catch { /* A record that cannot be read waits for the next sync or start. */ }
+  }
+  if (!revocations) return;
+  try { await consumeRevocations(context); } catch { /* Same: the request stays queued. */ }
+}
+
+async function applyImportedDecisions(runtime, result) {
+  if (result?.status !== 'applied' || result.machine === runtime.paths.machine) return;
+  const ids = new Set();
+  let revocations = false;
+  for (const change of result.changes ?? []) {
+    const file = slashPath(change.target?.path);
+    const answer = /^user\/relay\/approvals\/([^/]+)\/answers\/[^/]+\.json$/.exec(file);
+    if (answer && change.operation !== 'delete') ids.add(answer[1]);
+    if (file.startsWith(`user/relay/grant-revocations/${runtime.paths.machine}/`) && change.operation !== 'delete') revocations = true;
+  }
+  if (!ids.size && !revocations) return;
+  const context = { store: runtime.sync.store, paths: runtime.paths, now: runtime.now, projects: runtime.sync.projects ?? [], bus: runtime.bus };
+  await applyQueuedDecisions(context, ids.size ? [...ids] : [], revocations);
 }
 
 async function emitImported(runtime, result) {
