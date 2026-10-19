@@ -939,5 +939,6 @@ test('a migrated 2.x M1ND keeps its seats and tasks: role from the unit name, ta
   assert.deepEqual(view.tasks.map(task => [task.number, task.status]), [['001', 'open']]);
   const flagged = view.issues.map(issue => issue.path);
   assert.equal(flagged.some(item => item.includes('tasks/')), false, 'briefs and task folders are not broken tasks');
-  assert.equal(flagged.includes('user/state/builder-cursor.md'), true, 'a seat with no 3.0 role is still reported');
+  assert.equal(flagged.includes('user/state/builder-cursor.md'), false);
+  assert.equal(view.units.find(unit => unit.unit === 'builder-cursor').role, 'agent', 'a seat with no 3.0 role is shown as an agent');
 });

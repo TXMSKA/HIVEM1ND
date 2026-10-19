@@ -68,7 +68,7 @@ export function renderClusterChanges(document, changes) {
 export function renderUnit(document, unit, t, language = "en") {
   const card = element(document, "section", { class: "unit-card" });
   card.append(element(document, "h3", { text: unit ? unitDisplayName(unit) : t("unknown") }));
-  card.append(element(document, "p", { text: `${t("role")}: ${unit?.role ?? t("unknown")}` }));
+  card.append(element(document, "p", { text: `${t("role")}: ${unit?.role === 'agent' ? startText(language, 'agent') : unit?.role ?? t("unknown")}` }));
   card.append(element(document, "p", { text: `${t("job")}: ${unit?.job ?? t("unknown")}` }));
   const lines = [
     ["scope", unit?.scope?.name ?? unit?.scope?.kind],

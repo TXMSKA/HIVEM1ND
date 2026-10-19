@@ -726,7 +726,9 @@ function readUnit(bytes, relative, issues) {
   try {
     const headers = headerMap(bytes);
     const id = parseUnitId(stateUnitId(bytes, relative));
-    const role = validateRole(headers.get('role') || legacyRole(headers.get('unit') || id.unit));
+    // A 2.x seat whose name carries no 3.0 role, such as a builder or a test seat, is shown as an agent.
+    const written = headers.get('role');
+    const role = written ? validateRole(written) : legacyRole(headers.get('unit') || id.unit) ?? 'agent';
     const state = headers.get('state');
     if (state !== 'in' && state !== 'out') throw new CoreError(422, 'corrupt_resource', 'The state is not valid.');
     return {
