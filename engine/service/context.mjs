@@ -63,7 +63,7 @@ export async function createContext(context, registration, adapter, bootstrap) {
     if (before) return projected(JSON.parse(before), before);
     const value = { format: 'hivem1nd-context-v1', sessionId: registration.sessionId, unitId: registration.unitId,
       client: registration.client, generationId: randomUUID(), dismissed: false, meter: contextMeter(await adapter.readContext?.(registration)),
-      operation: null, bootstrap: bootstrap ?? await contextBootstrap(context, registration.unitId) };
+      operation: null, bootstrap: bootstrap ?? await contextBootstrap(context, registration.unitId, { client: registration.client }) };
     return save(context, file, null, value);
   });
 }
@@ -136,7 +136,7 @@ async function execute(context, binding, value, before) {
     if (checkpoint.attempted) return reconcile(context, binding, value, before);
     if (await binding.adapter.contextBusy?.(binding.registration) === true) unavailable();
     if (binding.adapter.reserveContext && await binding.adapter.reserveContext(binding.registration) !== true) unavailable();
-    const bootstrap = await contextBootstrap(context, value.unitId);
+    const bootstrap = await contextBootstrap(context, value.unitId, { client: value.client });
     let summary = null;
     // Persist before the first inference call; an interrupted summary is never submitted twice.
     await commitTransaction(context.store, { id: randomUUID(), entries: [entry(checkpointFile, checkpointBytes,

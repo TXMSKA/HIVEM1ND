@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { clearContext, compactContext, contextMeter, contextNotice, createContext, dismissContext, readContext, recoverContexts } from '../engine/service/context.mjs';
 import { contextBootstrap, createChat, postChat } from '../engine/service/chats.mjs';
@@ -265,17 +265,37 @@ test('new Overseer sessions default fresh, explicit keep reuses native context, 
   }
 });
 
-test('the session start of the longest role the kit ships fits its budget', async t => {
+test('every role the kit ships starts within its budget, and the local model gets the rules it can use', async t => {
   const fixture = await makeCoreFixture(); t.after(() => dispose(fixture));
   const kit = path.resolve(import.meta.dirname, '..');
   await mkdir(path.join(fixture.paths.mind, 'roles'), { recursive: true });
   await mkdir(path.join(fixture.paths.mind, 'user', 'state'), { recursive: true });
   await writeFile(path.join(fixture.paths.mind, 'rules.md'), await readFile(path.join(kit, 'rules.md')));
-  await writeFile(path.join(fixture.paths.mind, 'roles', 'genesis.md'), await readFile(path.join(kit, 'roles', 'genesis.md')));
-  await writeFile(path.join(fixture.paths.mind, 'user', 'state', 'genesis.md'), `unit: genesis\nunit-id: root:genesis\nrole: genesis\nstate: in\nmachine: ${fixture.machine}\n\nReady.\n`);
-  const bootstrap = JSON.parse(await contextBootstrap({ ...fixture, now: () => fixture.clock.now }, 'root:genesis'));
-  assert.equal(bootstrap.role, 'genesis');
-  assert.ok(bootstrap.records[1].text.length > 12000, 'the role text alone is longer than the old budget');
+  const context = { ...fixture, now: () => fixture.clock.now };
+  const roles = (await readdir(path.join(kit, 'roles'))).filter(name => name.endsWith('.md') && name !== 'README.md').map(name => name.slice(0, -3));
+  assert.ok(roles.length >= 14);
+  for (const role of roles) {
+    await writeFile(path.join(fixture.paths.mind, 'roles', `${role}.md`), await readFile(path.join(kit, 'roles', `${role}.md`)));
+    await writeFile(path.join(fixture.paths.mind, 'user', 'state', `${role}.md`), `unit: ${role}
+unit-id: root:${role}
+role: ${role}
+state: in
+machine: ${fixture.machine}
+
+Ready.
+`);
+    const bootstrap = JSON.parse(await contextBootstrap(context, `root:${role}`));
+    assert.equal(bootstrap.role, role);
+    assert.ok(bootstrap.records[1].text.length > 0, `${role} has its role text`);
+  }
+  // The local model has no Git or editor tools and an input bound of 12,000 characters, which the Overseer must fit with room for its state.
+  const local = await contextBootstrap(context, 'root:overseer', { client: 'lyra' });
+  assert.ok(local.length <= 10000, `the local Overseer starts with ${local.length} characters`);
+  const rules = JSON.parse(local).records[0].text;
+  assert.equal(rules.includes('## Exit and Git'), false);
+  assert.equal(rules.includes('## Blueprint and Void'), false);
+  assert.equal(rules.includes('## Authority'), true);
+  assert.ok(JSON.parse(await contextBootstrap(context, 'root:overseer')).records[0].text.includes('## Exit and Git'));
 });
 
 test('a custom role starts with the text the person wrote and the brief of its project, and no role file', async t => {

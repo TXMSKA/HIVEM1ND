@@ -527,7 +527,7 @@ export function openLyraAdapter(options = {}) {
       if (saved && (saved.unitId !== session.unitId || saved.sessionId !== session.registration.sessionId)) fail('scope_unavailable', 409);
       let messages = [...(saved?.messages ?? session.messages), { role: 'user', content: text }];
       while (messages.length > 30 || messages.reduce((sum, message) => sum + message.content.length, 0) > 16000 && messages.length > 1) messages.shift();
-      const context = saved?.bootstrap ?? session.bootstrap ?? session.request.bootstrap ?? await contextBootstrap(session.context, session.unitId);
+      const context = saved?.bootstrap ?? session.bootstrap ?? session.request.bootstrap ?? await contextBootstrap(session.context, session.unitId, { client: 'lyra' });
       let output = '';
       const checkpoint = async () => {
         await atomicWrite(session.context.store, file, Buffer.from(canonicalJson({ unitId: session.unitId, sessionId: session.registration.sessionId, messages, bootstrap: context })));

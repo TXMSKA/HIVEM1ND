@@ -747,7 +747,15 @@ export async function ensureChatDir(context, id) {
 // Bootstrap is private model input; it is never an authored message or a read receipt.
 const BOOTSTRAP_MAX = 24000;
 
-export async function contextBootstrap(context, unitId) {
+// The local model has no Git or editor tools and is always a session the service started, so it gets the rules without the
+// sections about them; its input budget is a third of the others'.
+const LOCAL_SKIPPED_RULES = new Set(['Locate', 'Exit and Git', 'Blueprint and Void']);
+
+function localRules(text) {
+  return text.split(/(?=^## )/m).filter((part) => !LOCAL_SKIPPED_RULES.has(/^## (.+)$/m.exec(part)?.[1]?.trim())).join('');
+}
+
+export async function contextBootstrap(context, unitId, { client = null } = {}) {
   const state = await readUnitState(context, parseUnitId(unitId));
   if (!state) throw new CoreError(404, 'unit_not_found', 'The unit does not exist.');
   const role = headerMap(state.bytes).get('role');
@@ -756,7 +764,12 @@ export async function contextBootstrap(context, unitId) {
     const bytes = await readBytes(context.store, absolute(context, relative));
     return { resource: relative, revision: revisionOf(bytes), text: bytes?.toString('utf8') ?? '' };
   };
-  const records = [await read('rules.md')];
+  const rules = await read('rules.md');
+  if (client === 'lyra' && rules.text) {
+    rules.text = localRules(rules.text);
+    rules.revision = revisionOf(Buffer.from(rules.text));
+  }
+  const records = [rules];
   // A custom role is the text the person wrote into the agent; a role that is not a known one names no file.
   if (custom) {
     const text = customRoleText(custom);

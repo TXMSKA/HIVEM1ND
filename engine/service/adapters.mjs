@@ -1058,7 +1058,7 @@ async function launch(context, request) {
       return { ...context, principal: { audience: 'agent', unitId: request.unitId,
         sessionId: uuidV8(['session', context.paths.machine, request.client, created.nativeSessionId, request.unitId]) } };
     };
-    created = await adapter.create({ ...request, nativeMode, bootstrap: await contextBootstrap(context, request.unitId), retainedContext: await previousContext(context, request), cwd, probeDirectory: scope.directory, launchScope: scope.scope, contentReader: adapter.capabilities?.scopedContent ? contentReader : null,
+    created = await adapter.create({ ...request, nativeMode, bootstrap: await contextBootstrap(context, request.unitId, { client: request.client }), retainedContext: await previousContext(context, request), cwd, probeDirectory: scope.directory, launchScope: scope.scope, contentReader: adapter.capabilities?.scopedContent ? contentReader : null,
       nativePermission: (operation, boundary) => requestNativeOperation(actorContext(), operation, boundary),
       scopedRead: input => readScopedFile(actorContext(), input),
       scopedWrite: input => writeScopedFile(actorContext(), input),
@@ -1701,7 +1701,7 @@ export async function launchPlanSession(context, host) {
     unitId: host.unitId, client: choice.client, machine: host.machine, model: choice.model, effort: choice.effort, runsIn: choice,
     runMode: host.role === 'coordinator' ? 'chat' : 'task', taskId: host.taskId, cwd: mapping?.localPath ?? directory, probeDirectory: directory,
     launchScope: scope, store: context.store, prompt, bootstrap: canonicalJson({ role: host.role, actorId: host.actorId, assignment: host.assignment,
-      plan: host.approval.plan, unit: host.unitId ? JSON.parse(await contextBootstrap(context, host.unitId)) : null, resources: ['plan'] }),
+      plan: host.approval.plan, unit: host.unitId ? JSON.parse(await contextBootstrap(context, host.unitId, { client: choice.client })) : null, resources: ['plan'] }),
     retainedContext: host.reviewConversation?.checkpoint ?? null, planObserver: host.observer, planTranscript: host.transcript,
     planAuthority: { role: host.role, writablePaths: host.role === 'builder' ? host.approval.taskWitnesses.find(task => task.id === host.taskId)?.paths ?? [] : [] },
     nativePermission: (operation, boundary) => import('./runs.mjs').then(module => module.requestPlanNativeOperation(actor, operation, boundary)),
