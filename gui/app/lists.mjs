@@ -184,9 +184,9 @@ export function renderWindow(document, host, list, rows, handlers = {}) {
     range = windowRange(0, list.height || height, list.rowHeight, rows.length);
   }
   const before = document.createElement("div");
-  before.setAttribute("style", `height:${range.before}px`);
+  before.style.height = `${range.before}px`;
   const after = document.createElement("div");
-  after.setAttribute("style", `height:${range.after}px`);
+  after.style.height = `${range.after}px`;
   const visible = rows.slice(range.start, range.end).map((row) => renderRow(document, list, row, handlers));
   host.replaceChildren(before, ...visible, after);
   if (host.scrollTop !== list.scrollTop) host.scrollTop = list.scrollTop;

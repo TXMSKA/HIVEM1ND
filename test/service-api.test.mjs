@@ -306,6 +306,7 @@ test('phone writes are rejected and static absence leaves the API usable', async
   assert.equal(page.status, 200);
   assert.equal(page.raw.includes('HIVEM1ND'), true);
   assert.match(page.headers['content-security-policy'], /frame-ancestors 'none'/);
+  assert.match(page.headers['content-security-policy'], /img-src 'self' blob:;/);
   assert.equal(page.headers['x-frame-options'], 'DENY');
   const style = await call(hosted.http.port, 'GET', '/app/styles.css');
   assert.equal(style.status, 503);

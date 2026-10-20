@@ -1830,7 +1830,7 @@ function contentType(name) {
 }
 
 function csp(ancestors, recoveryOrigin) {
-  return `default-src 'self'; script-src 'self' data:; worker-src 'self'; frame-src blob:; style-src 'self'; connect-src 'self'${recoveryOrigin ? ` ${recoveryOrigin}` : ''}; object-src 'none'; base-uri 'none'; frame-ancestors ${ancestors}`;
+  return `default-src 'self'; script-src 'self' data:; worker-src 'self'; frame-src blob:; img-src 'self' blob:; style-src 'self'; connect-src 'self'${recoveryOrigin ? ` ${recoveryOrigin}` : ''}; object-src 'none'; base-uri 'none'; frame-ancestors ${ancestors}`;
 }
 
 function decodeStatic(name) {
