@@ -80,6 +80,9 @@ export async function loadSnapshot(store, api) {
     if (error?.status === 413 && error.code === "view_too_large") {
       store.mode = "paged";
       store.view = null;
+      // Paged, there is no snapshot cursor: events count from the live stream's cursor, or from the first one consumed.
+      store.snapshotCursor = store.liveCursor ?? null;
+      store.cursor = store.liveCursor ?? null;
       store.snapshotReady = true;
       store.buffer.length = 0;
       store.pending.delete("view");
@@ -125,7 +128,7 @@ export async function applyEvent(store, api, event) {
   const data = event.envelope?.data ?? {};
   if (event.name === 'additions.changed') {
     store.additions.report = null;
-    const response = await request(api, 'GET', '/view'); store.view = response.data; indexView(store, response.data);
+    await refreshView(store, api);
     return { applied: true };
   }
   if (event.name === 'unit.unread' && data.unitId && Number.isSafeInteger(data.count) && data.count >= 0) {
@@ -136,7 +139,7 @@ export async function applyEvent(store, api, event) {
     if (data.runId) for (const view of store.sessionViews.values()) {
       if (view.session.runId === data.runId) view.workStale = true;
     }
-    const response = await request(api, 'GET', '/view'); store.view = response.data; indexView(store, response.data);
+    await refreshView(store, api);
     return { applied: true };
   }
   if (['session.work', 'session.context'].includes(event.name)) {
@@ -196,7 +199,12 @@ export async function applyReset(store, api) {
   store.cursor = null;
   try {
     const snapshot = await loadSnapshot(store, api);
-    if (store.mode === "paged") return snapshot;
+    if (store.mode === "paged") {
+      store.failure = null;
+      store.paused = false;
+      await drainBuffer(store, api);
+      return snapshot;
+    }
     await Promise.all(openPaths(store).map((path) => request(api, "GET", path).then((response) => {
       if (path === "/settings") store.settings = response.data;
       if (path === "/viewer") store.viewer = response.data;
@@ -226,12 +234,26 @@ function openPaths(store) {
   return paths;
 }
 
+// A view too large for one answer leaves the store paged; its open collections reload on their own events instead.
+async function refreshView(store, api) {
+  if (store.mode === "paged") return;
+  try {
+    const response = await request(api, "GET", "/view");
+    store.view = response.data;
+    indexView(store, response.data);
+  } catch (error) {
+    if (error?.status !== 413 || error.code !== "view_too_large") throw error;
+    store.mode = "paged";
+    store.view = null;
+  }
+}
+
 async function drainBuffer(store, api) {
   const events = store.buffer.splice(0);
   const watermark = store.snapshotCursor;
   for (const event of events) {
     if (!event || event.name === "stream.reset") continue;
-    if (event.name !== "stream.ready" && !isAfterCursor(event.id, watermark)) continue;
+    if (watermark != null && event.name !== "stream.ready" && !isAfterCursor(event.id, watermark)) continue;
     await applyEvent(store, api, event);
     noteConsumed(store, event);
   }
@@ -248,7 +270,7 @@ function connectionControl(event) {
 
 function staleReplay(store, event) {
   // Reset and ready share the snapshot cursor, so the mutation cursor must not discard them.
-  if (connectionControl(event)) return false;
+  if (connectionControl(event) || store.cursor == null) return false;
   return !isAfterCursor(event.id, store.cursor);
 }
 

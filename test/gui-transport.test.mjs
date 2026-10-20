@@ -874,3 +874,20 @@ test('actual chat and mailbox posts time out at ten seconds and ordinary bodies 
     dispose(api);
   }
 });
+
+test("a paged store applies live events and leaves a reset unpaused", async () => {
+  const tooLarge = () => jsonResponse(413, { error: { code: "view_too_large", message: "The view is too large. Request each collection instead.", requestId: "x" } });
+  const api = harness({ fetch: async () => tooLarge() }).api;
+  const store = createStore();
+  assert.equal((await loadSnapshot(store, api)).paged, true);
+  const event = { id: `${SERVICE}:7`, name: "unit.unread", envelope: { contract: "hivem1nd-events-v3", data: { unitId: "root:master", count: 3 } } };
+  const applied = await acceptStreamEvent(store, api, event);
+  assert.notEqual(applied?.dropped, true, "a paged store must not drop live events");
+  applied.consume();
+  assert.equal(store.cursor, `${SERVICE}:7`);
+  await applyReset(store, api);
+  assert.equal(store.paused, false, "a reset that ends paged resumes the stream");
+  const later = await acceptStreamEvent(store, api, { ...event, id: `${SERVICE}:8` });
+  assert.notEqual(later?.buffered, true);
+  assert.equal((await applyEvent(store, api, { id: `${SERVICE}:9`, name: "additions.changed", envelope: { contract: "hivem1nd-events-v3", data: {} } })).applied, true, "a paged store does not ask for the whole view again");
+});
