@@ -114,7 +114,9 @@ function parseHeaders(raw) {
   } else if (Buffer.byteLength(body, 'utf8') > MAX_BODY_BYTES) {
     throw relayError('MESSAGE_TOO_LARGE', 'A Relay message body exceeds the maximum size.');
   }
-  return { headers, body };
+  // Counted in bytes: a copy cut inside a multi-byte character reads as one whole character in text.
+  const bodyBytes = (Buffer.isBuffer(raw) ? raw.length : Buffer.byteLength(text, 'utf8')) - Buffer.byteLength(text.slice(0, separator + delimiter.length), 'utf8');
+  return { headers, body, bodyBytes };
 }
 
 function attachmentPath(entry) {
@@ -135,7 +137,15 @@ function headerList(headers, name) {
 }
 
 function parseMessage(raw, sourcePath, archived = false) {
-  const { headers, body } = parseHeaders(raw);
+  const { headers, body, bodyBytes } = parseHeaders(raw);
+  // A message that declares the size of its body is whole only with all of those bytes, so a copy cut inside the body waits for
+  // the rest as one cut inside the headers does. Files of an older kit or of another machine declare nothing and are taken as they are.
+  const declared = header(headers, 'body-bytes');
+  if (declared) {
+    if (!/^\d{1,7}$/.test(declared)) throw relayError('MALFORMED_MESSAGE', 'The message declares an invalid body size.');
+    // Only a shorter body is a message still arriving; a longer one, such as after a line ending conversion, is kept.
+    if (bodyBytes < Number(declared)) throw relayError('MALFORMED_MESSAGE', 'The message body is shorter than it declares; it may still be arriving.');
+  }
   const filename = path.basename(sourcePath);
   const rawFrom = header(headers, 'from');
   const legacySender = rawFrom.match(/^([^@\s]+)@([a-zA-Z0-9._-]+)$/);
@@ -224,6 +234,7 @@ function serializeMessage(message) {
     ['thread-id', message.threadId], ['reply-to', message.replyTo ?? ''],
     ['reply-requested', message.replyRequested ? 'true' : 'false'],
     ['attachments', JSON.stringify(message.attachments)],
+    ['body-bytes', Buffer.byteLength(message.body, 'utf8')],
   ];
   return Buffer.from(`${fields.map(([key, value]) => `${key}: ${value}`).join('\n')}\n\n${message.body}`, 'utf8');
 }
