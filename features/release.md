@@ -9,12 +9,19 @@ category: continuity
 Mind: {{mind}}
 Argument: none
 
-## Start
-
-Locate the mind through the Mind line above. Read `machines/<host>.md` in its `user/` folder, where `<host>` is the hostname of this machine, and take the paths from its `Paths` section. Resolve the current project from the working directory against those paths, and the unit as the role of the current chat plus that project; executive roles use the role name alone. When no role is active, say so and ask which unit to act as, in one line. The layout of the mind and the format of every file are in `files.md`, next to `rules.md`: the steps name the files and do not repeat the formats.
+Start: Locate in `rules.md` of the mind above; no unit is needed, so its step that asks for one is skipped.
 
 ## Steps
 
-1. Read the commits since the last tag on the current branch.
-2. Write the changelog entry from them, bump the version in the project's version file, and create the tag locally.
-3. Report the commands the user runs to push the branch and the tag. Never push.
+1. Check the branch. With main or the default branch checked out, or with uncommitted changes, stop and say so: a release is prepared on a release or task branch with a clean tree.
+2. Read the commits since the last tag on the current branch: `git describe --tags --abbrev=0`, then `git log <tag>..HEAD`; with no tag, every commit.
+3. Read the current version from the repository's own version file: the `version` of `package.json`, or the file the repository already bumps, such as `pyproject.toml`, `Cargo.toml` or `VERSION`. The brief's `version` is a planning number, never the release version. Propose the next version from the commits: a fix adds a patch, a feature a minor, a breaking change a major.
+4. Run the build and the tests: the brief's `build` and the repository's test script. A fail stops here.
+5. Write the changelog entry from the commits into the repository's changelog, `CHANGELOG.md` at its root when it has none, and bump the version in the version file.
+6. Show the diff and the proposed tag, in the form the existing tags use (`v<version>` when there are none), and ask for one yes to commit those two files and tag that commit locally. Without the yes, the files stay changed and uncommitted.
+7. Never push.
+
+## End
+
+- Stops after the tag, at a failed check, or without the yes.
+- Reports the version, the tag, the build and the tests as pass or fail, and the commands the person runs to publish, `git push origin <branch>` and `git push origin <tag>`, never run here.

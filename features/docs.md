@@ -9,12 +9,16 @@ category: continuity
 Mind: {{mind}}
 Argument: [range]
 
-## Start
-
-Locate the mind through the Mind line above. Read `machines/<host>.md` in its `user/` folder, where `<host>` is the hostname of this machine, and take the paths from its `Paths` section. Resolve the current project from the working directory against those paths, and the unit as the role of the current chat plus that project; executive roles use the role name alone. When no role is active, say so and ask which unit to act as, in one line. The layout of the mind and the format of every file are in `files.md`, next to `rules.md`: the steps name the files and do not repeat the formats.
+Start: Locate in `rules.md` of the mind above; no unit is needed, so its step that asks for one is skipped.
 
 ## Steps
 
-1. Take the diff of the current task branch, or the range the user gives.
-2. Search the documentation for the files and symbols the diff changed. Open each document found.
-3. Update the affected documents on the same branch, and list what was updated. Documents that were not affected are not touched.
+1. Take the diff of the current branch against the branch it was cut from (`git diff <base>...HEAD`, the default branch when unsure), or the range the person gives.
+2. Search the documentation for each file, symbol, command and option the diff changed, with several spellings; `git grep -n -i -e <name>` runs the same in a POSIX shell and in PowerShell. Open each document found. An empty search counts only with its scope recorded and a positive control: the same search first finds a name known to be documented.
+3. Update the affected documents on the same branch. A document the diff does not affect is not touched. Nothing is committed.
+4. Verify: each changed statement matches the code it describes, at file and line; each link and path in the changed text resolves; the repository's documentation lint passes when it has one. A fail is fixed before the end, or reported.
+
+## End
+
+- Stops after the verification.
+- Reports each document updated with what changed, the lint as pass, fail or not run with the reason, and any statement left not verifiable.

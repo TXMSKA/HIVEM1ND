@@ -9,13 +9,16 @@ category: planning
 Mind: {{mind}}
 Argument: <text>
 
-## Start
-
-Locate the mind through the Mind line above. Read `machines/<host>.md` in its `user/` folder, where `<host>` is the hostname of this machine, and take the paths from its `Paths` section. Resolve the current project from the working directory against those paths, and the unit as the role of the current chat plus that project; executive roles use the role name alone. When no role is active, say so and ask which unit to act as, in one line. The layout of the mind and the format of every file are in `files.md`, next to `rules.md`: the steps name the files and do not repeat the formats.
+Start: Locate in `rules.md` of the mind above.
 
 ## Steps
 
-1. Read the text as a defect or a request. Search the repo for the symbols it names, with several variants, and open the files found.
-2. Find the root cause and cite it as file and line. When the cause is not in the code, say where it is.
-3. Write a task file: `status: open`, `from` the current unit, `to` the project's executor, the Request with the cause, the exact files to change, what not to touch and what done looks like.
-4. Report the task id. No code changes.
+1. Read the text as a defect or a request. Search the repo for the symbols it names, with several spellings; `git grep -n -i -e <name>` runs the same in a POSIX shell and in PowerShell. Open the files found. An empty search counts only with its scope recorded and a positive control: the same search first finds a symbol known to exist.
+2. Find the root cause and cite it as file and line. When the cause is not in the code, say where it is, such as configuration, data, the environment or another repo, with the evidence.
+3. Create the task with `/task` for the project's executor; `/task` routes it to the lead when the executor has one. The Request holds the cause with file and line, the exact files to change, what not to touch, and what done looks like as checks an agent can verify.
+4. Change no code.
+
+## End
+
+- Stops when the task is written, or when no cause is found; then nothing is written.
+- Reports the task id and the cause in one line, or what was searched and where when no cause was found.

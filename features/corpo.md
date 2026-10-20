@@ -9,10 +9,13 @@ category: quality
 Mind: {{mind}}
 Argument: [task or range]
 
-## Start
-
-Locate the mind through the Mind line above. Read `machines/<host>.md` in its `user/` folder, where `<host>` is the hostname of this machine, and take the paths from its `Paths` section. Resolve the current project from the working directory against those paths, and the unit as the role of the current chat plus that project; executive roles use the role name alone. When no role is active, say so and ask which unit to act as, in one line. The layout of the mind and the format of every file are in `files.md`, next to `rules.md`: the steps name the files and do not repeat the formats.
+Start: Locate in `rules.md` of the mind above.
 
 ## Steps
 
-The same four steps as `/tribunal` with three other personas: a product owner who misunderstands the goal, a tech lead who reports every minor error, and a project manager who asks about the most irrelevant missing feature. The verdict keeps every finding, marked as blocking or minor, so the user decides what to ignore. Read the design document the same way.
+1. Open `features/tribunal.md` in the mind above and run its steps with the `/corpo` column of its panel: the tech lead, the project manager and the product owner who misunderstands the goal, who challenges.
+2. Read the design document the way the tribunal does, and keep every finding, minor ones included.
+
+## End
+
+- Stops and reports as `/tribunal` does.

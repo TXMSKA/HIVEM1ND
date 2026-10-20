@@ -9,12 +9,16 @@ category: quality
 Mind: {{mind}}
 Argument: none
 
-## Start
-
-Locate the mind through the Mind line above. Read `machines/<host>.md` in its `user/` folder, where `<host>` is the hostname of this machine, and take the paths from its `Paths` section. Resolve the current project from the working directory against those paths, and the unit as the role of the current chat plus that project; executive roles use the role name alone. When no role is active, say so and ask which unit to act as, in one line. The layout of the mind and the format of every file are in `files.md`, next to `rules.md`: the steps name the files and do not repeat the formats.
+Start: Locate in `rules.md` of the mind above; no unit is needed, so its step that asks for one is skipped.
 
 ## Steps
 
-1. On a merge or rebase with conflicts, list the conflicted files.
-2. For each hunk, resolve it when both sides are compatible. When they are not, ask one question through the agent's native Q&A when it has one.
-3. Build after resolving. Report the files resolved and the questions asked. Never complete the merge with a failing build.
+1. Confirm that a merge or a rebase is in progress (`git status` names it) and list the conflicted files with `git diff --name-only --diff-filter=U`. With none in progress, stop and say so.
+2. For each hunk, resolve it when both sides are compatible, keeping what each side meant. When they are not, ask one question through the client's native question tool when it has one, showing both sides, and resolve it as answered.
+3. Stage the resolved files and run the build and the tests: the brief's `build` and the repository's test script. A fail stops here and the merge stays unfinished.
+4. Completing the merge or the rebase (`git commit`, `git rebase --continue`) is a commit: it runs only when the person asked for the merge to be completed, and never with main checked out. With main checked out, the work stops after staging.
+
+## End
+
+- Stops when every conflict is resolved and the checks pass, at a failed check, or at an unanswered question.
+- Reports the files resolved, each question with its answer, the build and the tests as pass or fail, and whether the merge was completed.

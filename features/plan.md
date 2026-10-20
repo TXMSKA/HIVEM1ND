@@ -9,13 +9,21 @@ category: planning
 Mind: {{mind}}
 Argument: <text>
 
-## Start
-
-Locate the mind through the Mind line above. Read `machines/<host>.md` in its `user/` folder, where `<host>` is the hostname of this machine, and take the paths from its `Paths` section. Resolve the current project from the working directory against those paths, and the unit as the role of the current chat plus that project; executive roles use the role name alone. When no role is active, say so and ask which unit to act as, in one line. The layout of the mind and the format of every file are in `files.md`, next to `rules.md`: the steps name the files and do not repeat the formats.
+Start: Locate in `rules.md` of the mind above.
 
 ## Steps
 
 1. Read the routes, and the briefs and product documents of the projects the request touches.
-2. Split the request into task files, one per piece that can fail on its own, with `depends` set in dependency order and `to` set to the unit that owns each piece; a piece for an executor whose state names a `lead` goes to that lead, which hands it over. When the project has a product document, each task cites in its `requirements` header the IDs of the requirements it delivers. A task may carry a `work` header naming its kind of work, from the list of the `delegation` category, so that the executor takes the model and effort of that row.
-3. Read the `INDEX.md` of every installed knowledge module, in `knowledge/` and `user/knowledge/` of the mind, and for each piece open only the categories it touches. The `Build:` lines of those subcategories go into that task file's request as requirements, each one naming the file it came from, and the same request lists only the protocols the piece actually uses: of those the categories name, the global ones in `user/protocols/` and the local ones of the piece's project in `user/projects/<project>/protocols/`, one is kept only when something the piece builds falls inside its scope, named next to it.
-4. Write them and notify each unit by message. No implementation.
+2. Split the request into pieces that can fail on their own, in dependency order, each with the unit that owns it.
+3. Read the `INDEX.md` of every installed knowledge module, in `knowledge/` and `user/knowledge/` of the mind, and for each piece open only the categories it touches.
+   - The `Build:` lines of those subcategories go into that piece's request as requirements, each naming the file it came from.
+   - The request lists only the protocols the piece uses: of those the categories name, the global ones in `user/protocols/` and the local ones of its project in `user/projects/<project>/protocols/`, a protocol is kept only when something the piece builds falls inside its `scope`, and is named next to that item.
+4. Create each piece with `/task` for its owner, in dependency order, so that every `depends` names ids already written. `/task` writes the id, `from`, `to` and the Relay message, and routes the task to the lead when the owner has one.
+   - `requirements` cites the IDs of the product document the piece delivers, when the project has one.
+   - `work` names its kind of work from the `delegation` category, so that the executor takes that row of `models.md`.
+5. Implement nothing.
+
+## End
+
+- Stops when every piece is a task.
+- Reports the task ids in order, each with its owner and its `depends`.
