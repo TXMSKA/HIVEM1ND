@@ -42,6 +42,7 @@ import {
   writeMachineRecord,
 } from './records.mjs';
 import { applyFolderIcon } from './folder-icon.mjs';
+import { applyShortcuts, shortcutPlan, windowsShortcutFolders } from './shortcuts.mjs';
 import { estimateStagedFiles, syncProgress } from './setup-progress.mjs';
 import { detectLanguage, LANGUAGES, option, relayLine, text } from './texts.mjs';
 
@@ -92,6 +93,10 @@ export async function createSetupSession(options = {}) {
     serviceQuery: options.serviceQuery ?? null,
     aclRunner: options.aclRunner ?? null,
     folderIconPlatform: options.folderIconPlatform ?? null,
+    shortcuts: options.shortcuts === true,
+    shortcutFolders: options.shortcutFolders ?? null,
+    shortcutRunner: options.shortcutRunner ?? null,
+    nodePath: options.nodePath ?? null,
     attribRunner: options.attribRunner ?? null,
     sid: options.sid ?? null,
     serviceProtect: options.serviceProtect !== false,
@@ -883,6 +888,7 @@ class SetupSession {
     const display = await this.writeDisplaySettings();
     const applied = await applyInstallPlan(plan, this.answers.conflicts);
     const folderIcon = await this.writeFolderIcon();
+    const shortcuts = await this.writeShortcuts();
     // A migrated copy inherits the machine record of the previous M1ND; the files inside that M1ND are not this installation's.
     const inherited = { ...(this.machineRecord?.managedFiles ?? {}) };
     const legacySource = this.checkpoint?.mode === 'migrate' ? this.checkpoint.sourcePath ?? this.legacySourcePath : null;
@@ -892,6 +898,12 @@ class SetupSession {
     if (display) managedFiles[display.file] = display.hash;
     // The folder icon file is recorded only when setup created it or already owned it; a desktop.ini the person had is merged, never claimed.
     if (folderIcon?.status === 'applied' && (folderIcon.created || Object.hasOwn(inherited, folderIcon.file))) managedFiles[folderIcon.file] = folderIcon.hash;
+    // A shortcut is recorded when setup made it or already owned it, so uninstall removes it while it is unchanged;
+    // one the person put there under the same name is left alone and never claimed.
+    for (const shortcut of shortcuts) {
+      if (shortcut.status === 'applied') managedFiles[shortcut.file] = shortcut.hash;
+      else delete managedFiles[shortcut.file];
+    }
     for (const filePath of plan.retired) delete managedFiles[filePath];
     for (const conflict of plan.conflicts) {
       if (this.answers.conflicts[conflict.path] === 'keep') delete managedFiles[conflict.path];
@@ -1266,6 +1278,25 @@ class SetupSession {
     if (this.answers.attach || this.checkpoint?.mode === 'join') return null;
     return applyFolderIcon(this.mindPath, { platform: this.folderIconPlatform ?? process.platform, attrib: this.attribRunner ?? undefined, env: this.env })
       .catch(error => ({ status: 'failed', reason: error.code ?? error.message }));
+  }
+
+  // The desktop and Start menu shortcuts start the app without a console. They are made only for a real Windows
+  // installation, and only when the M1ND holds the launcher they run.
+  async writeShortcuts() {
+    const platform = this.folderIconPlatform ?? process.platform;
+    if (this.shortcuts !== true || this.serviceDryRun !== false || platform !== 'win32') return [];
+    try {
+      const mind = this.mindPath;
+      for (const file of [['gui', 'launch.vbs'], ['cli', 'index.mjs']]) if (!await lstat(path.join(mind, ...file)).then(state => state.isFile(), () => false)) return [];
+      const language = this.answers.language;
+      const folders = this.shortcutFolders ?? await windowsShortcutFolders({ env: this.env, home: this.homeDir });
+      const plan = shortcutPlan({ platform, mindPath: mind, nodePath: this.nodePath ?? process.execPath, cosmicPath: this.cosmicPath ?? '', folders,
+        message: text(language, 'launchFailed'), description: text(language, 'shortcutDescription'), env: this.env });
+      return await applyShortcuts(plan, { managed: this.machineRecord?.managedFiles ?? {}, run: this.shortcutRunner ?? undefined, env: this.env });
+    } catch {
+      // A shortcut is a convenience: the installation goes on without it.
+      return [];
+    }
   }
 
   // A new or migrated M1ND without display settings opens in the language chosen in setup; a joined one is never written.

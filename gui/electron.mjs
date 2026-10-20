@@ -122,6 +122,7 @@ export async function startElectronApp(electron, argv = process.argv.slice(2), d
       sessionOptions.kitPath ??= app.getAppPath();
       sessionOptions.serviceSetup = true;
       sessionOptions.serviceDryRun = false;
+      sessionOptions.shortcuts = true;
       sessionOptions.serviceStart = async config => {
         const started = await (dependencies.startConfiguredViewer ?? startConfiguredViewer)(config, {
           homeDir: launchOptions.homeDir, hostname: launchOptions.hostname,

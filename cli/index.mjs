@@ -38,7 +38,7 @@ Usage:
   hivem1nd view [--project <name>] [options]
   hivem1nd relay <in|register|send|inbox|read|history|threads|status|events|reminder|delivery|mcp|hook|wake|configure|unconfigure|diagnose> [options]
   hivem1nd uninstall [--dry-run] [--remove-mind] [options]
-  hivem1nd service <install|uninstall|status|run> [--dry-run] [options]
+  hivem1nd service <install|uninstall|status|run|launch> [--dry-run] [options]
   hivem1nd task status <project> <id> <status> [--note <text>]
   hivem1nd task undo <project> <id>
 
@@ -96,6 +96,7 @@ Uninstall options:
 
 Service options:
   service install --dry-run    Print the login plan. This does not register a task.
+  service launch               Open the app: start the service in the background when it is not running, then open the viewer. Prints nothing.
   --origin-kind <folder|onedrive>
   --origin-path <path>         Explicit origin folder
   --cosmic-path <path>         Cosmic parent. The M1ND folder ${MIND_DIRECTORY_NAME} is appended when no M1ND path is set.
@@ -239,8 +240,8 @@ const SERVICE_FLAGS = new Set(["dryRun", "originKind", "originPath", "cosmicPath
 function parseServiceArgs(tokens) {
   const action = tokens[0];
   if (!action || action === "--help" || action === "-h") return { command: "service", help: true };
-  if (!["install", "uninstall", "status", "run"].includes(action)) {
-    throw new CliUsageError("service requires install, uninstall, status or run.");
+  if (!["install", "uninstall", "status", "run", "launch"].includes(action)) {
+    throw new CliUsageError("service requires install, uninstall, status, run or launch.");
   }
   const options = { action };
   for (let index = 1; index < tokens.length; index += 1) {
@@ -573,6 +574,7 @@ function setupOptions(options, { env = process.env, lifecycle = false, serviceRu
     relaySetup: true,
     serviceSetup: true,
     serviceDryRun: options.dryRun === true,
+    ...(!lifecycle && options.dryRun !== true ? { shortcuts: true } : {}),
     ...(options.dryRun === true ? {} : { serviceRunner: serviceRunner ?? runRegistrationCommand, serviceStart: serviceStart ?? (config => startUserService(config, serviceOptions)) }),
     ...(serviceQuery ? { serviceQuery } : {}),
     ...(serviceAclRunner ? { aclRunner: serviceAclRunner } : {}),
@@ -1124,6 +1126,32 @@ async function runService(options, dependencies, output) {
     output.write(`${JSON.stringify({ status: configured.status, phase: configured.phase, viewerUrl: configured.viewerUrl ?? null, error: configured.error ?? configured.conflict ?? null })}\n`);
     if (configured.status === "started" && configured.viewerUrl) await (dependencies.openUrl ?? openLocalUrl)(configured.viewerUrl);
     return configured.status === "started" ? 0 : 1;
+  }
+  if (options.action === "launch") {
+    // What the desktop shortcut runs: no console, no output. A service that is not running starts detached.
+    const runtime = dependencies.serviceRuntime ?? await import("../engine/service/service.mjs");
+    const { launchApp, serviceState, spawnDetachedService } = dependencies.launcher ?? await import("../engine/launcher.mjs");
+    const selected = { mindPath, platform: registration.platform, env: common.env, homeDir: registration.home, cosmicPath: common.cosmicPath,
+      hostname: common.hostname, aclRunner: dependencies.aclRunner, userKey: dependencies.userKey, guardPort: dependencies.guardPort };
+    try {
+      await launchApp(selected, {
+        state: () => serviceState(selected, runtime),
+        spawnService: () => spawnDetachedService({ cliPath: path.join(KIT_PATH, "cli", "index.mjs"), mindPath, cosmicPath: common.cosmicPath,
+          hostname: options.hostname, env: common.env }),
+        // The viewer address is handed to the browser and never written anywhere a person could read it.
+        viewerUrl: async () => (await installers.startConfiguredViewer({ mindPath, machine: common.hostname }, {
+          start: () => runtime.runConfiguredService({ mindPath, platform: registration.platform, env: common.env, home: registration.home,
+            cosmicPath: common.cosmicPath, hostname: common.hostname, aclRunner: dependencies.aclRunner, userKey: dependencies.userKey,
+            guardPort: dependencies.guardPort }),
+        })).viewerUrl,
+        openUrl: dependencies.openUrl ?? openLocalUrl,
+        ...(dependencies.launchTiming ?? {}),
+      });
+    } catch (error) {
+      output.write(`${error.code ?? "error"}: ${error.message}\n`);
+      return 1;
+    }
+    return 0;
   }
   if (options.action === "run") {
     const { runConfiguredService, stopService } = dependencies.serviceRuntime ?? await import("../engine/service/service.mjs");
