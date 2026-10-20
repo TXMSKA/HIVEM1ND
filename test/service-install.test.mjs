@@ -20,7 +20,7 @@ import { copyLegacyTree, legacyTreeInventory } from '../engine/legacy-copy.mjs';
 import { createSetupSession } from '../engine/setup.mjs';
 import { evolve } from '../engine/lifecycle.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
-import { assertReleaseAssets, assertZipBounds, BROWSER_ASSETS, browserReferences, build, cleanStage, collectPayload, confirmRuntimeVersion, dryRun, installerEntry, installerScript, installPayload, main, manifestDocument, missingPackagedBrowserAssets, NODE_ENTRY_LIMIT, NODE_EXE_NAME, productionPackages, readArchive, verifyInstalled, verifyRuntime, writeZip } from '../scripts/build-installer.mjs';
+import { assertReleaseAssets, assertZipBounds, BROWSER_ASSETS, browserReferences, build, cleanStage, collectPayload, confirmRuntimeVersion, dryRun, installerEntry, installerScript, installPayload, main, manifestDocument, outputFor, missingPackagedBrowserAssets, NODE_ENTRY_LIMIT, NODE_EXE_NAME, productionPackages, readArchive, verifyInstalled, verifyRuntime, writeZip } from '../scripts/build-installer.mjs';
 
 const base = {
   nodePath: 'C:\\Program Files\\node\\node.exe',
@@ -1104,6 +1104,14 @@ test('installer archives are reproducible and reject malicious containers', asyn
     }
   }
   assert.match(runtime, /unavailable|verified|digest mismatch/);
+});
+
+test('the Windows build names its command when the runtime is missing and always saves a release archive', async () => {
+  await assert.rejects(() => main([]), /npm run dist:win -- --node-zip <file>/);
+  const packageRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+  assert.equal(outputFor({ output: null, dryRun: false }, '3.0.0'), path.join(packageRoot, 'dist', 'hivem1nd-3.0.0-win-x64.zip'));
+  assert.equal(outputFor({ output: null, dryRun: true }, '3.0.0'), null);
+  assert.equal(outputFor({ output: 'artifact.zip', dryRun: true }, '3.0.0'), path.resolve('artifact.zip'));
 });
 
 test('the runtime reader accepts the pinned NTFS extra and a dry-run stages offline', async (context) => {

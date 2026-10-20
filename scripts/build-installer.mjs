@@ -1,3 +1,10 @@
+// Builds the offline Windows installer ZIP. The pinned Node runtime is supplied by the person and never downloaded.
+//
+//   npm run dist:win -- --node-zip <file>                  release build, saved at dist/hivem1nd-<version>-win-x64.zip
+//   npm run dist:win -- --node-zip <file> --output <file>  release build, saved at the given file
+//   npm run dist:win -- --node-zip <file> --dry-run        offline staging and smoke check, saved only with --output
+//
+// <file> is the official node-v22.23.3-win-x64.zip; its SHA-256 is checked before anything is built.
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { access, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
@@ -14,6 +21,7 @@ export const NODE_ZIP_NAME = 'node-v22.23.3-win-x64.zip';
 export const NODE_ZIP_SHA256 = '2b0ff57b049cda1bbcea2240eec20467018713c1efe1f7360c2681859b90ed71';
 export const NODE_EXE_SHA256 = '9c9245166b4a8e182e0b797da9c20136117ff24368eaff1fec8343a123c8db0e';
 export const BROWSER_ASSETS = BROWSER_STATIC_FILES;
+export const INSTALLER_USAGE = 'Usage: npm run dist:win -- --node-zip <file> [--output <file>] [--dry-run]';
 
 export function missingPackagedBrowserAssets(included, embedded = EMBEDDED_BROWSER_FILES) {
   const missing = [];
@@ -941,10 +949,16 @@ export async function installPayload(options) {
   }
 }
 
+// A release build is always saved: at --output, or under dist/ with the package version. A dry run is saved only with --output.
+export function outputFor(input, version) {
+  if (input.output) return path.resolve(input.output);
+  return input.dryRun === true ? null : path.join(root, 'dist', `hivem1nd-${version}-win-x64.zip`);
+}
+
 export async function main(argv) {
   const input = readInputs(argv);
   if (!input.nodeZip) {
-    throw new Error(`Pass --node-zip <absolute-file> pointing at ${NODE_ZIP_NAME}. The build does not download it.`);
+    throw new Error(`Pass --node-zip <file> pointing at ${NODE_ZIP_NAME}. The build does not download it. ${INSTALLER_USAGE}`);
   }
   if (input.dryRun !== true) await assertReleaseAssets(input.assetDir ?? path.join(root, 'gui', 'app'));
   const runtime = await verifyRuntime(input.nodeZip);
@@ -979,9 +993,12 @@ export async function main(argv) {
       await rm(stageRoot, { recursive: true, force: true });
     }
   }
-  if (input.output) {
-    await mkdir(path.dirname(path.resolve(input.output)), { recursive: true });
-    await writeFile(input.output, artifact.zip);
+  const { version } = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
+  const output = outputFor(input, version);
+  if (output) {
+    await mkdir(path.dirname(output), { recursive: true });
+    await writeFile(output, artifact.zip);
+    artifact.output = output;
   }
   return artifact;
 }
@@ -989,7 +1006,9 @@ export async function main(argv) {
 const isMain = process.argv[1]
   && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(path.resolve(process.argv[1]));
 if (isMain) {
-  main(process.argv.slice(2)).catch((error) => {
+  main(process.argv.slice(2)).then((artifact) => {
+    console.log(artifact.output ? `Saved ${artifact.output}` : 'Dry run passed. Pass --output <file> to keep the archive.');
+  }).catch((error) => {
     console.error(error.message);
     process.exitCode = 1;
   });

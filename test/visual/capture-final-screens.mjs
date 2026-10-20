@@ -101,6 +101,14 @@ async function pool(items, size, worker) {
   return results;
 }
 
+// The report is written first; the run then fails when any capture was not reached, so automation cannot accept it.
+export async function finishRun(results, { version, reportFile, write = writeFile, log = console.log }) {
+  const report = { version, tasks: results.length, captured: results.filter(item => item.status === 'captured').length, unreached: results.filter(item => item.status !== 'captured').length, results };
+  await write(reportFile, `${JSON.stringify(report, null, 2)}\n`);
+  log(`captured ${report.captured}, unreached ${report.unreached}, Chrome ${version}`);
+  return report.unreached ? 1 : 0;
+}
+
 export async function main() {
   const only = argument('only') ? argument('only').split(',').map(item => item.trim()) : null;
   const languages = argument('lang') ? [argument('lang')] : ['en', 'es'];
@@ -123,9 +131,7 @@ export async function main() {
   } finally {
     await browser.close();
   }
-  const report = { version: browser.version, tasks: results.length, captured: results.filter(item => item.status === 'captured').length, unreached: results.filter(item => item.status !== 'captured').length, results };
-  await writeFile(reportFile, `${JSON.stringify(report, null, 2)}\n`);
-  console.log(`captured ${report.captured}, unreached ${report.unreached}, Chrome ${browser.version}`);
+  process.exitCode = await finishRun(results, { version: browser.version, reportFile });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

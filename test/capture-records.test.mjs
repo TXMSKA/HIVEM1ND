@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import test from 'node:test';
 import { finalLookCaptures, finalVerificationCases } from './gui-data.mjs';
-import { captureTasks, loadRegistry } from './visual/capture-final-screens.mjs';
+import { captureTasks, finishRun, loadRegistry } from './visual/capture-final-screens.mjs';
 import { pngSize } from './visual/chrome.mjs';
 
 test('the capture runner covers every active destination without opening a browser', async () => {
@@ -66,4 +66,14 @@ test('capture records match the actual PNG inventory and retain unreached states
   assert.equal(handoff.includes('retained guarantees CAPTURED'), false, 'A saved replacement PNG does not establish retained behavior.');
   assert.match(handoff.split('\n').find(line => line.startsWith('| 3.10 ')), /Send back dialog opens/);
   assert.match(handoff.split('\n').find(line => line.startsWith('| 4.11 ')), /required recipient live Work row absent/);
+});
+
+test('a capture run saves its report and then fails when a state was unreached', async () => {
+  const writes = [];
+  const options = { version: 'Chrome/1', reportFile: 'capture-results.json', write: async (file, text) => writes.push({ file, report: JSON.parse(text) }), log: () => undefined };
+  const record = status => ({ reference: '1.8', status });
+  assert.equal(await finishRun([record('captured'), record('unreached')], options), 1);
+  assert.deepEqual(writes.map(item => [item.file, item.report.captured, item.report.unreached]), [['capture-results.json', 1, 1]]);
+  assert.equal(await finishRun([record('captured')], options), 0);
+  assert.equal(writes.length, 2);
 });
