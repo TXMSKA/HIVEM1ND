@@ -9,8 +9,10 @@ npm ci --ignore-scripts
 npm run lint
 npm test
 npm run build
-npm run dist:win
+npm run dist:win -- --node-zip <path to node-v22.23.3-win-x64.zip>
 ```
+
+The Windows build bundles the official `node-v22.23.3-win-x64.zip` from nodejs.org and checks its SHA-256 before building; it stops with its usage line when the zip is not given, and saves the archive under `dist/` unless `--output` names another file.
 
 The build creates the npm archive under `dist/` and checks that the package contains the executable fronts and kit, with no private root `user/` data. The Windows build creates a zip archive; extracting it and running `HIVEM1ND.exe` starts the app without installing anything; the selected mind and attached agent configurations remain independent user data.
 

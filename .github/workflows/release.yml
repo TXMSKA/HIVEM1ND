@@ -27,7 +27,11 @@ jobs:
       - run: npm run lint
       - run: npm test
       - run: npm run build
-      - run: npm run dist:win
+      # The installer bundles the pinned official Node runtime and checks its SHA-256 itself before building.
+      - name: Fetch the pinned Node runtime
+        shell: pwsh
+        run: Invoke-WebRequest -Uri https://nodejs.org/dist/v22.23.3/node-v22.23.3-win-x64.zip -OutFile "$env:RUNNER_TEMP/node-v22.23.3-win-x64.zip"
+      - run: npm run dist:win -- --node-zip "${{ runner.temp }}/node-v22.23.3-win-x64.zip"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: HIVEM1ND-Windows
