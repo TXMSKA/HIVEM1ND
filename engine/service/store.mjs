@@ -270,6 +270,11 @@ export async function withLocalChanges(store, operation) {
   });
 }
 
+// Whether the running work already holds the local changes lock of this store.
+export function holdsLocalChanges(store) {
+  return localChanges.getStore()?.get(store)?.active === true;
+}
+
 // Work started from a timer or watcher belongs to no caller: it must take local-observation itself instead of
 // inheriting the lease of whatever call happened to schedule it.
 export function withoutLocalChanges(operation) {

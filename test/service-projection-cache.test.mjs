@@ -3,7 +3,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { projectChat, readCollection, readDetail, readProjection } from '../engine/service/projection.mjs';
-import { atomicWrite, createProjectionCache, noteProjectionChange } from '../engine/service/store.mjs';
+import { atomicWrite, createProjectionCache, noteProjectionChange, withLocalChanges } from '../engine/service/store.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
 const NOW = Date.parse('2026-10-10T12:00:00.000Z');
@@ -128,4 +128,24 @@ test('an old build is answered at once while a new one is built behind it, and a
   await writeFile(path.join(fixture.paths.mind, 'user', 'state', 'three.md'), unit('executor-shop-3'));
   cache.maxAgeMs = -1;
   assert.equal((await readProjection(context)).units.length, 3, 'a build past its limit is built again before it is answered');
+});
+
+test('work that holds the local changes lock reads the M1ND while another reader waits for that lock', async (t) => {
+  const { context } = await world(t);
+  let holding, release;
+  const held = new Promise(resolve => { holding = resolve; });
+  // A deletion takes the lock, and meanwhile the app asks for the view, which queues a shared build behind the lock.
+  const deletion = withLocalChanges(context.store, async () => {
+    holding();
+    await new Promise(resolve => { release = resolve; });
+    return readProjection(context);
+  });
+  await held;
+  const reader = readProjection(context);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  release();
+  const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('the lock holder waited on a build queued behind its own lock')), 5000));
+  const view = await Promise.race([deletion, timeout]);
+  assert.equal(view.units.some(unit => unit.id === 'project:shop:executor-shop'), true);
+  assert.equal((await Promise.race([reader, timeout])).units.length, view.units.length);
 });

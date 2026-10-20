@@ -5,7 +5,7 @@ import { CLIENTS, CoreError, ROLES, canonicalJson, canonicalTaskId, hashBytes, h
 import { leadApproved } from './tasks.mjs';
 import { isMachineCopy, machineNames, stateCustomRole, stateRunsIn, stateUnitId } from './state.mjs';
 import { projectGroup } from './groups.mjs';
-import { readBytes, withLocalChanges } from './store.mjs';
+import { holdsLocalChanges, readBytes, withLocalChanges } from './store.mjs';
 import { MESSAGE_BYTES_MAX, MESSAGE_MAX, MESSAGE_WINDOW_MS, SYNC_BYTES_MAX, SYNC_WINDOW_MS } from '../sync/limits.mjs';
 import { classifyApprovalAction } from './adapters.mjs';
 import { authoredMessages, unreadByAgent } from './conversation-data.mjs';
@@ -157,6 +157,9 @@ async function builtProjection(context) {
     if (Date.now() - ready.builtAt > cache.refreshAfterMs && !slot.pending) startProjectionBuild(cache, key, context, now).promise.catch(() => {});
     return structuredClone(ready.value);
   }
+  // Work that holds the local changes lock builds its own view: a shared build started by another reader waits for that
+  // same lock, so waiting on it would never end.
+  if (holdsLocalChanges(context.store)) return projectionRead(context, () => buildProjection(context));
   // Readers share a build that started after the last change; one that started before it may predate what they just wrote.
   let pending = slot.pending;
   if (!pending || pending.generation !== cache.generation || !near(pending.now)) pending = startProjectionBuild(cache, key, context, now);
