@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CoreError, canonicalJson, hashBytes, isUuid, uuidV8, validateName } from './identity.mjs';
 import { assertNoLinks, localCosmic, mindKeyFor, servicePaths } from './paths.mjs';
-import { atomicWrite, bindProjects, createStore, recoverTransactions } from './store.mjs';
+import { atomicWrite, bindProjects, createProjectionCache, createStore, noteProjectionChange, recoverTransactions } from './store.mjs';
 import { applyPack, recoverIncomingGroups } from '../sync/apply.mjs';
 import { openLedger } from '../sync/limits.mjs';
 import { closeOrigin, listMachineNames, openOrigin, readHead, readOriginPack, watchOrigin, writeDurable } from '../sync/origin.mjs';
@@ -943,6 +943,7 @@ async function closeServiceSync(runtime, { beat = true } = {}) {
 
 async function reconcileOrigin(runtime) {
   if (runtime.closed) return;
+  noteProjectionChange(runtime.sync.store);
   runtime.reconcileAgain = true;
   if (runtime.reconciling) return runtime.reconciling;
   runtime.reconciling = (async () => {
@@ -1577,6 +1578,8 @@ function createRuntimeStore(paths, options) {
     confineRoot: options.confineRoot ?? null,
   });
   if (options.aclRunner) store.aclRunner = options.aclRunner;
+  // The running service keeps its last build of the M1ND; the file watchers and the store's own writes throw it away.
+  if (options.projectionCache !== false) store.projectionCache = createProjectionCache();
   bindProjects(store, options.projects ?? []);
   return store;
 }

@@ -3,7 +3,7 @@ import { lstat, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { hashBytes } from './identity.mjs';
 import { assertNoLinks, resolveTarget } from './paths.mjs';
-import { readBytes, withLocalChanges, withoutLocalChanges } from './store.mjs';
+import { noteProjectionChange, readBytes, withLocalChanges, withoutLocalChanges } from './store.mjs';
 import { observeExternal, readComments, readEditor } from './editors.mjs';
 import { eligibleTargets, observationSnapshot, observeLocalChange, settleAppliedMarker, targetKey, withVersionBatch } from '../sync/store.mjs';
 
@@ -26,6 +26,8 @@ export async function watchLocalChanges(runtime, onChanges) {
 
   function schedule() {
     if (closed) return;
+    // Whatever moved on disk, the next read of the M1ND builds it again.
+    noteProjectionChange(context.store);
     dirty = true;
     if (timer || running) return;
     timer = setTimeout(() => {
