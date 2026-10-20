@@ -41,6 +41,7 @@ import {
   hashContent,
   writeMachineRecord,
 } from './records.mjs';
+import { applyFolderIcon } from './folder-icon.mjs';
 import { detectLanguage, LANGUAGES, option, relayLine, text } from './texts.mjs';
 
 const SETUP_PHASES = ['prepare', 'close-legacy', 'copy', 'migrate', 'configure', 'start', 'open', 'ready'];
@@ -89,6 +90,8 @@ export async function createSetupSession(options = {}) {
     serviceStart: options.serviceStart ?? null,
     serviceQuery: options.serviceQuery ?? null,
     aclRunner: options.aclRunner ?? null,
+    folderIconPlatform: options.folderIconPlatform ?? null,
+    attribRunner: options.attribRunner ?? null,
     sid: options.sid ?? null,
     serviceProtect: options.serviceProtect !== false,
     openViewer: options.openViewer ?? null,
@@ -855,6 +858,7 @@ class SetupSession {
     await this.createMindLayout();
     const display = await this.writeDisplaySettings();
     const applied = await applyInstallPlan(plan, this.answers.conflicts);
+    const folderIcon = await this.writeFolderIcon();
     // A migrated copy inherits the machine record of the previous M1ND; the files inside that M1ND are not this installation's.
     const inherited = { ...(this.machineRecord?.managedFiles ?? {}) };
     const legacySource = this.checkpoint?.mode === 'migrate' ? this.checkpoint.sourcePath ?? this.legacySourcePath : null;
@@ -862,6 +866,8 @@ class SetupSession {
     const managedFiles = { ...inherited, ...applied.managedFiles };
     // Setup wrote this file, so uninstall may remove it while its bytes are unchanged.
     if (display) managedFiles[display.file] = display.hash;
+    // The folder icon file is recorded only when setup created it or already owned it; a desktop.ini the person had is merged, never claimed.
+    if (folderIcon?.status === 'applied' && (folderIcon.created || Object.hasOwn(inherited, folderIcon.file))) managedFiles[folderIcon.file] = folderIcon.hash;
     for (const filePath of plan.retired) delete managedFiles[filePath];
     for (const conflict of plan.conflicts) {
       if (this.answers.conflicts[conflict.path] === 'keep') delete managedFiles[conflict.path];
@@ -1156,7 +1162,8 @@ class SetupSession {
       for (const entry of this.checkpointProof.inventory ?? []) {
         // Outside user/ a 2.x M1ND holds only the old kit (its files, package.json and node_modules). In the copy that
         // is upgraded it is replaced without a question; the original M1ND keeps every byte.
-        if (entry.kind === 'file' && !entry.path.startsWith('user/') && !entry.path.startsWith('.migration/')) existingManaged[path.join(this.mindPath, entry.path)] = entry.sha256;
+        // A desktop.ini is the folder's own setting (its icon and view), never part of the old kit.
+        if (entry.kind === 'file' && !entry.path.startsWith('user/') && !entry.path.startsWith('.migration/') && entry.path.toLowerCase() !== 'desktop.ini') existingManaged[path.join(this.mindPath, entry.path)] = entry.sha256;
       }
     }
     const peerHashes = await readPeerHashes(this.mindPath, this.hostname);
@@ -1224,10 +1231,17 @@ class SetupSession {
     ), {
       managedFiles: Object.fromEntries(Object.entries(existingManaged).filter(([file]) => isWithin(this.mindPath, file))),
       mindPath: this.mindPath,
-      retainedPaths: attach ? Object.keys(existingManaged) : [],
+      retainedPaths: [path.join(this.mindPath, 'desktop.ini'), ...(attach ? Object.keys(existingManaged) : [])],
       skillsRoots: [],
       peerHashes,
     });
+  }
+
+  // The icon is cosmetic: when it cannot be set the installation goes on without it.
+  async writeFolderIcon() {
+    if (this.answers.attach || this.checkpoint?.mode === 'join') return null;
+    return applyFolderIcon(this.mindPath, { platform: this.folderIconPlatform ?? process.platform, attrib: this.attribRunner ?? undefined, env: this.env })
+      .catch(error => ({ status: 'failed', reason: error.code ?? error.message }));
   }
 
   // A new or migrated M1ND without display settings opens in the language chosen in setup; a joined one is never written.
