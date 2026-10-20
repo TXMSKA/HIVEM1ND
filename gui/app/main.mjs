@@ -786,6 +786,12 @@ async function onStream(app, event) {
       if (view.contextStale) { view.contextStale = false; await loadSessionView(app.api, view, { context: true }); }
     }
   }
+  // The index holds the new task; the cards and the waiting record keep their own copies, so they take it too.
+  if (event?.name === "task.changed") {
+    const task = app.store.indexes.tasks.get(dataOf(event).task?.id);
+    if (task) replaceTask(app, task);
+    if (app.waitingList) reloadList(app.waitingList).catch(() => {});
+  }
   if (['unit.unread', 'message.read', 'message.created'].includes(event?.name) && app.unitList) {
     for (const unit of app.unitList.catalog ?? []) { const current = app.store.indexes.units.get(unit.id); if (current) unit.unread = current.unread; }
   }

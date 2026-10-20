@@ -7524,3 +7524,18 @@ test('the Hierarchy names a custom or preset role under the unit and a role the 
   assert.equal(line({ unit: 'a' }), 'Role: Unknown');
   assert.equal(renderUnit(desktop.document, { unit: 'a', role: 'wizard' }, (key, values) => text('es', key, values), 'es').querySelectorAll('p').find(node => node.textContent.startsWith('Rol')).textContent, 'Rol: Agente');
 });
+
+test("a task changed elsewhere updates the inspector's copy of it", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.unitList?.catalog?.some((unit) => unit.id === "project:shop:executor-shop"), "The unit list did not load.");
+  const executor = desktop.app.unitList.catalog.find((unit) => unit.id === "project:shop:executor-shop");
+  desktop.app.activeHandlers.onActivate({ id: executor.id, kind: "unit", unit: executor }, "double");
+  await waitFor(() => desktop.app.inspectorData?.unitId === executor.id && desktop.app.inspectorData.tasks?.some((task) => task.status === "open"), "The inspector did not list an open task.");
+  const open = desktop.app.inspectorData.tasks.find((task) => task.status === "open");
+  const path = `/tasks/${encodeURIComponent(open.id)}/status`;
+  await request(desktop.app.api, "POST", path, { operation: createOperation({ method: "POST", path, body: { status: "review", expectedRevision: open.revision } }) });
+  await waitFor(() => desktop.app.inspectorData.tasks.find((task) => task.id === open.id)?.status === "review", "The inspector kept the old task.");
+});
