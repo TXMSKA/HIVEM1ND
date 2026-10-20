@@ -891,3 +891,21 @@ test("a paged store applies live events and leaves a reset unpaused", async () =
   assert.notEqual(later?.buffered, true);
   assert.equal((await applyEvent(store, api, { id: `${SERVICE}:9`, name: "additions.changed", envelope: { contract: "hivem1nd-events-v3", data: {} } })).applied, true, "a paged store does not ask for the whole view again");
 });
+
+test("a paged store does not ask for the whole view on view.changed, and takes a restarted service's events", async () => {
+  const requests = [];
+  const api = harness({ fetch: async (url) => { requests.push(String(url)); return jsonResponse(413, { error: { code: "view_too_large", message: "The view is too large.", requestId: "x" } }); } }).api;
+  const store = createStore();
+  await loadSnapshot(store, api);
+  requests.length = 0;
+  const changed = await applyEvent(store, api, { id: `${SERVICE}:5`, name: "view.changed", envelope: { contract: "hivem1nd-events-v3", data: { revision: "r1", collections: ["units"] } } });
+  assert.equal(changed.applied, true);
+  assert.equal(requests.some((url) => url.endsWith("/view")), false, "paged, view.changed reloads collections, not the view");
+  const first = await acceptStreamEvent(store, api, { id: `${SERVICE}:9`, name: "unit.unread", envelope: { contract: "hivem1nd-events-v3", data: { unitId: "root:master", count: 1 } } });
+  first.consume();
+  const restarted = "22222222-2222-4222-8222-222222222222";
+  const next = await acceptStreamEvent(store, api, { id: `${restarted}:1`, name: "unit.unread", envelope: { contract: "hivem1nd-events-v3", data: { unitId: "root:master", count: 2 } } });
+  assert.notEqual(next?.dropped, true, "the first event of a restarted service is new, though its number is lower");
+  next.consume();
+  assert.equal(store.cursor, `${restarted}:1`);
+});

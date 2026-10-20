@@ -170,6 +170,8 @@ export async function applyEvent(store, api, event) {
   if (resource.invalidate) {
     for (const name of resource.invalidate) invalidateCollection(store, name);
   }
+  // Paged, the whole view is never asked for again: the invalidated collections reload instead.
+  if (resource.key === "view" && store.mode === "paged") return { applied: true };
   if (resource.apply) resource.apply(store);
   else if (resource.path) return loadResource(store, api, resource.path, resource.key);
   return { applied: true };
@@ -271,6 +273,9 @@ function connectionControl(event) {
 function staleReplay(store, event) {
   // Reset and ready share the snapshot cursor, so the mutation cursor must not discard them.
   if (connectionControl(event) || store.cursor == null) return false;
+  // An event of a service that started again carries a new service id; its numbers start over and are all new.
+  const service = CURSOR.exec(String(event.id ?? ""))?.[1];
+  if (service && service !== CURSOR.exec(String(store.cursor))?.[1]) return false;
   return !isAfterCursor(event.id, store.cursor);
 }
 
@@ -279,8 +284,7 @@ function noteConsumed(store, event) {
   const next = CURSOR.exec(String(event.id));
   if (!next) return;
   const current = CURSOR.exec(String(store.cursor ?? ""));
-  if (current && current[1] !== next[1]) return;
-  if (!current || Number(next[2]) > Number(current[2])) store.cursor = String(event.id);
+  if (!current || current[1] !== next[1] || Number(next[2]) > Number(current[2])) store.cursor = String(event.id);
 }
 
 function indexView(store, data) {
