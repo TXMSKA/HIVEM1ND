@@ -20,7 +20,7 @@ export const START_COPY=Object.freeze({
   freshHint:['Recommended: it reads the M1ND again instead of carrying an old conversation. It tells you when its context is filling.','Recomendado: volver a leer el M1ND sin arrastrar una conversación anterior. Se avisa cuando el contexto está por llenarse.'],
   later:['Later','Más tarde'],create:['Create','Crear'],cancel:['Cancel','Cancelar'],above:['Above every cluster','Por encima de todos los clústeres'],
   inside:['Zoomed in on {name}, {count} repositories; zoom out to see every cluster again','Vista de {name}, {count} repositorios; alejar para volver a ver todos los clústeres'],
-  drag:['Drag the empty space to move around; Shift and drag to select','Arrastrar el espacio vacío para desplazarse; Mayús y arrastrar para seleccionar'],
+  drag:['Drag the empty space to move around; drag a cluster title to move the cluster; Shift and drag to select','Arrastrar el espacio vacío para desplazarse; arrastrar el título de un clúster para moverlo; Mayús y arrastrar para seleccionar'],
   repoCluster:['Cluster linked to a repository','Clúster vinculado a un repositorio'],unlinkedCluster:['Cluster with no link','Clúster sin vínculo'],
   changedOne:['1 file changed, not committed','1 archivo modificado, sin commit'],changedMany:['{count} files changed, not committed','{count} archivos modificados, sin commit'],
   changes:['Changes','Cambios'],openEditor:['Open in editor','Abrir en el editor'],

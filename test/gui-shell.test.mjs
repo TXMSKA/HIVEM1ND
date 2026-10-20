@@ -7471,7 +7471,7 @@ test('the mounted New agent dialog offers every preset and Custom, and a preset 
   // The Map draws its own mark and names the role in the tooltip; the inspector says it in the Role line.
   const node = root.querySelector(`[data-unit-id="${made.id}"]`);
   assert.ok(node.querySelector(`[data-role-icon="${hierarchyIcon(made)}"]`));
-  assert.equal(node.getAttribute('title'), 'Code reviewer');
+  assert.match(node.getAttribute('title'), /(^|, )Code reviewer$/, 'the tooltip names the role, after the full name when the name was shortened');
   assert.ok(root.querySelectorAll('p').some(node => node.textContent === 'Role: Code reviewer'));
 });
 
@@ -7518,7 +7518,7 @@ test('the mounted Custom role is checked inline, sent with its name and descript
   await waitFor(() => root.querySelector(`[data-unit-id="${made.id}"]`), 'The new agent did not reach the Map.');
   const node = root.querySelector(`[data-unit-id="${made.id}"]`);
   assert.equal(node.getAttribute('data-role'), 'custom');
-  assert.equal(node.getAttribute('title'), 'Release captain');
+  assert.match(node.getAttribute('title'), /(^|, )Release captain$/);
   assert.ok(node.querySelector(`[data-role-icon="${hierarchyIcon(made)}"]`));
   assert.ok(root.querySelectorAll('p').some(node => node.textContent === 'Role: Release captain'));
 });
