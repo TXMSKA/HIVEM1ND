@@ -551,7 +551,7 @@ test('an exclusive-open denial after a new owner appears waits without replacing
   } finally { releaseOpen(); releaseOwner(); restoreRealpath(); restoreOpen(); await Promise.allSettled([owner, contender].filter(Boolean)); }
 });
 
-test('a denied archive unlink succeeds only for an absent source, safe parent and exact retained archive', async (context) => {
+test('a denied archive unlink is a leftover only when the archive holds the exact message, and a message is never lost', async (context) => {
   for (const branch of ['new', 'existing']) for (const outcome of branch === 'new' ? ['moved', 'present', 'unsafe-parent', 'lost-archive'] : ['moved', 'present']) await context.test(`${branch} ${outcome}`, async (context) => {
     const { mind } = await fixture(context);
     const sender = await bind(mind, 'executor-alpha', 'unlink-denied-sender');
@@ -596,7 +596,12 @@ test('a denied archive unlink succeeds only for an absent source, safe parent an
         assert.deepEqual(await readFile(archive), bytes);
         assert.deepEqual(await readdir(archiveDirectory), [filename]);
       } else if (outcome === 'unsafe-parent') assert.equal(result.error?.code, 'UNSAFE_SYMLINK');
-      else assert.equal(result.error, denied);
+      else if (outcome === 'present') {
+        // A source that is denied for now is the leftover of a message that was archived, and the reader gets the message.
+        assert.equal(result.error, undefined);
+        assert.equal(result.value.messages[0].body, 'Retain exact bytes: ñ\n');
+        assert.deepEqual(await readFile(archive), bytes);
+      } else assert.deepEqual([result.error, result.value.messages], [undefined, []], 'an archive that was lost is not claimed');
       if (outcome === 'present') assert.deepEqual(await readFile(source), bytes);
       if (branch === 'existing') assert.equal(published, true);
     } finally { release(); unsafe = false; restoreUnlink(); restoreStat(); await checked; }
@@ -945,11 +950,11 @@ test('an archived twin with different bytes keeps the message unread and read re
   const filename = (await readdir(inboxPath)).find((name) => name.includes(sent.id));
   await bob.read();
   const original = await readFile(path.join(mind, 'user', 'relay', 'archive', 'executor-beta', filename));
-  await writeFile(path.join(inboxPath, filename), Buffer.concat([original, Buffer.from(' edited')]));
+  await writeFile(path.join(inboxPath, filename), Buffer.from(original.toString('utf8').replace('original', 'edited!!')));
 
   assert.equal((await bob.inbox()).unread, 1);
   await assert.rejects(bob.read(), code('ARCHIVE_COLLISION'));
-  assert.equal((await readFile(path.join(inboxPath, filename), 'utf8')).endsWith(' edited'), true, 'both files are left intact');
+  assert.equal((await readFile(path.join(inboxPath, filename), 'utf8')).endsWith('edited!!'), true, 'both files are left intact');
   assert.deepEqual(await readFile(path.join(mind, 'user', 'relay', 'archive', 'executor-beta', filename)), original);
 });
 
@@ -1145,7 +1150,7 @@ test('delivery status tells the sender whether the recipient can be woken now', 
   await mkdir(policies, { recursive: true });
   const policy = (deadlineAt, extra = {}) => writeFile(path.join(policies, `${'e'.repeat(64)}.json`), JSON.stringify({
     kind: 'relay-wake-policy', binding: { unit: 'executor-beta', nativeSessionId: 'bob-native', client: 'claude', machine: 'TESTBOX' },
-    enabled: true, pausedReason: null, deadlineAt, deliveries: {}, ...extra }));
+    enabled: true, pausedReason: null, deadlineAt, deliveries: {}, worker: { state: 'running', heartbeatAt: new Date().toISOString() }, ...extra }));
   await policy(new Date(Date.now() - 60000).toISOString());
   assert.deepEqual((await alice.delivery({ ids: [sent.id] })).deliveries[0].wake, { live: false, reason: 'expired' });
   await policy(new Date(Date.now() + 3600000).toISOString());

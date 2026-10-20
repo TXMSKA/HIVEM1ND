@@ -2,6 +2,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { openRelayOperations } from '../service/client.mjs';
+import { wakeCanRun } from './store.mjs';
 
 const MAX_SUBJECT = 240;
 
@@ -18,8 +19,7 @@ async function enabledWakeUnits(mindPath, now) {
     // A policy OneDrive has not finished syncing reads as invalid for a moment; the next poll sees it.
     let policy;
     try { policy = JSON.parse(await readFile(path.join(folder, name), 'utf8')); } catch { continue; }
-    const fresh = policy?.enabled === true && !policy.pausedReason && (policy.deadlineAt === null || Date.parse(policy.deadlineAt) > now);
-    if (fresh && typeof policy.binding?.unit === 'string') units.add(policy.binding.unit.toLowerCase());
+    if (wakeCanRun(policy, now) && typeof policy.binding?.unit === 'string') units.add(policy.binding.unit.toLowerCase());
   }
   return units;
 }

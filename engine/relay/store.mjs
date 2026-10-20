@@ -13,6 +13,12 @@ const MAX_SUBJECT_LENGTH = 240;
 const MAX_ATTACHMENTS = 64;
 const MAX_LIST_LIMIT = 500;
 const OBSERVATION_MAX_AGE_MS = 15 * 60 * 1000;
+// A session that nothing has shown a sign of for this long is gone when the caller could not say; a registration of another
+// machine that has not been seen for this long stops being listed.
+const QUIET_SESSION_MS = 12 * 60 * 60 * 1000;
+const REMOTE_QUIET_MS = 14 * 24 * 60 * 60 * 1000;
+// Past this many policy files the ones of chats that are gone are removed, well before the limit of 512 that stops the wake.
+const WAKE_PRUNE_AT = 256;
 const UNIT_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/;
 const SAFE_FILE_PATTERN = /^\d{8}-\d{6}-[a-zA-Z0-9._-]{1,48}-[a-f0-9-]{8,36}\.md$/i;
 const LOCAL_STATE_ENV = 'RELAY_LOCAL_STATE_DIR';
@@ -20,6 +26,8 @@ const MAX_DELIVERY_IDS = 100;
 const DELIVERY_STATES = new Set(['attempting', 'submitted', 'ambiguous', 'not_submitted', 'failed']);
 // A lock is held for milliseconds, so one this old was left by an older version that is no longer running.
 const LEGACY_LOCK_AGE_MS = 10 * 60 * 1000;
+// A message file that was changed a moment ago may still be arriving, so it counts as complete once it stays as it is for this long.
+const MESSAGE_SETTLE_MS = 50;
 
 function relayError(code, message, cause) {
   const error = new Error(message, cause ? { cause } : undefined);
@@ -273,6 +281,37 @@ export function isTransientFsError(error) {
   return TRANSIENT_FS_CODES.has(error?.code);
 }
 
+// A worker writes a liveness note into its policy once a minute, and three missed notes mean it is gone (the same bound as wake.mjs).
+const WORKER_NOTE_STALE_MS = 3 * 60_000;
+const DEFAULT_DAILY_HANDOFFS = 200;
+
+function localDate(ms) {
+  const date = new Date(ms);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function noteRuns(policy, now) {
+  return policy.worker?.state === 'running' && now - Date.parse(policy.worker.heartbeatAt) <= WORKER_NOTE_STALE_MS;
+}
+
+// Why the consent of a policy cannot wake its chat right now, or null when it can. The worker is judged by the policy's own
+// note unless the caller knows better, and a message id adds the question whether every attempt to wake for it failed.
+function wakeBlock(policy, now, { workerRuns = noteRuns(policy, now), messageId = null } = {}) {
+  if (policy.pausedReason) return policy.pausedReason;
+  if (policy.enabled !== true) return 'disabled';
+  if (policy.deadlineAt != null && !(Date.parse(policy.deadlineAt) > now)) return 'expired';
+  if (!workerRuns) return 'no-worker';
+  const cap = Number.isInteger(policy.maxDailyHandoffs) ? policy.maxDailyHandoffs : DEFAULT_DAILY_HANDOFFS;
+  if (policy.day?.date === localDate(now) && policy.day.count >= cap) return 'daily-cap';
+  if (messageId !== null && policy.deliveries && Object.hasOwn(policy.deliveries, messageId) && policy.deliveries[messageId]?.state === 'failed') return 'wake-failed';
+  return null;
+}
+
+/** Whether the consent in a policy file can wake its chat now: it is on, its worker's note is fresh and the day's cap is not spent. */
+export function wakeCanRun(policy, now = Date.now()) {
+  return Boolean(policy) && wakeBlock(policy, now) === null;
+}
+
 // A file that is still being synced: busy or locked, or replaced while it was opened or read.
 function isSyncRace(error) {
   return isTransientFsError(error)
@@ -291,7 +330,34 @@ function skipMalformed(error, ids = [], file = '', raw = null) {
   for (const id of ids) if (id && (id === named || path.basename(file).endsWith(`-${id}.md`))) throw error;
 }
 
-async function readRegularFileSafe(root, filePath) {
+// A file that is locked, busy or cut short for a moment is read again a few times before its reader gives up on it.
+async function readBriefly(read) {
+  for (let attempt = 0; ; attempt += 1) {
+    try { return await read(); }
+    catch (error) {
+      if (!isSkippableRecordError(error) || attempt === 3) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 20 * (attempt + 1)));
+    }
+  }
+}
+
+// What the routes file said when it was last read, for the moment the sync client holds it and every call would fail for it.
+const lastRoutes = new Map();
+
+async function routesText(routesFile) {
+  try {
+    const text = await readBriefly(() => readFile(routesFile, 'utf8'));
+    lastRoutes.set(routesFile, text);
+    return text;
+  } catch (error) {
+    if (isTransientFsError(error) && lastRoutes.has(routesFile)) return lastRoutes.get(routesFile);
+    throw error;
+  }
+}
+
+// A message that is still being written reads as a head of itself, so a caller that is about to deliver or archive one asks for
+// `settle`: the file must not move while it is read, and one that was changed a moment ago must not move for a short wait either.
+async function readRegularFileSafe(root, filePath, { settle = false } = {}) {
   try { await safePath(root, filePath, { missing: false }); }
   catch (error) {
     if (isMissingPath(error)) return null;
@@ -321,6 +387,7 @@ async function readRegularFileSafe(root, filePath) {
     }
     throw error;
   }
+  let read;
   try {
     const opened = await handle.stat();
     if (!opened.isFile() || before.ino && opened.ino && (before.ino !== opened.ino || before.dev !== opened.dev)) {
@@ -336,6 +403,12 @@ async function readRegularFileSafe(root, filePath) {
     }
     if (size > MAX_MESSAGE_BYTES) throw relayError('MESSAGE_TOO_LARGE', 'A Relay message exceeds the maximum stored size.');
     const bytes = buffer.subarray(0, size);
+    if (settle) {
+      const closing = await handle.stat();
+      if (size !== opened.size || closing.size !== opened.size || closing.mtimeMs !== opened.mtimeMs) {
+        throw relayError('UNSAFE_PATH', 'A Relay message changed while it was being read.');
+      }
+    }
     const after = await lstatOrNull(filePath);
     if (after?.isSymbolicLink()) throw relayError('UNSAFE_SYMLINK', 'Relay refuses symbolic links in message storage.');
     if (after && (!after.isFile() || before.ino && after.ino && (before.ino !== after.ino || before.dev !== after.dev))) {
@@ -345,8 +418,22 @@ async function readRegularFileSafe(root, filePath) {
     // this descriptor was being read; check the stable parent, not that stale
     // pathname (NTFS can expose a transient $Deleted realpath for it).
     await safePath(root, path.dirname(filePath), { missing: false });
-    return bytes;
+    read = { bytes, opened };
   } finally { await handle.close(); }
+  if (settle) await assertSettled(filePath, read.opened);
+  return read.bytes;
+}
+
+// Bytes that are still arriving keep the file's time moving, so a file changed within the settle time is looked at again once that time is over.
+async function assertSettled(filePath, opened) {
+  const age = Date.now() - opened.mtimeMs;
+  // A time well ahead of ours comes from another machine's clock and says nothing about a write that just happened.
+  if (age >= MESSAGE_SETTLE_MS || age < -MESSAGE_SETTLE_MS) return;
+  await new Promise((resolve) => setTimeout(resolve, Math.min(MESSAGE_SETTLE_MS, MESSAGE_SETTLE_MS - age)));
+  const later = await lstatOrNull(filePath);
+  if (later && (later.size !== opened.size || later.mtimeMs !== opened.mtimeMs)) {
+    throw relayError('UNSAFE_PATH', 'A Relay message changed while it was being read.');
+  }
 }
 
 async function readMessageFile(root, filePath, archived) {
@@ -357,12 +444,21 @@ async function readMessageFile(root, filePath, archived) {
   return { parsed, raw };
 }
 
+// A copy that was taken while the file was still arriving is the head of the complete file.
+function isHeadOf(head, bytes) {
+  return head.length < bytes.length && bytes.subarray(0, head.length).equals(head);
+}
+
 function uniqueMessageEntries(entries) {
   const unique = new Map();
   for (const entry of entries) {
     const previous = unique.get(entry.parsed.id);
     if (!previous) { unique.set(entry.parsed.id, entry); continue; }
-    if (!previous.raw.equals(entry.raw)) throw relayError('DUPLICATE_ID', 'The same message id exists in Relay with conflicting bytes.');
+    if (!previous.raw.equals(entry.raw)) {
+      if (isHeadOf(previous.raw, entry.raw)) unique.set(entry.parsed.id, entry);
+      else if (!isHeadOf(entry.raw, previous.raw)) throw relayError('DUPLICATE_ID', 'The same message id exists in Relay with conflicting bytes.');
+      continue;
+    }
     if (entry.parsed.archived && !previous.parsed.archived) unique.set(entry.parsed.id, entry);
   }
   return [...unique.values()];
@@ -413,9 +509,23 @@ async function safePath(root, target, { missing = true } = {}) {
       }
       throw error;
     }
-    try { assertWithin(canonicalRoot, canonical); } catch (cause) { throw relayError('UNSAFE_PATH', 'A Relay storage path escapes its root.', cause); }
+    try { assertWithin(canonicalRoot, canonical); } catch (cause) {
+      if (targetFile && state.isFile() && isDeletedArea(canonical)) {
+        // NTFS answers with its internal deleted area for a leaf that another caller is deleting at this moment.
+        await safePath(root, path.dirname(cursor), { missing: false });
+        if (!await lstatOrNull(cursor)) {
+          if (missing) return path.resolve(target);
+          throw relayError('NOT_FOUND', 'The requested Relay file does not exist.');
+        }
+      }
+      throw relayError('UNSAFE_PATH', 'A Relay storage path escapes its root.', cause);
+    }
   }
   return path.resolve(target);
+}
+
+function isDeletedArea(canonical) {
+  return canonical.replaceAll('\\', '/').toLowerCase().includes('/$extend/$deleted');
 }
 
 async function ensureDirectory(root, directory) {
@@ -459,20 +569,48 @@ async function vanishedArchiveSource(root, source, error) {
   return !await lstatOrNull(source);
 }
 
+// Once the archive holds the message, a source that cannot be removed right now (a scanner or the sync client holds it) is only
+// a leftover: it reads as a copy of a message that was read, and the next read removes it.
+async function removeArchivedSource(root, source, destination, bytes) {
+  try { await unlink(source); }
+  catch (error) {
+    if (await vanishedArchiveSource(root, source, error)) {
+      const retained = await readRegularFileSafe(root, destination);
+      if (!retained || !retained.equals(bytes)) throw error;
+    } else if (!isTransientFsError(error)) throw error;
+  }
+}
+
+// The last look at the archive. A copy that is busy or being replaced at that moment is read again, and one that stays so
+// counts as kept, because the message is archived and has to reach its reader.
+async function retainedArchive(root, destination, bytes) {
+  for (let attempt = 0; ; attempt += 1) {
+    try { return await readRegularFileSafe(root, destination); }
+    catch (error) {
+      if (!isSyncRace(error)) throw error;
+      if (attempt === 3) return bytes;
+      await new Promise((resolve) => setTimeout(resolve, 10 * (attempt + 1)));
+    }
+  }
+}
+
 async function archiveThroughCommit(root, source, destination, bytes, parsed, commitFile) {
   await safePath(root, destination);
-  const existing = await lstatOrNull(destination);
+  let existing = await lstatOrNull(destination);
   if (existing) {
     if (existing.isSymbolicLink() || !existing.isFile()) throw relayError('UNSAFE_PATH', 'The archive destination is not a regular file.');
     const archivedBytes = await readRegularFileSafe(root, destination);
-    if (!archivedBytes || !archivedBytes.equals(bytes)) throw relayError('ARCHIVE_COLLISION', 'The archive destination contains different bytes; both files were left intact.');
-  } else {
+    // An earlier read archived what had arrived of the file; the complete file replaces it.
+    if (archivedBytes && isHeadOf(archivedBytes, bytes)) existing = null;
+    else if (!archivedBytes || !archivedBytes.equals(bytes)) throw relayError('ARCHIVE_COLLISION', 'The archive destination contains different bytes; both files were left intact.');
+  }
+  if (!existing) {
     const sourceState = await lstatOrNull(source);
     if (sourceState?.isSymbolicLink()) throw relayError('UNSAFE_SYMLINK', 'Relay refuses to archive a symbolic link.');
     await commitFile(destination, bytes);
   }
-  if (await lstatOrNull(source)) await unlink(source).catch(async (error) => { if (!await vanishedArchiveSource(root, source, error)) throw error; });
-  const retained = await readRegularFileSafe(root, destination);
+  if (await lstatOrNull(source)) await removeArchivedSource(root, source, destination, bytes);
+  const retained = await retainedArchive(root, destination, bytes);
   if (!retained || !retained.equals(bytes)) throw relayError('ARCHIVE_COLLISION', 'The message archive was not safely retained.');
   parsed.archived = true;
   parsed.sourcePath = destination;
@@ -486,17 +624,17 @@ async function archiveOriginal(root, source, destination, bytes, parsed, commitF
     if (existing.isSymbolicLink() || !existing.isFile()) throw relayError('UNSAFE_PATH', 'The archive destination is not a regular file.');
     const archivedBytes = await readRegularFileSafe(root, destination);
     if (!archivedBytes) throw relayError('NOT_FOUND', 'The archive destination disappeared before the message could be retained.');
-    if (!archivedBytes.equals(bytes)) throw relayError('ARCHIVE_COLLISION', 'The archive destination contains different bytes; both files were left intact.');
-    await unlink(source).catch(async (error) => {
-      if (!await vanishedArchiveSource(root, source, error)) throw error;
-      const retained = await readRegularFileSafe(root, destination);
-      if (!retained || !retained.equals(bytes)) throw error;
-    });
-    const retained = await readRegularFileSafe(root, destination);
-    if (!retained || !retained.equals(bytes)) throw relayError('ARCHIVE_COLLISION', 'The message archive was not safely retained.');
-    parsed.archived = true;
-    parsed.sourcePath = destination;
-    return;
+    // An earlier read archived what had arrived of the file; the complete file takes its place below.
+    if (isHeadOf(archivedBytes, bytes)) await unlink(destination);
+    else {
+      if (!archivedBytes.equals(bytes)) throw relayError('ARCHIVE_COLLISION', 'The archive destination contains different bytes; both files were left intact.');
+      await removeArchivedSource(root, source, destination, bytes);
+      const retained = await retainedArchive(root, destination, bytes);
+      if (!retained || !retained.equals(bytes)) throw relayError('ARCHIVE_COLLISION', 'The message archive was not safely retained.');
+      parsed.archived = true;
+      parsed.sourcePath = destination;
+      return;
+    }
   }
   const sourceStateBeforeLink = await lstatOrNull(source);
   if (sourceStateBeforeLink?.isSymbolicLink()) throw relayError('UNSAFE_SYMLINK', 'Relay refuses to archive a symbolic link.');
@@ -511,20 +649,27 @@ async function archiveOriginal(root, source, destination, bytes, parsed, commitF
   try {
     await linkFile(source, destination);
   } catch (error) {
-    if (error?.code !== 'EEXIST' && error?.code !== 'ENOENT') throw error;
+    // Windows answers EPERM when another reader links the same name at that moment; then the name is there.
+    const raced = error?.code === 'EEXIST' || error?.code === 'ENOENT' || error?.code === 'EPERM' && Boolean(await lstatOrNull(destination));
+    if (!raced) throw error;
     const winnerBytes = await readRegularFileSafe(root, destination);
     if (!winnerBytes) throw error;
     if (!winnerBytes.equals(bytes)) throw relayError('ARCHIVE_COLLISION', 'The archive destination contains different bytes; both files were left intact.', error);
   }
+  // The archive is a link to the source, so a source that kept arriving after it was read is longer in the archive too.
+  const linked = await lstatOrNull(destination);
+  if (linked?.isFile() && linked.size > bytes.length) {
+    const grown = await readRegularFileSafe(root, destination);
+    if (grown && isHeadOf(bytes, grown)) {
+      Object.assign(parsed, parseMessage(grown, destination, true));
+      bytes = grown;
+    }
+  }
   const sourceState = await lstatOrNull(source);
   if (sourceState?.isSymbolicLink()) throw relayError('UNSAFE_SYMLINK', 'Relay refuses to archive a symbolic link.');
-  if (sourceState) await unlink(source).catch(async (error) => {
-    if (!await vanishedArchiveSource(root, source, error)) throw error;
-    const retained = await readRegularFileSafe(root, destination);
-    if (!retained || !retained.equals(bytes)) throw error;
-  });
+  if (sourceState) await removeArchivedSource(root, source, destination, bytes);
   await safePath(root, destination, { missing: false });
-  const retained = await readRegularFileSafe(root, destination);
+  const retained = await retainedArchive(root, destination, bytes);
   if (!retained || !retained.equals(bytes)) throw relayError('ARCHIVE_COLLISION', 'The message archive was not safely retained.');
   parsed.archived = true;
   parsed.sourcePath = destination;
@@ -627,7 +772,7 @@ export async function createRelay(options = {}) {
     await safePath(mindPath, routesFile);
     const routesState = await lstatOrNull(routesFile);
     if (routesState && !routesState.isFile()) throw relayError('UNSAFE_PATH', 'The routes file is not a regular file.');
-    const routes = parseRoutes(routesState ? await readFile(routesFile, 'utf8') : '');
+    const routes = parseRoutes(routesState ? await routesText(routesFile) : '');
     return { routes, scopes: splitScopes(mindPath, routes) };
   }
 
@@ -853,9 +998,31 @@ export async function createRelay(options = {}) {
     }
     return null;
   }
+  // A policy is written for every chat that attached and nothing removed it, so those of chats that are gone pile up. One whose
+  // consent is off or over, and whose chat has no registration any more, is of no use but for the wakes it counted today.
+  async function pruneWakePolicies(files) {
+    const now = Date.now();
+    let sessions;
+    try { sessions = (await currentRegistrationIndex()).latest; } catch { return; }
+    for (const file of files) {
+      const key = path.basename(file, '.json').toLowerCase();
+      let policy;
+      try { policy = await readWakeRecord('policies', key); } catch (error) { if (isSkippableRecordError(error)) continue; throw error; }
+      const binding = policy?.binding;
+      if (policy?.kind !== 'relay-wake-policy' || !binding || policy.day?.date === localDate(now)) continue;
+      const on = policy.enabled === true && !policy.pausedReason && (policy.unlimited === true || policy.runLeaseUntil > now || Date.parse(policy.deadlineAt) > now);
+      if (on || sessions[sessionKey(binding.machine, binding.client, binding.nativeSessionId)]) continue;
+      await removeWakeRecord('policies', key).catch(() => {});
+    }
+  }
   async function listWakeRecords(bucket) {
     const { root, directory } = await prepareWakeBucket(bucket);
-    const files = await listRegularFiles(root, directory, (name) => /^[a-f0-9]{64}\.json$/i.test(name));
+    const listed = () => listRegularFiles(root, directory, (name) => /^[a-f0-9]{64}\.json$/i.test(name));
+    let files = await listed();
+    if (bucket === 'policies' && files.length > WAKE_PRUNE_AT) {
+      await pruneWakePolicies(files);
+      files = await listed();
+    }
     if (files.length > 512) throw relayError('WAKE_STORE_LIMIT', 'Wake storage has reached its safe record limit.');
     const records = [];
     for (const file of files) {
@@ -970,7 +1137,9 @@ export async function createRelay(options = {}) {
           // writing its short record. Only reclaim a malformed lock after it has
           // remained untouched beyond the crash-recovery grace period.
         }
-        const stale = current?.kind === 'wake-lock' && !await processIsAlive(current.pid)
+        // A lock is held for milliseconds, so a valid one that old was left by a process that died, and its id may belong to another program now.
+        const lockedAt = Date.parse(current?.createdAt);
+        const stale = current?.kind === 'wake-lock' && (!await processIsAlive(current.pid) || Date.now() - (Number.isFinite(lockedAt) ? lockedAt : currentState.mtimeMs) > LEGACY_LOCK_AGE_MS)
           || (!current || current?.kind !== 'wake-lock') && Date.now() - currentState.mtimeMs > 5000;
         if (stale) {
           const confirm = await lstatOrNull(lockPath);
@@ -1067,6 +1236,9 @@ export async function createRelay(options = {}) {
     if (pinned.hostSessionId && args.hostSessionId !== undefined && args.hostSessionId !== pinned.hostSessionId) throw relayError('FORBIDDEN_SCOPE', 'The host conversation cannot be changed.');
     const activity = safeActivity(args.activity);
     const quota = safeQuota(args.quota);
+    // A chat registers again whenever its client starts a new MCP process; with nothing new to record, its record stays, so the
+    // registrations do not pile up.
+    if (activity === null && quota === null && (args.hostSessionId === undefined || args.hostSessionId === pinned.hostSessionId)) return toPublicRegistration(pinned);
     const observedAt = isoNow();
     const record = {
       kind: 'registration',
@@ -1148,7 +1320,9 @@ export async function createRelay(options = {}) {
       const twinPath = path.join(directory, path.basename(file));
       if (!await lstatOrNull(twinPath)) continue;
       try {
-        if ((await readRegularFileSafe(mindPath, twinPath))?.equals(raw) === true) return true;
+        // A copy that is only the head of the archived one is the same message, still arriving.
+        const twin = await readRegularFileSafe(mindPath, twinPath);
+        if (twin && (twin.equals(raw) || isHeadOf(raw, twin))) return true;
       } catch (error) { if (isTransientFsError(error)) continue; throw error; }
     }
     return false;
@@ -1255,7 +1429,7 @@ export async function createRelay(options = {}) {
     const malformed = [];
     for (const file of files) {
       try {
-        const raw = await readRegularFileSafe(mindPath, file);
+        const raw = await readRegularFileSafe(mindPath, file, { settle: true });
         if (!raw) continue;
         const parsed = parseMessage(raw, file, false);
         if (!validMessageFilename(path.basename(file), parsed)) continue;
@@ -1399,6 +1573,7 @@ export async function createRelay(options = {}) {
       const files = await listRegularFiles(mindPath, activeDirectory, candidateMessageFilename);
       const messages = [];
       const malformed = [];
+      let failure = null;
       for (const file of files) {
         if (messages.length >= limit) break;
         const archivedPath = path.join(archiveDirectory, path.basename(file));
@@ -1406,10 +1581,12 @@ export async function createRelay(options = {}) {
         let parsed = null;
         let archivedEntry = null;
         try {
-          raw = await readRegularFileSafe(mindPath, file);
+          raw = await readRegularFileSafe(mindPath, file, { settle: true });
           if (raw) parsed = parseMessage(raw, file, false);
           else archivedEntry = await readMessageFile(mindPath, archivedPath, true);
         } catch (error) {
+          // A file that is locked or still arriving stays in the inbox for the next read, as list_inbox leaves it.
+          if (isSyncRace(error)) continue;
           skipMalformed(error, selected ?? [], file, raw);
           malformed.push(path.basename(file));
           continue;
@@ -1429,17 +1606,28 @@ export async function createRelay(options = {}) {
         }
         if (selected && !selected.has(parsed.id)) continue;
         if (parsed.to.toLowerCase() !== unit.toLowerCase()) continue;
-        await ensureDirectory(mindPath, archiveDirectory);
-        await archiveOriginal(mindPath, file, archivedPath, raw, parsed, scopeLock ? options.commitFile : null);
+        try {
+          await ensureDirectory(mindPath, archiveDirectory);
+          await archiveOriginal(mindPath, file, archivedPath, raw, parsed, scopeLock ? options.commitFile : null);
+        } catch (error) {
+          if (isSyncRace(error)) continue;
+          // What was archived before this file has to reach the caller, so the file that failed waits for the next read.
+          failure = error;
+          malformed.push(path.basename(file));
+          break;
+        }
         parsed.archived = true;
         parsed.sourcePath = archivedPath;
         messages.push({ ...metadata(parsed), body: parsed.body, archive: { path: path.relative(userPath, parsed.sourcePath).replaceAll('\\', '/'), archived: true } });
       }
+      if (failure && !messages.length) throw failure;
       if (selected) {
         const found = new Set(messages.map((message) => message.id));
         for (const id of selected) {
           if (found.has(id)) continue;
-          const archived = await locateMessage(id, unit);
+          let archived;
+          try { archived = await locateMessage(id, unit); }
+          catch (error) { if (!messages.length) throw error; continue; }
           if (archived?.archived) messages.push({ ...metadata(archived), body: archived.body, archive: { path: path.relative(userPath, archived.sourcePath).replaceAll('\\', '/'), archived: true, alreadyArchived: true } });
         }
       }
@@ -1503,16 +1691,44 @@ export async function createRelay(options = {}) {
       const allPolicies = (await listWakeRecords('policies')).map((record) => record.value).filter((policy) => policy?.kind === 'relay-wake-policy'
         && typeof policy.binding?.unit === 'string');
       const policies = allPolicies.filter((policy) => policy.deliveries && typeof policy.deliveries === 'object');
-      // Whether the recipient can be woken now, so a sender never mistakes a publication for a delivery.
-      function recipientWake(unit) {
+      // A worker of this machine is alive while it holds a lease whose process runs; for another machine, or when no lease is to be
+      // found, the note in the synced policy is all there is.
+      const running = new Map();
+      function workerRuns(policy, now) {
+        if (!running.has(policy)) running.set(policy, (async () => {
+          const noted = noteRuns(policy, now);
+          if (policy.binding.machine !== hostname) return noted;
+          const { unit, nativeSessionId, client, machine } = policy.binding;
+          const keys = [policy.key, createHash('sha256').update(JSON.stringify([unit, nativeSessionId, client, machine])).digest('hex')]
+            .filter((key, index, all) => typeof key === 'string' && /^[a-f0-9]{64}$/i.test(key) && all.indexOf(key) === index);
+          let leased = false;
+          for (const key of keys) {
+            let lease;
+            try { lease = await readWakeRecord('workers', key.toLowerCase()); } catch { return noted; }
+            if (!lease) continue;
+            leased = true;
+            if (lease.expiresAt > now && await processIsAlive(lease.pid)) return true;
+          }
+          return leased ? false : noted;
+        })());
+        return running.get(policy);
+      }
+      // Whether the recipient can be woken for this message now, so a sender never mistakes a publication for a delivery. When no
+      // consent can, the reason is the one of the chat whose consent is still on, then of the newest one.
+      async function recipientWake(unit, id) {
         const own = allPolicies.filter((policy) => policy.binding.unit.toLowerCase() === unit.toLowerCase());
+        if (!own.length) return { live: false, reason: 'none' };
         const now = Date.now();
-        if (own.some((policy) => policy.enabled === true && !policy.pausedReason && (policy.deadlineAt == null || Date.parse(policy.deadlineAt) > now))) return { live: true, reason: null };
-        const policy = own[0];
-        if (!policy) return { live: false, reason: 'none' };
-        if (policy.pausedReason) return { live: false, reason: policy.pausedReason };
-        if (policy.enabled !== true) return { live: false, reason: 'disabled' };
-        return { live: false, reason: 'expired' };
+        const verdicts = [];
+        for (const policy of own) {
+          let block = wakeBlock(policy, now, { workerRuns: true, messageId: id });
+          if ((block === null || block === 'daily-cap' || block === 'wake-failed') && !await workerRuns(policy, now)) block = 'no-worker';
+          if (block === null) return { live: true, reason: null };
+          verdicts.push({ policy, block });
+        }
+        const stamp = ({ policy }) => String(policy.enabled === true ? policy.startedAt : policy.disabledAt ?? policy.startedAt ?? '');
+        const [current] = verdicts.sort((a, b) => Number(b.policy.enabled === true) - Number(a.policy.enabled === true) || stamp(b).localeCompare(stamp(a)));
+        return { live: false, reason: current.block };
       }
       let everything = null;
       let mailbox = null;
@@ -1547,7 +1763,7 @@ export async function createRelay(options = {}) {
         deliveries.push({
           id, to: record.to, subject: text(record.subject) ?? '', priority: record.priority === 'urgent' ? 'urgent' : 'normal', sentAt: text(record.timestamp),
           stage: replied ? 'replied' : read ? 'read' : woken.some((item) => item.state === 'submitted') ? 'woken' : 'published',
-          woken, read, replied, wake: recipientWake(record.to),
+          woken, read, replied, wake: await recipientWake(record.to, id),
         });
       }
       return { deliveries, unknown };
@@ -1560,15 +1776,29 @@ export async function createRelay(options = {}) {
         throw relayError('FORBIDDEN_SCOPE', 'This session cannot use another unit.');
       }
       const { scopes } = await routesAndScopes();
-      const registered = await registrations();
+      const now = Date.now();
+      const registered = (await registrations()).filter((record) => {
+        const seen = lastSeenAt(record);
+        return record.machine === hostname || seen === null || now - seen < REMOTE_QUIET_MS;
+      });
       const selected = scopeLock ? registration.unit : (args.unit === undefined ? null : validUnit(args.unit));
       const units = [];
+      const issues = [];
       for (const scope of scopes) {
         const stateDirectory = path.join(scope.path, 'state');
         const files = await listRegularFiles(mindPath, stateDirectory, (name) => name.endsWith('.md'));
+        const stems = new Set(files.map((file) => path.basename(file, '.md').toLowerCase()));
         for (const file of files) {
-          const content = await readFile(file, 'utf8');
+          let content;
+          try { content = await readBriefly(() => readFile(file, 'utf8')); }
+          catch (error) {
+            // A state file the sync client holds leaves that unit out of the answer, not every unit.
+            if (!isTransientFsError(error)) throw error;
+            issues.push({ path: path.relative(userPath, file).split(path.sep).join('/'), code: error.code });
+            continue;
+          }
           const parsed = parseHeaders(`${content}\n\n`);
+          if (stateConflictCopy(path.basename(file, '.md'), header(parsed.headers, 'unit'), stems)) continue;
           const name = header(parsed.headers, 'unit') || path.basename(file, '.md');
           if (!UNIT_PATTERN.test(name) || selected && name.toLowerCase() !== selected.toLowerCase()
             || scopeLock && canonicalUnitId(name, scope.id) !== registration.unitId) continue;
@@ -1592,7 +1822,7 @@ export async function createRelay(options = {}) {
         units.push({ unit: record.unit, scope: record.scopeId, environment: null, project: null, state: null, machine: record.machine, date: null, currentWork: null,
           registeredSessions: matching.map(toPublicRegistration), active: latestActivity(matching, 'active'), busy: latestActivity(matching, 'busy'), quota: latestQuota(matching) });
       }
-      return { units: units.sort((a, b) => a.unit.localeCompare(b.unit) || a.scope.localeCompare(b.scope)) };
+      return { units: units.sort((a, b) => a.unit.localeCompare(b.unit) || a.scope.localeCompare(b.scope)), ...(issues.length ? { issues } : {}) };
     },
 
     // The status a chat asks for through MCP, whose tool output is bounded: by default counts, the caller's own unit and the
@@ -1605,14 +1835,14 @@ export async function createRelay(options = {}) {
       if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw relayError('INVALID_LIMIT', 'limit must be an integer from 1 to 100.');
       const offset = args.offset ?? 0;
       if (!Number.isInteger(offset) || offset < 0) throw relayError('INVALID_INPUT', 'offset must be a whole number.');
-      let { units } = await relay.status(args.unit === undefined ? {} : { unit: validUnit(args.unit) });
+      let { units, issues = [] } = await relay.status(args.unit === undefined ? {} : { unit: validUnit(args.unit) });
       if (machine !== null) {
         units = units.map((item) => ({ ...item, registeredSessions: item.registeredSessions.filter((record) => record.machine === machine) }))
           .filter((item) => item.registeredSessions.length || item.machine === machine);
       }
       const page = (items) => ({ total: items.length, offset, limit, nextOffset: offset + limit < items.length ? offset + limit : null });
       const publicEntry = entry => scopeLock ? Object.fromEntries(Object.entries(entry).filter(([key]) => !['nativeSessionId', 'hostSessionId', 'instanceId'].includes(key))) : entry;
-      if (args.detail) return { units: units.slice(offset, offset + limit).map(item => ({ ...item, registeredSessions: item.registeredSessions.map(publicEntry) })), ...page(units) };
+      if (args.detail) return { units: units.slice(offset, offset + limit).map(item => ({ ...item, registeredSessions: item.registeredSessions.map(publicEntry) })), ...page(units), ...(issues.length ? { issues } : {}) };
       const { scopes } = await routesAndScopes();
       let self = null;
       try { self = await currentIdentity(); } catch { /* a session with simultaneous registrations has no single unit to show */ }
@@ -1644,7 +1874,7 @@ export async function createRelay(options = {}) {
           unread: summaries.reduce((sum, item) => sum + item.unread, 0), waiting: summaries.reduce((sum, item) => sum + item.waiting, 0),
         },
         self: own ? { ...own, registration: publicEntry(toPublicRegistration(self)) } : null,
-        attention: attention.slice(offset, offset + limit), ...page(attention),
+        attention: attention.slice(offset, offset + limit), ...page(attention), ...(issues.length ? { issues } : {}),
         more: 'Pass detail: true for every unit with its registrations, a page at a time through limit and offset, and unit or machine to narrow it.',
       };
     },
@@ -1657,8 +1887,16 @@ export async function createRelay(options = {}) {
       const messages = (await allMessages({ includeArchived: true })).filter((message) => !bound || message.from.toLowerCase() === bound || message.to.toLowerCase() === bound);
       const existing = await listRegularFiles(mindPath, eventsPath, (name) => /^[a-f0-9-]{36}\.json$/i.test(name));
       const byId = new Map();
+      const issues = [];
       for (const file of existing) {
-        const event = await readJsonSafe(mindPath, file);
+        let event;
+        try { event = await readBriefly(() => readJsonSafe(mindPath, file)); }
+        catch (error) {
+          // An event that is cut short or held by the sync client is left out and built again from its message.
+          if (!isSkippableRecordError(error)) throw error;
+          issues.push({ path: path.relative(userPath, file).split(path.sep).join('/'), code: error.code });
+          continue;
+        }
         if (event?.kind === 'message' && typeof event.id === 'string') byId.set(event.id, event);
       }
       for (const message of messages) {
@@ -1671,14 +1909,16 @@ export async function createRelay(options = {}) {
             if (error?.code !== 'COLLISION') throw error;
             const eventPath = path.join(eventsPath, `${message.id}.json`);
             await safePath(mindPath, eventPath, { missing: false });
-            const existing = await readJsonSafe(mindPath, eventPath);
+            let existing;
+            try { existing = await readJsonSafe(mindPath, eventPath); }
+            catch (readError) { if (isSkippableRecordError(readError)) continue; throw readError; }
             if (existing?.id !== message.id || existing?.kind !== 'message') throw relayError('EVENT_COLLISION', 'The event log contains conflicting message metadata.', error);
           }
         }
       }
       const events = [...byId.values()].filter((event) => !bound || String(event.from ?? '').toLowerCase() === bound || String(event.to ?? '').toLowerCase() === bound)
         .sort((a, b) => String(a.timestamp).localeCompare(String(b.timestamp)) || a.id.localeCompare(b.id));
-      return { events: events.slice(-limit) };
+      return { events: events.slice(-limit), ...(issues.length ? { issues } : {}) };
     },
 
     /** The registration this instance answers for, or null when it has none or more than one. */
@@ -1752,24 +1992,29 @@ export async function createRelay(options = {}) {
     return createHash('sha256').update(JSON.stringify(['relay-session-holder', hostname, client, nativeSessionId])).digest('hex');
   }
 
-  // A recent observation retains a session; retirement additionally requires a verified native closure.
-  // An unreadable or unknown connection is retained, and the shared owner PID is never a chat identity.
+  // A recent observation retains a session; retirement additionally requires that the session is gone. The caller says so
+  // (false) or vouches for it (true); when it cannot tell, the store goes by what it can see: a session that showed no sign of
+  // life for half a day is gone. An unreadable connection is retained, and the shared owner PID is never a chat identity.
   async function sessionLive(records, now) {
-    const recent = (at) => typeof at === 'string' && now - Date.parse(at) < OBSERVATION_MAX_AGE_MS;
+    const within = (at, window) => typeof at === 'string' && now - Date.parse(at) < window;
+    const recent = (at) => within(at, OBSERVATION_MAX_AGE_MS);
     if (records.some((item) => recent(item.registeredAt) || recent(item.activityObservedAt))) return true;
     const [{ client, nativeSessionId }] = records;
     if (typeof client !== 'string') return false;
     try {
       const holder = await readWakeRecord('holders', holderKey(client, nativeSessionId));
       const live = typeof options.sessionLive === 'function' ? await options.sessionLive(toPublicRegistration(records[0])) : null;
-      if (live !== false) return true;
+      if (live === true) return true;
+      const unknown = live !== false;
+      const seen = (at) => within(at, unknown ? QUIET_SESSION_MS : OBSERVATION_MAX_AGE_MS);
+      if (unknown && (records.some((item) => seen(item.registeredAt) || seen(item.activityObservedAt)) || seen(holder?.at))) return true;
       if (holder?.kind === 'relay-session-holder' && holder.sessionId !== toPublicRegistration(records[0]).sessionId) return true;
-      for (const unit of new Set(records.map((item) => item.unit))) {
-        const key = createHash('sha256').update(JSON.stringify([unit, nativeSessionId, client, hostname])).digest('hex');
+      for (const name of new Set(records.flatMap((item) => [item.unit, item.unitId]).filter(Boolean))) {
+        const key = createHash('sha256').update(JSON.stringify([name, nativeSessionId, client, hostname])).digest('hex');
         const policy = await readWakeRecord('policies', key);
-        if (recent(policy?.activity?.observedAt) || recent(policy?.startedAt)) return true;
+        if (seen(policy?.activity?.observedAt) || seen(policy?.startedAt)) return true;
         const lease = await readWakeRecord('workers', key);
-        if (lease?.expiresAt > now && typeof options.sessionLive !== 'function') return true;
+        if (lease?.expiresAt > now && (unknown || typeof options.sessionLive !== 'function')) return true;
       }
     } catch { return true; }
     return false;
@@ -1881,6 +2126,21 @@ function formatLocalDate(date) {
 
 function sortByTimestamp(left, right) {
   return String(left.timestamp).localeCompare(String(right.timestamp)) || left.id.localeCompare(right.id);
+}
+
+// OneDrive keeps the older of two edits as "<name>-<MACHINE>.md". A state file is the one of the unit its name says: another unit in
+// its header, or a machine name after the name of a state file that is there, make it a copy.
+function stateConflictCopy(stem, unit, stems) {
+  if (unit) return unit.toLowerCase() !== stem.toLowerCase();
+  for (let cut = stem.indexOf('-'); cut > 0; cut = stem.indexOf('-', cut + 1)) {
+    if (stems.has(stem.slice(0, cut).toLowerCase()) && /[A-Z]/.test(stem.slice(cut + 1))) return true;
+  }
+  return false;
+}
+
+function lastSeenAt(record) {
+  const times = [record.registeredAt, record.activityObservedAt].map((at) => Date.parse(at)).filter(Number.isFinite);
+  return times.length ? Math.max(...times) : null;
 }
 
 function firstBodyLine(body) {

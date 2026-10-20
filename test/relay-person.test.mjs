@@ -26,7 +26,7 @@ async function unit(mind, project, name, { state = 'in', date = '2026-10-05 10:0
 async function wakePolicy(mind, name, policy, key = 'a') {
   const folder = path.join(mind, 'user', 'relay', 'wake', 'policies');
   await mkdir(folder, { recursive: true });
-  await writeFile(path.join(folder, `${key.repeat(64)}.json`), JSON.stringify({ enabled: true, deadlineAt: null, binding: { unit: name }, ...policy }));
+  await writeFile(path.join(folder, `${key.repeat(64)}.json`), JSON.stringify({ enabled: true, deadlineAt: null, binding: { unit: name }, worker: { state: 'running', heartbeatAt: '2026-10-09T11:59:30Z' }, ...policy }));
 }
 
 const open = (mind, extra = {}) => createPersonRelay({ mindPath: mind, tool: 'blueprint', hostname: HOST, ...extra });

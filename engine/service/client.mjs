@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
 import { createConnection } from 'node:net';
 import { lstat, readFile } from 'node:fs/promises';
@@ -210,6 +210,12 @@ function nativeOperations(options, env) {
   }]));
 }
 
+// The wake policy of a chat is the file its worker writes the liveness note into; null when it cannot be read.
+async function sessionWakePolicy(mindPath, session) {
+  const key = createHash('sha256').update(JSON.stringify([session.unitId, session.nativeSessionId, session.client, session.machine])).digest('hex');
+  try { return JSON.parse(await readFile(path.join(mindPath, 'user', 'relay', 'wake', 'policies', `${key}.json`), 'utf8')); } catch { return null; }
+}
+
 function personOperations(options) {
   const withViewer = async (run) => {
     const viewer = await connectService(options);
@@ -235,8 +241,14 @@ function personOperations(options) {
     },
     async awake(unitId) {
       const now = options.now?.() ?? Date.now();
-      return withViewer(async (viewer) => (await call(viewer, 'GET', '/view')).sessions.some((session) => session.unitId === unitId && session.state !== 'stopped'
-        && session.wake?.enabled === true && !session.wake.pausedReason && (session.wake.deadlineAt === null || Date.parse(session.wake.deadlineAt) > now)));
+      const { wakeCanRun } = await import('../relay/store.mjs');
+      return withViewer(async (viewer) => {
+        const sessions = (await call(viewer, 'GET', '/view')).sessions.filter((session) => session.unitId === unitId && session.state !== 'stopped'
+          && session.wake?.enabled === true && !session.wake.pausedReason && (session.wake.deadlineAt === null || Date.parse(session.wake.deadlineAt) > now));
+        // The view says a consent is on; whether a worker is behind it, and the day's cap is not spent, only its policy file tells.
+        for (const session of sessions) if (!options.mindPath || wakeCanRun(await sessionWakePolicy(options.mindPath, session), now)) return true;
+        return false;
+      });
     },
     async send(args) {
       return withViewer(async (viewer) => {
