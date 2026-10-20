@@ -274,7 +274,10 @@ export function validateHead(head, { machine = null, previous = null, packBytes 
   return normalized;
 }
 
-export async function resolveDependencies(packBytes, provider, state = { stack: new Set(), seen: 0 }) {
+// A pack reached through several dependency paths is resolved once per call: without the memo every path decoded it
+// again, so each publication of a large M1ND decoded its earlier packs many times over.
+export async function resolveDependencies(packBytes, provider, state = { stack: new Set(), seen: 0, memo: new Map() }) {
+  state.memo ??= new Map();
   const buffer = asBuffer(packBytes);
   const decoded = decodePack(buffer);
   const here = `${decoded.header.machine}:${decoded.header.sequence}`;
@@ -307,16 +310,21 @@ export async function resolveDependencies(packBytes, provider, state = { stack: 
         continue;
       }
       if (listed.hash !== dependency.packHash) throw new CoreError(422, 'corrupt_resource', 'The dependency digest does not match the head.');
-      const packed = await provider.readPack(dependency.machine, dependency.sequence);
-      if (!packed) {
-        missing.push(dependency);
-        continue;
+      const memoKey = `${dependency.machine}:${dependency.sequence}:${dependency.packHash}`;
+      let nested = state.memo.get(memoKey);
+      if (!nested) {
+        const packed = await provider.readPack(dependency.machine, dependency.sequence);
+        if (!packed) {
+          missing.push(dependency);
+          continue;
+        }
+        const body = asBuffer(packed);
+        if (body.length !== listed.bytes || hashBytes(body) !== dependency.packHash) {
+          throw new CoreError(422, 'corrupt_resource', 'The dependency bytes do not match the head.');
+        }
+        nested = await resolveDependencies(body, provider, state);
+        state.memo.set(memoKey, nested);
       }
-      const body = asBuffer(packed);
-      if (body.length !== listed.bytes || hashBytes(body) !== dependency.packHash) {
-        throw new CoreError(422, 'corrupt_resource', 'The dependency bytes do not match the head.');
-      }
-      const nested = await resolveDependencies(body, provider, state);
       if (nested.status === 'pending') {
         missing.push(...nested.missing);
         continue;
