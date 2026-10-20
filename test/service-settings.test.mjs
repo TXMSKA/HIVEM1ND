@@ -591,7 +591,11 @@ test('a running service answers a read of its own report from the last report an
   fixture.store.projectionCache = createProjectionCache();
   const cache = fixture.store.projectionCache;
   owner.startedAt = new Date(fixture.clock.now).toISOString();
+  // The first report does not wait for the walk that looks for repositories; the offer joins the report once it is saved.
+  assert.equal((await publishMachineSettings(owner)).discoveryOffer, null);
+  await owner.discoverySaved;
   const first = await publishMachineSettings(owner);
+  assert.notEqual(first.discoveryOffer, null);
   const builds = cache.builds;
   const file = machineSettingsPath(fixture.paths.mind, fixture.machine);
   const written = await readFile(file, 'utf8');
