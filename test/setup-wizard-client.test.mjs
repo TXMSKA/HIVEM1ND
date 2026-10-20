@@ -79,6 +79,65 @@ test("the 2.x sessions to close start folded under their count", async () => {
   assert.equal(fold.querySelectorAll(".legacy-session").length, 30);
 });
 
+const locationStep = {
+  ...failedStep, id: "location", number: 2, failure: null, progress: [], action: "Continue",
+  fields: [{ id: "mindPath", type: "text", label: "Folder", required: true }],
+  values: { mindPath: "C:/M1ND", migrateLegacy: true },
+  languages: [{ value: "en", label: "English" }],
+  relayPlus: { title: "Use Relay+", badge: "Coming soon", body: "Sync your preferences.", disabled: true },
+  legacy: { confirmation: false, title: "Migrate legacy M1ND", body: "Found.", sessions: [] },
+  ui: { ...failedStep.ui, browse: "Browse", browseUnavailable: "No picker here." },
+};
+
+// Starts the wizard client on a step; each API path answers from `routes`, and a route may return a promise to hold the request.
+async function openWizard(step, routes, hivem1nd) {
+  const document = createWizardDocument();
+  const session = new Map([["hivem1nd.session", "test-token"]]);
+  const calls = [];
+  const source = await readFile(new URL("../gui/app.js", import.meta.url), "utf8");
+  const start = new AsyncFunction("document", "location", "sessionStorage", "history", "fetch", "window", "CSS", "setTimeout", source);
+  await start(document, { hash: "#session=test-token", assign() {} },
+    { getItem: (key) => session.get(key) ?? null, setItem: (key, value) => session.set(key, String(value)) }, { replaceState() {} },
+    async (url, options = {}) => {
+      const route = String(url).split("/api/v1/")[1];
+      calls.push({ route, body: options.body ? JSON.parse(options.body) : undefined });
+      const handler = routes[route];
+      const reply = handler ? await handler(options) : { data: step };
+      return { ok: reply.error === undefined, status: reply.error ? 501 : 200, json: async () => reply };
+    }, { hivem1nd }, { escape: (value) => String(value) }, (fn) => setTimeout(fn, 0));
+  return { document, calls };
+}
+const spinnerIn = (node) => node.querySelector(".button-spinner");
+
+test("Continue and Back show a loader while their request runs, including Continue with the Migrate option", async () => {
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  const { document } = await openWizard(locationStep, { answer: async () => { await held; return { data: { ...locationStep, id: "service", number: 3, progress: [], failure: { headline: "x", body: "y" } } }; },
+    back: async () => { await held; return { data: locationStep }; } });
+  const continueButton = document.getElementById("continue-button");
+  assert.equal(spinnerIn(continueButton), null);
+  const submit = document.getElementById("step-form").listeners.get("submit")[0]({ preventDefault() {} });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.ok(spinnerIn(continueButton), "Continue shows a loader on the step with the Migrate option");
+  assert.equal(continueButton.textContent, "Continue");
+  assert.equal(document.getElementById("back-button").disabled, true);
+  release();
+  await submit;
+  assert.equal(spinnerIn(document.getElementById("continue-button")), null);
+
+  let releaseBack;
+  const heldBack = new Promise((resolve) => { releaseBack = resolve; });
+  const back = await openWizard({ ...locationStep, back: true }, { back: async () => { await heldBack; return { data: locationStep }; } });
+  const backButton = back.document.getElementById("back-button");
+  assert.equal(spinnerIn(backButton), null);
+  const pending = backButton.listeners.get("click")[0]();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.ok(spinnerIn(backButton), "Back shows a loader while it runs");
+  releaseBack();
+  await pending;
+  assert.equal(spinnerIn(back.document.getElementById("back-button")), null);
+});
+
 function createWizardDocument() {
   const nodes = new Map();
   const tags = {
@@ -102,7 +161,6 @@ function createWizardDocument() {
   function make(tag) {
     const node = {
       tag,
-      id: "",
       className: "",
       textContent: "",
       hidden: false,
@@ -142,6 +200,10 @@ function createWizardDocument() {
     Object.defineProperty(node, "textContent", {
       get() { return this.children.length ? this.children.map((child) => child.textContent ?? "").join("") : this.ownText ?? ""; },
       set(value) { this.ownText = String(value); this.children = []; },
+    });
+    Object.defineProperty(node, "id", {
+      get() { return this.ownId ?? ""; },
+      set(value) { this.ownId = String(value); if (value) nodes.set(this.ownId, this); },
     });
     Object.defineProperty(node, "firstElementChild", { get() { return this.children.find((child) => child.tag !== "#text") ?? null; } });
     return node;

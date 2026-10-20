@@ -6,6 +6,9 @@ const sessionToken = tokenFromHash ?? sessionStorage.getItem('hivem1nd.session')
 history.replaceState({}, '', '/');
 let currentStep;
 let busy = false;
+// Every button that starts an action shows a spinner while the action runs, so none of them looks stuck.
+let busyButton = null;
+const painters = new Map();
 
 function el(tag, className, value) {
   const node = document.createElement(tag);
@@ -46,9 +49,22 @@ function setError(message) {
   elements['status-message'].hidden = !message;
   elements['status-message'].textContent = message ?? '';
 }
-function setBusy(value) {
+// A painter draws the content of a button for a loading or a resting state; the spinner replaces the button's icon.
+function paint(button, draw) {
+  painters.set(button, draw);
+  button.replaceChildren(...draw(false));
+}
+function setBusy(value, button) {
   busy = value;
+  if (!value) busyButton = null;
+  else if (button) busyButton = button;
   for (const control of document.querySelectorAll('button, input, select')) control.disabled = value || control.dataset.permanentDisabled === 'true';
+  for (const [target, draw] of painters) {
+    // The service can already be installing when the page opens, and then Continue shows it too.
+    const loading = value && target === busyButton || target === elements['continue-button'] && Boolean(currentStep?.busy);
+    target.setAttribute('aria-busy', String(loading));
+    target.replaceChildren(...draw(loading));
+  }
   elements['step-form'].setAttribute('aria-busy', String(value));
 }
 async function api(path, { method = 'GET', body } = {}) {
@@ -143,7 +159,7 @@ function renderLegacyDialog(step) {
   if (!elements['mode-dialog'].open) elements['mode-dialog'].showModal();
 }
 async function closeLegacy(close) {
-  elements['mode-dialog'].close(); setBusy(true);
+  elements['mode-dialog'].close(); setBusy(true, elements['continue-button']);
   try {
     render(await api('answer', { method: 'POST', body: { values: { ...collectValues(), closeLegacy: close } } }));
     if (currentStep.id === 'service') await runInstall();
@@ -192,10 +208,10 @@ function render(step) {
   document.documentElement.lang = step.language; document.title = ui().documentTitle;
   elements.fields.replaceChildren(); elements.preview.hidden = true;
   elements['step-title'].textContent = step.title; elements['step-description'].textContent = step.description;
-  renderProgress(step); elements['back-button'].hidden = !step.back; elements['back-button'].replaceChildren(icon('back'), document.createTextNode(ui().back));
-  elements['continue-button'].replaceChildren();
-  if (step.busy || busy && step.id === 'service') elements['continue-button'].append(icon('spinner', 'button-spinner'));
-  elements['continue-button'].append(document.createTextNode(step.action));
+  renderProgress(step); elements['back-button'].hidden = !step.back;
+  painters.clear();
+  paint(elements['back-button'], loading => [icon(loading ? 'spinner' : 'back', loading ? 'button-spinner' : ''), document.createTextNode(ui().back)]);
+  paint(elements['continue-button'], loading => [...(loading ? [icon('spinner', 'button-spinner')] : []), document.createTextNode(step.action)]);
   if (step.id === 'install') {
     const list = el('div', 'setup-bullets'); step.bullets.forEach((copy, index) => {
       const row = el('div', 'setup-bullet'); const image = el('span', 'bullet-icon'); image.append(icon(['graph', 'net', 'zap'][index])); row.append(image, el('span', '', copy)); list.append(row);
@@ -212,7 +228,7 @@ function render(step) {
 async function runInstall() {
   if (currentStep.preview?.conflicts?.some(conflict => !document.querySelector('[data-conflict-path="' + CSS.escape(conflict.path) + '"] input:checked'))) return;
   const conflicts = Object.fromEntries([...elements.fields.querySelectorAll('[data-conflict-path]')].map(field => [field.dataset.conflictPath, field.querySelector('input:checked')?.value]));
-  setBusy(true); setError();
+  setBusy(true, elements['continue-button']); setError();
   let pending = true;
   const install = api('install', { method: 'POST', body: { confirm: true, conflicts } }).finally(() => { pending = false; });
   const poll = (async () => { while (pending) { await new Promise(resolve => setTimeout(resolve, 1000)); if (pending) render(await api('step')); } })();
@@ -225,7 +241,7 @@ async function runInstall() {
 }
 elements['step-form'].addEventListener('submit', async event => {
   event.preventDefault(); if (busy || !elements['step-form'].reportValidity()) return;
-  setBusy(true); setError();
+  setBusy(true, elements['continue-button']); setError();
   try {
     if (currentStep.id === 'ready') { const opened = await api('open', { method: 'POST', body: {} }); if (opened.viewerUrl) location.assign(opened.viewerUrl); }
     else if (currentStep.id === 'service') await runInstall();
@@ -234,7 +250,7 @@ elements['step-form'].addEventListener('submit', async event => {
   finally { setBusy(false); }
 });
 elements['back-button'].addEventListener('click', async () => {
-  if (busy) return; setBusy(true); setError();
+  if (busy) return; setBusy(true, elements['back-button']); setError();
   try { render(await api('back', { method: 'POST', body: {} })); } catch (error) { setError(error.message); } finally { setBusy(false); }
 });
 try {
