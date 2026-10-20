@@ -185,12 +185,12 @@ async function recoverSession(app) {
 }
 
 const OPENING_COPY = {
-  reading: ["Reading the M1ND", "Leyendo el M1ND"],
-  failure: ["The M1ND cannot be read", "No se puede leer el M1ND"],
+  reading: ["Reading the M1ND", "Leyendo la M1ND"],
+  failure: ["The M1ND cannot be read", "No se puede leer la M1ND"],
   chooseFolder: ["Choose another folder", "Elegir otra carpeta"],
   noUnits: ["No units yet", "Todavía no hay unidades"],
   first: ["The Overseer comes first; create it from the inspector.", "Crear primero el Overseer desde el inspector."],
-  empty: ["Your M1ND is empty", "El M1ND está vacío"],
+  empty: ["Your M1ND is empty", "La M1ND está vacía"],
   coordinates: ["The Overseer coordinates every other unit. Create it first; then add Overlords and Executors from the Map.", "El Overseer coordina las demás unidades. Crearlo primero y agregar después Overlords y Executors desde el Mapa."],
   create: ["Create the Overseer", "Crear el Overseer"],
   timeout: ["{path} did not answer in 30 s. The drive may be offline, or another program may hold the folder.", "{path} no respondió en 30 s. La unidad puede estar desconectada o la carpeta puede estar bloqueada por otro programa."],
@@ -5877,7 +5877,7 @@ function renderFailure(app, error) {
   releaseBootstrapAnnouncement(app, message);
 }
 
-const BOOTSTRAP_ANNOUNCEMENTS = new Set(["Loading.", "Cargando.", "Reading the M1ND.", "Leyendo el M1ND."]);
+const BOOTSTRAP_ANNOUNCEMENTS = new Set(["Loading.", "Cargando.", "Reading the M1ND.", "Leyendo la M1ND."]);
 
 function renderStatus(app, key) {
   if (app.api.token && app.layout !== "phone") {

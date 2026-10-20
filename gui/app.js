@@ -6,6 +6,9 @@ const sessionToken = tokenFromHash ?? sessionStorage.getItem('hivem1nd.session')
 history.replaceState({}, '', '/');
 let currentStep;
 let busy = false;
+// Every button that starts an action shows a spinner while the action runs, so none of them looks stuck.
+let busyButton = null;
+const painters = new Map();
 
 function el(tag, className, value) {
   const node = document.createElement(tag);
@@ -46,9 +49,22 @@ function setError(message) {
   elements['status-message'].hidden = !message;
   elements['status-message'].textContent = message ?? '';
 }
-function setBusy(value) {
+// A painter draws the content of a button for a loading or a resting state; the spinner replaces the button's icon.
+function paint(button, draw) {
+  painters.set(button, draw);
+  button.replaceChildren(...draw(false));
+}
+function setBusy(value, button) {
   busy = value;
+  if (!value) busyButton = null;
+  else if (button) busyButton = button;
   for (const control of document.querySelectorAll('button, input, select')) control.disabled = value || control.dataset.permanentDisabled === 'true';
+  for (const [target, draw] of painters) {
+    // The service can already be installing when the page opens, and then Continue shows it too.
+    const loading = value && target === busyButton || target === elements['continue-button'] && Boolean(currentStep?.busy);
+    target.setAttribute('aria-busy', String(loading));
+    target.replaceChildren(...draw(loading));
+  }
   elements['step-form'].setAttribute('aria-busy', String(value));
 }
 async function api(path, { method = 'GET', body } = {}) {
@@ -73,6 +89,7 @@ function renderProgress(step) {
 }
 function offer(title, body, { id, checked = false, disabled = false, badge = null } = {}) {
   const label = el('label', 'setup-offer' + (disabled ? ' relay-plus' : ''));
+  if (disabled) label.setAttribute('aria-disabled', 'true');
   const checkbox = el('input');
   checkbox.type = 'checkbox'; checkbox.id = id; checkbox.checked = checked; checkbox.disabled = disabled;
   if (disabled) checkbox.dataset.permanentDisabled = 'true';
@@ -98,26 +115,38 @@ function renderLocation(step) {
   const label = el('label', '', ui().folder); label.htmlFor = 'mind-path';
   const path = el('div', 'path-control');
   const input = el('input'); input.type = 'text'; input.id = 'mind-path'; input.required = true; input.value = step.values.mindPath;
-  const change = el('button', 'button plain', ui().change); change.type = 'button'; change.id = 'change-folder';
-  change.addEventListener('click', async () => {
-    if (busy) return;
-    if (typeof window.hivem1nd?.browseFolder === 'function') {
-      const chosen = await window.hivem1nd.browseFolder();
-      if (chosen) { input.value = chosen; await changeFolder(); }
-    } else { input.focus(); input.select(); }
-  });
-  input.addEventListener('change', changeFolder);
-  path.append(icon('folder'), input, change); field.append(label, path); elements.fields.append(field);
+  const browse = el('button', 'button plain'); browse.type = 'button'; browse.id = 'browse-folder';
+  paint(browse, loading => [...(loading ? [icon('spinner', 'button-spinner')] : []), document.createTextNode(ui().browse)]);
+  // The Electron app opens its own dialog; the browser wizard asks its local server to open the system one.
+  browse.addEventListener('click', () => browseFolder(input, browse));
+  input.addEventListener('change', () => changeFolder(browse));
+  path.append(icon('folder'), input, browse); field.append(label, path); elements.fields.append(field);
   if (step.join) elements.fields.append(offer(step.join.title, step.join.body, { id: 'join-mind', checked: step.values.attach }));
   else if (step.legacy) elements.fields.append(offer(step.legacy.title, step.legacy.body, { id: 'migrate-legacy', checked: step.values.migrateLegacy }));
   elements.fields.append(offer(step.relayPlus.title, step.relayPlus.body, { id: 'relay-plus', disabled: true, badge: step.relayPlus.badge }));
 }
-async function changeFolder() {
+async function reviewFolder() {
+  render(await api('answer', { method: 'POST', body: { values: { mindPath: document.getElementById('mind-path').value.trim(), changeFolder: true } } }));
+}
+async function changeFolder(button) {
   if (busy) return;
-  setBusy(true); setError();
-  try { render(await api('answer', { method: 'POST', body: { values: { mindPath: document.getElementById('mind-path').value.trim(), changeFolder: true } } })); }
+  setBusy(true, button); setError();
+  try { await reviewFolder(); }
   catch (error) { setError(error.message); }
   finally { setBusy(false); }
+}
+async function browseFolder(input, button) {
+  if (busy) return;
+  setBusy(true, button); setError();
+  try {
+    const chosen = typeof window.hivem1nd?.browseFolder === 'function'
+      ? await window.hivem1nd.browseFolder()
+      : (await api('browse', { method: 'POST', body: {} })).path;
+    if (chosen) { input.value = chosen; await reviewFolder(); }
+  } catch (error) {
+    setError(error.message);
+    input.focus();
+  } finally { setBusy(false); }
 }
 function renderLegacyDialog(step) {
   const legacy = step.legacy;
@@ -143,7 +172,7 @@ function renderLegacyDialog(step) {
   if (!elements['mode-dialog'].open) elements['mode-dialog'].showModal();
 }
 async function closeLegacy(close) {
-  elements['mode-dialog'].close(); setBusy(true);
+  elements['mode-dialog'].close(); setBusy(true, elements['continue-button']);
   try {
     render(await api('answer', { method: 'POST', body: { values: { ...collectValues(), closeLegacy: close } } }));
     if (currentStep.id === 'service') await runInstall();
@@ -158,6 +187,12 @@ function renderService(step) {
     const status = el('span', 'progress-status'); status.setAttribute('aria-label', ui()['progress' + row.state[0].toUpperCase() + row.state.slice(1)]);
     if (row.state !== 'todo') status.append(icon(row.state === 'done' ? 'check' : row.state === 'fail' ? 'x' : 'spinner'));
     item.append(status, el('span', 'progress-copy', row.label), el('span', 'progress-time', row.elapsedSeconds === null ? '' : row.elapsedSeconds + ' s'));
+    if (row.sync) {
+      // Files done out of the total while the first sync runs; without a known total the bar stays indeterminate.
+      const bar = el('progress', 'sync-bar'); bar.max = row.sync.total || 1; bar.setAttribute('aria-label', row.sync.detail);
+      if (row.sync.total) bar.value = Math.min(row.sync.done, row.sync.total);
+      item.append(bar, el('p', 'sync-detail', row.sync.detail));
+    }
     list.append(item);
   }
   elements.fields.append(list);
@@ -192,10 +227,10 @@ function render(step) {
   document.documentElement.lang = step.language; document.title = ui().documentTitle;
   elements.fields.replaceChildren(); elements.preview.hidden = true;
   elements['step-title'].textContent = step.title; elements['step-description'].textContent = step.description;
-  renderProgress(step); elements['back-button'].hidden = !step.back; elements['back-button'].replaceChildren(icon('back'), document.createTextNode(ui().back));
-  elements['continue-button'].replaceChildren();
-  if (step.busy || busy && step.id === 'service') elements['continue-button'].append(icon('spinner', 'button-spinner'));
-  elements['continue-button'].append(document.createTextNode(step.action));
+  renderProgress(step); elements['back-button'].hidden = !step.back;
+  painters.clear();
+  paint(elements['back-button'], loading => [icon(loading ? 'spinner' : 'back', loading ? 'button-spinner' : ''), document.createTextNode(ui().back)]);
+  paint(elements['continue-button'], loading => [...(loading ? [icon('spinner', 'button-spinner')] : []), document.createTextNode(step.action)]);
   if (step.id === 'install') {
     const list = el('div', 'setup-bullets'); step.bullets.forEach((copy, index) => {
       const row = el('div', 'setup-bullet'); const image = el('span', 'bullet-icon'); image.append(icon(['graph', 'net', 'zap'][index])); row.append(image, el('span', '', copy)); list.append(row);
@@ -212,7 +247,7 @@ function render(step) {
 async function runInstall() {
   if (currentStep.preview?.conflicts?.some(conflict => !document.querySelector('[data-conflict-path="' + CSS.escape(conflict.path) + '"] input:checked'))) return;
   const conflicts = Object.fromEntries([...elements.fields.querySelectorAll('[data-conflict-path]')].map(field => [field.dataset.conflictPath, field.querySelector('input:checked')?.value]));
-  setBusy(true); setError();
+  setBusy(true, elements['continue-button']); setError();
   let pending = true;
   const install = api('install', { method: 'POST', body: { confirm: true, conflicts } }).finally(() => { pending = false; });
   const poll = (async () => { while (pending) { await new Promise(resolve => setTimeout(resolve, 1000)); if (pending) render(await api('step')); } })();
@@ -225,7 +260,7 @@ async function runInstall() {
 }
 elements['step-form'].addEventListener('submit', async event => {
   event.preventDefault(); if (busy || !elements['step-form'].reportValidity()) return;
-  setBusy(true); setError();
+  setBusy(true, elements['continue-button']); setError();
   try {
     if (currentStep.id === 'ready') { const opened = await api('open', { method: 'POST', body: {} }); if (opened.viewerUrl) location.assign(opened.viewerUrl); }
     else if (currentStep.id === 'service') await runInstall();
@@ -234,7 +269,7 @@ elements['step-form'].addEventListener('submit', async event => {
   finally { setBusy(false); }
 });
 elements['back-button'].addEventListener('click', async () => {
-  if (busy) return; setBusy(true); setError();
+  if (busy) return; setBusy(true, elements['back-button']); setError();
   try { render(await api('back', { method: 'POST', body: {} })); } catch (error) { setError(error.message); } finally { setBusy(false); }
 });
 try {

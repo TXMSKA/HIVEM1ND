@@ -8,7 +8,7 @@
   --bg: #0f0b13; --panel: #18121d; --card: #211a27; --card2: #2b2232;
   --line: rgba(236,230,218,0.08); --line2: rgba(236,230,218,0.15);
   --text: #f5f1f6; --body: #d4ccd8; --muted: #aa9fb1;
-  --accent: #bdcd79; --accent-ink: #1b200b; --mark-purple: #81648c;
+  --accent: #bdcd79; --accent-hover: #cddb8d; --accent-press: #a9b968; --accent-ink: #1b200b; --mark-purple: #81648c;
   --waiting-soft: rgba(230,192,111,0.12); --working: #8fd19e;
   --error: #e58e7c; --error-soft: rgba(229,142,124,0.12); --error-ink: #1d0b08;
   --scrim: rgba(4,2,6,0.62);
@@ -47,9 +47,13 @@ h1 { margin: 0; font-size: 24px; font-weight: 700; line-height: 1.2; }
 .fields:empty { display: none; }
 .actions { display: flex; align-items: center; gap: 10px; justify-content: space-between; }
 #continue-button { margin-left: auto; }
-.button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 7px 12px; border: 0; border-radius: 10px; color: var(--text); background: var(--card2); font-size: 12.5px; font-weight: 600; }
-.button.primary { color: var(--accent-ink); background: var(--accent); }
-.button.secondary, .button.ghost { color: var(--body); background: transparent; }
+/* Every button that acts is the accent color; Back and Cancel are quieter but still bordered buttons. */
+.button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 7px 14px; border: 1px solid var(--accent); border-radius: 10px; color: var(--accent-ink); background: var(--accent); font-size: 12.5px; font-weight: 700; }
+.button:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+.button:active:not(:disabled) { background: var(--accent-press); border-color: var(--accent-press); }
+.button.secondary, .button.ghost { color: var(--body); background: transparent; border-color: var(--line2); font-weight: 600; }
+.button.secondary:hover:not(:disabled), .button.ghost:hover:not(:disabled) { color: var(--text); background: rgba(189,205,121,0.12); border-color: var(--accent); }
+.button.secondary:active:not(:disabled), .button.ghost:active:not(:disabled) { background: rgba(189,205,121,0.22); border-color: var(--accent-press); }
 .button svg { width: 14px; height: 14px; }
 .button-spinner { animation: spin 1s linear infinite; }
 .setup-bullets { display: grid; gap: 12px; }
@@ -66,15 +70,24 @@ h1 { margin: 0; font-size: 24px; font-weight: 700; line-height: 1.2; }
 .offer-heading { display: flex; align-items: center; gap: 8px; font-size: 14px; }
 .offer-body { color: var(--body); font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere; }
 .offer-badge { padding: 2px 8px; border-radius: 999px; background: var(--card2); color: var(--muted); font-size: 11px; font-weight: 700; }
-.relay-plus { background: var(--card); border: 1px solid var(--line); cursor: default; }
+/* Relay+ is not available yet: the whole offer is dimmed, its checkbox is dashed and empty, and its mark stays readable. */
+.relay-plus { background: transparent; border: 1px dashed var(--line2); cursor: not-allowed; }
+.relay-plus .offer-heading > strong, .relay-plus .offer-body { opacity: .5; }
+.relay-plus input[type=checkbox]:disabled { border-style: dashed; border-color: var(--line2); background: transparent; opacity: .45; cursor: not-allowed; }
+.relay-plus .offer-badge { margin-left: auto; border: 1px solid var(--line2); background: transparent; color: var(--body); }
 input[type=checkbox], input[type=radio] { appearance: none; width: 18px; height: 18px; flex: 0 0 18px; margin: 1px 0 0; display: grid; place-content: center; border: 2px solid var(--line2); border-radius: 4px; background: transparent; }
 input[type=checkbox]:checked { border-color: var(--accent); background: var(--accent); }
 input[type=checkbox]:checked::before { width: 8px; height: 4px; border: solid var(--accent-ink); border-width: 0 0 2px 2px; transform: translateY(-1px) rotate(-45deg); content: ''; }
 .service-progress { display: grid; gap: 11px; margin: 0; padding: 14px 16px; list-style: none; border-radius: 14px; background: var(--card); }
-.progress-row { display: flex; align-items: center; gap: 10px; font-size: 13.5px; }
+.progress-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 13.5px; }
 .progress-copy { flex: 1 1 auto; }
 .progress-time { color: var(--muted); font-size: 12px; }
 .progress-row.todo .progress-copy { color: var(--muted); }
+.sync-bar { flex: 1 0 100%; width: 100%; height: 8px; appearance: none; border: 0; border-radius: 999px; overflow: hidden; background: var(--card2); accent-color: var(--accent); }
+.sync-bar::-webkit-progress-bar { background: var(--card2); }
+.sync-bar::-webkit-progress-value { background: var(--accent); border-radius: 999px; transition: width .4s ease; }
+.sync-bar::-moz-progress-bar { background: var(--accent); border-radius: 999px; }
+.sync-detail { flex: 1 0 100%; margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.4; }
 .progress-status { flex: 0 0 18px; height: 18px; display: grid; place-items: center; border: 2px solid var(--line2); border-radius: 50%; }
 .progress-status svg { width: 12px; height: 12px; }
 .done .progress-status { border: 0; background: var(--accent); color: var(--accent-ink); }
@@ -113,7 +126,7 @@ input[type=checkbox]:checked::before { width: 8px; height: 4px; border: solid va
 input[type=radio] { border-radius: 50%; }
 input[type=radio]:checked { background: var(--accent); border-color: var(--accent); }
 @keyframes spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .button-spinner, .busy .progress-status svg { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .button-spinner, .busy .progress-status svg { animation: none; } .sync-bar::-webkit-progress-value { transition: none; } }
 @media (max-width: 720px) {
   .workspace { padding: 76px 16px 24px; }
   .step-card { width: min(640px, calc(100vw - 32px)); padding: 24px; }

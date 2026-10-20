@@ -19,7 +19,7 @@ test('discovery lists mixed parts and disables the excluded tool with a named co
   assert.equal(rows[2].children[0].getAttribute('disabled'), ''); assert.match(copy(rows[2]), /Reads and writes cloud files/);
   assert.match(rows[2].children[0].getAttribute('aria-label'), /Available after 3.0/);
   assert.equal(addButton(document, 'en', () => {}).getAttribute('aria-label'), 'Add to M1ND');
-  assert.match(copy(renderAdd(document, { ...model, language: 'es' }, {})), /Agregar al M1ND/);
+  assert.match(copy(renderAdd(document, { ...model, language: 'es' }, {})), /Agregar a la M1ND/);
 });
 test('the check precedes unit selection and runtime caution does not imply installation', () => {
   const view = renderAdd(document, { ...model, stage: 'check' }, {});

@@ -79,6 +79,137 @@ test("the 2.x sessions to close start folded under their count", async () => {
   assert.equal(fold.querySelectorAll(".legacy-session").length, 30);
 });
 
+const locationStep = {
+  ...failedStep, id: "location", number: 2, failure: null, progress: [], action: "Continue",
+  fields: [{ id: "mindPath", type: "text", label: "Folder", required: true }],
+  values: { mindPath: "C:/M1ND", migrateLegacy: true },
+  languages: [{ value: "en", label: "English" }],
+  relayPlus: { title: "Use Relay+", badge: "Coming soon", body: "Sync your preferences.", disabled: true },
+  legacy: { confirmation: false, title: "Migrate legacy M1ND", body: "Found.", sessions: [] },
+  ui: { ...failedStep.ui, browse: "Browse", browseUnavailable: "No picker here." },
+};
+
+// Starts the wizard client on a step; each API path answers from `routes`, and a route may return a promise to hold the request.
+async function openWizard(step, routes, hivem1nd) {
+  const document = createWizardDocument();
+  const session = new Map([["hivem1nd.session", "test-token"]]);
+  const calls = [];
+  const source = await readFile(new URL("../gui/app.js", import.meta.url), "utf8");
+  const start = new AsyncFunction("document", "location", "sessionStorage", "history", "fetch", "window", "CSS", "setTimeout", source);
+  await start(document, { hash: "#session=test-token", assign() {} },
+    { getItem: (key) => session.get(key) ?? null, setItem: (key, value) => session.set(key, String(value)) }, { replaceState() {} },
+    async (url, options = {}) => {
+      const route = String(url).split("/api/v1/")[1];
+      calls.push({ route, body: options.body ? JSON.parse(options.body) : undefined });
+      const handler = routes[route];
+      const reply = handler ? await handler(options) : { data: step };
+      return { ok: reply.error === undefined, status: reply.error ? 501 : 200, json: async () => reply };
+    }, { hivem1nd }, { escape: (value) => String(value) }, (fn) => setTimeout(fn, 0));
+  return { document, calls };
+}
+const spinnerIn = (node) => node.querySelector(".button-spinner");
+
+test("Browse replaces Change, asks the local server for a folder and shows a loader while it waits", async () => {
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  const { document, calls } = await openWizard(locationStep, {
+    browse: async () => { await held; return { data: { path: "C:/chosen" } }; },
+    answer: async () => ({ data: { ...locationStep, values: { ...locationStep.values, mindPath: "C:/chosen" } } }),
+  });
+  assert.equal(document.getElementById("change-folder"), null);
+  const browse = document.getElementById("browse-folder");
+  assert.equal(browse.textContent, "Browse");
+  assert.equal(spinnerIn(browse), null);
+  const click = browse.listeners.get("click")[0]();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.ok(spinnerIn(browse), "the Browse button shows a loader while the picker is open");
+  assert.equal(browse.disabled, true);
+  assert.equal(document.getElementById("continue-button").disabled, true);
+  release();
+  await click;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(calls.filter((call) => call.route === "browse").map((call) => call.body), [{}]);
+  assert.deepEqual(calls.find((call) => call.route === "answer").body, { values: { mindPath: "C:/chosen", changeFolder: true } });
+  assert.equal(document.getElementById("mind-path").value, "C:/chosen");
+  assert.equal(spinnerIn(document.getElementById("browse-folder")), null);
+  assert.equal(document.getElementById("browse-folder").disabled, false);
+});
+
+test("Browse uses the Electron dialog when the app provides one and keeps the path editable when no picker exists", async () => {
+  const chosen = [];
+  const electron = await openWizard(locationStep, { answer: async (options) => { chosen.push(JSON.parse(options.body).values.mindPath); return { data: locationStep }; } },
+    { browseFolder: async () => "C:/native" });
+  await electron.document.getElementById("browse-folder").listeners.get("click")[0]();
+  assert.deepEqual(chosen, ["C:/native"]);
+  assert.equal(electron.calls.some((call) => call.route === "browse"), false);
+
+  const plain = await openWizard(locationStep, { browse: async () => ({ error: { message: "No picker here." } }) });
+  await plain.document.getElementById("browse-folder").listeners.get("click")[0]();
+  assert.equal(plain.document.getElementById("status-message").textContent, "No picker here.");
+  assert.equal(plain.document.getElementById("mind-path").value, "C:/M1ND", "the typed path stays");
+  assert.equal(spinnerIn(plain.document.getElementById("browse-folder")), null);
+  assert.equal(plain.document.getElementById("mind-path").disabled, false);
+});
+
+test("Continue and Back show a loader while their request runs, including Continue with the Migrate option", async () => {
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  const { document } = await openWizard(locationStep, { answer: async () => { await held; return { data: { ...locationStep, id: "service", number: 3, progress: [], failure: { headline: "x", body: "y" } } }; },
+    back: async () => { await held; return { data: locationStep }; } });
+  const continueButton = document.getElementById("continue-button");
+  assert.equal(spinnerIn(continueButton), null);
+  const submit = document.getElementById("step-form").listeners.get("submit")[0]({ preventDefault() {} });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.ok(spinnerIn(continueButton), "Continue shows a loader on the step with the Migrate option");
+  assert.equal(continueButton.textContent, "Continue");
+  assert.equal(document.getElementById("back-button").disabled, true);
+  release();
+  await submit;
+  assert.equal(spinnerIn(document.getElementById("continue-button")), null);
+
+  let releaseBack;
+  const heldBack = new Promise((resolve) => { releaseBack = resolve; });
+  const back = await openWizard({ ...locationStep, back: true }, { back: async () => { await heldBack; return { data: locationStep }; } });
+  const backButton = back.document.getElementById("back-button");
+  assert.equal(spinnerIn(backButton), null);
+  const pending = backButton.listeners.get("click")[0]();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.ok(spinnerIn(backButton), "Back shows a loader while it runs");
+  releaseBack();
+  await pending;
+  assert.equal(spinnerIn(back.document.getElementById("back-button")), null);
+});
+
+test("the Relay+ offer reads as unavailable: disabled, marked Coming soon, and never checked", async () => {
+  const { document } = await openWizard(locationStep, {});
+  const offer = document.querySelectorAll(".relay-plus")[0];
+  assert.ok(offer, "the Relay+ offer is marked");
+  assert.equal(offer.getAttribute("aria-disabled"), "true");
+  const checkbox = offer.querySelector("input");
+  assert.equal(checkbox.disabled, true);
+  assert.equal(checkbox.checked, false);
+  assert.equal(offer.querySelector(".offer-badge").textContent, "Coming soon");
+  const migrate = document.getElementById("migrate-legacy");
+  assert.equal(migrate.disabled, false);
+  assert.equal(migrate.parent.className.includes("relay-plus"), false);
+});
+
+test("the starting step shows a progress bar and a sentence while the first sync runs", async () => {
+  const service = { ...locationStep, id: "service", number: 3, preview: { conflicts: [] }, fields: [],
+    failure: { headline: "Paused", body: "Retry." },
+    progress: [{ id: "registration", state: "done", label: "Registered", elapsedSeconds: 1 },
+      { id: "start", state: "busy", label: "Starting the service", elapsedSeconds: 42,
+        sync: { phase: "staging", done: 5, total: 10, detail: "Preparing files for synchronization: 5 of about 10." } }] };
+  const { document } = await openWizard(service, {});
+  const [bar] = document.querySelectorAll(".sync-bar");
+  assert.equal(bar.max, 10);
+  assert.equal(bar.value, 5);
+  assert.equal(document.querySelector(".sync-detail").textContent, "Preparing files for synchronization: 5 of about 10.");
+  assert.equal(document.querySelectorAll(".sync-bar").length, 1, "only the running row has a bar");
+  const unknown = await openWizard({ ...service, progress: [{ ...service.progress[1], sync: { phase: "preparing", done: 0, total: null, detail: "Getting the service ready." } }] }, {});
+  assert.equal(unknown.document.querySelector(".sync-bar").value, undefined, "without a total the bar is indeterminate");
+});
+
 function createWizardDocument() {
   const nodes = new Map();
   const tags = {
@@ -102,7 +233,6 @@ function createWizardDocument() {
   function make(tag) {
     const node = {
       tag,
-      id: "",
       className: "",
       textContent: "",
       hidden: false,
@@ -142,6 +272,10 @@ function createWizardDocument() {
     Object.defineProperty(node, "textContent", {
       get() { return this.children.length ? this.children.map((child) => child.textContent ?? "").join("") : this.ownText ?? ""; },
       set(value) { this.ownText = String(value); this.children = []; },
+    });
+    Object.defineProperty(node, "id", {
+      get() { return this.ownId ?? ""; },
+      set(value) { this.ownId = String(value); if (value) nodes.set(this.ownId, this); },
     });
     Object.defineProperty(node, "firstElementChild", { get() { return this.children.find((child) => child.tag !== "#text") ?? null; } });
     return node;

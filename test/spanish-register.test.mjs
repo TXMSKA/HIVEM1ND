@@ -203,6 +203,26 @@ test('every Spanish source is read and holds no voseo and no tuteo', async () =>
   assert.equal(failures.length, 0, `Spanish copy must be neutral and impersonal, with no voseo and no tuteo:\n${failures.join('\n')}`);
 });
 
+// M1ND is feminine in Spanish: an article, demonstrative or adjective that agrees with it is feminine too.
+const MASCULINE_M1ND = /(?<![\p{L}\p{N}_])(?:el|del|al|este|ese|aquel|un|otro|mismo|todo|ningún|cada)\s+M1ND(?![\p{L}\p{N}_])|(?<![\p{L}\p{N}_])M1ND\s+(?:anterior\s+)?(?:\p{L}{3,}(?:ado|ido)s?|vacío)(?![\p{L}\p{N}_])/giu;
+
+test('Spanish copy treats M1ND as feminine', async () => {
+  const found = (value) => [...value.matchAll(MASCULINE_M1ND)].map((match) => match[0]);
+  assert.deepEqual(found('Leyendo el M1ND. Migrar un M1ND. Fuera del M1ND y al M1ND. M1ND anterior copiado.'),
+    ['el M1ND', 'un M1ND', 'del M1ND', 'al M1ND', 'M1ND anterior copiado']);
+  assert.deepEqual(found('Leyendo la M1ND. Migrar una M1ND. Fuera de la M1ND. M1ND anterior copiada. M1ND sin leer.'), []);
+  const setup = await copyTable('engine/setup.mjs', 'SETUP_COPY');
+  const sources = [
+    await installerCopy(), await guiSourceCopy('es'), await terminalCopy(),
+    Object.entries(setup.es).map(([key, value]) => [`engine/setup.mjs SETUP_COPY.es.${key}`, value]),
+  ];
+  const failures = [];
+  for (const entries of sources) {
+    for (const [where, value] of entries) for (const match of found(String(value))) failures.push(`${where}: "${match}"`);
+  }
+  assert.equal(failures.length, 0, `Spanish copy must use the feminine for M1ND:\n${failures.join('\n')}`);
+});
+
 test('the finite product inventory uses M1ND before interpolation in both languages', async () => {
   for (const language of ['en', 'es']) {
     assertVisibleCopy(language, await guiSourceCopy(language));
@@ -232,5 +252,5 @@ test('the finite product inventory uses M1ND before interpolation in both langua
 test('copy failures identify the element or key without reporting record values', () => {
   assert.throws(() => assertVisibleCopy('en', [['COPY.en.example', 'The mind is unavailable.']]), /COPY.en.example: forbidden product word "mind"/);
   assert.throws(() => assertVisibleCopy('es', [['button[data-action=retry]', 'Revisá tu carpeta.']]), /button\[data-action=retry\]: "Revisá"/);
-  assertVisibleCopy('es', [['COPY.es.example', 'Revisar la carpeta del M1ND.']]);
+  assertVisibleCopy('es', [['COPY.es.example', 'Revisar la carpeta de la M1ND.']]);
 });

@@ -1,6 +1,6 @@
 import { element, icon, labelDialog, progressMark } from './components.mjs';
 export const ADD_COPY = Object.freeze({
-  title: ['Add to M1ND', 'Agregar al M1ND'],
+  title: ['Add to M1ND', 'Agregar a la M1ND'],
   add: ['Add', 'Agregar'],
   linkHint: ['A GitHub or GitLab repository link, an npm package link, or a dropped folder', 'Un enlace a un repositorio de GitHub o GitLab, un enlace a un paquete de npm o una carpeta soltada'],
   droppedFolder: ['A dropped folder can be inspected, but it cannot be added: it has no pinned commit or release date. Add it from its repository link instead.', 'Una carpeta soltada se puede inspeccionar, pero no se puede agregar: no tiene un commit fijado ni una fecha de publicación. Agregarla desde el enlace de su repositorio.'],
@@ -63,7 +63,7 @@ export const ADD_COPY = Object.freeze({
   error_scope_unavailable: ['The selected client cannot provide content only to the selected units.', 'El cliente seleccionado no puede ofrecer el contenido solo a las unidades seleccionadas.'],
   error_addition_not_found: ['The addition is no longer available.', 'El elemento agregado ya no está disponible.'],
   error_preview_not_found: ['The source check is no longer available.', 'La comprobación de origen ya no está disponible.'],
-  error_forbidden: ['Add to M1ND is available on the computer only.', 'Agregar al M1ND está disponible solo en la computadora.'],
+  error_forbidden: ['Add to M1ND is available on the computer only.', 'Agregar a la M1ND está disponible solo en la computadora.'],
   error_unknown: ['The operation could not be confirmed. Retry to check its state.', 'No se pudo confirmar la operación. Reintentar para comprobar su estado.'],
 });
 export function addText(language, key, values = {}) {

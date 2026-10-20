@@ -248,7 +248,7 @@ test("Electron shows the window after the local wizard finishes loading", async 
 test("terminal setup renders descriptors and installs only after preview", async () => {
   const steps = [
  {id:'install',number:1,total:4,language:'es',title:'Instalar HIVEM1ND',fields:[],values:{}},
- {id:'location',number:2,total:4,language:'es',title:'Dónde se guarda el M1ND',fields:[{id:'mindPath',type:'text',label:'Carpeta',required:true}],values:{mindPath:'C:/fixture/M1ND'}},
+ {id:'location',number:2,total:4,language:'es',title:'Dónde se guarda la M1ND',fields:[{id:'mindPath',type:'text',label:'Carpeta',required:true}],values:{mindPath:'C:/fixture/M1ND'}},
  {id:'service',number:3,total:4,language:'es',title:'Iniciando el servicio Relay',fields:[],values:{}},
  {id:'ready',number:4,total:4,language:'es',title:'HIVEM1ND está en ejecución',description:'Listo.',fields:[],values:{},done:true,result:{completed:true,message:'Listo.',attachPrompts:[{agent:'otro',text:'Adjuntar'}]}}
  ];
