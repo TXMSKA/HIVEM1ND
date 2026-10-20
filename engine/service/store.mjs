@@ -27,12 +27,23 @@ export function noteProjectionChange(store, target = null) {
   store.projectionCache.generation += 1;
 }
 
+// The lock every local change takes is always watched: who took it is kept, so a holder that never lets go can be named
+// (see longHeld). The call site is kept as an Error and formatted only when it is read.
+const WATCHED_LOCKS = new Set(['local-observation']);
+
 function createLockTable() {
   const tails = new Map();
+  const holders = new Map();
+  let ticketSeq = 0;
   // HIVEM1ND_DEBUG_LOCKS=1 records who holds and who waits for each lock, readable as globalThis.__hivemindLocks.
   const debug = process.env.HIVEM1ND_DEBUG_LOCKS === '1' ? (globalThis.__hivemindLocks ??= { held: new Map(), waiting: new Map(), next: 0 }) : null;
   return {
+    longHeld(minimumMs, now = Date.now()) {
+      return [...holders.entries()].filter(([, entry]) => now - entry.at >= minimumMs)
+        .map(([ticket, entry]) => ({ ticket, key: entry.key, at: entry.at, stack: String(entry.site.stack ?? '') }));
+    },
     async acquire(key) {
+      const site = WATCHED_LOCKS.has(key) ? new Error('lock holder') : null;
       let release;
       const gate = new Promise((resolve) => {
         release = resolve;
@@ -46,6 +57,12 @@ function createLockTable() {
       const ticket = debug ? ++debug.next : 0;
       if (debug) debug.waiting.set(ticket, { key, since: Date.now(), stack: new Error().stack });
       await previous;
+      if (site) {
+        const held = ++ticketSeq;
+        holders.set(held, { key, at: Date.now(), site });
+        const inner = release;
+        release = () => { holders.delete(held); inner(); };
+      }
       if (!debug) return release;
       const entry = debug.waiting.get(ticket);
       debug.waiting.delete(ticket);

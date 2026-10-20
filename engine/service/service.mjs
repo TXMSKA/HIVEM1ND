@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { repositoryCheckoutPath } from './addition-parts.mjs';
-import { lstat, mkdir, open, readdir, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises';
+import { appendFile, lstat, mkdir, open, readdir, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises';
 import { createConnection, createServer } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -877,6 +877,7 @@ async function openServiceSync(options, paths, { migrate = true } = {}) {
     startedAt: new Date(options.startedAt ?? now()).toISOString(),
   };
   runtime.settingsOwner = createSettingsOwner({ ...options, paths, now, sync, pulse, ledger, bus: runtime.bus, startedAt: runtime.startedAt });
+  runtime.lockWatch = watchHeldLocks(options.store, paths.localDirectory);
   await recoverTransactions(options.store, { beforeRecover: () => refreshClusterProjects(runtime.settingsOwner) });
   await refreshAdditionProjects(runtime.settingsOwner);
   if (migrate) await migrateClusters(runtime.settingsOwner);
@@ -959,9 +960,29 @@ async function publishServiceBeat(runtime, state, { settings = true } = {}) {
   return runtime.beat;
 }
 
+// A lock held for a minute is a service that stopped answering: who took it is written once to the machine's diagnostics,
+// so the next stall can be traced instead of guessed.
+const HELD_LOCK_MS = 60000;
+
+function watchHeldLocks(store, localDirectory) {
+  if (typeof store?.locks?.longHeld !== 'function') return null;
+  const logged = new Set();
+  const timer = setInterval(() => {
+    const held = store.locks.longHeld(HELD_LOCK_MS).filter((entry) => !logged.has(entry.ticket));
+    if (!held.length) return;
+    for (const entry of held) logged.add(entry.ticket);
+    const lines = held.map((entry) => `${new Date().toISOString()} ${entry.key} held since ${new Date(entry.at).toISOString()}\n${entry.stack}\n`).join('\n');
+    mkdir(path.join(localDirectory, 'diagnostics'), { recursive: true })
+      .then(() => appendFile(path.join(localDirectory, 'diagnostics', 'held-locks.log'), `${lines}\n`)).catch(() => {});
+  }, HELD_LOCK_MS / 2);
+  timer.unref?.();
+  return timer;
+}
+
 async function closeServiceSync(runtime, { beat = true } = {}) {
   if (!runtime || runtime.closed) return;
   runtime.closed = true;
+  if (runtime.lockWatch) clearInterval(runtime.lockWatch);
   if (runtime.beatTimer) clearInterval(runtime.beatTimer);
   runtime.beatTimer = null;
   if (runtime.unwatch) await runtime.unwatch();
