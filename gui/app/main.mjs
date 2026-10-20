@@ -5924,6 +5924,20 @@ function paintActivity(app, shell) {
       text: text(app.language, "retry"),
       onclick: () => Promise.all([...group.map((record) => record.retry?.()), ...(app.startError && String(app.startError.code ?? "unknown") === String(group[0].error?.code ?? "unknown") ? [loadStartReports(app)] : [])]),
     }));
+    // A failure the person has seen can be closed; it never stays on screen over what is behind it.
+    notice.append(element(document, "button", {
+      type: "button",
+      class: "btn quiet notice-close",
+      "data-action": "dismiss-activity",
+      "data-activity": group[0].key,
+      "aria-label": text(app.language, "close"),
+      title: text(app.language, "close"),
+      text: "×",
+      onclick: () => {
+        for (const record of group) app.activity?.delete(record.key);
+        if (!app.disposed) renderShell(app);
+      },
+    }));
     region.append(notice);
   }
   const field = here === "unit" ? composerField(shell) : null;

@@ -8088,3 +8088,17 @@ test('a request is called slow only after five seconds; before that the button l
   renderShell(desktop.app);
   assert.ok(desktop.root.querySelector('.slow-notice'), 'five seconds is');
 });
+
+test('a failure notice can be closed without retrying', async t => {
+  const desktop = await openedBoardDesktop(t);
+  desktop.app.mode = 'map';
+  desktop.app.editors.current = null;
+  if (!desktop.app.activity) desktop.app.activity = new Map();
+  desktop.app.activity.set('older:shop', { key: 'older:shop', phase: 'error', scope: 'unit', label: 'Loading earlier messages', error: { code: 'timeout' } });
+  renderShell(desktop.app);
+  const close = desktop.root.querySelector('[data-action="dismiss-activity"]');
+  assert.ok(close, 'the failure has a close button');
+  click(close);
+  assert.equal(desktop.root.querySelector('[data-action="dismiss-activity"]'), null);
+  assert.equal(desktop.app.activity.has('older:shop'), false);
+});
