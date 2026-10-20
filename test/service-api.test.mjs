@@ -2334,6 +2334,8 @@ test('group HTTP receipts survive a partial write and enforce desktop authority 
   const port = core.http.port;
   const body = { title: 'Recovered group', members: ['root:one'] };
   const key = randomUUID();
+  // As in the library deletion test: a file watcher pass between the crash and the retry would complete the half-applied write first.
+  await core.runtime.unwatchProject();
   fixture.store.fault = { afterRenames: 1 };
   const failed = await call(port, 'POST', '/api/v1/groups', { token, body, headers: { 'idempotency-key': key } });
   assert.equal(failed.status, 500);
