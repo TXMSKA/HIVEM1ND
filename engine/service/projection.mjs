@@ -944,7 +944,8 @@ function readMessageFile(bytes, relative, issues, receipts = new Set(), units = 
     const fileId = path.basename(relative, '.md');
     const id = headers.get('id') || fileId;
     if (!id) throw new Error('missing id');
-    if (headers.get('kind') === 'run-pointer') return null;
+    // A pointer or an agent's inbox copy of a chat message is not a message of its own: the chat shows the original once.
+    if (headers.get('kind') === 'run-pointer' || headers.get('kind') === 'chat-copy') return null;
     const planMessage = isUuid(headers.get('plan-id'));
     return {
       id,

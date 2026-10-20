@@ -1013,7 +1013,9 @@ async function launch(context, request) {
   if (!request.runsIn) throw new CoreError(409, 'scope_unresolved', 'Choose Runs in before launching this agent.');
   const scope = await prepareLaunchScope(context, request);
   const cwd = scope.cwd;
-  if (journals.some((item) => item.unitId === request.unitId && item.requestId !== request.id && !['failed', 'stopped'].includes(item.phase) && item.createAttempted === true)) {
+  // A launch whose process is gone, such as one that ended with a previous service, no longer holds the unit.
+  if (journals.some((item) => item.unitId === request.unitId && item.requestId !== request.id && !['failed', 'stopped'].includes(item.phase) && item.createAttempted === true
+    && !launchGone(item))) {
     throw new CoreError(409, 'unit_in_use', 'The unit already has a launch in progress.');
   }
   const adapter = adapterFor(context, request.client);
@@ -1170,6 +1172,13 @@ async function latestResult(context, requestId) {
   }
   results.sort((left, right) => Number(left.state === 'canceled') - Number(right.state === 'canceled') || Date.parse(left.at) - Date.parse(right.at) || (left.id < right.id ? -1 : 1));
   return results.at(-1) ?? null;
+}
+
+// The service launches its agents as its own children, so a launch journaled before this service process started ended with
+// the previous service. Asking the system about the old process id cannot tell: Windows answers EPERM for a process that is gone.
+function launchGone(journal) {
+  const at = Date.parse(journal?.at ?? '');
+  return Number.isFinite(at) && at < performance.timeOrigin;
 }
 
 async function listJournals(context) {

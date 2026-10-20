@@ -1293,6 +1293,34 @@ export async function createRelay(options = {}) {
     return records[0];
   }
 
+  // An agent answers in a chat of the app: the message is written into that chat in the form the service writes, from the
+  // registered unit, which has to be a member of the chat. The service's watcher shows it in the chat.
+  async function sendToChat(sender, chatId, args) {
+    // A chat message needs no subject; the app shows the text.
+    const subject = args.subject ? scalar(args.subject, 'subject', MAX_SUBJECT_LENGTH) : '';
+    if (typeof args.body !== 'string' || Buffer.byteLength(args.body, 'utf8') > MAX_BODY_BYTES) throw relayError('INVALID_BODY', `body must be a string of at most ${MAX_BODY_BYTES} UTF-8 bytes.`);
+    const priority = args.priority ?? 'normal';
+    if (!['normal', 'urgent'].includes(priority)) throw relayError('INVALID_PRIORITY', 'priority must be normal or urgent.');
+    const directory = path.join(mindPath, 'user', 'relay', 'chats', chatId);
+    const chatBytes = await readRegularFileSafe(mindPath, path.join(directory, 'chat.md'));
+    if (!chatBytes) throw relayError('UNKNOWN_CHAT', 'No chat of the app has that id.');
+    const header = chatBytes.toString('utf8').split(/\r?\n\r?\n/, 1)[0];
+    let members = [];
+    try { members = JSON.parse(header.match(/^members:\s*(.*)$/m)?.[1] ?? '[]'); } catch { members = []; }
+    const resolved = await resolveUnit(sender.unit);
+    const fromId = sender.unitId ?? resolved.unitId ?? `${resolved.scope.id}:${sender.unit}`;
+    if (!Array.isArray(members) || !members.includes(fromId)) throw relayError('NOT_CHAT_MEMBER', 'This unit is not a member of that chat.');
+    const attachments = await storedParts(checkedParts(args.attachments ?? []));
+    const id = randomUUID(), timestamp = isoNow();
+    const lines = [
+      `id: ${id}`, `from: ${sender.unit}`, `from-id: ${fromId}`, `to: chat:${chatId}`, `to-id: chat:${chatId}`, `machine: ${hostname}`,
+      `timestamp: ${timestamp}`, `priority: ${priority}`, `subject: ${subject}`, `thread-id: ${chatId}`, 'reply-to: ', 'reply-requested: false',
+      `attachments: ${JSON.stringify(attachments)}`, 'kind: message', `recipient-ids: ${JSON.stringify(members.filter((member) => member !== fromId))}`,
+    ];
+    await publish(path.join(directory, `${id}.md`), Buffer.from(`${lines.join('\n')}\n\n${args.body}`, 'utf8'));
+    return { id, threadId: chatId, from: sender.unit, to: `chat:${chatId}`, timestamp, priority, replyRequested: false };
+  }
+
   async function currentIdentity() {
     if (!scopeLock && servedSession !== null) return servedRegistration();
     if (currentRegistration) return currentRegistration;
@@ -1647,6 +1675,8 @@ export async function createRelay(options = {}) {
       validateArgs(args, 'send', ['to', 'subject', 'body', 'priority', 'replyTo', 'threadId', 'replyRequested', 'attachments']);
       const sender = await currentIdentity();
       if (!sender) throw relayError('NOT_REGISTERED', 'Register this session before sending a message.');
+      const chatTarget = /^chat:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(String(args.to ?? ''));
+      if (chatTarget) return sendToChat(sender, chatTarget[1].toLowerCase(), args);
       const to = validUnit(args.to, 'recipient');
       const recipient = await resolveUnit(to);
       const subject = scalar(args.subject, 'subject', MAX_SUBJECT_LENGTH);
@@ -2237,6 +2267,33 @@ export async function createRelay(options = {}) {
 export async function createRelayWakePersistence(options = {}) {
   const relay = await createRelay(options);
   return relay.wakePersistence;
+}
+
+// A message written in a chat of the app reaches each agent of the chat as an inbox message, so list_inbox and read_inbox
+// show it and the wake of a running session sees it. It keeps the id of the chat message, so a retry
+// after a crash writes the same file. The answer goes back with send_message to "chat:<id>".
+export async function queueChatNotice(context, notice) {
+  const root = context.paths.mind, recipient = parseUnitId(notice.recipientId);
+  const directory = path.join(root, inboxDirectory(recipient));
+  // The copy has its own id, fixed by the chat message and the recipient, and is marked as a chat copy: the app counts and
+  // shows the chat message once, and the copy only serves the agent's inbox.
+  const id = uuidV8(['chat-copy', notice.messageId, recipient.id]);
+  const date = new Date(notice.at);
+  const stampText = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}-${String(date.getHours()).padStart(2, '0')}${String(date.getMinutes()).padStart(2, '0')}${String(date.getSeconds()).padStart(2, '0')}`;
+  const file = path.join(directory, `${stampText}-${context.paths.machine}-${id}.md`);
+  const title = String(notice.chatTitle ?? '').replace(/[\r\n]+/g, ' ').slice(0, 120);
+  const body = `${notice.body ?? ''}\n\n---\nWritten in the chat "${title}" of the HIVEM1ND app. Answer in that chat with send_message to "chat:${notice.chatId}".\n`;
+  const bytes = serializeMessage({
+    id, from: notice.fromUnit, to: recipient.unit, machine: context.paths.machine, timestamp: notice.at, date: formatLocalDate(date),
+    priority: notice.priority === 'urgent' ? 'urgent' : 'normal', subject: String(notice.subject || `Chat: ${title}`).slice(0, MAX_SUBJECT_LENGTH),
+    threadId: `chat-${notice.chatId}`, replyTo: null, replyRequested: true, attachments: notice.attachments ?? [], body,
+  }).toString('utf8').replace('\n\n', `\nkind: chat-copy\nchat-id: ${notice.chatId}\nchat-message-id: ${notice.messageId}\n\n`);
+  await ensureDirectory(root, directory);
+  const previous = await readRegularFileSafe(root, file);
+  if (previous) return { state: 'submitted' };
+  try { await publishExclusive(root, file, Buffer.from(bytes, 'utf8')); }
+  catch (error) { if (error.code !== 'EEXIST') throw error; }
+  return { state: 'submitted' };
 }
 
 // A pointer preserves the original authored message in its chat. Reading a pointer is not its read receipt.
