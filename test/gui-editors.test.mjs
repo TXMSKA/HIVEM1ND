@@ -1730,3 +1730,28 @@ test("History restore binds both current revisions and refuses to replace an uns
   await restoreEditorHistory(api, editors, { id: "snapshot" });
   assert.equal(current.commentsRevision, null); assert.equal(current.revision, "c".repeat(64));
 });
+
+test("a failed image does not block switching, and a draft saved in the background is dropped at the next switch", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const api = apiFrom(fixture.desktopUrl);
+  api.createObjectURL = () => "blob:asset";
+  api.revokeObjectURL = () => {};
+  const editors = createEditors();
+  const first = await createResource(api, "blueprint", { project: "shop", document: fullBoard() });
+  const second = await createResource(api, "blueprint", { project: "shop", document: { ...fullBoard(), id: "second-board", title: "Second" } });
+  const third = await createResource(api, "blueprint", { project: "shop", document: { ...fullBoard(), id: "third-board", title: "Third" } });
+  await openEditor(api, editors, { id: first.data.id, kind: "blueprint" });
+  editors.current.assets.set("assets/00000000-0000-4000-8000-000000000000.png", null);
+  await openEditor(api, editors, { id: second.data.id, kind: "blueprint" });
+  assert.equal(editors.current.resourceId, second.data.id, "a failed image left as null does not stop the switch");
+  const draft = editors.current;
+  draft.boardDraft = structuredClone(draft.authoritative.document);
+  draft.dirty = true;
+  await openEditor(api, editors, { id: third.data.id, kind: "blueprint" });
+  assert.equal(editors.drafts.get(second.data.id), draft, "an unsaved draft stays");
+  draft.boardDraft = null;
+  draft.dirty = false;
+  await openEditor(api, editors, { id: first.data.id, kind: "blueprint" });
+  assert.equal(editors.drafts.has(second.data.id), false, "once saved, the background draft goes at the next switch");
+});

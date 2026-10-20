@@ -268,11 +268,12 @@ export async function openEditor(api, editors, summary) {
   const previousAssets = saved?.assets;
   next.assets = new Map();
   next.assetIssues = [];
-  const previous = editors.current;
-  if (previous && previous !== next && previous.resourceId !== summary.id && !keepsDraft(previous)) {
-    releaseAssets(previous);
-    previous.voidSaver?.dispose();
-    editors.drafts.delete(previous.resourceId);
+  // Every other resource with nothing unsaved is dropped, the one just left and one that finished saving in the background alike.
+  for (const [id, other] of [...editors.drafts]) {
+    if (other === next || id === summary.id || keepsDraft(other)) continue;
+    releaseAssets(other);
+    other.voidSaver?.dispose();
+    editors.drafts.delete(id);
   }
   editors.drafts.set(summary.id, next);
   editors.current = next;
@@ -286,7 +287,7 @@ export async function openEditor(api, editors, summary) {
   if (next.kind === "blueprint") await loadAssets(api, next);
   if (previousAssets) {
     for (const image of previousAssets.values()) {
-      if (![...next.assets.values()].includes(image)) image.revoke?.();
+      if (![...next.assets.values()].includes(image)) image?.revoke?.();
     }
     if (saved && saved !== next) saved.assets = new Map();
   }

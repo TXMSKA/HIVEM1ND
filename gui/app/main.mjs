@@ -2647,6 +2647,8 @@ async function loadVoidAssets(app, editor, source) {
     editor.loadingAssets.add(src);
     try {
       const image = await fetchAsset(app.api, { url: `/api/v1/editors/${encodeURIComponent(editor.resourceId)}/assets/${assetIdentity(src)}` });
+      // An editor dropped while its image loaded keeps nothing: the image is released at once.
+      if (app.editors?.drafts?.get?.(editor.resourceId) !== editor) { image?.revoke?.(); continue; }
       editor.assets.set(src, image);
       if (!app.disposed && app.editors.current === editor) renderShell(app);
     } catch { editor.assets.set(src, null); }

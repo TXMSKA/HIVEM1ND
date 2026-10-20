@@ -219,7 +219,8 @@ export async function uploadAsset(api, editor, file, retained = null) {
 }
 
 export function releaseAssets(editor) {
-  for (const image of editor?.assets?.values?.() ?? []) image.revoke?.();
+  // A failed download is kept as null, so a missing image is skipped.
+  for (const image of editor?.assets?.values?.() ?? []) image?.revoke?.();
   editor?.assets?.clear?.();
 }
 
