@@ -7640,3 +7640,10 @@ test("every loaded waiting item shows, and more load on request", async (t) => {
   assert.equal(surface.querySelectorAll("[data-waiting-item]").length, 100, "every loaded item has its card");
   assert.ok(surface.querySelector("[data-action='waiting-more']"), "a list with more pages offers to show them");
 });
+
+test("an element's inline style is set through the object model, which the content policy allows", () => {
+  const document = createTestDocument(1440).document;
+  const node = element(document, "span", { class: "spinner", style: "width:15px;height:15px" });
+  assert.equal(node.getAttribute("style"), null, "a style attribute would be blocked by style-src 'self'");
+  assert.equal(node.style.cssText, "width:15px;height:15px");
+});

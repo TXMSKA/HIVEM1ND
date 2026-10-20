@@ -39,6 +39,8 @@ export function element(document, tag, attributes = {}, ...children) {
     if (key === "text") node.textContent = String(value);
     else if (key === "class") node.className = tag === "button" && value === "btn" ? "btn secondary" : String(value);
     else if (key.startsWith("on") && typeof value === "function") node.addEventListener(key.slice(2).toLowerCase(), value);
+    // The content policy blocks style attributes; a style set through the object model is allowed.
+    else if (key === "style" && node.style) node.style.cssText = String(value);
     else node.setAttribute(key, String(value));
   }
   for (const child of children.flat()) appendChild(document, node, child);

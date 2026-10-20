@@ -6673,9 +6673,9 @@ function openChoiceForm(app, kind, title, build, onConfirm, opener = null) {
   const dialog = document.createElement("dialog");
   dialog.className = "dialog";
   dialog.setAttribute("data-form", kind);
-  if (kind === 'session') dialog.setAttribute('style', 'width:520px;padding:24px;border-radius:22px');
+  if (kind === 'session' && dialog.style) dialog.style.cssText = 'width:520px;padding:24px;border-radius:22px';
   const form = element(document, "form", { method: "dialog" });
-  if (kind === 'session') form.setAttribute('style', 'display:flex;flex-direction:column;gap:18px');
+  if (kind === 'session' && form.style) form.style.cssText = 'display:flex;flex-direction:column;gap:18px';
   const heading = element(document, "h2", { text: title });
   labelDialog(dialog, heading);
   form.append(heading);
