@@ -647,3 +647,29 @@ test('publishing many staged changes compresses nothing: a staged object is alre
   assert.equal(compressions, 0, `objects were compressed ${compressions} times while publishing 150 changes`);
   assert.equal((await listStaged(sync)).length, 0);
 });
+
+test('each earlier pack is decoded once however many packs a machine has published', async (t) => {
+  const { sync, origin, clock, pulse } = await pulseWorld(t);
+  const zlib = (await import('node:zlib')).default;
+  const { syncBuiltinESMExports } = await import('node:module');
+  const original = zlib.brotliDecompressSync;
+  const decoded = new Map();
+  zlib.brotliDecompressSync = function (input, ...rest) {
+    const key = hashBytes(Buffer.from(input));
+    decoded.set(key, (decoded.get(key) ?? 0) + 1);
+    return original.call(this, input, ...rest);
+  };
+  syncBuiltinESMExports();
+  t.after(() => { zlib.brotliDecompressSync = original; syncBuiltinESMExports(); });
+  const packs = 8;
+  for (let index = 0; index < packs; index += 1) {
+    const staged = await stageNote(sync, `series-${index}.txt`, stamp(clock.now()));
+    await pulse.changed(staged.map((change) => change.id));
+    await clock.advance(2000);
+  }
+  // One object per pack. Staging read it once and the origin checked the new pack once; the lookup of committed objects
+  // before each later publication used to decode it again, so the first pack was decoded once per pack published after it.
+  const worst = Math.max(...decoded.values());
+  assert.ok(worst <= 3, `an earlier pack was decoded ${worst} times over ${packs} publications`);
+  assert.equal((await publishedPacks(origin)).length, packs);
+});

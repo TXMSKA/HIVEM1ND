@@ -4,7 +4,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { canonicalJson, hashBytes, uuidV8 } from '../engine/service/identity.mjs';
-import { COMPRESSION_QUALITY, compressObject, compressObjectAsync, countLogicalMessages, decodePack, decompressObject, encodePack, isDeterministicNotice, packFileName, validateHead } from '../engine/sync/pack.mjs';
+import { COMPRESSION_QUALITY, compressObject, compressObjectAsync, countLogicalMessages, decodePack, decompressObject, encodePack, isDeterministicNotice, packFileName, resolveDependencies, validateHead } from '../engine/sync/pack.mjs';
 import { ackPublished, eligibleTargets, listStaged, observationSnapshot, observeLocalChange, openSync, readObject, resolveIncoming, stageBaselines, stageTransaction, withVersionBatch } from '../engine/sync/store.mjs';
 import { withLocalChanges } from '../engine/service/store.mjs';
 import { assertContained, dispose, makeCoreFixture } from './core-fixture.mjs';
@@ -646,4 +646,47 @@ test('objects are compressed at a fast quality and still decode like any Brotli 
   compressObject(raw);
   assert.ok(performance.now() - started < 3000, 'a 4 MB object takes seconds to compress');
   await assert.rejects(() => compressObjectAsync(Buffer.alloc(16000001)), (error) => error.code === 'resource_too_large');
+});
+
+test('resolving the newest pack of a chain decodes each earlier pack once', async () => {
+  const count = 8;
+  const raws = Array.from({ length: count }, (_, index) => Buffer.from(`object ${index} of the chain`));
+  const packs = [];
+  const heads = { packs: [] };
+  for (let sequence = 1; sequence <= count; sequence += 1) {
+    // Every pack reaches each earlier pack directly: without a memo, a pack was decoded once per path that led to it.
+    const own = sequence - 1;
+    const changes = raws.slice(0, sequence).map((raw, index) => change({ kind: 'mind', path: `user/chain-${sequence}-${index}.txt` }, raw, { at: AT }));
+    const dependencies = raws.slice(0, own).map((raw, index) => ({ hash: hashBytes(raw), machine: 'DESKTOP', sequence: index + 1, packHash: hashBytes(packs[index]) }));
+    const body = encodePack({ machine: 'DESKTOP', sequence, changes, objects: [{ hash: hashBytes(raws[own]), raw: raws[own] }], dependencies });
+    packs.push(body);
+    heads.packs.push({ sequence, file: packFileName(sequence), hash: hashBytes(body), bytes: body.length });
+  }
+  const head = { format: 'hivem1nd-head-v1', machine: 'DESKTOP', sequence: count, updatedAt: AT, packs: heads.packs };
+  const zlib = (await import('node:zlib')).default;
+  const { syncBuiltinESMExports } = await import('node:module');
+  const original = zlib.brotliDecompressSync;
+  const decoded = new Map();
+  zlib.brotliDecompressSync = function (input, ...rest) {
+    const key = hashBytes(Buffer.from(input));
+    decoded.set(key, (decoded.get(key) ?? 0) + 1);
+    return original.call(this, input, ...rest);
+  };
+  syncBuiltinESMExports();
+  let resolved;
+  try {
+    resolved = await resolveDependencies(packs[count - 1], {
+      async readHead() { return head; },
+      async readPack(_machine, sequence) { return packs[sequence - 1]; },
+    });
+  } finally {
+    zlib.brotliDecompressSync = original;
+    syncBuiltinESMExports();
+  }
+  assert.equal(resolved.status, 'ready');
+  for (const raw of raws) assert.deepEqual(resolved.objects.get(hashBytes(raw)), raw);
+  // One object per pack: one decompression per pack decoded. The newest pack and each earlier one count once.
+  const total = [...decoded.values()].reduce((sum, value) => sum + value, 0);
+  assert.equal(total, count, `${total} packs were decoded for a chain of ${count}`);
+  assert.equal(Math.max(...decoded.values()), 1);
 });
