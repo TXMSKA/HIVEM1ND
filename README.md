@@ -86,7 +86,7 @@ No install is left half done. A destination that cannot be written stops on that
 A role is a markdown file in `roles/`, and that file is also the command that starts a chat in that role. A role added inside the mind is installed the same way, so it becomes a command on every machine. See [roles/README.md](roles/README.md).
 
 <details>
-<summary>Executive and operative roles</summary>
+<summary>Executive, operative and preset roles</summary>
 
 | Role | Group | Description |
 | --- | --- | --- |
@@ -96,8 +96,18 @@ A role is a markdown file in `roles/`, and that file is also the command that st
 | Overseer | Executive | Manages the whole mind: knows where every project stands, defines scope with the user and hands work to the executors. |
 | Adjutant | Executive | Takes the user's requests and solves them end to end: documents and manuals, research, reports, texts and analysis. Leaves the Overseer with coordination. |
 | Incubator | Operative | Develops ideas into products inside one folder: brainstorms them, prototypes them fast and sends each one to the product it belongs in. |
+| UX Designer | Preset | Designs flows, forms, states, accessibility and layout, and proves them on Blueprint boards. |
+| UI Designer | Preset | Designs tokens, colour and theme, type, motion and icons, and critiques the visual result on Blueprint boards. |
+| Writer | Preset | Writes interface microcopy, documentation, marketing and bilingual text, in Void. |
+| Game Designer | Preset | Designs the mechanics, systems, progression and balance of a game, kept in Void texts and Blueprint boards. |
+| Security Consultant | Preset | Audits an application by the parts a change touches and reports findings with evidence. Changes code only when asked. |
+| QA | Preset | Tests a project under adverse conditions and verifies delivered tasks, recording reproducible findings as tasks. |
+| Code Reviewer | Preset | Reviews delivered work without editing code and reports ranked findings with file and line evidence. |
+| Product Manager | Preset | Writes what the product is, for whom and what it must do, and keeps the product document of the project. |
 
 </details>
+
+The eight presets are the roles a person picks when creating an agent in the desktop app. Each does one kind of work in one project and reads the knowledge module that matches it. The `qa` preset installs as the command `/qa-agent`, since `/qa` is the feature that runs the open tasks.
 
 ### Commands
 

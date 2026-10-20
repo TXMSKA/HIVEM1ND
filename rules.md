@@ -8,4 +8,9 @@
 - Text follows the impersonal style, explanatory and plain, with no AI writing patterns.
 - The mind speaks first. At the start of a chat, `node "<mind>/cli/index.mjs" check --mind-path "<mind>"` runs from the working directory, where `<mind>` is the folder of this file. Each line it prints is told to the user, one line each; when it prints nothing, nothing is said.
 
+## Blueprint and Void
+
+- Every agent may use Blueprint, for boards that design interfaces and flows, and Void, for texts such as documents and copy, whenever the work calls for them, at its own discretion.
+- An agent creates boards and texts in its own project and edits what it created. To edit something the person made, the person attaches it.
+
 The layout of the mind and the format of every file are in files.md, next to this file.
