@@ -534,8 +534,11 @@ export async function createHttpServer(options) {
     const write = req.method !== 'GET' && req.method !== 'HEAD';
     checkOrigin(headerOne(req, 'origin') ?? null, listener, { write });
     const now = options.now?.() ?? Date.now();
-    const bucket = principalBucket(principals, req, requested.path, verifiedPrincipal(credentials, req), now);
-    checkLimits(bucket, { url, headerBytes, stream: requested.path === '/api/v1/events' }, now);
+    const caller = verifiedPrincipal(credentials, req);
+    const bucket = principalBucket(principals, req, requested.path, caller, now);
+    // The desktop app on this computer reads several lists for every change it is told about; while an agent works that is
+    // well over the general budget, and a refused read there stops the live connection.
+    checkLimits(bucket, { url, headerBytes, stream: requested.path === '/api/v1/events', limit: caller?.audience === 'desktop' ? DESKTOP_REQUEST_LIMIT : undefined }, now);
     if (requested.path === '/mcp') {
       if (listener.kind === 'lan') throw new CoreError(403, 'forbidden', 'A desktop credential is not accepted on the home network.');
       await serveMcp(req, res, options, credentials);
@@ -802,6 +805,8 @@ function expireIdleBuckets(principals, now) {
     if (now - (bucket.seen ?? 0) >= 60_000) principals.delete(key);
   }
 }
+
+const DESKTOP_REQUEST_LIMIT = 1200;
 
 function principalBucket(principals, req, pathname, credential, now) {
   expireIdleBuckets(principals, now);

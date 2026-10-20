@@ -343,7 +343,8 @@ test('local login requires the protected bootstrap secret and binds only the vie
   const localBody = { embedded: false, hostOrigin: null, look: null, language: null };
   const flooded = await requestJson(httpPort, 'POST', '/api/v1/auth/local', { token: secret, body: localBody });
   const spared = await requestJson(httpPort, 'POST', '/api/v1/auth/local', { token: secret, body: localBody });
-  for (let index = 0; index < 240; index += 1) {
+  // The local desktop has a budget of 1200 reads a minute; other callers keep 240.
+  for (let index = 0; index < 1200; index += 1) {
     const once = await requestJson(httpPort, 'GET', '/api/v1/viewer', { token: flooded.json.data.token });
     assert.equal(once.status, 200);
   }
