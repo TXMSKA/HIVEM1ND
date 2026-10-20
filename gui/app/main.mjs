@@ -7423,6 +7423,12 @@ function chatPanel(app, t) {
       thread.composer = draft.value;
       syncViewerDirty(app);
     });
+    // Enter sends, as in any chat; a composition in progress (an accent or an IME) is left to finish first.
+    composer.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+      event.preventDefault?.();
+      submitComposer(app, composer);
+    });
     // The board's composer: the field names who it goes to, with Send inside it and the hint below.
     const send = element(document, "button", {
       type: "button",

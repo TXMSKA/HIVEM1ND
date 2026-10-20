@@ -1589,6 +1589,24 @@ test("Watch opens the focused board and clears a stopped watch", async (t) => {
   await waitFor(() => desktop.app.editors.watch == null, "The stopped watch remained.");
 });
 
+test("Enter in the composer sends the message and Shift+Enter does not", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.chatList?.catalog?.length > 1, "The chat list did not load.");
+  navigate(desktop.app, "chats");
+  const [first] = desktop.app.chatList.catalog;
+  desktop.app.activeHandlers.onActivate({ id: first.id, kind: "chat" }, "double");
+  await waitFor(() => desktop.app.thread?.chat?.id === first.id && desktop.root.querySelector("[data-composer]"), "The chat did not open.");
+  const press = (key, shiftKey = false) => { for (const handler of desktop.root.querySelector("[data-composer]").listeners.get("keydown") ?? []) handler({ key, shiftKey, isComposing: false, preventDefault() {} }); };
+  typeInput(desktop.root.querySelector("[data-composer]"), "Sent with Enter", 15, 15);
+  press("Enter", true);
+  assert.equal(desktop.root.querySelector("[data-composer]").value, "Sent with Enter", "Shift+Enter keeps the text");
+  press("Enter");
+  await waitFor(() => desktop.app.thread?.messages?.some((message) => message.body === "Sent with Enter") && desktop.root.querySelector("[data-composer]")?.value === "", "Enter did not send the message.");
+});
+
 test("R13 Send back confirms in its dialog and incoming renders keep chat text and return notes", async (t) => {
   const fixture = await createGuiFixture();
   t.after(() => fixture.close());
