@@ -47,7 +47,7 @@ const SETUP_PHASES = ['prepare', 'close-legacy', 'copy', 'migrate', 'configure',
 const SETUP_COPY = {
   en: { joinTitle: 'Join this M1ND', join: 'Join', closeTitle: 'Close HIVEM1ND 2.x first', close: 'Sessions closed, migrate',
     offline: 'A session on an offline machine closes the next time that machine starts HIVEM1ND.', review: 'Review changes in Settings' },
-  es: { joinTitle: 'Unirse a este M1ND', join: 'Unirse', closeTitle: 'Cerrar HIVEM1ND 2.x primero', close: 'Sesiones cerradas, migrar',
+  es: { joinTitle: 'Unirse a esta M1ND', join: 'Unirse', closeTitle: 'Cerrar HIVEM1ND 2.x primero', close: 'Sesiones cerradas, migrar',
     offline: 'Una sesión en una máquina desconectada se cierra la próxima vez que esa máquina inicia HIVEM1ND.', review: 'Revisar cambios en Configuración' },
 };
 
@@ -818,7 +818,7 @@ class SetupSession {
       // Known migration stops say what stopped them in the person's language; nothing was copied or closed.
       const open = (this.checkpointProof.sessions ?? []).filter(session => session.binding?.machine === this.hostname && session.status !== 'closed');
       const causeMessage = typeof error?.legacyPath === 'string' ? (spanish
-        ? `La migración se detuvo: el M1ND anterior tiene un enlace o un elemento que no es un archivo en ${error.legacyPath}, y la migración no sigue enlaces. Quitarlo o moverlo fuera del M1ND y reintentar. No se copió nada.`
+        ? `La migración se detuvo: la M1ND anterior tiene un enlace o un elemento que no es un archivo en ${error.legacyPath}, y la migración no sigue enlaces. Quitarlo o moverlo fuera de la M1ND y reintentar. No se copió nada.`
         : `Migration stopped: the previous M1ND has a link or an entry that is not a file at ${error.legacyPath}, and migration does not follow links. Remove it or move it out of the M1ND, then retry. Nothing was copied.`)
         : error?.code === 'legacy_closure_required' ? (spanish
           ? `La migración se detuvo: no se pudieron cerrar las sesiones de HIVEM1ND 2.x de esta máquina (${open.length}). No se cerró ninguna y no se copió nada.`

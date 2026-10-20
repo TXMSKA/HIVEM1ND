@@ -41,7 +41,7 @@ test('Back is available only from location',async context=>{
 });
 
 test('language changes preserve folder and four-step position',async context=>{
- const fixture=await makeFixture(context);const session=await createSetupSession({kitPath:KIT_PATH,...fixture,hostname:'TESTBOX',env:{PATH:''},language:'en'});await session.answer({});const step=await session.setLanguage('es');assert.equal(step.title,'Dónde se guarda el M1ND');assert.equal(step.values.mindPath,fixture.mindPath);assert.equal(step.action,'Continuar');await session.answer({mindPath:fixture.mindPath});assert.equal((await session.getStep()).title,'Iniciando el servicio Relay');
+ const fixture=await makeFixture(context);const session=await createSetupSession({kitPath:KIT_PATH,...fixture,hostname:'TESTBOX',env:{PATH:''},language:'en'});await session.answer({});const step=await session.setLanguage('es');assert.equal(step.title,'Dónde se guarda la M1ND');assert.equal(step.values.mindPath,fixture.mindPath);assert.equal(step.action,'Continuar');await session.answer({mindPath:fixture.mindPath});assert.equal((await session.getStep()).title,'Iniciando el servicio Relay');
 });
 
 test('a resumed location retains the selected folder',async context=>{

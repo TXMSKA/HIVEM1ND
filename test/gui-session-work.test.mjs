@@ -17,20 +17,20 @@ test('Started with is one folded descriptor with actual safe references and has 
   assert.match(copy(overseer), /Overseer of every cluster and the M1ND/);
   assert.doesNotMatch(copy(overseer), /of ,/);
   const spanish = renderStartedWith(document, { role: 'overseer', references: ['rules.md'] }, 'es');
-  assert.match(copy(spanish), /Overseer de todos los clústeres y el M1ND/);
+  assert.match(copy(spanish), /Overseer de todos los clústeres y la M1ND/);
 });
 
 test('Started with names the role of every agent: presets, a custom name, and never a raw id', () => {
   const summary = (descriptor, language = 'en', options = {}) => copy(renderStartedWith(document, { references: ['rules.md'], ...descriptor }, language, { cluster: 'shop', ...options }));
   assert.match(summary({ role: 'executor' }), /Executor of shop and the M1ND/);
   assert.match(summary({ role: 'ux-designer' }), /UX designer of shop and the M1ND/);
-  assert.match(summary({ role: 'code-reviewer' }, 'es'), /Revisor de código de shop y el M1ND/);
-  assert.match(summary({ role: 'security-consultant' }, 'es', { task: 'Audit' }), /Consultor de ciberseguridad de shop, el M1ND y la tarea Audit/);
+  assert.match(summary({ role: 'code-reviewer' }, 'es'), /Revisor de código de shop y la M1ND/);
+  assert.match(summary({ role: 'security-consultant' }, 'es', { task: 'Audit' }), /Consultor de ciberseguridad de shop, la M1ND y la tarea Audit/);
   // A custom role reads as the name its person gave it, from the unit or from the descriptor.
   assert.match(summary({ role: 'custom' }, 'en', { roleName: 'Release captain' }), /Release captain of shop and the M1ND/);
-  assert.match(summary({ role: 'custom', roleName: 'Capitán de versión' }, 'es'), /Capitán de versión de shop y el M1ND/);
+  assert.match(summary({ role: 'custom', roleName: 'Capitán de versión' }, 'es'), /Capitán de versión de shop y la M1ND/);
   assert.match(summary({ role: 'custom' }), /Custom of shop and the M1ND/);
-  assert.match(summary({ role: 'custom' }, 'es'), /Personalizado de shop y el M1ND/);
+  assert.match(summary({ role: 'custom' }, 'es'), /Personalizado de shop y la M1ND/);
   // A plan session without a unit keeps its plan role as a name; anything the app does not know is an agent.
   assert.match(summary({ role: 'builder' }), /Builder of shop and the M1ND/);
   for (const role of ['invented-role', 'constructor', '__proto__', null, undefined, '']) {
@@ -38,7 +38,7 @@ test('Started with names the role of every agent: presets, a custom name, and ne
     assert.match(shown, /Agent of shop and the M1ND/, String(role));
     if (typeof role === 'string' && role) assert.doesNotMatch(shown, new RegExp(role.replace(/_/g, '.')));
   }
-  assert.match(summary({ role: 'invented-role' }, 'es', { cluster: '' }), /Agente y el M1ND/);
+  assert.match(summary({ role: 'invented-role' }, 'es', { cluster: '' }), /Agente y la M1ND/);
   assert.match(copy(renderStartedWith(document, { role: 'qa', references: [] }, 'en')), /QA and the M1ND/);
 });
 

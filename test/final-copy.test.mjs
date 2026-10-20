@@ -25,5 +25,5 @@ test('M1ND copy never changes an interpolated path or a wire field', () => {
   assert.ok(setupText('en', 'attachedMachine', { mind: location }).includes(location));
   assert.ok(setupText('es', 'attachedMachine', { mind: location }).includes(location));
   assert.equal(guiText('en', 'loadingView'), 'Reading the M1ND.');
-  assert.equal(guiText('es', 'loadingView'), 'Leyendo el M1ND.');
+  assert.equal(guiText('es', 'loadingView'), 'Leyendo la M1ND.');
 });

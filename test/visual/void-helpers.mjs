@@ -19,7 +19,7 @@ const RELEASE = {
     {
       k: 'overview',
       en: `HIVEM1ND 3.0 brings **every agent** of the M1ND onto one Map. Units are created where they run, and _every conversation is kept_.\n\n## One service per machine\n\nEach machine runs one Relay service while HIVEM1ND needs it. It wakes the sessions on that machine and starts new ones from the Map. ${IDLE.en.before}\n\n## Chats and mailboxes\n\nEvery unit has a mailbox for messages left while it is not running. A chat opens its own inbox, so a conversation with one unit or a group stays in one place.`,
-      es: `HIVEM1ND 3.0 reúne a **todos los agentes** del M1ND en un solo Mapa. Las unidades se crean donde se ejecutan y _cada conversación se conserva_.\n\n## Un servicio por máquina\n\nCada máquina ejecuta un servicio Relay mientras HIVEM1ND lo necesita. Despierta las sesiones de esa máquina e inicia otras nuevas desde el Mapa. ${IDLE.es.before}\n\n## Chats y buzones\n\nCada unidad tiene un buzón para los mensajes que llegan mientras no se ejecuta. Un chat abre su propia bandeja, así una conversación con una unidad o un grupo queda en un solo lugar.`,
+      es: `HIVEM1ND 3.0 reúne a **todos los agentes** de la M1ND en un solo Mapa. Las unidades se crean donde se ejecutan y _cada conversación se conserva_.\n\n## Un servicio por máquina\n\nCada máquina ejecuta un servicio Relay mientras HIVEM1ND lo necesita. Despierta las sesiones de esa máquina e inicia otras nuevas desde el Mapa. ${IDLE.es.before}\n\n## Chats y buzones\n\nCada unidad tiene un buzón para los mensajes que llegan mientras no se ejecuta. Un chat abre su propia bandeja, así una conversación con una unidad o un grupo queda en un solo lugar.`,
     },
     {
       k: 'live-editors',

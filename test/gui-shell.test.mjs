@@ -3654,7 +3654,7 @@ test("phone pairing uses a stored or browser language before a viewer exists", a
     navigator: { languages: ["es-ES", "es"] },
     fetch: async () => new Response("{}", { status: 404, headers: { "content-type": "application/json" } }),
   });
-  assert.equal(root.querySelector("h1").textContent, "Abrir el M1ND");
+  assert.equal(root.querySelector("h1").textContent, "Abrir la M1ND");
   assert.equal(document.documentElement.lang, "es");
   dispose(app);
   const storage = new Map([["hivem1nd:language", "en"]]);
@@ -3689,7 +3689,7 @@ test("the opening frame uses a stored or browser language before the read, then 
       return fetch(input, init);
     },
   });
-  assert.equal(root.querySelector("h2").textContent, "Leyendo el M1ND");
+  assert.equal(root.querySelector("h2").textContent, "Leyendo la M1ND");
   assert.equal(document.documentElement.lang, "es");
   const stored = new Map([["hivem1nd:language", "es"]]);
   const storedRoot = createTestDocument(1440).root;
@@ -3702,7 +3702,7 @@ test("the opening frame uses a stored or browser language before the read, then 
       return fetch(input, init);
     },
   });
-  assert.equal(storedRoot.querySelector("h2").textContent, "Leyendo el M1ND");
+  assert.equal(storedRoot.querySelector("h2").textContent, "Leyendo la M1ND");
   release();
   const app = await pending;
   const storedApp = await storedBoot;
@@ -3737,7 +3737,7 @@ test("settings do not replace the opening language before the viewer can be read
     },
   });
   await patient(() => settled === 2, "The settings read did not finish.");
-  assert.equal(root.querySelector("h2").textContent, "Leyendo el M1ND");
+  assert.equal(root.querySelector("h2").textContent, "Leyendo la M1ND");
   assert.equal(storage.get("hivem1nd:language"), "es");
   release();
   const app = await pending;
@@ -3830,7 +3830,7 @@ test("the initial read ends at 30000 milliseconds with its selected folder and R
   assert.equal(app.api.token != null, true);
   app.language = "es";
   renderShell(app);
-  assert.equal(root.querySelector("h2").textContent, "No se puede leer el M1ND");
+  assert.equal(root.querySelector("h2").textContent, "No se puede leer la M1ND");
   assert.equal(root.querySelector("[data-action='choose-folder']").textContent, "Elegir otra carpeta");
   assert.equal(root.querySelector("[data-opening-cause]").textContent.includes("no respondió en 30 s"), true);
   t.mock.timers.reset();

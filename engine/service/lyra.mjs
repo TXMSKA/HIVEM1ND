@@ -118,7 +118,7 @@ function definition(name, en, es, effect, properties, optional = []) {
 // C15 / T088 titles and the installed ToolProperty subset, not the MCP union schemas.
 export function lyraToolDefinitions() {
   return [
-    definition('m1nd_read', 'Read the M1ND', 'Leer el M1ND', 'read', { resourceId: str(512), cursor: str(300), limit: { type: 'integer', minimum: 1, maximum: 100 } }, ['cursor', 'limit']),
+    definition('m1nd_read', 'Read the M1ND', 'Leer la M1ND', 'read', { resourceId: str(512), cursor: str(300), limit: { type: 'integer', minimum: 1, maximum: 100 } }, ['cursor', 'limit']),
     definition('message_send', 'Send a message', 'Enviar un mensaje', 'send', { recipientIds: list(str(256), 255), text: str(8000) }),
     definition('message_read', 'Read messages', 'Leer mensajes', 'change', { messageIds: list(uuid, 200) }),
     definition('plan_confirm_start', 'Confirm plan start', 'Confirmar el inicio del plan', 'change', { ...run, attemptId: uuid, ...request }),
