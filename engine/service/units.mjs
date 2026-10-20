@@ -193,14 +193,13 @@ export async function patchLayout(context, input) {
     nextNodes[id] = { x: coordinate(position?.x), y: coordinate(position?.y) };
   }
   for (const [id, group] of Object.entries(groups ?? {})) {
-    if (!/^(project|env):[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id)) throw new CoreError(422, 'invalid_body', 'The group id is not canonical.');
+    // A scope group, or the frame of a cluster: the place a person dragged it to and whether it is collapsed.
+    if (!/^(project|env):[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id) && !/^cluster:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)) throw new CoreError(422, 'invalid_body', 'The group id is not canonical.');
     const prior = nextGroups[id] ?? {};
-    nextGroups[id] = {
-      ...prior,
-      x: coordinate(group?.x),
-      y: coordinate(group?.y),
-      collapsed: Object.prototype.hasOwnProperty.call(group, 'collapsed') ? group.collapsed === true : prior.collapsed === true,
-    };
+    const collapsed = Object.prototype.hasOwnProperty.call(group, 'collapsed') ? group.collapsed === true : prior.collapsed === true;
+    // A cluster frame may be collapsed without being moved, so its patch can leave the place out.
+    if (id.startsWith('cluster:') && group?.x === undefined && group?.y === undefined && Object.prototype.hasOwnProperty.call(group, 'collapsed')) nextGroups[id] = { ...prior, collapsed };
+    else nextGroups[id] = { ...prior, x: coordinate(group?.x), y: coordinate(group?.y), collapsed };
   }
   const next = { ...layout, format: 'hivem1nd-layout-v1', nodes: nextNodes, groups: nextGroups };
   const bytes = Buffer.from(`${canonicalJson(next)}\n`);
