@@ -592,6 +592,8 @@ button, input { font: inherit; color: inherit; }
   font-size: 11.5px;
   font-weight: 700;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   pointer-events: none;
 }
 .map-status { position: absolute; right: 1px; bottom: 1px; width: 11px; height: 11px; border-radius: var(--radius-circle); border: 2px solid var(--bg); background: transparent; box-shadow: inset 0 0 0 1.5px var(--idle); box-sizing: content-box; }
@@ -632,12 +634,11 @@ button, input { font: inherit; color: inherit; }
 .board-outline { display: flex; flex-wrap: wrap; gap: 8px; max-width: 100%; }
 .map-actions { position: absolute; z-index: 2; left: var(--gap); bottom: calc(var(--gap) + 48px); display: flex; gap: 8px; }
 .map-zoom { position: absolute; z-index: 2; left: var(--gap); bottom: var(--gap); display: flex; align-items: center; gap: 4px; padding: 4px; border-radius: 10px; background: var(--card); border: 1px solid var(--line); }
-.map-zoom-button { display: inline-flex; align-items: center; justify-content: center; min-width: 32px; height: 32px; padding: 0 8px; border: 0; border-radius: 7px; background: transparent; color: var(--body); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.map-zoom-button { display: inline-flex; align-items: center; justify-content: center; min-width: 32px; height: 32px; padding: 0 8px; border: 1px solid var(--accent); border-radius: 7px; background: var(--accent); color: var(--accent-ink); font-size: 12.5px; font-weight: 700; font-variant-numeric: tabular-nums; cursor: pointer; }
 .map-zoom-button .icon { width: 15px; height: 15px; }
-.map-zoom-button:hover, .map-zoom-button[aria-pressed="true"] { background: var(--card2); color: var(--text); }
 .map-services { position: absolute; z-index: 2; right: var(--gap); bottom: var(--gap); display: flex; align-items: center; gap: 6px; }
 .map-services-label { color: var(--mute); font-size: 12px; margin-right: 2px; }
-.map-service { display: inline-flex; align-items: center; gap: 7px; min-height: 32px; padding: 6px 12px; border-radius: var(--radius-pill); background: var(--card); border: 1px solid var(--line2); color: var(--body); font-size: 13px; }
+.map-service { display: inline-flex; align-items: center; gap: 7px; min-height: 32px; padding: 6px 12px; border-radius: var(--radius-pill); background: var(--accent); border: 1px solid var(--accent); color: var(--accent-ink); font-size: 13px; font-weight: 700; cursor: pointer; }
 .map-service .icon { width: 14px; height: 14px; }
 .editor-catalog,
 .editor-resource,
@@ -951,7 +952,7 @@ html[data-mode="focus"] body { background: #000000; color: #d8d4cc; }
 .void-page-dots .btn { position: relative; width: 32px; height: 32px; padding: 0; border: 0; overflow: hidden; font-size: 0; }
 .void-page-dots .btn::before { content: ""; width: 8px; height: 8px; border-radius: var(--radius-pill); background: var(--card2); }
 .void-page-dots .btn[aria-pressed="true"]::before { width: 22px; background: var(--accent); }
-.map-action { background: var(--panel); color: var(--text); border: var(--panel-border); border-radius: var(--radius-pill); padding: 8px 12px; }
+.map-action { background: var(--accent); color: var(--accent-ink); border: 1px solid var(--accent); border-radius: var(--radius-pill); padding: 8px 12px; font-weight: 700; cursor: pointer; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
@@ -1004,11 +1005,13 @@ html[data-mode="focus"] body { background: #000000; color: #d8d4cc; }
 .map-pending-edge { stroke: var(--accent); stroke-dasharray: 7 5; }
 .map-marquee { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 7 5; pointer-events: none; }
 [data-look="high-contrast"] .map-personal-zone { rx: 10px; }
-.map-group-label { position: absolute; z-index: 1; min-height: 32px; display: inline-flex; align-items: flex-start; padding: 0; background: transparent; color: var(--text); border: 0; font-size: 11.5px; font-weight: 700; }
-.map-group-caption { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; background: var(--zone-label); border-radius: 7px; }
+.map-group-label { position: absolute; z-index: 1; min-height: 0; display: inline-flex; align-items: center; padding: 0; background: transparent; color: var(--text); border: 0; font-size: 11.5px; font-weight: 700; cursor: grab; }
+.map-group-caption { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; min-width: 0; padding: 2px 8px; background: var(--zone-label); border-radius: 7px; }
+.map-group-caption > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .map-group-label .icon { width: 12px; height: 12px; }
 .map-group-label[aria-pressed="true"] { color: var(--accent); }
-.map-label { display: grid; gap: 2px; }
+.map-label { display: block; }
+.map-label > * { display: block; overflow: hidden; text-overflow: ellipsis; }
 .map-node.is-overseer .icon, .map-node.is-lead .icon { width: 22px; height: 22px; }
 .selection-heading { padding: 18px 18px 10px; display: grid; grid-template-columns: 38px 1fr; gap: 8px; align-items: center; }
 .selection-heading h2 { font-size: 15px; font-weight: 700; }
@@ -1021,6 +1024,19 @@ html[data-mode="focus"] body { background: #000000; color: #d8d4cc; }
 .map-menu summary { cursor: pointer; min-height: 32px; display: flex; align-items: center; padding: 4px 8px; }
 .map-menu[open] { background: var(--card2); border-radius: 10px; padding: 4px; }
 .map-menu .btn { display: flex; width: 100%; min-height: 32px; }
+.context-menu { position: fixed; z-index: 40; min-width: 180px; max-width: min(320px, calc(100vw - 16px)); padding: 6px; display: grid; gap: 2px; background: var(--panel); border: 1px solid var(--line2); border-radius: 12px; box-shadow: 0 12px 32px rgba(0, 0, 0, .45); }
+.context-item { display: flex; align-items: center; width: 100%; min-height: 34px; padding: 6px 12px; border: 0; border-radius: 8px; background: transparent; color: var(--text); font-size: 13.5px; text-align: left; cursor: pointer; }
+.context-item:hover:not(:disabled), .context-item:focus-visible { background: var(--card2); }
+.context-item.is-primary { background: var(--accent); color: var(--accent-ink); font-weight: 700; }
+.context-item.is-primary:hover:not(:disabled), .context-item.is-primary:focus-visible { background: var(--accent-hover, color-mix(in srgb, var(--accent) 82%, #fff)); }
+.context-item.is-primary:active:not(:disabled) { background: var(--accent-press, color-mix(in srgb, var(--accent) 76%, #000)); }
+.context-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.context-item.is-primary:focus-visible { outline-color: var(--text); }
+.context-item:active:not(:disabled) { background: var(--card); }
+/* The dialogs the Map opens: the action is the accent fill, Cancel is plain text. */
+.dialog[data-form="cluster-rename"] .dialog-actions .btn:not(.primary), .dialog[data-form="move-agent"] .dialog-actions .btn:not(.primary), .dialog[data-form="selection-lead"] .dialog-actions .btn:not(.primary), .dialog[data-form="detach-agent"] .dialog-actions .btn:not(.primary), .dialog.connection-dialog .dialog-actions .btn:not(.primary) { background: transparent; border-color: transparent; color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.context-item.is-danger { color: var(--error); }
+.context-item:disabled { color: var(--mute); cursor: default; }
 .map-toast { position: fixed; z-index: 30; left: 50%; bottom: 46px; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; max-width: min(560px, calc(100vw - 32px)); background: var(--text); color: var(--bg); padding: 11px 16px; border-radius: 14px; font-size: 13px; font-weight: 700; box-shadow: 0 8px 28px rgba(0, 0, 0, .35); }
 .map-toast .icon { width: 15px; height: 15px; flex: none; order: -1; }
 .map-toast .btn { background: transparent; border: 0; color: inherit; text-decoration: underline; text-underline-offset: 3px; padding: 0 0 0 6px; min-height: 0; }
@@ -1255,16 +1271,50 @@ button, [role="button"], a[href], summary, select, textarea, [contenteditable="t
 .empty-selection > .icon { width: 56px; height: 56px; padding: 14px; border-radius: 50%; color: var(--mute); background: var(--card); }
 .empty-selection h2 { font-size: 16px; }
 .empty-selection p { color: var(--mute); font-size: 13.5px; }
-.map-hint { position: absolute; top: 12px; left: 14px; right: 14px; margin: 0; font-size: 12px; color: var(--mute); pointer-events: none; }
+/* The hint and the save notice share one row, each in its own slot, so one never covers the other. */
+.map-top { position: absolute; z-index: 2; top: 12px; left: 14px; right: 14px; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; pointer-events: none; }
+.map-hint { flex: 1 1 auto; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--mute); pointer-events: none; }
+.map-save { flex: none; display: flex; align-items: center; gap: 10px; margin: 0; padding: 4px 6px 4px 12px; border: 1px solid var(--line2); border-radius: var(--radius-pill); background: var(--card); color: var(--body); font-size: 12.5px; pointer-events: auto; }
+.map-save[data-layout-state="saving"] { padding-right: 12px; }
+.map-save .btn { min-height: 28px; padding: 4px 12px; background: var(--accent); color: var(--accent-ink); border: 1px solid var(--accent); font-weight: 700; }
+/* Every Map control: the accent fill is the action; hover is lighter, a press is darker and the keyboard ring is always visible. */
+.map-zoom-button, .map-service, .map-action, .map-save .btn { transition: background-color 120ms ease, border-color 120ms ease, transform 80ms ease; }
+.map-zoom-button:hover, .map-service:hover, .map-action:hover, .map-save .btn:hover { background: var(--accent-hover, color-mix(in srgb, var(--accent) 82%, #fff)); border-color: var(--accent-hover, color-mix(in srgb, var(--accent) 82%, #fff)); }
+.map-zoom-button:active, .map-service:active, .map-action:active, .map-save .btn:active { background: var(--accent-press, color-mix(in srgb, var(--accent) 76%, #000)); border-color: var(--accent-press, color-mix(in srgb, var(--accent) 76%, #000)); transform: translateY(1px); }
+.map-zoom-button:focus-visible, .map-service:focus-visible, .map-action:focus-visible, .map-save .btn:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.map-zoom-button[aria-pressed="true"] { background: var(--accent-press, color-mix(in srgb, var(--accent) 76%, #000)); box-shadow: inset 0 0 0 2px var(--accent-ink); }
+.map { touch-action: none; }
+.map-node, .map-handle, .map-group-label { touch-action: none; }
+/* The Map draws a unit at the scale of the zoom, so the 32px floor of other buttons does not apply to a circle or a title. */
+.map-node, .map-group-label { min-inline-size: 0; min-block-size: 0; }
+.map-node { cursor: pointer; transition: filter 120ms ease, outline-color 120ms ease; }
+.map-node:hover { filter: brightness(1.2); outline: 2px solid var(--ring); outline-offset: 2px; }
+.map-node:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.map-node:active { filter: brightness(.9); }
+.map-node.is-connecting { outline: 2px dashed var(--accent); outline-offset: 3px; }
+.map-node.is-drop-target { outline: 3px solid var(--accent); outline-offset: 4px; background: var(--accent-soft); }
+.map-node.is-drop-invalid { outline: 2px solid var(--error); outline-offset: 3px; opacity: .7; cursor: not-allowed; }
+.map-handle { cursor: crosshair; }
+.map-handle:hover::before, .map-handle:focus-visible::before { background: var(--accent); transform: scale(1.35); }
+.map-handle:active::before { background: var(--accent-press, color-mix(in srgb, var(--accent) 76%, #000)); transform: scale(1.1); }
+.map-handle:focus-visible { outline: 2px solid var(--accent); outline-offset: -6px; }
+.map-handle::before { transition: opacity 120ms ease, transform 120ms ease, background-color 120ms ease; }
+@media (pointer: coarse) { .map-handle::before { opacity: 1; } }
+.map-nodes[data-detail="mid"] .map-handle, .map-nodes[data-detail="far"] .map-handle { pointer-events: none; }
+.map-pending-edge.is-locked { stroke-dasharray: none; stroke-width: 3; }
+.map-group-label:hover .map-group-caption, .map-group-label:focus-visible .map-group-caption { background: var(--card2); }
+.map-group-label:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 8px; }
+.map-group-label:active { cursor: grabbing; }
+.map-group-label:active .map-group-caption { background: var(--card); }
+.map-cluster-frame.is-hover { stroke: var(--accent); stroke-width: 2; }
 .map-cluster-frame { rx: 14px; fill: var(--ring-soft); stroke: var(--ring); stroke-width: 1.4; stroke-dasharray: 7 5; }
 .map-cluster-frame.is-folder { rx: 16px; }
 .map-cluster-frame.is-mini { rx: 10px; stroke-width: 1.2; stroke-dasharray: 5 4; }
 .map-cluster-frame.is-selected { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 2; }
-.map-group-label.is-mini { font-size: 9.5px; }
 .map-group-label.is-mini .icon { display: none; }
-.map-group-label.is-mini .map-group-caption { padding: 0; background: transparent; }
-.map-group-label.is-wide { font-size: 11.5px; }
-.map-group-label.is-wide .icon { display: block; width: 11px; height: 11px; }
+.map-group-label.is-mini .map-group-caption { padding: 0 4px; background: transparent; }
+.map-nodes[data-detail="mid"] .map-label, .map-nodes[data-detail="mid"] .map-unread,
+.map-nodes[data-detail="far"] .map-label, .map-nodes[data-detail="far"] .map-unread, .map-nodes[data-detail="far"] .map-node .icon { display: none; }
 [data-look] .map-cluster-frame { rx: 14px; }
 [data-look] .map-cluster-frame.is-folder { rx: 16px; }
 [data-look] .map-cluster-frame.is-mini { rx: 10px; }
@@ -1550,8 +1600,6 @@ html { scrollbar-color: var(--line2) var(--panel); scrollbar-width: thin; }
 .list-block > .empty-clusters { margin: 4px var(--gap) 8px; }
 /* A list action keeps its own width instead of spanning the panel. */
 .list-block > .btn { align-self: flex-start; margin: 0 var(--gap) 8px; }
-.map-group-label.is-mini, .map-group-label.is-mini .map-group-caption { min-width: 0; max-width: 100%; }
-.map-group-label.is-mini .map-group-caption span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Inside Details the nested disclosures read flat, and the agent's name is already in the header. */
 .agent-controls details.unit-metadata > summary, .agent-controls details.inspector-details > summary { display: none; }
 .agent-controls .unit-card > h3 { display: none; }

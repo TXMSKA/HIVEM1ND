@@ -71,7 +71,7 @@ import {
   startWatch,
   stopWatch,
 } from "./editors.mjs";
-import { activateUnit, buildHierarchy, collapseNewClusters, flattenVisibleHierarchy, hierarchyDisclosure, hierarchyIcon, listedWorktrees, pathFolder, readableIdentity, revealGroup, toggleGroup, unitDisplayName, unitRoleName, unitsForTree } from "./hierarchy.mjs";
+import { activateUnit, buildHierarchy, collapseNewClusters, flattenVisibleHierarchy, hierarchyDisclosure, hierarchyIcon, listedWorktrees, openContextMenu, pathFolder, readableIdentity, revealGroup, toggleGroup, unitDisplayName, unitRoleName, unitsForTree } from "./hierarchy.mjs";
 import { checkoutFacts, openTaskDetail, renderApproval, renderGrants, renderMachine, renderSession, renderTask, renderUnit, renderWaiting } from "./inspector.mjs";
 import { cardinal, formatClock, formatNumber, formatShortTime, text } from "./i18n.mjs";
 import { collectPages, createPagedList, loadAll, loadNext, reloadList, renderWindow, setQuery } from "./lists.mjs";
@@ -87,7 +87,7 @@ import * as startApi from './start-api.mjs';
 import { startText } from './start-copy.mjs';
 import { acceptedRepositoryCluster, clientLabel, clusterLead, customRoleProblems, initialRunsIn, repositorySelection, renderAgentForm, renderClusterForm, renderRepositoryOffer, renderRunsInPicker, runsInLabel, startDialog, supervisedClient } from './clusters.mjs';
 import { renderAgentHeader, renderCluster, renderClusterChanges } from './inspector.mjs';
-import { fitMap, flyToCluster } from './map.mjs';
+import { fitMap, flyToCluster, isCollapsed, toggleCollapsed } from './map.mjs';
 import { changeContext, createSessionView, loadSessionView, loadTranscriptPage, renderContext, renderSessionTabs, renderSessionWork, renderStartedWith } from './session-work.mjs';
 import { PLAN_TASK_LIMIT, controlPlan, createPlanController, loadChatPlans, planBranch, refreshPlan, renderControlledPlan, runPlan, savePlanDraft, tasksFromVoidText } from './plan-controller.mjs';
 import { createAddController, openAdd, disposeAdd } from './add-controller.mjs';
@@ -1639,10 +1639,15 @@ function renderCollection(app, t) {
       setQuery(list, event.target.value);
     },
   });
-  const status = list.status === "error" ? t("listError") : list.status === "loading" ? t("loadingList") : list.status === "empty" ? (list.query ? t("emptySearch") : emptyCollectionText(t, list.name)) : t("listTotal", { count: formatNumber(app.language, list.total ?? 0) });
-  // A ready list says its count only to assistive technology; the board shows the rows, not a count.
-  const total = element(document, "p", { class: `list-total${list.status === "ready" ? " visually-hidden" : ""}`, "data-total": String(list.total ?? ""), "data-list-status": list.status, text: status });
-  if (list.status === "loading") total.append(progressMark(document, t("loadingList"), { "data-list-progress": "true" }));
+  const rows = collectionRows(app, t, list);
+  // The list is only "loading" for the person while it has nothing to show. Rows already drawn stay, and a reload behind them says nothing.
+  const showing = rows.some((row) => row.unit || row.kind === "cluster" || row.kind === "chat");
+  const loading = list.status === "loading" || list.status === "idle", waiting = loading && !showing;
+  const status = list.status === "error" ? t("listError") : waiting ? "" : list.status === "empty" ? (list.query ? t("emptySearch") : emptyCollectionText(t, list.name)) : t("listTotal", { count: formatNumber(app.language, list.total ?? rows.length) });
+  // A list that shows rows says its count only to assistive technology; the board shows the rows, not a count.
+  const total = element(document, "p", { class: `list-total${list.status === "ready" || (loading && showing) ? " visually-hidden" : ""}`, "data-total": String(list.total ?? ""), "data-list-status": list.status, text: status });
+  // One mark carries the loading text, so the sentence is never written twice.
+  if (waiting) total.append(progressMark(document, t("loadingList"), { "data-list-progress": "true" }));
   if (list.status === "error") {
     total.append(element(document, "button", {
       type: "button",
@@ -1652,8 +1657,11 @@ function renderCollection(app, t) {
       onclick: () => reloadList(list),
     }));
   }
-  const host = element(document, "div", { class: "list", role: "listbox", "aria-label": t(app.tab), "data-collection": "true" });
-  const rows = collectionRows(app, t, list);
+  const host = element(document, "div", { class: "list", role: "listbox", "aria-label": t(app.tab), "data-collection": "true", "aria-busy": list.status === "loading" ? "true" : null });
+  if (app.tab === "hierarchy") {
+    host.addEventListener("contextmenu", (event) => hierarchyMenu(app, event));
+    host.addEventListener("keydown", (event) => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) hierarchyMenu(app, event); });
+  }
   const handlers = {
     selectedId: app.tab === "chats" ? app.store.selected.chatId : app.store.selected.groupId ? `cluster:${app.store.selected.groupId}` : app.store.selected.unitId,
     onActivate: (row, kind) => {
@@ -4289,6 +4297,152 @@ function renderPlanDraft(app) {
   return root;
 }
 
+// ---- Context menus ---------------------------------------------------------------------------------------------
+// The right-click menu of an agent or a cluster, on the Map and in the Hierarchy. Every entry runs an action the inspector already has,
+// and an entry is listed only when the current state allows it. The first entry is the primary action.
+function openItemMenu(app, target) {
+  const t = (key, values) => startText(app.language, key, values), caps = app.store.capabilities ?? [], desktop = app.layout !== 'phone';
+  const groups = [...app.store.indexes.groups.values()].filter(group => !group.deleted);
+  const items = [];
+  let name = '';
+  if (target.kind === 'unit') {
+    const unit = unitById(app, target.id);
+    if (!unit || unit.role === 'master' || unit.removed) return;
+    name = unitDisplayName(unit);
+    const home = unitCluster(app, unit);
+    items.push({ id: 'open', label: t('menuOpenChat'), primary: true, run: () => openUnitFromMenu(app, unit) });
+    if (unit.sessionIds?.length) { if (caps.includes('session.stop')) items.push({ id: 'stop', label: text(app.language, 'stopSession'), run: () => confirmStop(app, unit.sessionIds[0], unit) }); }
+    else if (caps.includes('session.start')) items.push({ id: 'start', label: text(app.language, 'startSession'), run: () => openSessionForm(app, unit) });
+    if (desktop && caps.includes('unit.create') && unit.revision) items.push({ id: 'rename', label: t('menuRename'), run: () => beginAlias(app, unit.id) });
+    if (desktop && caps.includes('unit.connect') && leadChoices(app).some(lead => lead.id !== unit.id)) items.push({ id: 'connect', label: t('menuConnect'), run: () => chooseSelectionLead(app, [unit.id]) });
+    if (desktop && caps.includes('chat.manage') && groups.some(group => group.id !== home?.id)) items.push({ id: 'move', label: t('menuMove'), run: () => openMoveAgent(app, unit) });
+    if (desktop) items.push({ id: 'details', label: text(app.language, 'details'), run: () => showUnitDetails(app, unit) });
+    if (desktop && caps.includes('chat.manage') && home) items.push({ id: 'remove', label: t('menuRemove'), run: () => detachAgent(app, unit, home) });
+    if (desktop && caps.includes('unit.create')) items.push({ id: 'delete', label: t('menuDelete'), danger: true, run: () => removeSelectedUnit(app, unit) });
+  } else {
+    const cluster = app.store.indexes.groups.get(target.id);
+    if (!cluster || cluster.deleted) return;
+    name = cluster.title;
+    const children = groups.filter(group => group.parentId === cluster.id), link = app.startProjects?.clusterLinks?.find(item => item.clusterId === cluster.id);
+    items.push({ id: 'open', label: t('menuOpen'), primary: true, run: () => openClusterFromMenu(app, cluster) });
+    if (desktop && caps.includes('unit.create')) items.push({ id: 'new-agent', label: t('menuNewAgent'), run: () => openStartAgent(app, cluster) });
+    if (desktop && caps.includes('chat.manage')) items.push({ id: 'rename', label: t('menuRename'), run: () => renameCluster(app, cluster) });
+    if (children.length || cluster.members?.length) {
+      const fromList = target.source === 'hierarchy';
+      const collapsed = fromList ? app.hierarchy.collapsed.has(`cluster:${cluster.id}`) : isCollapsed(ensureMap(app), cluster.id);
+      items.push({ id: 'collapse', label: collapsed ? t('menuExpand') : t('menuCollapse'), run: () => {
+        if (fromList) { toggleGroup(app.hierarchy, `cluster:${cluster.id}`); renderShell(app); } else toggleCollapsed(ensureMap(app), cluster.id);
+      } });
+    }
+    if (desktop && caps.includes('settings.write') && link && cluster.link?.kind !== 'none') items.push({ id: 'remove', label: t('menuRemoveLink'), run: () => removeStartLink(app, link, startMachine(app)) });
+    if (desktop && caps.includes('chat.manage') && !children.length) items.push({ id: 'delete', label: t('menuDelete'), danger: true, run: () => removeStartCluster(app, cluster) });
+  }
+  openContextMenu(app.root.ownerDocument, { x: target.x, y: target.y, items, label: t('menuLabel', { name }) });
+}
+
+function unitCluster(app, unit) {
+  const groups = [...app.store.indexes.groups.values()].filter(group => !group.deleted);
+  return groups.find(group => group.id === unit.clusterId) ?? groups.find(group => group.members?.includes(unit.id)) ?? null;
+}
+
+function openUnitFromMenu(app, unit) {
+  activateUnit(app, unit, 'double');
+  if (app.layout !== 'phone') app.pendingChat = { unitId: unit.id, create: true };
+  loadInspector(app, unit.id);
+  if (app.layout === 'phone') takePendingChat(app);
+  renderShell(app);
+}
+
+function openClusterFromMenu(app, cluster) {
+  openCluster(app, cluster.id);
+  selectGroup(app, cluster.id);
+  app.pendingClusterFlight = cluster.id;
+  renderShell(app);
+}
+
+// Selects the agent and opens the Details part of its inspector.
+function showUnitDetails(app, unit) {
+  app.store.selected.unitId = unit.id;
+  app.store.selected.groupId = null;
+  if (app.mapState) { app.mapState.selectedGroupId = null; app.mapState.selection = new Set([unit.id]); }
+  loadInspector(app, unit.id);
+  renderShell(app);
+  // Drawn closed first, then opened, and remembered so the next drawing keeps it open.
+  const key = `agent-controls:${unit.id}`, node = app.root.querySelector(`[data-disclosure="${key}"]`);
+  inputDrafts(app).disclosures.set(key, true);
+  if (node) { node.open = true; node.setAttribute('open', ''); }
+}
+
+function hierarchyMenu(app, event) {
+  const node = event.target?.closest?.('[data-row]'), row = node && app.activeRows?.find(item => item.id === node.getAttribute('data-id'));
+  const target = row?.unit ? { kind: 'unit', id: row.unit.id } : row && (row.kind === 'cluster' || row.kind === 'worktree') ? { kind: 'cluster', id: row.groupId } : null;
+  if (!target || app.tab !== 'hierarchy') return;
+  event.preventDefault?.();
+  const box = node.getBoundingClientRect?.(), keyboard = event.type === 'keydown' || (!event.clientX && !event.clientY);
+  openItemMenu(app, { ...target, source: 'hierarchy', x: keyboard && box ? box.left + 24 : event.clientX, y: keyboard && box ? box.bottom - 4 : event.clientY });
+}
+
+async function setClusterMembers(app, cluster, members) {
+  const operation = createOperation({ method: 'PATCH', path: '/clusters/:clusterId', params: { clusterId: cluster.id }, body: { members, machine: startMachine(app), expectedRevision: cluster.revision } });
+  return request(app.api, 'PATCH', operation.path, { operation });
+}
+
+async function refreshAfterMembership(app) {
+  await loadStartReports(app);
+  if (app.unitList) await reloadList(app.unitList);
+}
+
+function renameCluster(app, cluster) {
+  openChoiceForm(app, 'cluster-rename', startText(app.language, 'renameCluster'), form => {
+    appendInput(form.ownerDocument, form, 'title', startText(app.language, 'name'), cluster.title);
+  }, async form => {
+    const title = fieldValue(form, 'title').trim();
+    if (!title || title === cluster.title) return true;
+    const current = app.store.indexes.groups.get(cluster.id) ?? cluster;
+    const operation = createOperation({ method: 'PATCH', path: '/clusters/:clusterId', params: { clusterId: cluster.id }, body: { title, machine: startMachine(app), expectedRevision: current.revision } });
+    await request(app.api, 'PATCH', operation.path, { operation });
+    await loadStartReports(app);
+    return true;
+  }, 'rename-cluster');
+}
+
+function openMoveAgent(app, unit) {
+  const home = unitCluster(app, unit);
+  const choices = [...app.store.indexes.groups.values()].filter(group => !group.deleted && group.id !== home?.id);
+  openChoiceForm(app, 'move-agent', startText(app.language, 'moveTitle', { name: unitDisplayName(unit) }), form => {
+    appendSelect(form.ownerDocument, form, 'clusterId', startText(app.language, 'moveTo'), choices.map(group => ({ value: group.id, label: group.title })), choices[0]?.id ?? '');
+  }, async form => {
+    const target = app.store.indexes.groups.get(fieldValue(form, 'clusterId'));
+    if (!target) return false;
+    if (!target.members.includes(unit.id)) await setClusterMembers(app, target, [...target.members, unit.id]);
+    await loadStartReports(app);
+    const old = home && app.store.indexes.groups.get(home.id);
+    if (old?.members.includes(unit.id)) await setClusterMembers(app, old, old.members.filter(id => id !== unit.id));
+    await refreshAfterMembership(app);
+    return true;
+  }, 'move-agent');
+}
+
+// The agent stays, with its chat; it only leaves the cluster, so the Map stops drawing it until it is moved to one.
+function detachAgent(app, unit, cluster) {
+  const t = (key, values) => startText(app.language, key, values), name = unitDisplayName(unit);
+  const dialog = showDialog(app.root.ownerDocument, {
+    title: t('detachTitle', { name, cluster: cluster.title }), body: t('detachBody'), confirm: t('detachConfirm'), cancel: text(app.language, 'cancel'), retry: text(app.language, 'retry'),
+    onConfirm: async () => {
+      const fresh = app.store.indexes.groups.get(cluster.id) ?? cluster;
+      await setClusterMembers(app, fresh, fresh.members.filter(id => id !== unit.id));
+      await refreshAfterMembership(app);
+      showMapToast(app, t('detached', { name, cluster: cluster.title }), async () => {
+        const current = app.store.indexes.groups.get(cluster.id);
+        if (current && !current.members.includes(unit.id)) await setClusterMembers(app, current, [...current.members, unit.id]);
+        await refreshAfterMembership(app);
+      });
+      renderShell(app);
+    },
+  });
+  dialog.setAttribute('data-form', 'detach-agent');
+}
+
 function ensureMap(app) {
   const units = app.unitList?.catalog?.length ? app.unitList.catalog : [...(app.store.indexes.units?.values?.() ?? [])];
   const saved = app.store.layout ?? { layout: { nodes: {}, groups: {} }, revision: null };
@@ -4326,6 +4480,7 @@ function ensureMap(app) {
     } else app.thread = null;
     renderShell(app);
   };
+  app.mapState.onContextMenu = (target) => openItemMenu(app, { ...target, source: 'map' });
   app.mapState.onPersonalGroup = (id) => selectGroup(app, id);
   app.mapState.onOpenCluster = (id) => openCluster(app, id);
   app.mapState.onServices = () => { navigate(app, 'settings'); };
@@ -6160,7 +6315,7 @@ function decorateHierarchy(app, host) {
   const t = (key, variables) => text(app.language, key, variables);
   const decorate = () => {
     for (const node of host.querySelectorAll("[data-row]")) {
-      const row = app.activeRows?.find((item) => item.id === node.getAttribute("data-id"));
+      const row = app.activeRows?.find((item) => String(item.id) === node.getAttribute("data-id"));
       if (!row) continue;
       if (row.unit) {
         node.setAttribute("aria-label", row.text);
@@ -6413,8 +6568,8 @@ function selectionInspector(app, t, units) {
   return panel;
 }
 
-function chooseSelectionLead(app) {
-  const ids = [...app.mapState.selection].filter((id) => unitById(app, id)?.role !== "master");
+function chooseSelectionLead(app, picked = null) {
+  const ids = (picked ?? [...app.mapState.selection]).filter((id) => unitById(app, id)?.role !== "master");
   let leadId;
   openChoiceForm(app, "selection-lead", text(app.language, "connectToLead"), (form) => {
     appendSelect(form.ownerDocument, form, "leadId", text(app.language, "finalReportsTo"), leadChoices(app).filter((unit) => !ids.includes(unit.id)).map((unit) => ({ value: unit.id, label: unitDisplayName(unit) })), "");

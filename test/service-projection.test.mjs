@@ -1088,3 +1088,23 @@ test('the clusters a unit leads are found with one projection, not one per membe
   assert.deepEqual(await leadClusterIds(context, units[0]), []);
   assert.equal(calls.readFile.length, 1, `the view was built ${calls.readFile.length} times for the members of three clusters`);
 });
+
+test('a cluster frame is saved in the layout with its place and its collapsed flag, and a cluster id that is not a UUID is refused', async (t) => {
+  const fixture = await mind(t);
+  await answeringMachine(fixture);
+  const context = serviceContext(fixture);
+  const id = '3f2b8c1e-0a4d-4e5f-9b6a-1c2d3e4f5a6b', other = '8a1d2c3b-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
+  const layoutPath = path.join(fixture.paths.mind, 'user', 'gui', 'layout.json');
+  const revision = async () => revisionOf(await readFile(layoutPath));
+  await patchLayout(context, { groups: { [`cluster:${id}`]: { x: 120, y: -30 } }, expectedRevision: null });
+  assert.deepEqual(JSON.parse(await readFile(layoutPath, 'utf8')).groups[`cluster:${id}`], { x: 120, y: -30, collapsed: false });
+  await patchLayout(context, { groups: { [`cluster:${id}`]: { collapsed: true } }, expectedRevision: await revision() });
+  assert.deepEqual(JSON.parse(await readFile(layoutPath, 'utf8')).groups[`cluster:${id}`], { x: 120, y: -30, collapsed: true }, 'collapsing keeps the place');
+  await patchLayout(context, { groups: { [`cluster:${other}`]: { collapsed: true } }, expectedRevision: await revision() });
+  assert.deepEqual(JSON.parse(await readFile(layoutPath, 'utf8')).groups[`cluster:${other}`], { collapsed: true }, 'a cluster never moved is collapsed without a place');
+  const before = await readFile(layoutPath, 'utf8');
+  for (const groups of [{ 'cluster:Web': { x: 1, y: 2 } }, { [`cluster:${id}`]: { x: 1 } }, { [`cluster:${id}`]: {} }, { 'other:thing': { x: 1, y: 2 } }]) {
+    await assert.rejects(() => patchLayout(context, { groups, expectedRevision: undefined }), (error) => error.code === 'invalid_body', JSON.stringify(groups));
+  }
+  assert.equal(await readFile(layoutPath, 'utf8'), before, 'a refused patch changes nothing');
+});

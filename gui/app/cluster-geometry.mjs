@@ -1,11 +1,12 @@
-export function clusterCamera(bounds,viewport,padding=48){
+// A small Map is not blown up to fill the pane: units are drawn at their scale, so the camera stops at maxZoom.
+export function clusterCamera(bounds,viewport,padding=48,maxZoom=2.5){
   if(!bounds.length)return{x:0,y:0,zoom:1};
   if(viewport.width<=padding*2||viewport.height<=padding*2)throw new RangeError('Map viewport is too small');
   for(const b of bounds)if(![b.x,b.y,b.width,b.height].every(Number.isFinite)||b.width<0||b.height<0)throw new TypeError('Invalid graph bounds');
   const minX=Math.min(...bounds.map(b=>b.x)),minY=Math.min(...bounds.map(b=>b.y));
   const width=Math.max(1,Math.max(...bounds.map(b=>b.x+b.width))-minX);
   const height=Math.max(1,Math.max(...bounds.map(b=>b.y+b.height))-minY);
-  const zoom=Math.min(2.5,(viewport.width-padding*2)/width,(viewport.height-padding*2)/height);
+  const zoom=Math.min(maxZoom,(viewport.width-padding*2)/width,(viewport.height-padding*2)/height);
   return{x:(viewport.width-width*zoom)/2-minX*zoom,y:(viewport.height-height*zoom)/2-minY*zoom,zoom};
 }
 export function interpolateCamera(from,to,fraction){

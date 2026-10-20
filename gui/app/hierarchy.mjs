@@ -156,3 +156,55 @@ export function unitDisplayName(unit) {
   const alias = typeof unit?.alias === 'string' ? unit.alias.trim() : '';
   return alias ? alias + ' (' + id + ')' : id;
 }
+
+// The right-click menu of a Map node, a Map cluster and a Hierarchy row. It opens at the pointer, stays on screen and closes on
+// Escape, on a click elsewhere, on scrolling and on a choice. Each item is { id, label, danger, disabled, run }.
+export function openContextMenu(document, { x = 0, y = 0, items = [], label = '' } = {}) {
+  document.querySelector?.('[data-context-menu]')?.remove();
+  const view = document.defaultView, invoker = document.activeElement;
+  // The Map and the list draw themselves again while the menu is open, so the control that opened it may be gone by then.
+  const mark = ['data-unit-id', 'data-group-id', 'data-id'].map(key => [key, invoker?.getAttribute?.(key)]).find(([, value]) => value);
+  const refocus = () => {
+    if (invoker?.isConnected !== false) { invoker?.focus?.(); return; }
+    if (mark) document.querySelector?.(`[${mark[0]}="${String(mark[1]).replace(/["\\]/g, '\\$&')}"]`)?.focus?.();
+  };
+  const menu = element(document, 'div', { class: 'context-menu', role: 'menu', 'aria-label': label, 'data-context-menu': 'true' });
+  const entries = items.map(item => {
+    const entry = element(document, 'button', { type: 'button', class: `context-item${item.primary ? ' is-primary' : ''}${item.danger ? ' is-danger' : ''}`, role: 'menuitem',
+      'data-action': `context-${item.id}`, disabled: item.disabled ? '' : null, text: item.label });
+    entry.addEventListener('click', () => { close(false); item.run?.(); });
+    menu.append(entry);
+    return entry;
+  });
+  const enabled = () => entries.filter(entry => !entry.disabled && entry.getAttribute('disabled') === null);
+  function close(restore = true) {
+    document.removeEventListener?.('pointerdown', outside, true);
+    document.removeEventListener?.('keydown', keys, true);
+    view?.removeEventListener?.('resize', dismiss);
+    view?.removeEventListener?.('blur', dismiss);
+    document.removeEventListener?.('scroll', dismiss, true);
+    menu.remove();
+    if (restore) refocus();
+  }
+  function dismiss() { close(false); }
+  function outside(event) { if (!menu.contains?.(event.target)) close(false); }
+  function keys(event) {
+    const live = enabled(), index = live.indexOf(document.activeElement);
+    if (event.key === 'Escape') { event.preventDefault?.(); close(); return; }
+    if (event.key === 'Tab') { close(false); return; }
+    const next = event.key === 'ArrowDown' ? live[(index + 1) % live.length] : event.key === 'ArrowUp' ? live[(index - 1 + live.length) % live.length]
+      : event.key === 'Home' ? live[0] : event.key === 'End' ? live.at(-1) : null;
+    if (next) { event.preventDefault?.(); next.focus?.(); }
+  }
+  document.addEventListener?.('pointerdown', outside, true);
+  document.addEventListener?.('keydown', keys, true);
+  view?.addEventListener?.('resize', dismiss);
+  view?.addEventListener?.('blur', dismiss);
+  document.addEventListener?.('scroll', dismiss, true);
+  document.body.append(menu);
+  const box = menu.getBoundingClientRect?.(), width = box?.width ?? 0, height = box?.height ?? 0;
+  menu.style.left = `${Math.max(8, Math.min(x, (view?.innerWidth ?? x + width + 8) - width - 8))}px`;
+  menu.style.top = `${Math.max(8, Math.min(y, (view?.innerHeight ?? y + height + 8) - height - 8))}px`;
+  enabled()[0]?.focus?.();
+  return { menu, close };
+}

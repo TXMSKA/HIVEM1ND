@@ -7471,7 +7471,7 @@ test('the mounted New agent dialog offers every preset and Custom, and a preset 
   // The Map draws its own mark and names the role in the tooltip; the inspector says it in the Role line.
   const node = root.querySelector(`[data-unit-id="${made.id}"]`);
   assert.ok(node.querySelector(`[data-role-icon="${hierarchyIcon(made)}"]`));
-  assert.equal(node.getAttribute('title'), 'Code reviewer');
+  assert.match(node.getAttribute('title'), /(^|, )Code reviewer$/, 'the tooltip names the role, after the full name when the name was shortened');
   assert.ok(root.querySelectorAll('p').some(node => node.textContent === 'Role: Code reviewer'));
 });
 
@@ -7518,7 +7518,7 @@ test('the mounted Custom role is checked inline, sent with its name and descript
   await waitFor(() => root.querySelector(`[data-unit-id="${made.id}"]`), 'The new agent did not reach the Map.');
   const node = root.querySelector(`[data-unit-id="${made.id}"]`);
   assert.equal(node.getAttribute('data-role'), 'custom');
-  assert.equal(node.getAttribute('title'), 'Release captain');
+  assert.match(node.getAttribute('title'), /(^|, )Release captain$/);
   assert.ok(node.querySelector(`[data-role-icon="${hierarchyIcon(made)}"]`));
   assert.ok(root.querySelectorAll('p').some(node => node.textContent === 'Role: Release captain'));
 });
@@ -7769,4 +7769,130 @@ test("a chat message shows its pictures as a carousel with its buttons, and the 
   assert.equal(sent.body, "");
   assert.equal(desktop.root.querySelector("[data-composer-parts]"), null, "the composer is empty after sending");
   await waitFor(() => desktop.root.querySelectorAll("[data-gallery]").length === 2, "The sent picture did not show.");
+});
+
+async function startMenuDesktop(t) {
+  const state = await makePlanFixture(t, { count: 2, task: false });
+  state.context.ledger = openLedger({ store: state.store, paths: state.context.paths, now: state.context.now, machine: state.machine });
+  state.context.projects = [];
+  const credentials = createCredentialStore({ now: state.context.now });
+  state.context.settingsOwner = createSettingsOwner({ ...state.context, probeAgents: async () => ({}) });
+  const server = await createHttpServer({ ...state.context, credentials }); state.context.bus = server.bus;
+  const token = credentials.issue({ audience: 'desktop', capabilities: DESKTOP.filter(capability => capability !== 'viewer.write') }).token;
+  const calls = [];
+  const desktop = await bootWithFetch(`http://127.0.0.1:${server.port}/#session=${token}`, 1440, (input, init) => {
+    calls.push({ method: init?.method ?? 'GET', path: new URL(String(input)).pathname, body: init?.body ? JSON.parse(init.body) : null });
+    return fetch(input, init);
+  }, { clock: state.context.now });
+  t.after(async () => { dispose(desktop.app); await server.close(); });
+  await waitFor(() => desktop.app.unitList?.catalog?.length && desktop.app.activeHandlers && desktop.app.mapState, 'The actual core tree did not load.');
+  desktop.app.startDialog?.dialog.close();
+  return { ...desktop, state, calls };
+}
+
+test('the right-click menu of an agent and of a cluster lists only what the state allows, from the Map and from the Hierarchy, and every entry opens its action', async t => {
+  const { root, app, document, state, calls } = await startMenuDesktop(t);
+  const menu = () => document.querySelector('[data-context-menu]');
+  const actions = () => [...menu().children].map(item => item.getAttribute('data-action').replace('context-', ''));
+  const choose = async id => { const item = [...menu().children].find(child => child.getAttribute('data-action') === `context-${id}`); item.listeners.get('click')[0](); await delay(0); };
+  const member = state.units[1], clusterId = state.cluster.id;
+  const openMenu = target => { app.mapState.onContextMenu({ ...target, x: 30, y: 40 }); return actions(); };
+
+  assert.deepEqual(openMenu({ kind: 'unit', id: member.id }), ['open', 'start', 'rename', 'connect', 'details', 'remove', 'delete'], 'with one cluster there is nowhere to move an agent to');
+  assert.ok(menu().children[0].className.includes('is-primary'), 'Open chat is the primary action');
+  assert.equal(menu().getAttribute('aria-label'), `Actions for ${member.unit}`);
+  assert.match(menu().style.left, /px$/, 'the menu is placed');
+  app.store.indexes.groups.set('other', { id: 'other', title: 'Elsewhere', parentId: null, members: [], link: { kind: 'none' }, revision: 'x', chatId: 'chat-other' });
+  assert.ok(openMenu({ kind: 'unit', id: member.id }).includes('move'), 'a second cluster makes Move to cluster possible');
+  await choose('move');
+  await waitFor(() => document.querySelector('[data-form="move-agent"]'), 'Move to cluster did not open.');
+  assert.equal(document.querySelector('[data-form="move-agent"]').querySelector('select').value, 'other');
+  document.querySelector('[data-form="move-agent"]').querySelector('[data-action="cancel-form"]').listeners.get('click')[0]();
+  app.store.indexes.groups.delete('other');
+
+  // Rename, Details, Connect and Start open the same places the inspector opens.
+  openMenu({ kind: 'unit', id: member.id }); await choose('rename');
+  assert.equal(app.aliasEdit?.id, member.id);
+  app.aliasEdit = null;
+  openMenu({ kind: 'unit', id: member.id }); await choose('details');
+  assert.equal(app.store.selected.unitId, member.id);
+  await waitFor(() => document.querySelector(`[data-disclosure="agent-controls:${member.id}"]`)?.getAttribute('open') !== null, 'Details did not open.');
+  openMenu({ kind: 'unit', id: member.id }); await choose('connect');
+  await waitFor(() => document.querySelector('[data-form="selection-lead"]'), 'Connect to did not ask for a lead.');
+  document.querySelector('[data-form="selection-lead"]').querySelector('[data-action="cancel-form"]').listeners.get('click')[0]();
+  openMenu({ kind: 'unit', id: member.id }); await choose('start');
+  await waitFor(() => document.querySelector('[data-form="session"]'), 'Start did not open the session form.');
+  document.querySelector('[data-form="session"]').querySelector('[data-action="cancel-form"]').listeners.get('click')[0]();
+
+  // Delete asks first, as the inspector does; Remove takes the agent out of its cluster and nothing else.
+  openMenu({ kind: 'unit', id: member.id }); await choose('delete');
+  await waitFor(() => document.querySelector('[data-remove-unit]'), 'Delete did not ask for confirmation.');
+  assert.equal(calls.some(call => call.method === 'DELETE' && call.path.includes('/units/')), false);
+  document.querySelector('[data-remove-unit]').querySelector('button').listeners.get('click')[0]();
+  openMenu({ kind: 'unit', id: member.id }); await choose('remove');
+  await waitFor(() => document.querySelector('.dialog'), 'Remove did not ask for confirmation.');
+  assert.match(document.querySelector('.dialog').querySelector('h2').textContent, /Remove .* from Planning\?/);
+  await clickAndWait(document.querySelector('.dialog').querySelector('.primary'));
+  await waitFor(() => calls.some(call => call.method === 'PATCH' && call.path === `/api/v1/clusters/${clusterId}`), 'Remove did not reach the service.');
+  const patched = calls.find(call => call.method === 'PATCH' && call.path === `/api/v1/clusters/${clusterId}`);
+  assert.deepEqual(patched.body.members, state.units.filter(unit => unit.id !== member.id).map(unit => unit.id));
+
+  // A cluster: open, add an agent, rename, collapse on the Map and delete.
+  assert.deepEqual(openMenu({ kind: 'cluster', id: clusterId }), ['open', 'new-agent', 'rename', 'collapse', 'delete']);
+  await choose('collapse');
+  assert.equal(app.mapState.saved.groups[`cluster:${clusterId}`].collapsed, true);
+  assert.equal(openMenu({ kind: 'cluster', id: clusterId }).includes('collapse'), true);
+  assert.equal([...menu().children].find(child => child.getAttribute('data-action') === 'context-collapse').textContent, 'Expand');
+  await choose('collapse');
+  assert.equal(app.mapState.saved.groups[`cluster:${clusterId}`].collapsed, false);
+  openMenu({ kind: 'cluster', id: clusterId }); await choose('rename');
+  await waitFor(() => document.querySelector('[data-form="cluster-rename"]'), 'Rename did not open.');
+  const field = document.querySelector('[data-form="cluster-rename"]').querySelector('input');
+  assert.equal(field.value, 'Planning');
+  typeInput(field, 'Shipping', 8, 8);
+  await clickAndWait(document.querySelector('[data-form="cluster-rename"]').querySelector('[data-action="confirm-form"]'));
+  await waitFor(() => calls.some(call => call.method === 'PATCH' && call.body?.title === 'Shipping'), 'Rename did not reach the service.');
+  openMenu({ kind: 'cluster', id: clusterId }); await choose('new-agent');
+  await waitFor(() => app.startDialog, 'New agent here did not open its form.');
+  app.startDialog.dialog.close();
+  openMenu({ kind: 'cluster', id: clusterId }); await choose('delete');
+  await waitFor(() => [...document.querySelectorAll('.dialog')].some(dialog => /^Delete: /.test(dialog.querySelector('h2')?.textContent ?? '')), 'Delete did not ask for confirmation.');
+
+  // The Hierarchy offers the same menu on its rows, from the mouse and from the keyboard. A cluster starts folded there, so its entry reads Expand.
+  const listOf = () => root.querySelector('[data-collection]');
+  const rowNode = id => [...listOf().children].find(node => node.getAttribute?.('data-id') === id);
+  const prevented = [];
+  const clusterRow = app.activeRows.find(item => item.kind === 'cluster' && item.groupId === clusterId);
+  assert.ok(rowNode(clusterRow.id), 'the cluster row is drawn');
+  listOf().listeners.get('contextmenu')[0]({ type: 'contextmenu', target: rowNode(clusterRow.id), clientX: 70, clientY: 90, preventDefault: () => prevented.push(true) });
+  assert.equal(prevented.length, 1);
+  assert.deepEqual(actions(), ['open', 'new-agent', 'rename', 'collapse', 'delete']);
+  assert.equal([...menu().children].find(child => child.getAttribute('data-action') === 'context-collapse').textContent, 'Expand');
+  await choose('collapse');
+  assert.equal(app.hierarchy.collapsed.has(`cluster:${clusterId}`), false, 'Expand opens the folded row');
+  const unitRow = app.activeRows.find(item => item.unit?.id === state.units[0].id);
+  assert.ok(unitRow && rowNode(unitRow.id), 'the agents of the cluster are listed now');
+  for (const handler of listOf().listeners.get('keydown')) handler({ type: 'keydown', key: 'F10', shiftKey: true, target: rowNode(unitRow.id), preventDefault: () => prevented.push(true) });
+  assert.equal(prevented.length, 2);
+  assert.deepEqual(actions().slice(0, 2), ['open', 'start']);
+  assert.match(menu().style.top, /px$/);
+});
+
+test('the Hierarchy list says it is loading only while it has nothing to show, and says it once', async t => {
+  const { app, root } = await startMenuDesktop(t);
+  app.unitList.status = 'loading';
+  renderShell(app);
+  let total = root.querySelector('.list-total');
+  assert.equal(total.getAttribute('data-list-status'), 'loading');
+  assert.ok(total.className.includes('visually-hidden'), 'rows are drawn, so a reload behind them says nothing');
+  assert.equal(root.querySelectorAll('[data-list-progress]').length, 0);
+  app.unitList.catalog = []; app.unitList.items = [];
+  app.store.indexes.units.clear(); app.store.indexes.groups.clear();
+  renderShell(app);
+  total = root.querySelector('.list-total');
+  assert.equal(total.textContent, '', 'the list total holds no sentence of its own');
+  assert.equal(root.querySelector('[data-list-progress]').getAttribute('aria-label'), 'Loading the list.', 'the one mark carries the sentence');
+  assert.equal(root.querySelectorAll('[data-list-progress]').length, 1);
+  assert.equal(total.className.includes('visually-hidden'), false);
+  assert.equal(root.querySelector('[data-collection]').getAttribute('aria-busy'), 'true');
 });

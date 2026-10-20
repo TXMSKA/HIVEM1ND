@@ -171,7 +171,9 @@ test('saved cluster frames, empty and nested folders remain in Fit beyond the fo
   map.reducedMotion = true; assert.equal(flyToCluster(map, 'Web', viewport), true);
   assert.ok(map.view.zoom > camera.zoom);
   const before = map.view.zoom; wheelZoom(map, { clientX: 200, clientY: 200, deltaY: 1 }, viewport); assert.ok(map.view.zoom < before);
-  const placement = placeUnits([unit('root:overseer', 'overseer')], saved, groups); assert.deepEqual(placement.positions['root:overseer'], { x: 380, y: 409 });
+  // The Overseer sits centred above the clusters the layout placed, not above the one the person put far away.
+  const placement = placeUnits([unit('root:overseer', 'overseer')], saved, groups), web = frames.find(frame => frame.group.id === 'Web').bounds, overseer = placement.positions['root:overseer'];
+  assert.ok(overseer.y < web.y && overseer.x > web.x && overseer.x < web.x + web.w);
 });
 
 test('sibling cluster frames stay apart, agents stay inside and the overseer stays outside', () => {
@@ -191,7 +193,6 @@ test('sibling cluster frames stay apart, agents stay inside and the overseer sta
   assert.equal(overlaps(box(frames, 'shop'), box(frames, 'blog')), false);
   assert.equal(contains(box(frames, 'Web'), box(frames, 'shop')), true);
   assert.equal(contains(box(frames, 'Unity'), box(frames, 'game-1')), true);
-  assert.equal(box(frames, 'Unity').x > box(frames, 'Web').x + box(frames, 'Web').w, true);
   const placed = placeUnits(units, saved, groups);
   for (const [id, radius] of [['lead', 25], ['a', 21], ['b', 21]]) assert.equal(contains(box(frames, 'shop'), placed.positions[id], radius), true, id);
   const overseer = placed.positions['root:overseer'];

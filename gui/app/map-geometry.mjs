@@ -95,67 +95,45 @@ const canonicalOverseer = unit => unit.role === 'overseer' && unit.unit === 'ove
 // A brand-new unit is stored at the origin. That point is not a chosen place on the Map.
 const chosenPoint = point => Number.isFinite(point?.x) && Number.isFinite(point?.y) && !(point.x === 0 && point.y === 0);
 
-function circleHits(point, radius, bounds, pad = 8) {
-  const left = bounds.x - pad, right = bounds.x + bounds.w + pad, top = bounds.y - pad, bottom = bounds.y + bounds.h + pad;
-  const x = Math.max(left, Math.min(point.x, right)), y = Math.max(top, Math.min(point.y, bottom));
-  return (point.x - x) ** 2 + (point.y - y) ** 2 < radius ** 2;
-}
-
-function insideFrame(point, radius, bounds) {
+export function frameHolds(point, radius, bounds) {
   return point.x - radius >= bounds.x + 8 && point.x + radius <= bounds.x + bounds.w - 8
     && point.y - radius >= bounds.y + 8 && point.y + radius + 22 <= bounds.y + bounds.h - 4;
 }
 
-function overseerPoint(frames) {
-  const preferred = { x: 380, y: 409 };
-  const radius = NODE_RADIUS.overseer;
-  if (!frames.some(frame => circleHits(preferred, radius, frame.bounds))) return preferred;
-  let point = { x: Math.max(0, ...frames.map(frame => frame.bounds.x + frame.bounds.w)) + radius + 48, y: preferred.y };
-  while (frames.some(frame => circleHits(point, radius, frame.bounds))) point = { x: point.x + 48, y: point.y };
-  return point;
+const insideFrame = frameHolds;
+
+// The circle, its ring and its name need this much room around a unit. A saved Overseer is kept only where it clears every frame.
+function clearsFrames(point, radius, frames, pad = 12) {
+  const box = { x: point.x - radius - pad, y: point.y - radius - pad, w: radius * 2 + pad * 2, h: radius * 2 + pad * 2 + 52 };
+  return !frames.some(frame => rectsOverlap(box, frame.bounds));
 }
 
-function memberPoint(bounds, executorIndex, taken, radius) {
-  const inset = Math.min(90, Math.max(radius + 8, bounds.w / 2 - 8));
-  for (let row = Math.floor(executorIndex / 2); row < 8; row += 1) {
-    const point = { x: bounds.x + (executorIndex % 2 ? bounds.w - inset : inset), y: bounds.y + Math.min(160, bounds.h * 0.62) + row * 72 };
-    if (insideFrame(point, radius, bounds) && taken.every(other => Math.hypot(point.x - other.x, point.y - other.y) >= radius + other.radius + 8)) return point;
-  }
-  return { x: bounds.x + bounds.w / 2, y: bounds.y + bounds.h / 2 };
+// The Overseer coordinates every cluster, so it sits centred above the clusters the layout placed.
+function overseerPoint(frames) {
+  if (!frames.length) return { x: 380, y: 409 };
+  const left = Math.min(...frames.map(frame => frame.bounds.x)), right = Math.max(...frames.map(frame => frame.bounds.x + frame.bounds.w));
+  return { x: Math.round((left + right) / 2), y: Math.round(Math.min(...frames.map(frame => frame.bounds.y)) - 110) };
 }
 
 export function placeUnits(units, saved, clusters = []) {
   const layout = saved.layout ?? saved ?? {};
   if (clusters.length) {
-    const frames = clusterFrames(clusters, layout, null, units);
+    const { frames, slots, homes, hidden, overseer } = layoutClusters(clusters, layout, null, units);
     const positions = structuredClone(layout.nodes ?? {});
     delete positions['root:master'];
+    for (const id of hidden) delete positions[id];
     const origins = Object.fromEntries(frames.map(frame => [`cluster:${frame.group.id}`, { x: frame.bounds.x, y: frame.bounds.y }]));
-    const placed = new Set();
-    for (const frame of frames) {
-      const members = units.filter(unit => unit.role !== 'master' && unit.role !== 'overseer' && !unit.removed && !placed.has(unit.id)
-        && (unit.clusterId === frame.group.id || !unit.clusterId && frame.group.members?.includes(unit.id)));
-      members.sort((a, b) => (b.role === 'overlord') - (a.role === 'overlord') || byId(a, b));
-      const taken = [];
-      let executorIndex = 0;
-      for (const unit of members) {
-        placed.add(unit.id);
-        const radius = nodeRadius(unit);
-        const current = positions[unit.id];
-        if (chosenPoint(current) && insideFrame(current, radius, frame.bounds)) { taken.push({ ...current, radius }); continue; }
-        const lead = unit.role === 'overlord';
-        const point = lead
-          ? { x: frame.bounds.x + frame.bounds.w / 2, y: frame.bounds.y + Math.min(75, Math.max(radius + 8, frame.bounds.h * 0.32)) }
-          : memberPoint(frame.bounds, executorIndex++, taken, radius);
-        positions[unit.id] = point;
-        taken.push({ ...point, radius });
-      }
+    const byFrame = new Map(frames.map(frame => [frame.group.id, frame]));
+    for (const unit of units) {
+      if (unit.role === 'master' || unit.removed || !homes.has(unit.id)) continue;
+      const frame = byFrame.get(homes.get(unit.id)), current = layout.nodes?.[unit.id];
+      // A place the person chose stays while it is inside the frame; every other unit takes its own cell of the grid.
+      positions[unit.id] = chosenPoint(current) && insideFrame(current, nodeRadius(unit), frame.bounds) ? { x: current.x, y: current.y } : { ...slots.get(unit.id) };
     }
     for (const unit of units) {
-      if (unit.role === 'master' || unit.removed || placed.has(unit.id)) continue;
-      if (!canonicalOverseer(unit)) continue;
-      const current = positions[unit.id];
-      if (!chosenPoint(current) || frames.some(frame => circleHits(current, nodeRadius(unit), frame.bounds))) positions[unit.id] = overseerPoint(frames);
+      if (unit.role === 'master' || unit.removed || homes.has(unit.id) || !canonicalOverseer(unit)) continue;
+      const current = layout.nodes?.[unit.id];
+      positions[unit.id] = chosenPoint(current) && clearsFrames(current, nodeRadius(unit), frames) ? { x: current.x, y: current.y } : { ...overseer };
     }
     return { origins, positions };
   }
@@ -175,9 +153,10 @@ export function toScreen(world, rect, view) {
   };
 }
 
-export function hitNode(point, nodes, zoom) {
+// The slop is in screen pixels: a fingertip needs more of it than a mouse pointer.
+export function hitNode(point, nodes, zoom, slop = 6) {
   return [...nodes].reverse().find((node) =>
-    Math.hypot(point.x - node.x, point.y - node.y) <= node.radius + 6 / zoom) ?? null;
+    Math.hypot(point.x - node.x, point.y - node.y) <= node.radius + slop / zoom) ?? null;
 }
 
 export function marqueeIds(a, b, nodes) {
@@ -307,114 +286,199 @@ export function personalGroupBounds(memberIds, nodes, padding = 24) {
     w: right - left + padding * 2, h: bottom - top + padding * 2 };
 }
 
-function storedBox(saved, id) {
-  const stored = saved.groups?.[`cluster:${id}`];
-  const w = stored?.width ?? stored?.w, h = stored?.height ?? stored?.h;
-  if (![stored?.x, stored?.y, w, h].every(Number.isFinite)) return null;
-  return { x: stored.x, y: stored.y, w, h };
-}
-
 function rectsOverlap(left, right) {
   return left.x < right.x + right.w && left.x + left.w > right.x && left.y < right.y + right.h && left.y + left.h > right.y;
 }
 
-function shiftFrame(frame, dx, dy, frames, saved) {
-  frame.bounds.x += dx;
-  frame.bounds.y += dy;
-  for (const child of frames) {
-    if (child.group.parentId !== frame.group.id || storedBox(saved, child.group.id)) continue;
-    shiftFrame(child, dx, dy, frames, saved);
+// ---- Cluster layout ---------------------------------------------------------------------------------------
+// Sizes are world units. A unit owns one cell: its circle on top, its own name under it. A frame is sized from what it
+// holds, its title sits in a header inside the frame, and child frames are packed in rows below that header.
+export const CELL_W = 160;
+export const CELL_H = 104;
+export const CELL_CENTER = 44;
+export const FRAME_PAD = 20;
+export const FRAME_HEAD = 44;
+const FRAME_GAP = 24;
+const ROOT_GAP = 56;
+const CHIP_H = 34;
+const MAX_COLUMNS = 8;
+const FRAME_ASPECT = 1.35;
+const ROOT_ASPECT = 1.6;
+
+const names = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
+const byName = (a, b) => names.compare(String(a.unit ?? a.id), String(b.unit ?? b.id)) || byId(a, b);
+const byTitle = (a, b) => names.compare(String(a.title ?? ''), String(b.title ?? '')) || byId(a, b);
+const agentUnit = unit => unit.role !== 'master' && unit.role !== 'overseer' && !unit.removed;
+const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
+
+// The text of a name has its cell's width, less the plate around it.
+export const LABEL_TEXT_WIDTH = CELL_W - 24;
+
+// A name that does not fit loses its middle, so the end that tells similar names apart stays visible.
+export function fitLabel(text, width, measure) {
+  const value = String(text ?? '');
+  if (value.length < 2 || measure(value) <= width) return value;
+  let low = 1, high = value.length - 1, best = '\u2026';
+  while (low <= high) {
+    const keep = Math.floor((low + high) / 2), head = Math.ceil(keep * 0.55), tail = keep - head;
+    const candidate = value.slice(0, head) + '\u2026' + (tail ? value.slice(value.length - tail) : '');
+    if (measure(candidate) <= width) { best = candidate; low = keep + 1; } else high = keep - 1;
   }
+  return best;
 }
 
-// Saved frames stay where they were put. An unsaved frame moves clear of the one it covers.
-function separateRoots(roots, frames, saved) {
-  const gap = 28;
-  for (let pass = 0; pass < roots.length + 2; pass += 1) {
-    let moved = false;
-    for (let i = 0; i < roots.length; i += 1) for (let j = i + 1; j < roots.length; j += 1) {
-      const earlier = roots[i], later = roots[j];
-      if (!rectsOverlap(earlier.bounds, later.bounds)) continue;
-      const lockEarlier = Boolean(storedBox(saved, earlier.group.id)), lockLater = Boolean(storedBox(saved, later.group.id));
-      if (lockEarlier && lockLater) continue;
-      const mover = lockEarlier ? later : lockLater ? earlier : later;
-      const other = mover === earlier ? later : earlier;
-      const dy = other.bounds.y + other.bounds.h + gap - mover.bounds.y;
-      if (dy > 0) { shiftFrame(mover, 0, dy, frames, saved); moved = true; }
-    }
-    if (!moved) break;
+function storedFrame(saved, id) {
+  const stored = saved?.groups?.[`cluster:${id}`];
+  if (!Number.isFinite(stored?.x) || !Number.isFinite(stored?.y)) return null;
+  const w = stored.width ?? stored.w, h = stored.height ?? stored.h;
+  return { x: stored.x, y: stored.y, ...(Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0 ? { w, h } : {}) };
+}
+
+// The width a frame needs so its title is not cut: the glyph, the name and the count of folders inside.
+function titleWidth(group, count) {
+  return Math.ceil(30 + (String(group.title ?? '').length + (count ? String(count).length + 2 : 0)) * 7.2);
+}
+
+// One grid per frame: Overlords in a row of their own on top, every other agent below in columns sized to the member count.
+function unitGrid(members, ghosts = 0) {
+  const leads = members.filter(unit => unit.role === 'overlord').sort(byName);
+  const rest = members.filter(unit => unit.role !== 'overlord').sort(byName);
+  const lead = leads.length, count = rest.length + ghosts;
+  if (!lead && !count) return { w: 0, h: 0, slots: [] };
+  let best = null;
+  for (let columns = 1; columns <= MAX_COLUMNS; columns += 1) {
+    if (columns > Math.max(lead, count, 1) && columns > 1) break;
+    const leadColumns = Math.min(lead, columns), restColumns = Math.min(count, columns);
+    const leadRows = lead ? Math.ceil(lead / leadColumns) : 0, restRows = count ? Math.ceil(count / restColumns) : 0;
+    const w = Math.max(leadColumns, restColumns) * CELL_W, h = (leadRows + restRows) * CELL_H;
+    const score = Math.abs(Math.log((w + FRAME_PAD * 2) / (FRAME_HEAD + h + FRAME_PAD) / FRAME_ASPECT));
+    if (!best || score < best.score - 1e-9) best = { columns, leadColumns, restColumns, leadRows, restRows, w, h, score };
   }
+  const slots = [];
+  leads.forEach((unit, index) => {
+    const row = Math.floor(index / best.leadColumns), inRow = Math.min(best.leadColumns, lead - row * best.leadColumns);
+    slots.push({ unit, x: (best.w - inRow * CELL_W) / 2 + (index % best.leadColumns) * CELL_W + CELL_W / 2, y: row * CELL_H + CELL_CENTER });
+  });
+  rest.forEach((unit, index) => {
+    slots.push({ unit, x: (best.w - best.restColumns * CELL_W) / 2 + (index % best.restColumns) * CELL_W + CELL_W / 2,
+      y: (best.leadRows + Math.floor(index / best.restColumns)) * CELL_H + CELL_CENTER });
+  });
+  return { w: best.w, h: best.h, slots };
+}
+
+function shelves(items, width, gap) {
+  const placed = [];
+  let x = 0, y = 0, rowHeight = 0, right = 0;
+  for (const node of items) {
+    if (x > 0 && x + node.w > width) { y += rowHeight + gap; x = 0; rowHeight = 0; }
+    placed.push({ node, x, y });
+    right = Math.max(right, x + node.w);
+    x += node.w + gap;
+    rowHeight = Math.max(rowHeight, node.h);
+  }
+  return { placed, w: right, h: y + rowHeight };
+}
+
+// Rows of frames, tallest first, in the width that gives the roundest block with the least empty space.
+function packFrames(nodes, gap, aspect) {
+  if (!nodes.length) return { placed: [], w: 0, h: 0 };
+  const items = [...nodes].sort((a, b) => b.h - a.h || b.w - a.w || byTitle(a.group, b.group));
+  const widest = Math.max(...items.map(node => node.w)), total = items.reduce((sum, node) => sum + node.w, 0) + gap * (items.length - 1);
+  const area = items.reduce((sum, node) => sum + node.w * node.h, 0);
+  const widths = new Set([widest, total]);
+  for (let step = 1; step < 32; step += 1) widths.add(Math.round(widest + (total - widest) * step / 32));
+  let best = null;
+  for (const width of [...widths].sort((a, b) => a - b)) {
+    const result = shelves(items, width, gap);
+    const score = Math.abs(Math.log(result.w / Math.max(1, result.h) / aspect)) + (1 - area / Math.max(1, result.w * result.h));
+    if (!best || score < best.score - 1e-9) best = { ...result, score };
+  }
+  return best;
+}
+
+// A collapsed cluster is one chip with the number of agents inside; what it holds is not drawn.
+function collapseFrame(group, context) {
+  const all = [group];
+  for (let index = 0; index < all.length; index += 1) all.push(...(context.children.get(all[index].id) ?? []));
+  const units = all.flatMap(item => context.members.get(item.id) ?? []);
+  for (const unit of units) context.hidden.add(unit.id);
+  return { group, compact: true, collapsed: true, inside: units.length, w: clamp(titleWidth(group, units.length) + 8, 76, 320), h: CHIP_H, kids: [], placed: [], slots: [] };
+}
+
+function measureFrame(group, context) {
+  if (context.saved?.groups?.[`cluster:${group.id}`]?.collapsed === true) return collapseFrame(group, context);
+  const kids = (context.children.get(group.id) ?? []).map(child => measureFrame(child, context));
+  const members = context.members.get(group.id) ?? [];
+  const ghosts = context.known ? 0 : Math.max(0, (group.members ?? []).length - members.length);
+  const title = titleWidth(group, kids.length);
+  if (!members.length && !ghosts && !kids.length) return { group, compact: true, w: clamp(title + 8, 76, 280), h: CHIP_H, kids: [], placed: [], slots: [] };
+  const grid = unitGrid(members, ghosts), packed = packFrames(kids, FRAME_GAP, FRAME_ASPECT);
+  const w = Math.max(Math.max(grid.w, packed.w) + FRAME_PAD * 2, title + FRAME_PAD);
+  const between = grid.h && packed.h ? FRAME_GAP : 0;
+  const slots = grid.slots.map(slot => ({ unit: slot.unit, x: (w - grid.w) / 2 + slot.x, y: FRAME_HEAD + slot.y }));
+  const left = Math.max(FRAME_PAD, (w - packed.w) / 2), top = FRAME_HEAD + grid.h + between;
+  return { group, compact: false, w, h: top + packed.h + FRAME_PAD, kids, slots,
+    placed: packed.placed.map(item => ({ node: item.node, x: left + item.x, y: top + item.y })) };
+}
+
+function resolveFrame(node, origin, context) {
+  const stored = storedFrame(context.saved, node.group.id);
+  const anchor = stored ? { x: stored.x, y: stored.y } : origin;
+  const frame = { group: node.group, anchor, bounds: { x: anchor.x, y: anchor.y, w: stored?.w ?? node.w, h: stored?.h ?? node.h },
+    compact: node.compact, collapsed: node.collapsed === true, folder: node.kids.length > 0 || node.group.link?.kind === 'folder' || (context.children.get(node.group.id)?.length ?? 0) > 0,
+    count: node.collapsed ? node.inside : node.kids.length, focused: node.group.id === context.focusedId };
+  context.frames.push(frame);
+  for (const slot of node.slots) {
+    context.slots.set(slot.unit.id, { x: anchor.x + slot.x, y: anchor.y + slot.y });
+    context.homes.set(slot.unit.id, node.group.id);
+  }
+  const inside = node.placed.map(item => resolveFrame(item.node, { x: anchor.x + item.x, y: anchor.y + item.y }, context));
+  // A child dragged out of its folder stretches the folder, so the folder still holds it.
+  if (stored?.w === undefined) for (const child of inside) {
+    const box = frame.bounds, left = Math.min(box.x, child.bounds.x - FRAME_PAD), top = Math.min(box.y, child.bounds.y - FRAME_HEAD);
+    const right = Math.max(box.x + box.w, child.bounds.x + child.bounds.w + FRAME_PAD), bottom = Math.max(box.y + box.h, child.bounds.y + child.bounds.h + FRAME_PAD);
+    frame.bounds = { x: left, y: top, w: right - left, h: bottom - top };
+  }
+  return frame;
+}
+
+// Each unit belongs to one cluster: the one it names, otherwise the first that lists it.
+function assignMembers(active, units) {
+  const ids = new Set(active.map(cluster => cluster.id)), members = new Map(active.map(cluster => [cluster.id, []]));
+  for (const unit of [...units].filter(agentUnit).sort(byId)) {
+    const home = ids.has(unit.clusterId) ? unit.clusterId : active.find(cluster => cluster.members?.includes(unit.id))?.id;
+    if (home) members.get(home).push(unit);
+  }
+  return members;
+}
+
+export function layoutClusters(clusters, saved = {}, focusedId = null, units = []) {
+  const active = clusters.filter(cluster => !cluster.deleted);
+  const ids = new Set(active.map(cluster => cluster.id)), children = new Map(active.map(cluster => [cluster.id, []])), roots = [];
+  for (const cluster of [...active].sort(byTitle)) (ids.has(cluster.parentId) && cluster.parentId !== cluster.id ? children.get(cluster.parentId) : roots).push(cluster);
+  const context = { saved, focusedId, children, members: assignMembers(active, units), known: units.length > 0, frames: [], slots: new Map(), homes: new Map(), hidden: new Set() };
+  const nodes = roots.map(root => measureFrame(root, context));
+  const loose = nodes.filter(node => !storedFrame(saved, node.group.id)), fixed = nodes.filter(node => storedFrame(saved, node.group.id));
+  const packed = packFrames(loose, ROOT_GAP, ROOT_ASPECT);
+  const origins = new Map(packed.placed.map(item => [item.node.group.id, { x: item.x, y: item.y }]));
+  // A frame the person placed stays put; a frame the layout placed moves clear of it.
+  const boxes = new Map([...fixed.map(node => { const stored = storedFrame(saved, node.group.id); return [node.group.id, { x: stored.x, y: stored.y, w: stored.w ?? node.w, h: stored.h ?? node.h }]; }),
+    ...packed.placed.map(item => [item.node.group.id, { x: item.x, y: item.y, w: item.node.w, h: item.node.h }])]);
+  for (const item of packed.placed) {
+    const box = boxes.get(item.node.group.id);
+    for (let guard = 0; guard < 64; guard += 1) {
+      const other = [...boxes].find(([id, rect]) => id !== item.node.group.id && rectsOverlap({ x: box.x - ROOT_GAP / 2, y: box.y - ROOT_GAP / 2, w: box.w + ROOT_GAP, h: box.h + ROOT_GAP }, rect))?.[1];
+      if (!other) break;
+      box.y = other.y + other.h + ROOT_GAP;
+    }
+    origins.set(item.node.group.id, { x: box.x, y: box.y });
+  }
+  const rootFrames = nodes.map(node => resolveFrame(node, origins.get(node.group.id) ?? { x: 0, y: 0 }, context));
+  const placedByLayout = rootFrames.filter(frame => !storedFrame(saved, frame.group.id));
+  return { frames: context.frames, slots: context.slots, homes: context.homes, hidden: context.hidden, overseer: overseerPoint(placedByLayout.length ? placedByLayout : rootFrames) };
 }
 
 // Flying the camera into a folder must not move that folder: a larger frame would cover the clusters beside it.
 export function clusterFrames(clusters, saved = {}, focusedId = null, units = []) {
-  const active = clusters.filter(cluster => !cluster.deleted);
-  const childrenOf = id => active.filter(group => group.parentId === id && active.some(parent => parent.id === id));
-  const measure = group => {
-    const agents = Math.max(group.members?.length ?? 0, units.filter(unit => unit.role !== 'master' && unit.role !== 'overseer' && !unit.removed
-      && (unit.clusterId === group.id || group.members?.includes(unit.id))).length);
-    if (!agents) return { w: 66, h: 24, compact: true };
-    const rows = Math.max(1, Math.ceil(Math.max(0, agents - 1) / 2));
-    return { w: 290, h: Math.max(230, 96 + rows * 84), compact: false };
-  };
-  const frames = [], packed = new Set();
-  const pack = parent => {
-    if (packed.has(parent.group.id)) return;
-    packed.add(parent.group.id);
-    const children = childrenOf(parent.group.id);
-    let x = parent.bounds.x + 14, y = parent.bounds.y + 20, rowH = 0;
-    const startX = x, limit = parent.bounds.x + parent.bounds.w - 14;
-    for (const child of children) {
-      const stored = storedBox(saved, child.id);
-      const size = stored ? { w: stored.w, h: stored.h, compact: stored.w <= 80 && stored.h <= 40 } : measure(child);
-      if (!stored && x > startX && x + size.w > limit) {
-        x = startX;
-        y += rowH + (rowH <= 24 ? 6 : 8);
-        rowH = 0;
-      }
-      const frame = { group: child, bounds: stored ? { ...stored } : { x, y, w: size.w, h: size.h }, compact: Boolean(size.compact && !childrenOf(child.id).length),
-        folder: childrenOf(child.id).length > 0 || child.link?.kind === 'folder', count: childrenOf(child.id).length, focused: child.id === focusedId };
-      frames.push(frame);
-      if (!stored) { rowH = Math.max(rowH, size.h); x += size.compact ? 72 : size.w + 14; }
-      pack(frame);
-    }
-    if (!storedBox(saved, parent.group.id) && children.length) {
-      const kids = frames.filter(frame => frame.group.parentId === parent.group.id);
-      const right = Math.max(parent.bounds.x + parent.bounds.w, ...kids.map(frame => frame.bounds.x + frame.bounds.w + 14));
-      const bottom = Math.max(parent.bounds.y + parent.bounds.h, ...kids.map(frame => frame.bounds.y + frame.bounds.h + 16));
-      parent.bounds.w = right - parent.bounds.x;
-      parent.bounds.h = bottom - parent.bounds.y;
-    }
-  };
-  const roots = active.filter(group => !active.some(parent => parent.id === group.parentId));
-  const folders = roots.filter(group => group.link?.kind === 'folder' || childrenOf(group.id).length);
-  const loose = roots.filter(group => !folders.includes(group));
-  let stackY = 260;
-  for (const [index, group] of folders.entries()) {
-    const stored = storedBox(saved, group.id);
-    const width = index === 0 ? 318 : 300;
-    const children = childrenOf(group.id);
-    const columns = Math.max(1, Math.floor((width - 24) / 72));
-    const minis = children.every(child => !storedBox(saved, child.id) && measure(child).compact);
-    const height = minis ? Math.max(60, 36 + Math.ceil(children.length / columns) * 30) : 90;
-    const frame = { group, bounds: stored ? { ...stored } : { x: index === 0 ? 8 : 444, y: index === 0 ? 320 : stackY, w: width, h: height },
-      compact: false, folder: true, count: children.length, focused: group.id === focusedId };
-    frames.push(frame);
-    pack(frame);
-    if (index > 0) stackY = frame.bounds.y + frame.bounds.h + 36;
-  }
-  separateRoots(folders.map(group => frames.find(frame => frame.group.id === group.id)), frames, saved);
-  let looseY = Math.max(720, ...frames.filter(frame => folders.some(group => group.id === frame.group.id)).map(frame => frame.bounds.y + frame.bounds.h + 40), 0);
-  for (const group of loose) {
-    const stored = storedBox(saved, group.id);
-    const size = measure(group);
-    const unlinked = (group.link?.kind ?? 'none') === 'none' && size.compact;
-    const bounds = stored ?? (unlinked ? { x: 290, y: looseY, w: 180, h: 70 } : { x: 40, y: looseY, w: Math.max(290, size.w), h: Math.max(230, size.h) });
-    const frame = { group, bounds: { ...bounds }, compact: false, folder: group.link?.kind === 'folder', count: childrenOf(group.id).length, focused: group.id === focusedId };
-    frames.push(frame);
-    pack(frame);
-    if (!stored) looseY = frame.bounds.y + frame.bounds.h + 40;
-  }
-  separateRoots(roots.map(group => frames.find(frame => frame.group.id === group.id)).filter(Boolean), frames, saved);
-  return frames;
+  return layoutClusters(clusters, saved, focusedId, units).frames;
 }
