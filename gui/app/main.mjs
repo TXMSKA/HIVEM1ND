@@ -7207,9 +7207,12 @@ function sendFirstMessage(app, unit, composer) {
   // Its own key: selecting the agent may already be opening its conversation under open-chat.
   settle(app, `first-message:${unit.id}`, text(app.language, "loadingConversation"), async (record) => {
     const result = await openDirectChat(app.api, [unit.id], record.operation);
-    await showChat(app, result.data);
+    // showChat opens the thread before it loads; the person may switch chats while it loads, so the message keeps this thread.
+    const loading = showChat(app, result.data);
+    const thread = app.thread;
+    await loading;
     clearInputDraft(app, "chat", `first:${unit.id}`);
-    await postMessage(app.api, app.thread, { body });
+    await postMessage(app.api, thread, { body });
     syncViewerDirty(app);
   }).finally(() => { if (!app.disposed) renderShell(app); });
 }
