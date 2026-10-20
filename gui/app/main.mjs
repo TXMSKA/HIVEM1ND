@@ -72,7 +72,7 @@ import {
 import { activateUnit, buildHierarchy, collapseNewClusters, flattenVisibleHierarchy, hierarchyDisclosure, hierarchyIcon, listedWorktrees, pathFolder, readableIdentity, revealGroup, toggleGroup, unitDisplayName, unitRoleName, unitsForTree } from "./hierarchy.mjs";
 import { checkoutFacts, openTaskDetail, renderApproval, renderGrants, renderMachine, renderSession, renderTask, renderUnit, renderWaiting } from "./inspector.mjs";
 import { cardinal, formatClock, formatNumber, formatShortTime, text } from "./i18n.mjs";
-import { collectPages, createPagedList, loadAll, reloadList, renderWindow, setQuery, windowRange } from "./lists.mjs";
+import { collectPages, createPagedList, loadAll, loadNext, reloadList, renderWindow, setQuery } from "./lists.mjs";
 import { adoptInitialLayout, applyRemoteLayout, centerUnit, createMap, keepLocalPosition, renderMap, retrySavedLayout, settlePositions, useIncomingPosition } from "./map.mjs";
 import { dispose as disposeEmbed, publishDirty, publishReady, startEmbedChannel } from "./embed.mjs";
 import { PHONE_NAV, exchangeCode, exchangeHomeFragment, logout, renderCodeEntry, renderPhone } from "./phone.mjs";
@@ -1508,13 +1508,15 @@ function renderWaitingSurface(app, t) {
     }));
   }
   const items = list.items ?? [];
-  const range = windowRange(list.scrollTop, list.height || 640, list.rowHeight || 36, items.length);
   if (!items.length && list.status !== "loading") {
     const emptyText = (key) => t(app.layout === "phone" && key === "emptyWaitingNext" ? "phoneNavHint" : key);
     surface.append(renderWaiting(document, [], emptyText, (item) => openWaitingItem(app, item), showMapButton(app, document, t)));
   } else if (items.length) {
-    const visible = items.slice(range.start, range.end);
-    if (visible.length) surface.append(renderWaiting(document, visible, t, (item) => openWaitingItem(app, item)));
+    // Every loaded item shows; the cards have no fixed height for a scroll window, so more come a page at a time.
+    surface.append(renderWaiting(document, items, t, (item) => openWaitingItem(app, item)));
+    if (list.nextCursor) surface.append(element(document, "button", { type: "button", class: "btn", "data-action": "waiting-more",
+      text: t("showMore", { count: Math.max(0, total - items.length) }),
+      onclick: () => loadNext(list).then(() => { if (!app.disposed) renderShell(app); }).catch((error) => noteAction(app, error)) }));
   }
   surface.append(renderWaitingRecord(app, t));
   return surface;

@@ -7581,3 +7581,21 @@ test("the older messages of a long conversation can be reached, not only loaded"
   }
   assert.ok(visible().includes(first()), "the first message of the conversation stays out of reach");
 });
+
+test("every loaded waiting item shows, and more load on request", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.waitingList?.status === "ready" && desktop.app.waitingList.items.length, "Waiting did not load.");
+  click(desktop.root.querySelector("[data-action='waiting']"));
+  await waitFor(() => desktop.root.querySelector("[data-waiting-surface]") && desktop.app.waitingList.status === "ready", "The waiting list did not open.");
+  const sample = desktop.app.waitingList.items[0];
+  desktop.app.waitingList.items = Array.from({ length: 100 }, (_, index) => ({ ...sample, id: `${sample.id}-${index}` }));
+  desktop.app.waitingList.total = 140;
+  desktop.app.waitingList.nextCursor = "next-page";
+  renderShell(desktop.app);
+  const surface = desktop.root.querySelector("[data-waiting-surface]");
+  assert.equal(surface.querySelectorAll("[data-waiting-item]").length, 100, "every loaded item has its card");
+  assert.ok(surface.querySelector("[data-action='waiting-more']"), "a list with more pages offers to show them");
+});
