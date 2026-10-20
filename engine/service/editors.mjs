@@ -377,6 +377,48 @@ export async function discoverResources(context, projectName) {
   return found;
 }
 
+// A mind that was migrated holds its boards in the projects but has no register of them. The first time a project is read,
+// the boards it already holds in its flows folder are registered in one change, so they list
+// without anyone registering them by hand. A board that cannot be read is left out and the rest still list.
+const BOARD_PLACES = [['docs/flows/boards', 'index.json']];
+const foundProjects = new WeakMap();
+
+export async function registerFound(context, names) {
+  const key = context.store ?? context.paths;
+  if (!key || typeof key !== 'object') return 0;
+  const done = foundProjects.get(key) ?? new Set();
+  foundProjects.set(key, done);
+  const fresh = names.filter((name) => !done.has(name));
+  if (!fresh.length) return 0;
+  for (const name of fresh) done.add(name);
+  const catalog = await readCatalog(context);
+  const known = new Set(catalog.value.resources.map((item) => `${item.project}\u0000${item.path}`));
+  const added = [];
+  for (const name of fresh) {
+    const project = (context.projects ?? []).find((item) => item.name === name && item.eligible !== false && item.localPath);
+    if (!project) { done.delete(name); continue; }
+    for (const [place, skip] of BOARD_PLACES) {
+      let files = [];
+      try { files = await readdir(inside(project.localPath, place)); } catch { continue; }
+      for (const file of files.sort()) {
+        if (file === skip || !/\.(json|mjs)$/.test(file) || known.has(`${name}\u0000${place}/${file}`)) continue;
+        const relative = `${place}/${file}`;
+        try {
+          const loaded = await loadBytes(inside(project.localPath, relative));
+          if (!loaded.bytes) continue;
+          const readOnly = file.endsWith('.mjs');
+          const document = readOnly ? null : validateBoard(parseJson(loaded.bytes));
+          added.push({ id: editorId('blueprint', name, relative), kind: 'blueprint', project: name, path: relative,
+            legacyId: document?.id ?? file.replace(/\.(json|mjs)$/, ''), readOnly, attached: [] });
+        } catch { /* This board is not readable; it stays out of the register. */ }
+      }
+    }
+  }
+  if (!added.length) return 0;
+  await commit(context, [record(catalogFile(context), catalog.revision, jsonBytes({ ...catalog.value, resources: [...catalog.value.resources, ...added] }))]);
+  return added.length;
+}
+
 export async function registerResource(context, input) {
   const project = projectOf(context, input.project);
   const relative = input.path;
@@ -436,6 +478,7 @@ export function editorSearchText(editor) {
 export async function list(context, query = {}) {
   if (query.q != null && String(query.q).length > 200) fail(422, 'invalid_query', 'The search is longer than 200 characters.');
   const names = query.project ? [query.project] : (context.projects ?? []).map((item) => item.name);
+  if (!query.kind || query.kind === 'blueprint') await registerFound(context, names).catch(() => 0);
   const catalog = await readCatalog(context);
   const editors = [];
   const issues = [];
@@ -2255,6 +2298,7 @@ function createdEditor(context, entry, document, bytes, comments, library) {
 export async function listFolders(context, query = {}) {
   if (!['blueprint', 'void'].includes(query.kind)) fail(422, 'invalid_query', 'The editor kind is required.');
   const items = [], issues = [];
+  if (query.kind === 'blueprint') await registerFound(context, query.project ? [query.project] : (context.projects ?? []).map((item) => item.name)).catch(() => 0);
   for (const name of query.project ? [query.project] : (context.projects ?? []).map((item) => item.name)) {
     try {
       const library = await loadLibrary(context, name);

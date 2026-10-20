@@ -786,6 +786,26 @@ test('a module stays read-only and a board id cannot be registered twice', async
   await assert.rejects(() => writeAttachments(context, created.id, { attached: ['root:builder'], expectedRevision: null }), { code: 'unknown_unit' });
 });
 
+test('a project that already holds boards lists them without a manual registration', async (t) => {
+  const { context, localPath } = await shop(t);
+  const boards = path.join(localPath, 'docs', 'flows', 'boards');
+  await mkdir(boards, { recursive: true });
+  await writeFile(path.join(boards, 'app.mjs'), 'export const board = {}\n');
+  await writeFile(path.join(boards, 'broken.json'), '{ not json');
+  await writeFile(path.join(boards, 'index.json'), '[]\n');
+  const first = await list(context, { kind: 'blueprint' });
+  assert.deepEqual(first.items.map((item) => item.path), ['docs/flows/boards/app.mjs']);
+  assert.equal(first.items[0].readOnly, true);
+  assert.deepEqual(first.issues, []);
+  // The register is written once: a second read lists the same board and writes nothing more.
+  const writes = context.store.writes?.length ?? 0;
+  const second = await list(context, { kind: 'blueprint' });
+  assert.deepEqual(second.items.map((item) => item.id), first.items.map((item) => item.id));
+  assert.equal(context.store.writes?.length ?? 0, writes);
+  const folders = await listFolders(context, { kind: 'blueprint' });
+  assert.equal(folders.issues.length, 0);
+});
+
 test('an absent project is unavailable', async (t) => {
   const fixture = await makeCoreFixture();
   t.after(() => dispose(fixture));
