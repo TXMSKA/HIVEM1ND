@@ -8,7 +8,7 @@
   --bg: #0f0b13; --panel: #18121d; --card: #211a27; --card2: #2b2232;
   --line: rgba(236,230,218,0.08); --line2: rgba(236,230,218,0.15);
   --text: #f5f1f6; --body: #d4ccd8; --muted: #aa9fb1;
-  --accent: #bdcd79; --accent-ink: #1b200b; --mark-purple: #81648c;
+  --accent: #bdcd79; --accent-hover: #cddb8d; --accent-press: #a9b968; --accent-ink: #1b200b; --mark-purple: #81648c;
   --waiting-soft: rgba(230,192,111,0.12); --working: #8fd19e;
   --error: #e58e7c; --error-soft: rgba(229,142,124,0.12); --error-ink: #1d0b08;
   --scrim: rgba(4,2,6,0.62);
@@ -47,9 +47,13 @@ h1 { margin: 0; font-size: 24px; font-weight: 700; line-height: 1.2; }
 .fields:empty { display: none; }
 .actions { display: flex; align-items: center; gap: 10px; justify-content: space-between; }
 #continue-button { margin-left: auto; }
-.button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 7px 12px; border: 0; border-radius: 10px; color: var(--text); background: var(--card2); font-size: 12.5px; font-weight: 600; }
-.button.primary { color: var(--accent-ink); background: var(--accent); }
-.button.secondary, .button.ghost { color: var(--body); background: transparent; }
+/* Every button that acts is the accent color; Back and Cancel are quieter but still bordered buttons. */
+.button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 7px 14px; border: 1px solid var(--accent); border-radius: 10px; color: var(--accent-ink); background: var(--accent); font-size: 12.5px; font-weight: 700; }
+.button:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+.button:active:not(:disabled) { background: var(--accent-press); border-color: var(--accent-press); }
+.button.secondary, .button.ghost { color: var(--body); background: transparent; border-color: var(--line2); font-weight: 600; }
+.button.secondary:hover:not(:disabled), .button.ghost:hover:not(:disabled) { color: var(--text); background: rgba(189,205,121,0.12); border-color: var(--accent); }
+.button.secondary:active:not(:disabled), .button.ghost:active:not(:disabled) { background: rgba(189,205,121,0.22); border-color: var(--accent-press); }
 .button svg { width: 14px; height: 14px; }
 .button-spinner { animation: spin 1s linear infinite; }
 .setup-bullets { display: grid; gap: 12px; }
