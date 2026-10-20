@@ -6,6 +6,7 @@ import { atomicWrite, exclusiveRecord, readBytes, withLocalChanges, withLocks } 
 import { compressObjectAsync, decompressObject, isTemporaryName, normalizeTarget, resolveDependencies, sanitizeSessionRecord, sessionVerdict, validateChange } from './pack.mjs';
 
 const LOCK = 'sync-stage';
+const STAGED_READS = 32;
 const TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 export function openSync({ store, paths, now = () => Date.now(), projects = [] } = {}) {
@@ -727,15 +728,18 @@ async function stagedChanges(sync) {
   const cache = sync.stagedCache ??= new Map();
   const present = new Set();
   const changes = [];
-  for (const name of names) {
-    if (!name.endsWith('.json') || isTemporaryName(name)) continue;
-    present.add(name);
-    if (!cache.has(name)) {
+  const listed = names.filter((name) => name.endsWith('.json') && !isTemporaryName(name));
+  // The first listing after a start reads every staged change. They are read a few at a time instead of one after another.
+  const unread = listed.filter((name) => !cache.has(name));
+  for (let at = 0; at < unread.length; at += STAGED_READS) {
+    await Promise.all(unread.slice(at, at + STAGED_READS).map(async (name) => {
       const parsed = await readJson(sync, path.join(directory, name));
-      if (!parsed) continue;
-      cache.set(name, Object.freeze(parsed));
-    }
-    changes.push(cache.get(name));
+      if (parsed) cache.set(name, Object.freeze(parsed));
+    }));
+  }
+  for (const name of listed) {
+    present.add(name);
+    if (cache.has(name)) changes.push(cache.get(name));
   }
   for (const name of cache.keys()) if (!present.has(name)) cache.delete(name);
   return changes;
