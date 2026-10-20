@@ -194,6 +194,22 @@ test("the Relay+ offer reads as unavailable: disabled, marked Coming soon, and n
   assert.equal(migrate.parent.className.includes("relay-plus"), false);
 });
 
+test("the starting step shows a progress bar and a sentence while the first sync runs", async () => {
+  const service = { ...locationStep, id: "service", number: 3, preview: { conflicts: [] }, fields: [],
+    failure: { headline: "Paused", body: "Retry." },
+    progress: [{ id: "registration", state: "done", label: "Registered", elapsedSeconds: 1 },
+      { id: "start", state: "busy", label: "Starting the service", elapsedSeconds: 42,
+        sync: { phase: "staging", done: 5, total: 10, detail: "Preparing files for synchronization: 5 of about 10." } }] };
+  const { document } = await openWizard(service, {});
+  const [bar] = document.querySelectorAll(".sync-bar");
+  assert.equal(bar.max, 10);
+  assert.equal(bar.value, 5);
+  assert.equal(document.querySelector(".sync-detail").textContent, "Preparing files for synchronization: 5 of about 10.");
+  assert.equal(document.querySelectorAll(".sync-bar").length, 1, "only the running row has a bar");
+  const unknown = await openWizard({ ...service, progress: [{ ...service.progress[1], sync: { phase: "preparing", done: 0, total: null, detail: "Getting the service ready." } }] }, {});
+  assert.equal(unknown.document.querySelector(".sync-bar").value, undefined, "without a total the bar is indeterminate");
+});
+
 function createWizardDocument() {
   const nodes = new Map();
   const tags = {

@@ -42,6 +42,7 @@ import {
   writeMachineRecord,
 } from './records.mjs';
 import { applyFolderIcon } from './folder-icon.mjs';
+import { estimateStagedFiles, syncProgress } from './setup-progress.mjs';
 import { detectLanguage, LANGUAGES, option, relayLine, text } from './texts.mjs';
 
 const SETUP_PHASES = ['prepare', 'close-legacy', 'copy', 'migrate', 'configure', 'start', 'open', 'ready'];
@@ -266,6 +267,7 @@ class SetupSession {
     }
     if (id === 'service') {
       base.progress = this.setupProgress();
+      await this.attachSyncProgress(base.progress, language);
       base.failure = this.checkpoint?.error ? { code: this.checkpoint.error.code,
         headline: this.checkpoint.error.message, body: text(language, 'failureScope') } : null;
       const preview = this.checkpoint?.completed.includes('configure') ? { conflicts: [] }
@@ -334,6 +336,27 @@ class SetupSession {
       return { id: ['folder', 'legacy', 'registration', 'start', 'open'][index], label: text(this.answers.language, key),
         state, elapsedSeconds: duration > 0 ? Math.ceil(duration / 1000) : null };
     }).filter(row => migrating || row.id !== 'legacy');
+  }
+
+  // While the service starts for the first time it stages and publishes every file of the M1ND, which takes minutes.
+  // The counts come from the staging folders the service writes, so the step can show a bar instead of a bare spinner.
+  async attachSyncProgress(rows, language) {
+    const row = rows.find(item => item.id === 'start' && item.state === 'busy');
+    if (!row) return;
+    try {
+      const directory = this.localDirectory();
+      if (this.stagingEstimate === undefined) {
+        this.stagingEstimate = null;
+        estimateStagedFiles(this.mindPath).then(count => { this.stagingEstimate = count; }, () => {});
+      }
+      const found = await syncProgress({ localDirectory: directory, estimate: this.stagingEstimate });
+      const numbers = { done: found.done.toLocaleString(language), total: found.total === null ? '' : found.total.toLocaleString(language) };
+      const key = found.phase === 'preparing' ? 'syncPreparing' : found.phase === 'publishing' ? 'syncPublishing'
+        : found.total === null ? 'syncStagingUnknown' : 'syncStaging';
+      row.sync = { phase: found.phase, done: found.done, total: found.total, detail: text(language, key, numbers) };
+    } catch {
+      // The count is a courtesy; the step keeps its spinner and its seconds when the folders cannot be read.
+    }
   }
 
   async setLanguage(value) {
@@ -755,6 +778,7 @@ class SetupSession {
     if (!this.answers.confirm) throw new SetupValidationError('Installation must be confirmed');
     if (this.installing) throw new CoreError(409, 'setup_busy', 'Setup is already running.');
     this.installing = true;
+    this.stagingEstimate = undefined;
     try {
       await this.prepareSetup();
       await this.phase('prepare', () => this.prepareDestination());

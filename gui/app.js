@@ -187,6 +187,12 @@ function renderService(step) {
     const status = el('span', 'progress-status'); status.setAttribute('aria-label', ui()['progress' + row.state[0].toUpperCase() + row.state.slice(1)]);
     if (row.state !== 'todo') status.append(icon(row.state === 'done' ? 'check' : row.state === 'fail' ? 'x' : 'spinner'));
     item.append(status, el('span', 'progress-copy', row.label), el('span', 'progress-time', row.elapsedSeconds === null ? '' : row.elapsedSeconds + ' s'));
+    if (row.sync) {
+      // Files done out of the total while the first sync runs; without a known total the bar stays indeterminate.
+      const bar = el('progress', 'sync-bar'); bar.max = row.sync.total || 1; bar.setAttribute('aria-label', row.sync.detail);
+      if (row.sync.total) bar.value = Math.min(row.sync.done, row.sync.total);
+      item.append(bar, el('p', 'sync-detail', row.sync.detail));
+    }
     list.append(item);
   }
   elements.fields.append(list);
