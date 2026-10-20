@@ -673,3 +673,44 @@ test('each earlier pack is decoded once however many packs a machine has publish
   assert.ok(worst <= 3, `an earlier pack was decoded ${worst} times over ${packs} publications`);
   assert.equal((await publishedPacks(origin)).length, packs);
 });
+
+test('a backlog that only filled the last pack follows at once, not after a minute', async (t) => {
+  const { sync, origin, clock, pulse } = await pulseWorld(t);
+  // Five objects of 14 MB: a pack takes at most 64 MB of objects, so four go out and one is left over. The quota has
+  // room for it, and a flat one-minute hold used to leave it, and every pack after it, waiting.
+  const ids = [];
+  for (let index = 0; index < 5; index += 1) {
+    const staged = await stageTransaction(sync, [{ target: { kind: 'mind', path: `user/large-${index}.bin` }, bytes: Buffer.alloc(14000000, index + 1), at: stamp(clock.now()) }], { at: stamp(clock.now()) });
+    ids.push(staged[0].id);
+  }
+  const started = clock.now();
+  await pulse.changed(ids);
+  await clock.advance(2000);
+  const packs = await publishedPacks(origin);
+  assert.deepEqual(packs.map((pack) => pack.length), [4, 1]);
+  assert.ok(clock.now() - started <= 2000);
+  assert.equal((await listStaged(sync)).length, 0);
+});
+
+test('a full quota window holds the next pack until the window names room, not for a fixed minute', async (t) => {
+  const { fixture, sync, origin, ledger, clock, pulse } = await pulseWorld(t);
+  const ids = [];
+  for (let index = 0; index < 90; index += 1) {
+    ids.push((await stageMessage(sync, uuidV8(['hold', String(index)]), stamp(clock.now())))[0].id);
+  }
+  const start = clock.now();
+  await pulse.changed(ids);
+  await clock.advance(2000);
+  assert.equal((await publishedPacks(origin)).length, 1);
+  assert.equal((await limitsFor(ledger, 'publication')).messages.used, 60);
+  assert.equal((await listStaged(sync)).length, 30);
+  // The window opens 60 seconds after the first charge, which was made at the first flush.
+  const opens = Date.parse((await limitsFor(ledger, 'publication')).retryAt);
+  assert.ok(opens > start && opens <= start + 62000);
+  await clock.advance(opens - clock.now() - 1);
+  assert.equal((await publishedPacks(origin)).length, 1);
+  await clock.advance(1);
+  assert.equal((await publishedPacks(origin)).length, 2);
+  assert.equal((await listStaged(sync)).length, 0);
+  void fixture;
+});

@@ -31,6 +31,8 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
   let timer = null;
   let flushing = null;
   let holdUntil = null;
+  // Staged changes the last pack left over although nothing but its own size kept them out: they follow at once.
+  let backlog = false;
   let closed = false;
   let scheduleToken = 0;
   let finishedJournal = null;
@@ -47,7 +49,7 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
     if (closed || pending.length === 0 || first === null) return;
     const limits = await currentLimits();
     if (token !== scheduleToken || closed) return;
-    const due = nextDue(now(), first, last, limits);
+    const due = backlog && limits.state === 'normal' ? now() : nextDue(now(), first, last, limits);
     if (due === null || !Number.isFinite(due)) return;
     timer = setTimeout(() => flush(), Math.max(0, due - now()));
   }
@@ -77,6 +79,7 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
     scheduleToken += 1;
     clearTimer();
     holdUntil = null;
+    backlog = false;
     await loadSkipped();
     const recovered = await finishJournal();
     const batch = new Set(pending);
@@ -164,7 +167,7 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
       pending = [...deferred.flat().map((change) => change.id), ...pending];
       if (deferred.length > 0) {
         await load(deferred[0]);
-        holdUntil = await holdFor(deferred[0], objects, sequence, head, committed, compressed);
+        holdUntil = await holdFor(deferred[0], objects, sequence, head, committed, compressed, false);
       }
       if (pending.length === 0) { first = null; last = null; }
       else if (first === null) first = now();
@@ -180,7 +183,9 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
       await sendPack(packed.body);
     } catch (error) {
       pending = [...chosen.flat().map((change) => change.id), ...deferred.flat().map((change) => change.id), ...pending];
-      holdUntil = now() + 2000;
+      // A full window names the moment it frees room: retrying every 2 seconds until then packed the same objects again.
+      const named = typeof error?.retryAt === 'string' ? Date.parse(error.retryAt) : NaN;
+      holdUntil = Number.isFinite(named) && named > now() ? named : now() + 2000;
       await failOnce(error);
       return { published: false, packs: 0, error: error.code, ids: [], issues: issues.flat().map((change) => change.id) };
     }
@@ -196,7 +201,8 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
       if (first === null) first = now();
       last = now();
       await load(deferred[0]);
-      holdUntil = await holdFor(deferred[0], objects, sequence, head, committed, compressed);
+      holdUntil = await holdFor(deferred[0], objects, sequence, head, committed, compressed, true);
+      backlog = holdUntil <= now();
     } else {
       first = now();
       last = now();
@@ -340,7 +346,10 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
     return { ids, published };
   }
 
-  async function holdFor(group, objects, sequence, head, committed, compressed) {
+  // When the next group may go out. The ledger names the moment its window frees enough room. It names none when the group
+  // fits already: the last pack was full by its own limits (64 MB of objects, 10000 changes), not by the quota, so there
+  // is nothing to wait for. A flat minute here left a large first publication idle for a minute after every pack.
+  async function holdFor(group, objects, sequence, head, committed, compressed, progressed) {
     if (!group) return now() + 60000;
     const count = logical(group, objects);
     let bytes = 1;
@@ -351,7 +360,7 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
     }
     const charges = await outgoingCharges();
     const retry = retryAtFor(now(), charges, { messages: Math.min(count, MESSAGE_MAX), bytes: Math.min(bytes, SYNC_BYTES_MAX) });
-    return retry ?? now() + 60000;
+    return retry ?? (progressed ? now() : now() + 5000);
   }
 
   async function readPublication() {
