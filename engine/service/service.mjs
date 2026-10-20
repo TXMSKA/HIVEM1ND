@@ -198,7 +198,7 @@ export async function startService(options, retained = null) {
       binding,
     });
     bindRuntime(handle);
-    handle.adopted = await adoptWake(options, { nonce });
+    handle.adopted = await adoptWake(options, { nonce, bus });
     options.store.runWake = handle.adopted?.controller?.wake;
     handle.runSupervisor = await openRunSupervisor({ ...options, paths, bus, now: options.now ?? (() => Date.now()), adapters: handle.adapters.adapters,
       settingsOwner: handle.runtime.settingsOwner, sync: handle.runtime.sync, pulse: handle.runtime.pulse });
@@ -396,24 +396,53 @@ export async function acquireServiceLock(handle) {
   return body;
 }
 
-export async function adoptWake(options, { nonce } = {}) {
+// How often the service looks for a consent whose worker ended.
+const WAKE_RESTART_MS = 30_000;
+
+export async function adoptWake(options, { nonce, bus } = {}) {
   const directory = path.join(options.paths.mind, 'user', 'relay', 'wake', 'policies');
+  const skipped = [];
   let names = [];
   try {
     names = (await readdir(directory)).filter((name) => name.endsWith('.json'));
   } catch (error) {
-    if (error?.code === 'ENOENT') return finishWake([], options, nonce);
+    if (error?.code === 'ENOENT') return finishWake([], options, nonce, skipped, directory);
     throw error;
   }
   const policies = [];
   for (const name of names) {
-    const parsed = JSON.parse(await readFile(path.join(directory, name), 'utf8'));
-    policies.push(parsed);
+    try {
+      policies.push(await readPolicyFile(path.join(directory, name)));
+    } catch (error) {
+      // A policy that OneDrive is still syncing is truncated or locked: it is reported and read again later, and the others are adopted.
+      skipped.push({ file: name, code: error?.code ?? error?.name ?? 'unreadable' });
+      try { bus?.emit({ name: 'issue.changed', data: { issue: 'wake_policy_unreadable', file: name, code: skipped.at(-1).code } }); } catch { /* the issue is advisory */ }
+    }
   }
-  return finishWake(policies, options, nonce);
+  return finishWake(policies, options, nonce, skipped, directory);
 }
 
-async function finishWake(policies, options, nonce) {
+async function readPolicyFile(file) {
+  const parsed = JSON.parse(await readFile(file, 'utf8'));
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new SyntaxError('The wake policy is not an object.');
+  return parsed;
+}
+
+// The policies that could not be read at the start are read again, and a consent among them gets its worker once its file is whole.
+async function adoptSkipped(skipped, directory, options, controller) {
+  for (const item of [...skipped]) {
+    let policy;
+    try { policy = await readPolicyFile(path.join(directory, item.file)); } catch { continue; }
+    skipped.splice(skipped.indexOf(item), 1);
+    if (policy.kind !== 'relay-wake-policy' || policy.version !== 1 || policy.binding?.machine !== options.paths?.machine) continue;
+    try {
+      policy = await controller.wake.adopt(policy.binding) ?? policy;
+      if (eligibleWake(policy, options, options.now?.() ?? Date.now())) controller.wake.start(policy.binding);
+    } catch { /* a binding that cannot be adopted does not become a worker */ }
+  }
+}
+
+async function finishWake(policies, options, nonce, skipped = [], directory = null) {
   const controller = await startWakeController(options, nonce);
   const now = options.now?.() ?? Date.now();
   let workersSpawned = 0;
@@ -441,7 +470,8 @@ async function finishWake(policies, options, nonce) {
       // A binding that cannot be normalized does not become a worker.
     }
   }
-  return { policies: [...merged.values()], workersSpawned, signaled: [], nonce, controller };
+  controller.restartEnded(options.wakeRestartMs ?? WAKE_RESTART_MS, () => skipped.length ? adoptSkipped(skipped, directory, options, controller) : null);
+  return { policies: [...merged.values()], workersSpawned, signaled: [], skipped, nonce, controller };
 }
 
 function eligibleWake(policy, options, now) {
@@ -1572,13 +1602,29 @@ async function startWakeController(options, nonce) {
     sink: options.wakeSink ?? ((input) => verifiedDelivery(options, { adapters: options.adapters, ownedPids: options.ownedPids }, input?.binding, input)),
   });
   let closed = false;
+  let restartTimer = null;
   return {
     started: true,
     nonce: nonce ?? null,
     wake,
+    // A worker that ended because of a problem that lasted, such as a record OneDrive kept busy, leaves its consent enabled with
+    // nobody serving it; every so often the service starts it again. One whose consent ended meanwhile ends again at once, and a
+    // worker that was stopped on purpose is not started.
+    restartEnded(everyMs, alsoDo = null) {
+      if (restartTimer || closed) return;
+      restartTimer = setInterval(() => {
+        if (closed) return;
+        for (const binding of wake.lapsedWorkers()) {
+          try { wake.start(binding); } catch { /* a binding that cannot be normalized does not become a worker */ }
+        }
+        Promise.resolve(alsoDo?.()).catch(() => {});
+      }, everyMs);
+      restartTimer.unref?.();
+    },
     close() {
       if (closed) return null;
       closed = true;
+      clearInterval(restartTimer);
       return wake.stopAll('stopped');
     },
   };

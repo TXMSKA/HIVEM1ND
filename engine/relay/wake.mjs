@@ -18,6 +18,8 @@ const DEFAULT_WAKE_HANDOFFS = 20;
 const DEFAULT_DAILY_HANDOFFS = 200;
 const MAX_DAILY_HANDOFFS = 1000;
 const MAX_DELIVERIES = 1024;
+// Ids dropped beyond what a wave needs, so the memory is not trimmed again at the next poll.
+const DELIVERY_SLACK = 64;
 const MAX_INBOX_MESSAGES = 500;
 const ACTIVITY_MAX_AGE_MS = 15 * 60 * 1000;
 const ACTIVITY_REFRESH_MS = 60_000;
@@ -27,6 +29,15 @@ const LEASE_RENEW_MS = 5000;
 // Another machine reads the note from the synced policy, so it is written rarely; three missed notes mean the worker is gone.
 const WORKER_NOTE_MS = 60_000;
 const WORKER_NOTE_STALE_MS = 3 * WORKER_NOTE_MS;
+// A file problem that clears by itself, such as a record OneDrive is still syncing, is retried on the next polls; a worker
+// ends for one only when it has lasted this many polls in a row and this long.
+const GLITCH_POLLS = 10;
+const GLITCH_MS = 30_000;
+// After the fast retries a wake that never reached the host is tried again on a slower schedule while the worker runs and the
+// consent is enabled: 30 seconds, doubling up to 10 minutes, eight times in all, and only then is it marked failed.
+const SLOW_RETRIES = 8;
+const SLOW_RETRY_MS = 30_000;
+const SLOW_RETRY_MAX_MS = 10 * 60_000;
 const DEFAULT_COOLDOWN_MS = 30_000;
 const DEFAULT_SINK_TIMEOUT_MS = 5000;
 
@@ -263,7 +274,16 @@ const SAFE_ERROR_CODES = new Set([
   'SINK_NOT_SUBMITTED', 'SINK_AMBIGUOUS', 'SINK_TIMEOUT',
 ]);
 
+// The ends a restart can cure: a record that stayed busy, locked or cut short longer than the glitch bound.
+const LAPSE_CODES = new Set(['WAKE_ERROR', 'WAKE_WORKER_ERROR', 'WAKE_STORE_BUSY', 'WAKE_POLICY_INVALID', 'MALFORMED_RECORD', 'UNSAFE_PATH', 'EPERM']);
+
 function stableCode(value, fallback = 'WAKE_ERROR') { return SAFE_ERROR_CODES.has(value) ? value : fallback; }
+
+// A read that fails the way a sync leaves a file: busy or locked, cut short, replaced while it was opened, or its lock still held.
+function isFileGlitch(error) {
+  return isTransientFsError(error) || ['MALFORMED_RECORD', 'WAKE_POLICY_INVALID', 'WAKE_STORE_BUSY'].includes(error?.code)
+    || error?.code === 'UNSAFE_PATH' && /changed while it was being (?:opened|read)\./.test(error.message);
+}
 
 function stableSinkReason(status, reason) {
   if (reason === 'SINK_TIMEOUT') return reason;
@@ -290,6 +310,8 @@ function renewedWindow(policy, now) {
   return { consentWindows, startedAt: iso(now), deadlineAt: consentWindows.filter(window => !window.unlimited)
     .reduce((at, window) => earlierTime(at, window.deadlineAt), null) };
 }
+
+function supersededPolicy(policy) { return policy?.enabled === false && policy.disabledReason === 'superseded'; }
 
 function expectedPolicy(policy, binding, key) {
   return Boolean(policy?.kind === 'relay-wake-policy' && policy.version === 1 && policy.key === key
@@ -371,6 +393,14 @@ export async function createRelayWakeController(options = {}) {
   const persistence = await createRelayWakePersistence({ mindPath: options.mindPath, hostname });
   const workers = new Map();
   const starting = new Set();
+  // The workers that ended because a file stayed unreadable, not because they were stopped, their consent ended or their chat's
+  // registration is gone for good; the service starts them again. A registration missing past the glitch bound is a closed chat.
+  const lapses = new Map();
+  function noteEnd(binding, reason) {
+    if (LAPSE_CODES.has(reason)) lapses.set(bindingHash(binding), binding);
+    else lapses.delete(bindingHash(binding));
+  }
+  function lapsedWorkers() { return [...lapses.values()]; }
   async function bindingInbox(binding) {
     const registration = await registered(binding);
     const scoped = await createRelay({ mindPath: options.mindPath, hostname, scopeLock: true, pinnedRegistration: registration });
@@ -601,10 +631,12 @@ export async function createRelayWakeController(options = {}) {
     const newest = await persistence.latestUnitRegistration({ unit: binding.unit, unitId: binding.unitId, client: binding.client, machine: binding.machine });
     if (!newest || newest.nativeSessionId !== binding.nativeSessionId) return null;
     const lock = createHash('sha256').update(JSON.stringify([binding.unitId, binding.client, binding.machine])).digest('hex');
-    return persistence.withLock(`takeover-${lock}`, async () => {
+    const moved = await persistence.withLock(`takeover-${lock}`, async () => {
       const now = nowMs(clock), key = bindingHash(binding);
       const current = await readPolicy(binding, key);
-      if (current && !freshPolicy(current, now)) return null;
+      // The consent this session lost to a newer one comes back when the session registers again and is the newest.
+      const lost = supersededPolicy(current);
+      if (current && !lost && !freshPolicy(current, now)) return null;
       const earlier = new Map();
       for (const { value } of await persistence.list('policies')) {
         if (value?.kind !== 'relay-wake-policy' || value.binding?.machine !== hostname || value.binding.client !== binding.client
@@ -617,16 +649,19 @@ export async function createRelayWakeController(options = {}) {
         if (freshPolicy(policy, now) && policy.wakeCount < policy.maxHandoffs) earlier.set(bindingHash(other), { policy, binding: other });
       }
       if (!earlier.size) return null;
-      let transferred = current;
+      let transferred = lost ? null : current;
       for (const { policy } of earlier.values()) {
-        const next = { ...policy, binding, key, generation: current?.generation ?? randomUUID() };
+        const next = { ...policy, binding, key, generation: lost ? randomUUID() : current?.generation ?? randomUUID() };
         transferred = mergeAliases(transferred, next, binding, key);
       }
       for (const { binding: other } of earlier.values()) workers.get(bindingHash(other))?.stop('superseded');
-      await mutatePolicy(binding, key, previous => mergeAliases(previous, transferred, binding, key));
+      await mutatePolicy(binding, key, previous => supersededPolicy(previous) ? transferred : mergeAliases(previous, transferred, binding, key));
       for (const { binding: other } of earlier.values()) await disablePolicy(other, 'superseded', { wait: false });
       return inspect(binding);
     });
+    // A worker follows the consent, so the session that now holds it is served without waiting for its own attach.
+    if (moved) start(binding);
+    return moved;
   }
 
   async function resume(bindingValue) {
@@ -685,18 +720,20 @@ export async function createRelayWakeController(options = {}) {
     try { stored = await readPolicy(binding, key); }
     catch (error) { if (error?.code === 'MALFORMED_RECORD' || isTransientFsError(error)) return quiet; throw error; }
     if (stored?.enabled !== true) return quiet;
-    if (stored.pausedReason === 'handoff-budget-exhausted') {
+    if (stored.pausedReason === 'handoff-budget-exhausted' || stored.pausedReason === 'dedupe-budget-exhausted') {
       if (stored.budgetNoticeAt) return quiet;
       let claimed = false;
       const told = await mutatePolicy(binding, key, async (policy) => {
-        if (policy?.enabled !== true || policy.pausedReason !== 'handoff-budget-exhausted' || policy.budgetNoticeAt || policy.generation !== stored.generation) return policy;
+        if (policy?.enabled !== true || policy.pausedReason !== stored.pausedReason || policy.budgetNoticeAt || policy.generation !== stored.generation) return policy;
         claimed = true;
         return { ...policy, budgetNoticeAt: iso(now) };
       });
       if (!claimed) return quiet;
       return {
         renewed: false,
-        notice: `Relay wake for ${binding.unit} stopped after ${told.wakeCount} wakes that this chat did not answer with any Relay activity, the most its consent allows, so new messages no longer wake it. `
+        notice: (stored.pausedReason === 'dedupe-budget-exhausted'
+          ? `Relay wake for ${binding.unit} stopped because ${MAX_DELIVERIES} messages it already pointed to are still unread, the most it keeps track of, so new messages no longer wake it. Read them first. `
+          : `Relay wake for ${binding.unit} stopped after ${told.wakeCount} wakes that this chat did not answer with any Relay activity, the most its consent allows, so new messages no longer wake it. `)
           + `To wake it again, run from this chat's own shell: ${attachCommand(binding, told)}`,
       };
     }
@@ -822,6 +859,7 @@ export async function createRelayWakeController(options = {}) {
 
   async function stop(bindingValue) {
     const binding = await canonicalBinding(makeBinding(bindingValue));
+    lapses.delete(bindingHash(binding));
     const worker = workers.get(bindingHash(binding));
     const pending = [...starting].filter(handle => legacyHash(handle.binding) === legacyHash(binding)
       && (!handle.binding.unitId || !binding.unitId || handle.binding.unitId === binding.unitId));
@@ -831,6 +869,7 @@ export async function createRelayWakeController(options = {}) {
   }
 
   async function stopAll() {
+    lapses.clear();
     const running = [...workers.values()];
     await Promise.all([...starting].map(handle => handle.stop('stopped')));
     await Promise.all(running.map((worker) => worker.stop('stopped')));
@@ -858,6 +897,7 @@ export async function createRelayWakeController(options = {}) {
       } catch (error) {
         const code = stableCode(error?.code, 'WAKE_WORKER_ERROR');
         resolveReady({ state: 'error', ownsLease: false, code });
+        noteEnd(requested, code);
         return { reason: code };
       } finally { starting.delete(pending); }
     })();
@@ -879,6 +919,8 @@ export async function createRelayWakeController(options = {}) {
     let activeGeneration = null;
     let leasedAt = 0;
     let notedAt = null;
+    let noteTried = false;
+    let checkedAt = null;
     const handle = {
       stop: (reason = 'stopped') => {
         stopReason ??= reason;
@@ -933,15 +975,51 @@ export async function createRelayWakeController(options = {}) {
         return Boolean(await takeOver({ unit: newest.unit, unitId: newest.unitId, nativeSessionId: newest.nativeSessionId, client: binding.client, machine: binding.machine }));
       } catch { return false; }
     }
+    // The policy that records the error may be the file that is locked or cut short; then the error stays unrecorded and the poll goes on.
     async function absorbError(error, fallback, generation) {
-      const current = await recordError(stableCode(error.code, fallback), generation);
+      let current;
+      try { current = await recordError(stableCode(error.code, fallback), generation); }
+      catch { return 'continue'; }
       if ((current?.consecutiveErrors ?? 0) >= 5) {
-        await mutatePolicy(binding, key, async (record) => record?.generation === generation ? ({ ...record, pausedReason: 'error-budget-exhausted' }) : record);
+        try { await mutatePolicy(binding, key, async (record) => record?.generation === generation ? ({ ...record, pausedReason: 'error-budget-exhausted' }) : record); }
+        catch { return 'continue'; }
         stopReason = 'error-budget-exhausted';
         controller.abort();
         return stopReason;
       }
       return 'continue';
+    }
+    // The lease outlives several polls, so it is renewed only when the next poll would land past the renewal interval; the gap between renewals then stays within the interval plus one iteration, which leaseMs is validated to cover.
+    async function renewLease(now) {
+      if (now + pollIntervalMs - leasedAt < LEASE_RENEW_MS) return true;
+      const lease = await leaseRenew();
+      if (lease?.ownerId !== ownerId) return false;
+      leasedAt = now;
+      return true;
+    }
+    // A worker that ends while the policy is unwritable leaves a note that still says running, so the stopped note is tried again.
+    async function noteStopped() {
+      for (let attempt = 0; ; attempt += 1) {
+        try { await noteWorker('stopped'); return; }
+        catch (error) { if (!isFileGlitch(error) || attempt === 3) return; }
+        await new Promise((resolve) => setTimeout(resolve, 100 * (attempt + 1)));
+      }
+    }
+    // The dedupe memory has to keep only what can still matter: the ids of messages still unread and of wakes in flight. When a
+    // wave would pass the budget, the oldest ids of messages that were read since are dropped first, so a consent whose chat
+    // answers its wakes never runs out of memory; only a memory full of unread messages still pauses it.
+    async function makeRoom(policy, candidates, inbox) {
+      const entries = Object.entries(policy.deliveries ?? {});
+      const needed = entries.length + candidates.length - MAX_DELIVERIES;
+      // A listing cut at its limit does not show every unread message, so nothing is dropped from it.
+      if (needed <= 0 || inbox.unread > inbox.messages.length) return policy;
+      const unread = new Set(inbox.messages.map((message) => message.id));
+      const readIds = entries.filter(([id, entry]) => !unread.has(id) && entry.state !== 'attempting')
+        .sort(([, left], [, right]) => Date.parse(left.lastAttemptAt) - Date.parse(right.lastAttemptAt)).map(([id]) => id);
+      if (readIds.length < needed) return policy;
+      const dropped = new Set(readIds.slice(0, Math.min(readIds.length, needed + DELIVERY_SLACK)));
+      return await mutatePolicy(binding, key, async (current) => current?.generation !== policy.generation ? current : ({ ...current,
+        deliveries: Object.fromEntries(Object.entries(current.deliveries ?? {}).filter(([id]) => !dropped.has(id))) })) ?? policy;
     }
     async function deliverBatch(policy, registration, candidates) {
       return withSourceBudget(binding, async () => {
@@ -978,7 +1056,9 @@ export async function createRelayWakeController(options = {}) {
         const deliveries = { ...(current.deliveries ?? {}) };
         for (const message of selected) {
           const previous = deliveries[message.id];
-          deliveries[message.id] = { state: 'attempting', attempts: (previous?.attempts ?? 0) + 1,
+          // A slower retry is one more try of the same round, so the count of fast attempts stays where it ended.
+          deliveries[message.id] = { state: 'attempting', attempts: previous?.slow ? previous.attempts : (previous?.attempts ?? 0) + 1,
+            ...(previous?.slow ? { slow: previous.slow } : {}),
             lastAttemptAt: iso(now), threadId: message.threadId ?? null, priority: message.priority === 'urgent' ? 'urgent' : 'normal' };
         }
         return { ...current, deliveries, retryAt: null };
@@ -1031,6 +1111,8 @@ export async function createRelayWakeController(options = {}) {
       if (settledPolicy?.generation !== policy.generation || !freshPolicy(settledPolicy, nowMs(clock))) return;
       const safeReason = stableSinkReason(validOutcome.status, validOutcome.reason);
       const woke = validOutcome.status === 'submitted' || validOutcome.status === 'ambiguous';
+      // A slower retry that fails again only probes the pipe, so it does not spend the error budget that pauses the consent.
+      const probe = validOutcome.status === 'not_submitted' && ids.every((id) => settled[id]?.slow > 0);
       if (validOutcome.status === 'submitted') {
         for (const id of ids) settled[id] = { ...settled[id], state: 'submitted', submittedAt: iso(settledAt) };
       } else if (validOutcome.status === 'ambiguous') {
@@ -1038,8 +1120,11 @@ export async function createRelayWakeController(options = {}) {
       } else {
         for (const id of ids) {
           const entry = settled[id];
-          if ((entry?.attempts ?? 0) >= retry.maxAttempts) settled[id] = { ...entry, state: 'failed', failedAt: iso(settledAt), reason: safeReason };
-          else settled[id] = { ...entry, state: 'not_submitted', retryAt: iso(settledAt + Math.min(retry.maxDelayMs, retry.baseDelayMs * 2 ** Math.max(0, (entry?.attempts ?? 1) - 1))), reason: safeReason };
+          if ((entry?.attempts ?? 0) >= retry.maxAttempts) {
+            const slow = entry.slow ?? 0;
+            if (slow < SLOW_RETRIES) settled[id] = { ...entry, state: 'not_submitted', slow: slow + 1, retryAt: iso(settledAt + Math.min(SLOW_RETRY_MAX_MS, SLOW_RETRY_MS * 2 ** slow)), reason: safeReason };
+            else settled[id] = { ...entry, state: 'failed', failedAt: iso(settledAt), reason: safeReason };
+          } else settled[id] = { ...entry, state: 'not_submitted', retryAt: iso(settledAt + Math.min(retry.maxDelayMs, retry.baseDelayMs * 2 ** Math.max(0, (entry?.attempts ?? 1) - 1))), reason: safeReason };
         }
       }
       // Both counts grow on the stored policy, so activity of the session that answered meanwhile is not written over.
@@ -1047,7 +1132,7 @@ export async function createRelayWakeController(options = {}) {
         wakeCount: (current.wakeCount ?? 0) + (woke ? 1 : 0), ...(woke ? { day: countedDay(current, settledAt, 1) } : {}),
         cooldownUntil: woke ? iso(settledAt + retry.cooldownMs) : current.cooldownUntil,
         lastError: validOutcome.status === 'submitted' ? null : { code: stableReasonCode(safeReason), at: iso(settledAt) },
-        consecutiveErrors: validOutcome.status === 'submitted' ? 0 : (current.consecutiveErrors ?? 0) + 1,
+        consecutiveErrors: validOutcome.status === 'submitted' ? 0 : (current.consecutiveErrors ?? 0) + (probe ? 0 : 1),
       }));
       const postSinkPolicy = await readPolicy(binding, key);
       if (postSinkPolicy?.generation === policy.generation && postSinkPolicy.consecutiveErrors >= 5) {
@@ -1063,16 +1148,14 @@ export async function createRelayWakeController(options = {}) {
       if (policy.generation !== activeGeneration) return 'policy-replaced';
       const registration = await persistence.resolveBinding(binding);
       if (!registration) return 'registration-lost';
-      // The lease outlives several polls, so it is renewed only when the next poll would land past the renewal interval; the gap between renewals then stays within the interval plus one iteration, which leaseMs is validated to cover.
-      if (now + pollIntervalMs - leasedAt >= LEASE_RENEW_MS) {
-        const lease = await leaseRenew();
-        if (lease?.ownerId !== ownerId) return 'lease-lost';
-        leasedAt = now;
-      }
+      if (!await renewLease(now)) return 'lease-lost';
       if (notedAt === null || now - notedAt >= WORKER_NOTE_MS) {
-        notedAt = now;
-        // The note is advisory, so a policy that OneDrive is still syncing skips this minute's note instead of counting against the error budget.
-        await noteWorker('running').catch(() => {});
+        noteTried = true;
+        // The note is advisory, so a policy that OneDrive is still syncing skips this attempt instead of counting against the error budget; the next poll tries again, since another machine sees no worker until a note lands.
+        if (await noteWorker('running').then(() => true, () => false)) notedAt = now;
+      }
+      if (checkedAt === null || now - checkedAt >= WORKER_NOTE_MS) {
+        checkedAt = now;
         if (await superseded(registration)) return 'superseded';
       }
       let inbox;
@@ -1106,6 +1189,7 @@ export async function createRelayWakeController(options = {}) {
         return entry.state === 'not_submitted' && Date.parse(entry.retryAt) <= nowMs(clock);
       });
       if (!candidates.length) return 'continue';
+      policy = await makeRoom(policy, candidates, inbox);
       // Every attempt checks again, so a session replaced between two attempts is not woken in vain until its retries run out.
       if (await superseded(registration)) return 'superseded';
       await deliverBatch(policy, registration, candidates);
@@ -1156,13 +1240,27 @@ export async function createRelayWakeController(options = {}) {
         if (controller.signal.aborted) { terminal = stopReason ?? 'stopped'; resolveReady({ state: terminal, ownsLease: false }); return; }
         leasedAt = nowMs(clock);
         resolveReady({ state: 'running', ownsLease: true });
+        let glitchPolls = 0;
+        let glitchSince = 0;
         while (!controller.signal.aborted) {
+          let glitch = null;
           try { terminal = await iteration(); }
           catch (error) {
             // A record that OneDrive is still syncing fails one read, not the worker; the next poll retries it within the error budget.
-            if (!isTransientFsError(error)) throw error;
+            if (!isFileGlitch(error)) throw error;
+            glitch = stableCode(error.code, 'WAKE_WORKER_ERROR');
             terminal = await absorbError(error, 'WAKE_STORE_BUSY', activeGeneration);
           }
+          // Routes or a state file that are empty or missing for a moment make the registration look gone; only a loss that stays ends the worker.
+          if (terminal === 'registration-lost') { glitch = terminal; terminal = 'continue'; }
+          if (glitch) {
+            const at = nowMs(clock);
+            if (glitchPolls === 0) glitchSince = at;
+            glitchPolls += 1;
+            if (terminal === 'continue' && glitchPolls >= GLITCH_POLLS && at - glitchSince >= GLITCH_MS) terminal = glitch;
+            // The lease still has to be renewed while the poll cannot get past the problem.
+            else if (terminal === 'continue') await renewLease(at).catch(() => {});
+          } else glitchPolls = 0;
           if (terminal !== 'continue') break;
           await clock.sleep(pollIntervalMs, controller.signal);
         }
@@ -1174,9 +1272,10 @@ export async function createRelayWakeController(options = {}) {
         resolveReady({ state: 'error', ownsLease: false, code });
       } finally {
         resolveReady({ state: terminal, ownsLease: false });
-        if (notedAt !== null) await noteWorker('stopped').catch(() => {});
+        if (noteTried) await noteStopped();
         await leaseRelease();
         if (workers.get(key) === worker) workers.delete(key);
+        noteEnd(binding, terminal);
         resolveDone({ reason: terminal });
       }
     }
@@ -1316,7 +1415,7 @@ export async function createRelayWakeController(options = {}) {
     const current = await state(); return { pausedReason: current.pausedReason, dailyResumesAt: current.dailyResumesAt };
   }
   const stopRunActors = () => Promise.all([...workers.values()].filter(worker => worker.runActor).map(worker => worker.stop()));
-  return Object.freeze({ adopt, enable, disable, status, start, stop, stopAll, findEnabledBinding, workerStates, observeActivity, endSession, cursorStop, takeOver, touch, resume, renewRunLease, releaseRunLease, maintainActor, stopRunActors });
+  return Object.freeze({ adopt, enable, disable, status, start, stop, stopAll, findEnabledBinding, workerStates, lapsedWorkers, observeActivity, endSession, cursorStop, takeOver, touch, resume, renewRunLease, releaseRunLease, maintainActor, stopRunActors });
 }
 
 async function isProcessAlive(pid) {

@@ -191,15 +191,24 @@ export async function initializeNativeEntry({ controller, bridge, request, regis
   const proof = { unitId: registration.unitId, nativeSessionId: registration.nativeSessionId, client: registration.client, machine: registration.machine };
   if (await bridge.adapters?.[registration.client]?.confirm?.(proof) !== true) throw new CoreError(503, 'native_login_unverified', 'The native entry could not be verified.');
   const directory = path.join(bridge.paths.mind, 'user', 'relay', 'wake', 'policies');
-  const matches = [];
-  for (const name of await jsonNames(directory)) {
-    const policy = await readJson(path.join(directory, name));
-    const binding = policy?.binding;
-    if (binding?.nativeSessionId !== proof.nativeSessionId || binding.client !== proof.client || binding.machine !== proof.machine) continue;
-    if (binding.unitId && binding.unitId !== proof.unitId || !binding.unitId && binding.unit !== registration.unit) continue;
-    matches.push(policy);
-  }
+  const readMatches = async () => {
+    const found = [];
+    for (const name of await jsonNames(directory)) {
+      const policy = await readJson(path.join(directory, name));
+      const binding = policy?.binding;
+      if (binding?.nativeSessionId !== proof.nativeSessionId || binding.client !== proof.client || binding.machine !== proof.machine) continue;
+      if (binding.unitId && binding.unitId !== proof.unitId || !binding.unitId && binding.unit !== registration.unit) continue;
+      found.push(policy);
+    }
+    return found;
+  };
+  let matches = await readMatches();
   const exact = { unit: registration.unit, ...proof };
+  // A consent that a newer session of the unit took is not gone: this session is the newest again, so it takes the consent back.
+  if (matches.length && matches.every((policy) => policy.enabled === false && policy.disabledReason === 'superseded')) {
+    await controller.takeOver?.(exact);
+    matches = await readMatches();
+  }
   if (!matches.length) await controller.takeOver?.(exact);
   const continued = await controller.status(exact);
   if (matches.length) {
