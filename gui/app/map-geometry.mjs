@@ -463,11 +463,15 @@ function assignMembers(active, units) {
   return members;
 }
 
-export function layoutClusters(clusters, saved = {}, focusedId = null, units = []) {
+// Units not loaded yet (undefined) keep room for a cluster's declared members; a loaded list, even an empty one, is the truth,
+// so a cluster whose agents were archived shrinks to what it holds.
+export function layoutClusters(clusters, saved = {}, focusedId = null, units = undefined) {
+  const known = Array.isArray(units);
+  units = units ?? [];
   const active = clusters.filter(cluster => !cluster.deleted);
   const ids = new Set(active.map(cluster => cluster.id)), children = new Map(active.map(cluster => [cluster.id, []])), roots = [];
   for (const cluster of [...active].sort(byTitle)) (ids.has(cluster.parentId) && cluster.parentId !== cluster.id ? children.get(cluster.parentId) : roots).push(cluster);
-  const context = { saved, focusedId, children, members: assignMembers(active, units), known: units.length > 0, frames: [], slots: new Map(), homes: new Map(), hidden: new Set() };
+  const context = { saved, focusedId, children, members: assignMembers(active, units), known, frames: [], slots: new Map(), homes: new Map(), hidden: new Set() };
   const nodes = roots.map(root => measureFrame(root, context));
   const loose = nodes.filter(node => !storedFrame(saved, node.group.id)), fixed = nodes.filter(node => storedFrame(saved, node.group.id));
   const packed = packFrames(loose, ROOT_GAP, ROOT_ASPECT);
@@ -490,6 +494,6 @@ export function layoutClusters(clusters, saved = {}, focusedId = null, units = [
 }
 
 // Flying the camera into a folder must not move that folder: a larger frame would cover the clusters beside it.
-export function clusterFrames(clusters, saved = {}, focusedId = null, units = []) {
+export function clusterFrames(clusters, saved = {}, focusedId = null, units = undefined) {
   return layoutClusters(clusters, saved, focusedId, units).frames;
 }

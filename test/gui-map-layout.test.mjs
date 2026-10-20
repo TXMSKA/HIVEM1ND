@@ -478,3 +478,12 @@ test('agents that belong to no cluster stand in the Overseer row and never on a 
     for (const frame of frames) assert.equal(overlaps(cell, frame.bounds), false, `${id} clears ${frame.group.title}`);
   }
 });
+
+test('a cluster whose agents are gone shrinks to its empty size once the unit list is known', () => {
+  const declared = Array.from({ length: 39 }, (_, index) => `project:Nebula:executor-${index}`);
+  const groups = [cluster('repo-Nebula', 'Nebula', null, declared)];
+  const waiting = clusterFrames(groups, {}, null, undefined)[0].bounds;
+  const known = clusterFrames(groups, {}, null, [])[0].bounds;
+  assert.ok(known.h < waiting.h && known.w <= waiting.w, 'an empty loaded list does not keep room for the 39 archived agents');
+  assert.ok(known.h < CELL_H * 2, 'the empty box is a small chip-sized frame');
+});

@@ -770,7 +770,7 @@ function zoneKey(map) {
 
 function zoneLayout(map) {
   const key = zoneKey(map);
-  if (map.zoneCache?.key !== key) map.zoneCache = { key, layout: layoutClusters(map.groups ?? [], map.saved ?? {}, map.focusedFolder, map.units ?? []) };
+  if (map.zoneCache?.key !== key) map.zoneCache = { key, layout: layoutClusters(map.groups ?? [], map.saved ?? {}, map.focusedFolder, map.units) };
   return map.zoneCache.layout;
 }
 
