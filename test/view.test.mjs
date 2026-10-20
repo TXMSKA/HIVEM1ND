@@ -576,5 +576,5 @@ test("the view command fails only when the mind itself cannot be read, and takes
   assert.throws(() => parseArgs(["swarm", "--project", "myapp"]), /not valid for swarm/);
   assert.throws(() => parseArgs(["view", "--state", "main"]), /not valid for view/);
   assert.deepEqual(parseArgs(["view", "--json", "--project", "myapp"]).options, { json: true, project: "myapp" });
-  assert.match(helpText(), /hivem1nd view \[--project <name>\]/);
+  assert.match(await helpText(), /hivem1nd view \[--project <name>\]/);
 });

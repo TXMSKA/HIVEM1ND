@@ -506,7 +506,7 @@ test('a comment reaches the agent through the person channel of Relay', async (c
   await writeFile(path.join(mind, 'user', 'machines', 'TESTBOX.md'), `machine: TESTBOX\n\n## Paths\n- alpha: ${repo}\n`);
   await writeFile(path.join(mind, 'user', 'state', 'overseer.md'), 'unit: overseer\nstate: in\nmachine: TESTBOX\ndate: 2026-10-05 10:00\n\nManaging.\n');
   await writeFile(path.join(mind, 'user', 'projects', 'alpha', 'state', 'executor-alpha.md'), 'unit: executor-alpha\nstate: in\nmachine: TESTBOX\ndate: 2026-10-05 10:00\n\nWorking on alpha.\n');
-  await writeFile(path.join(mind, 'user', 'relay', 'wake', 'policies', `${'a'.repeat(64)}.json`), JSON.stringify({ enabled: true, pausedReason: null, deadlineAt: null, binding: { unit: 'executor-alpha' } }));
+  await writeFile(path.join(mind, 'user', 'relay', 'wake', 'policies', `${'a'.repeat(64)}.json`), JSON.stringify({ enabled: true, pausedReason: null, deadlineAt: null, binding: { unit: 'executor-alpha' }, worker: { state: 'running', heartbeatAt: new Date().toISOString() } }));
   const file = path.join(repo, 'handbook.json');
   await writeFile(file, JSON.stringify({ title: 'Handbook', pages: structuredClone(PAGES) }));
   const relay = await createPersonRelay({ mindPath: mind, tool: 'void-lite', hostname: 'TESTBOX' });

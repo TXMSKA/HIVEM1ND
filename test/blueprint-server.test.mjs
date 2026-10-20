@@ -47,7 +47,7 @@ async function world(context, { agent = true, wake = false } = {}) {
   if (wake) {
     const folder = path.join(mind, "user", "relay", "wake", "policies");
     await mkdir(folder, { recursive: true });
-    await writeFile(path.join(folder, `${"a".repeat(64)}.json`), JSON.stringify({ enabled: true, deadlineAt: null, binding: { unit: "executor-shop" } }));
+    await writeFile(path.join(folder, `${"a".repeat(64)}.json`), JSON.stringify({ enabled: true, deadlineAt: null, binding: { unit: "executor-shop" }, worker: { state: "running", heartbeatAt: new Date().toISOString() } }));
   }
 
   const port = await freePort();
