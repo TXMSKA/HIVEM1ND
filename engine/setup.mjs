@@ -855,7 +855,11 @@ class SetupSession {
     await this.createMindLayout();
     const display = await this.writeDisplaySettings();
     const applied = await applyInstallPlan(plan, this.answers.conflicts);
-    const managedFiles = { ...(this.machineRecord?.managedFiles ?? {}), ...applied.managedFiles };
+    // A migrated copy inherits the machine record of the previous M1ND; the files inside that M1ND are not this installation's.
+    const inherited = { ...(this.machineRecord?.managedFiles ?? {}) };
+    const legacySource = this.checkpoint?.mode === 'migrate' ? this.checkpoint.sourcePath ?? this.legacySourcePath : null;
+    if (legacySource) for (const filePath of Object.keys(inherited)) if (isWithin(legacySource, filePath)) delete inherited[filePath];
+    const managedFiles = { ...inherited, ...applied.managedFiles };
     // Setup wrote this file, so uninstall may remove it while its bytes are unchanged.
     if (display) managedFiles[display.file] = display.hash;
     for (const filePath of plan.retired) delete managedFiles[filePath];

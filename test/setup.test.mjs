@@ -11,6 +11,7 @@ import { applyInstallPlan, combinePlans, installAgentAssets, planAgentAssets, pl
 import { evolve } from '../engine/lifecycle.mjs';
 import { assertSafePath, hashContent, readMachineRecord, writeMachineRecord } from '../engine/records.mjs';
 import { createSetupSession as rawCreateSetupSession, SetupValidationError } from '../engine/setup.mjs';
+import { uninstall } from '../engine/uninstall.mjs';
 import { text } from '../engine/texts.mjs';
 import { stubAclRunner } from '../engine/service/security.mjs';
 import { legacyTreeInventory } from '../engine/legacy-copy.mjs';
@@ -908,6 +909,40 @@ test('a migrated copy replaces the old kit outside user without asking, and the 
   const result = await session.install();
   assert.equal(result.completed, true, JSON.stringify(session.checkpoint?.error));
   assert.equal(await readFile(path.join(fixture.mindPath, 'rules.md'), 'utf8'), 'Current rules.' + nl);
+  assert.deepEqual(await legacyTreeInventory(fixture.sourcePath), before);
+});
+
+test('a migrated copy does not adopt the files of the previous M1ND, and its uninstall leaves them in place', async context => {
+  const fixture = await checkpointFixture(context);
+  const nl = String.fromCharCode(10);
+  // The 2.x machine record lists the kit files it installed into the previous M1ND and a skill in the home folder.
+  const legacyRules = path.join(fixture.sourcePath, 'rules.md');
+  const legacyBytes = await readFile(legacyRules, 'utf8');
+  const skill = path.join(fixture.homeDir, '.claude', 'skills', 'overseer', 'SKILL.md');
+  await mkdir(path.dirname(skill), { recursive: true });
+  await writeFile(skill, 'Legacy skill.' + nl);
+  const { record } = await readMachineRecord(fixture.sourcePath, 'TESTBOX');
+  await writeMachineRecord(fixture.sourcePath, 'TESTBOX', { ...record, machine: 'TESTBOX', setup: 'done',
+    managedFiles: { [legacyRules]: hashContent(legacyBytes), [skill]: hashContent('Legacy skill.' + nl) } });
+  const session = await confirmedSetup(fixture.options);
+  const result = await session.install();
+  assert.equal(result.completed, true, JSON.stringify(session.checkpoint?.error));
+  const managed = (await readMachineRecord(fixture.mindPath, 'TESTBOX')).record.managedFiles;
+  assert.equal(Object.hasOwn(managed, legacyRules), false, 'a file of the previous M1ND does not belong to this installation');
+  assert.equal(Object.hasOwn(managed, skill), true, 'a skill of the machine stays known, so connecting agents can replace it');
+  // A record written before this fix still lists the previous M1ND; uninstall leaves it alone in both modes.
+  const { record: migrated } = await readMachineRecord(fixture.mindPath, 'TESTBOX');
+  await writeMachineRecord(fixture.mindPath, 'TESTBOX', { ...migrated, managedFiles: { ...migrated.managedFiles, [legacyRules]: hashContent(legacyBytes) } });
+  const before = await legacyTreeInventory(fixture.sourcePath);
+  const uninstallOptions = { mindPath: fixture.mindPath, homeDir: fixture.homeDir, hostname: 'TESTBOX', env: { PATH: '' }, cosmicPath: fixture.cosmicPath,
+    registrationRunner: async () => ({ status: 0, stdout: '', stderr: '' }), stopService: async () => {} };
+  const dry = await uninstall({ ...uninstallOptions, dryRun: true });
+  assert.equal(dry.dryRun, true);
+  assert.equal(dry.removed.some((file) => file.startsWith(fixture.sourcePath + path.sep)), false);
+  assert.ok(dry.warnings.some((warning) => warning.includes(fixture.sourcePath)));
+  const done = await uninstall(uninstallOptions);
+  assert.equal(done.removed.some((file) => file.startsWith(fixture.sourcePath + path.sep)), false);
+  assert.equal(await readFile(legacyRules, 'utf8'), legacyBytes);
   assert.deepEqual(await legacyTreeInventory(fixture.sourcePath), before);
 });
 

@@ -534,9 +534,9 @@ function relayUninstallLine({ client, status, reason }) {
 
 function formatUninstall(result) {
   const lines = result.removed.length
-    ? result.removed.map((path) => `Removed: ${path}`)
-    : ["Nothing was removed."];
-  for (const path of result.updated ?? []) lines.push(`Rule line removed: ${path}`);
+    ? result.removed.map((path) => `${result.dryRun ? "Would remove" : "Removed"}: ${path}`)
+    : [result.dryRun ? "Nothing would be removed." : "Nothing was removed."];
+  for (const path of result.updated ?? []) lines.push(`${result.dryRun ? "Rule line would be removed" : "Rule line removed"}: ${path}`);
   for (const item of result.kept ?? []) lines.push(`Kept: ${item.path} (${item.reason})`);
   for (const item of result.relay ?? []) lines.push(relayUninstallLine(item));
   for (const warning of result.warnings ?? []) lines.push(`Warning: ${warning}`);
