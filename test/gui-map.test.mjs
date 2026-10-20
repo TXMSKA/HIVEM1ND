@@ -247,6 +247,38 @@ test("keyboard movement is saved and panning changes only the viewport", async (
   assert.equal(calls.length, 1);
 });
 
+test("Tab leaves a Connect handle forward and Enter or Space on it opens the connection dialog", () => {
+  const map = createMap({
+    units: [unit("a", "a", "executor", "project", "shop"), unit("b", "b", "executor", "project", "shop")],
+    saved: { nodes: { a: { x: 0, y: 0 }, b: { x: 80, y: 0 } }, groups: {} },
+  });
+  const host = createHost();
+  const document = host.ownerDocument;
+  host.constructor.prototype.focus = function focus() { document.activeElement = this; };
+  renderMap(document, host, map, { connect: "Connect" });
+  const handleOf = (id) => host.querySelectorAll("[data-handle='connect']").find((item) => item.getAttribute("data-unit-id") === id);
+  const keydown = (key, target) => host.listeners.get("keydown")[0]({ key, target, preventDefault() {} });
+  handleOf("a").focus();
+  host.listeners.get("focusin")[0]({ target: handleOf("a") });
+  keydown("Tab", handleOf("a"));
+  assert.equal(document.activeElement.getAttribute("data-handle"), "connect");
+  assert.equal(document.activeElement.getAttribute("data-unit-id"), "a");
+  keydown("x", handleOf("a"));
+  assert.equal(document.activeElement, handleOf("a"));
+
+  const connects = [];
+  const selected = [];
+  map.onGroupConnect = (pending) => connects.push(pending);
+  map.onSelect = (id) => selected.push(id);
+  host.listeners.get("focusin")[0]({ target: handleOf("b") });
+  keydown("Enter", handleOf("b"));
+  assert.deepEqual(connects, [{ source: "b", targets: [] }]);
+  assert.deepEqual([...map.selection], ["b"]);
+  keydown(" ", handleOf("a"));
+  assert.deepEqual(connects.at(-1), { source: "a", targets: [] });
+  assert.deepEqual(selected, []);
+});
+
 test("collapsed scope groups hide their members and rendered nodes keep paint order", () => {
   const map = createMap({
     units: [
@@ -418,7 +450,7 @@ function query(node, selector) {
   const walk = (current) => {
     if (attribute) {
       const [name, raw] = attribute;
-      const expected = raw?.replaceAll("'", "");
+      const expected = raw?.replace(/['"]/g, "");
       if (current.getAttribute?.(name) === expected) found.push(current);
     }
     for (const child of current.children ?? []) walk(child);

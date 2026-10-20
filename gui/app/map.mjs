@@ -522,6 +522,16 @@ export function keyDown(map, event) {
     map.onRename?.(id);
     return;
   }
+  // Enter or Space on a Connect handle opens the connection dialog for that agent, so connecting does not need a pointer drag.
+  const target = readTarget(event);
+  if (target.handle === "connect" && target.unitId && (event.key === "Enter" || event.key === " ")) {
+    event.preventDefault?.();
+    map.selectedGroupId = null;
+    map.selection = new Set([target.unitId]);
+    map.focusId = target.unitId;
+    requestConnect(map);
+    return;
+  }
   const clusterId = event.target?.closest?.('[data-group-id]')?.getAttribute('data-group-id');
   if (clusterId && event.key === 'Enter') { event.preventDefault?.(); selectPersonalGroup(map, clusterId); flyToCluster(map, clusterId); return; }
   if (event.key === 'Home' || event.key.toLowerCase() === 'f') { event.preventDefault?.(); fitMap(map); return; }
@@ -766,6 +776,8 @@ function bindMap(host, map) {
     }
   });
   host.addEventListener("keydown", (event) => {
+    // Tab changes nothing on the map; drawing again would move focus before the browser advances it.
+    if (event.key === "Tab") return;
     keyDown(map, event);
     refresh(map);
   });
@@ -779,9 +791,11 @@ function refresh(map) {
   if (map.document && map.host) {
     const active = map.document.activeElement;
     const id = active?.getAttribute?.("data-unit-id");
+    const handle = active?.getAttribute?.("data-handle") ?? null;
     const groupId = active?.getAttribute?.("data-group-id");
     renderMap(map.document, map.host, map, map.labels ?? {});
-    if (id) map.host.querySelector(`[data-unit-id="${id}"]`)?.focus?.();
+    // A node and its Connect handle share the unit id, so focus returns to the same kind of control.
+    if (id) [...map.host.querySelectorAll(`[data-unit-id="${id}"]`)].find((node) => (node.getAttribute?.("data-handle") ?? null) === handle)?.focus?.();
     if (groupId) map.host.querySelector(`[data-group-id="${groupId}"]`)?.focus?.();
   }
 }
