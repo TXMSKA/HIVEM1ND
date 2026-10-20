@@ -66,7 +66,11 @@ h1 { margin: 0; font-size: 24px; font-weight: 700; line-height: 1.2; }
 .offer-heading { display: flex; align-items: center; gap: 8px; font-size: 14px; }
 .offer-body { color: var(--body); font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere; }
 .offer-badge { padding: 2px 8px; border-radius: 999px; background: var(--card2); color: var(--muted); font-size: 11px; font-weight: 700; }
-.relay-plus { background: var(--card); border: 1px solid var(--line); cursor: default; }
+/* Relay+ is not available yet: the whole offer is dimmed, its checkbox is dashed and empty, and its mark stays readable. */
+.relay-plus { background: transparent; border: 1px dashed var(--line2); cursor: not-allowed; }
+.relay-plus .offer-heading > strong, .relay-plus .offer-body { opacity: .5; }
+.relay-plus input[type=checkbox]:disabled { border-style: dashed; border-color: var(--line2); background: transparent; opacity: .45; cursor: not-allowed; }
+.relay-plus .offer-badge { margin-left: auto; border: 1px solid var(--line2); background: transparent; color: var(--body); }
 input[type=checkbox], input[type=radio] { appearance: none; width: 18px; height: 18px; flex: 0 0 18px; margin: 1px 0 0; display: grid; place-content: center; border: 2px solid var(--line2); border-radius: 4px; background: transparent; }
 input[type=checkbox]:checked { border-color: var(--accent); background: var(--accent); }
 input[type=checkbox]:checked::before { width: 8px; height: 4px; border: solid var(--accent-ink); border-width: 0 0 2px 2px; transform: translateY(-1px) rotate(-45deg); content: ''; }

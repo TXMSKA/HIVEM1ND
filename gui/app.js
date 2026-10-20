@@ -89,6 +89,7 @@ function renderProgress(step) {
 }
 function offer(title, body, { id, checked = false, disabled = false, badge = null } = {}) {
   const label = el('label', 'setup-offer' + (disabled ? ' relay-plus' : ''));
+  if (disabled) label.setAttribute('aria-disabled', 'true');
   const checkbox = el('input');
   checkbox.type = 'checkbox'; checkbox.id = id; checkbox.checked = checked; checkbox.disabled = disabled;
   if (disabled) checkbox.dataset.permanentDisabled = 'true';

@@ -138,6 +138,20 @@ test("Continue and Back show a loader while their request runs, including Contin
   assert.equal(spinnerIn(back.document.getElementById("back-button")), null);
 });
 
+test("the Relay+ offer reads as unavailable: disabled, marked Coming soon, and never checked", async () => {
+  const { document } = await openWizard(locationStep, {});
+  const offer = document.querySelectorAll(".relay-plus")[0];
+  assert.ok(offer, "the Relay+ offer is marked");
+  assert.equal(offer.getAttribute("aria-disabled"), "true");
+  const checkbox = offer.querySelector("input");
+  assert.equal(checkbox.disabled, true);
+  assert.equal(checkbox.checked, false);
+  assert.equal(offer.querySelector(".offer-badge").textContent, "Coming soon");
+  const migrate = document.getElementById("migrate-legacy");
+  assert.equal(migrate.disabled, false);
+  assert.equal(migrate.parent.className.includes("relay-plus"), false);
+});
+
 function createWizardDocument() {
   const nodes = new Map();
   const tags = {
