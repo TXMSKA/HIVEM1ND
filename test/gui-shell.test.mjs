@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { gzipSync } from 'node:zlib';
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
@@ -2873,7 +2874,7 @@ test("settings and the footer follow sync, service, and issue changes", async (t
   assert.equal(desktop.root.querySelector("[data-limits='paused']")?.getAttribute("data-retry-at"), retryAt);
   const limitText = desktop.root.querySelector("[data-limits='paused']").textContent;
   assert.equal(limitText.includes(retryAt), false);
-  assert.equal(limitText.includes("2099"), true);
+  assert.equal(limitText.includes(String(new Date(retryAt).getFullYear())), true);
   assert.equal(limitText.includes("T"), false);
   const usage = desktop.root.querySelector("[data-limit-usage]")?.textContent ?? "";
   assert.equal(usage.includes("61 of 60"), true);
@@ -3421,14 +3422,19 @@ test("counts, clocks, and session facts follow the active language", () => {
   assert.equal(text("es", "nothingToUndo"), "No hay un cambio de tarea para deshacer.");
   const stamp = "2026-10-10T12:00:00.000Z";
   const clock = formatClock("en", stamp);
-  assert.equal(clock.includes("12:00"), true);
+  assert.equal(clock, localTime(stamp));
   assert.equal(clock.includes(stamp), false);
   assert.equal(formatWhen("en", stamp).includes(stamp), false);
   assert.equal(/\d:\d{2}:\d{2}/.test(formatWhen("en", stamp)), false);
   assert.equal(/\d:\d{2}:\d{2}/.test(formatWhen("es", stamp)), false);
   assert.equal(formatShortTime("en", stamp).includes(":00:"), false);
-  assert.match(formatShortTime("en", stamp), /12:00/);
+  assert.equal(formatShortTime("en", stamp), localTime(stamp));
   assert.equal(formatWhen("en", "not-a-date"), "not-a-date");
+  // Phone access that ends at midnight in Buenos Aires reads 00:00 there, not the UTC 03:00.
+  const local = JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", `import { formatClock, formatShortTime, formatWhen } from ${JSON.stringify(new URL("../gui/app/i18n.mjs", import.meta.url).href)};
+const at = "2026-10-11T03:00:00.000Z";
+console.log(JSON.stringify([formatShortTime("en", at), formatClock("es", at), formatWhen("en", at)]));`], { encoding: "utf8", env: { ...process.env, TZ: "America/Argentina/Buenos_Aires" } }));
+  assert.deepEqual(local, ["00:00", "00:00", "Oct 11, 2026, 00:00"]);
   assert.equal(limitsUsage("en", { used: 0, max: 0 }, { used: 0, max: 0 }), "0 of 0 messages and 0 of 0 sync bytes.");
   assert.equal(limitsUsage("en", { used: 1, max: 1 }, { used: 1, max: 1 }), "1 of 1 message and 1 of 1 sync byte.");
   assert.equal(limitsUsage("en", { used: 1, max: 2 }, { used: 1, max: 2 }), "1 of 2 messages and 1 of 2 sync bytes.");
@@ -5071,6 +5077,10 @@ async function localViewer(fixture, secret, viewer) {
   return json.data;
 }
 
+function localTime(stamp) {
+  return new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(stamp));
+}
+
 function createTestDocument(width = 390) {
   const document = {
     documentElement: null,
@@ -5798,7 +5808,7 @@ test('R6 comment metadata separates the short time and reports submitted recipie
   renderShell(desktop.app);
   const line = desktop.root.querySelector('[data-comment-message="message-r6"]');
   assert.equal(line.querySelector('.comment-author').textContent, 'You');
-  assert.equal(line.querySelector('time').textContent, '12:00');
+  assert.equal(line.querySelector('time').textContent, localTime('2026-10-10T12:00:00.000Z'));
   const statuses = desktop.root.querySelectorAll('[data-notice]');
   assert.equal(statuses.length, 1);
   assert.equal(statuses[0].textContent, 'Sent to executor-shop and overlord-web.');

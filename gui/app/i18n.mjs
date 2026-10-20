@@ -696,9 +696,9 @@ const WHEN = {
   hour: "2-digit",
   minute: "2-digit",
   hourCycle: "h23",
-  timeZone: "UTC",
 };
 
+// Dates and times are shown in the viewer's local time zone; stored times stay UTC.
 export function formatWhen(language, value) {
   if (value == null || value === "") return "";
   const date = new Date(value);
@@ -710,8 +710,6 @@ const CLOCK = {
   hour: "2-digit",
   minute: "2-digit",
   hourCycle: "h23",
-  timeZone: "UTC",
-  timeZoneName: "short",
 };
 
 export function formatClock(language, value) {
@@ -721,7 +719,7 @@ export function formatClock(language, value) {
 }
 
 const SHORT_TIME = {
-  hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: "UTC",
+  hour: "2-digit", minute: "2-digit", hourCycle: "h23",
 };
 
 export function formatShortTime(language, value) {
