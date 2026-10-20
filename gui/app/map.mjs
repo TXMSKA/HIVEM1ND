@@ -529,6 +529,8 @@ export function keyDown(map, event) {
     map.selectedGroupId = null;
     map.selection = new Set([target.unitId]);
     map.focusId = target.unitId;
+    // The shell follows the map's selection, so the inspector shows the agent being connected.
+    map.onSelection?.([...map.selection]);
     requestConnect(map);
     return;
   }

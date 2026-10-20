@@ -268,12 +268,15 @@ test("Tab leaves a Connect handle forward and Enter or Space on it opens the con
 
   const connects = [];
   const selected = [];
+  const announced = [];
   map.onGroupConnect = (pending) => connects.push(pending);
   map.onSelect = (id) => selected.push(id);
+  map.onSelection = (ids) => announced.push(ids);
   host.listeners.get("focusin")[0]({ target: handleOf("b") });
   keydown("Enter", handleOf("b"));
   assert.deepEqual(connects, [{ source: "b", targets: [] }]);
   assert.deepEqual([...map.selection], ["b"]);
+  assert.deepEqual(announced.at(-1), ["b"], "the shell hears the selection, so the inspector shows the agent being connected");
   keydown(" ", handleOf("a"));
   assert.deepEqual(connects.at(-1), { source: "a", targets: [] });
   assert.deepEqual(selected, []);
