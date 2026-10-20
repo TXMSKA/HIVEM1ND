@@ -793,14 +793,7 @@ async function onStream(app, event) {
     if (task) replaceTask(app, task);
     if (app.waitingList) reloadList(app.waitingList).catch(() => {});
     // The inspector keeps its own waiting items for its unit; a task change can add or remove one.
-    // Only the latest request applies, so an older answer arriving last cannot bring back a finished task.
-    const unitId = app.inspectorData?.unitId;
-    const ticket = app.inspectorWaitingTicket = (app.inspectorWaitingTicket ?? 0) + 1;
-    if (unitId) collectPages(app.api, "/waiting", { query: { unitId }, limit: 50 }).then((waiting) => {
-      if (app.disposed || ticket !== app.inspectorWaitingTicket || app.inspectorData?.unitId !== unitId) return;
-      Object.assign(app.inspectorData, { waiting: waiting.items, waitingTotal: waiting.total, waitingIssues: waiting.issues });
-      renderShell(app);
-    }).catch(() => {});
+    refreshInspectorWaiting(app);
   }
   if (['unit.unread', 'message.read', 'message.created'].includes(event?.name) && app.unitList) {
     for (const unit of app.unitList.catalog ?? []) { const current = app.store.indexes.units.get(unit.id); if (current) unit.unread = current.unread; }
@@ -7429,9 +7422,22 @@ function refreshCheckout(app, unitId = app.store.selected.unitId, force = false)
   return job;
 }
 
+// Only the latest waiting request applies, so an older answer arriving last cannot bring back a finished task.
+function refreshInspectorWaiting(app) {
+  const unitId = app.inspectorData?.unitId;
+  const ticket = app.inspectorWaitingTicket = (app.inspectorWaitingTicket ?? 0) + 1;
+  if (unitId) collectPages(app.api, "/waiting", { query: { unitId }, limit: 50 }).then((waiting) => {
+    if (app.disposed || ticket !== app.inspectorWaitingTicket || app.inspectorData?.unitId !== unitId) return;
+    Object.assign(app.inspectorData, { waiting: waiting.items, waitingTotal: waiting.total, waitingIssues: waiting.issues });
+    renderShell(app);
+  }).catch(() => {});
+}
+
 function loadInspector(app, unitId) {
   const ticket = (app.inspectorTicket ?? 0) + 1;
   app.inspectorTicket = ticket;
+  // A full load supersedes the waiting refreshes already in flight; a task change during the load supersedes the load's tasks and waiting items.
+  const waitingTicket = app.inspectorWaitingTicket = (app.inspectorWaitingTicket ?? 0) + 1;
   const name = unitById(app, unitId)?.unit || unitId;
   return settle(app, `inspector:${unitId}`, text(app.language, "loadingDetails", { name }), async () => {
     const [tasks, approvals, expired, unit, waiting, machines, sessions] = await Promise.all([
@@ -7444,9 +7450,10 @@ function loadInspector(app, unitId) {
       collectPages(app.api, "/sessions", { query: { unitId }, limit: 50 }),
     ]);
     if (app.disposed || ticket !== app.inspectorTicket) return;
+    const changed = waitingTicket !== app.inspectorWaitingTicket;
     app.inspectorData = {
       unitId,
-      tasks: tasks.items,
+      tasks: changed ? tasks.items.map((task) => app.store.indexes.tasks.get(task.id) ?? task) : tasks.items,
       taskTotal: tasks.total,
       taskIssues: tasks.issues,
       taskNext: tasks.nextCursor,
@@ -7461,6 +7468,7 @@ function loadInspector(app, unitId) {
       machines: machines.items,
       sessions: sessions.items,
     };
+    if (changed) refreshInspectorWaiting(app);
     app.store.indexes.units.set(unitId, unit.data);
     refreshCheckout(app, unitId);
     if (app.layout !== 'phone') {

@@ -7608,11 +7608,51 @@ test("an older waiting answer arriving last does not undo a newer one", async (t
   const ready = (await request(desktop.app.api, "GET", `/tasks/${encodeURIComponent(taskId)}`)).data;
   const accepted = (await changeTaskStatus(desktop.app.api, ready.task ?? ready, "done")).data.task;
   await waitFor(() => held, "The first waiting request did not start.");
+  const before = desktop.app.inspectorData.waiting;
   await undoTask(desktop.app.api, accepted);
-  await waitFor(() => answered > 0 && waits(), "The task back in review did not wait again.");
+  await waitFor(() => answered > 0 && desktop.app.inspectorData.waiting !== before && waits(), "The task back in review did not wait again.");
   release();
   await new Promise((resolve) => setTimeout(resolve, 200));
   assert.equal(waits(), true, "the older answer arriving last does not remove it");
+});
+
+test("a full inspector load answered after a task change keeps the newer task and waiting items", async (t) => {
+  const taskId = "project:shop:029";
+  // The reviewer's inspector waits on the review; the executor's inspector lists the task itself.
+  for (const side of ["reviewer", "executor"]) await t.test(side, async (t) => {
+    const fixture = await createGuiFixture();
+    t.after(() => fixture.close());
+    const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+    t.after(() => dispose(desktop.app));
+    const review = (await request(desktop.app.api, "GET", "/waiting")).data.items.find((item) => item.taskId === taskId);
+    const unitId = side === "reviewer" ? review.unitId : "project:shop:executor-shop";
+    await waitFor(() => desktop.app.unitList?.catalog?.some((unit) => unit.id === unitId), "The unit list did not load.");
+    const unit = desktop.app.unitList.catalog.find((item) => item.id === unitId);
+    const waits = () => desktop.app.inspectorData?.waiting?.some((item) => item.taskId === taskId);
+    const status = () => desktop.app.inspectorData?.tasks?.find((task) => task.id === taskId)?.status;
+    const current = () => side === "reviewer" ? waits() : status() === "review";
+    desktop.app.activeHandlers.onActivate({ id: unit.id, kind: "unit", unit }, "double");
+    await waitFor(() => desktop.app.inspectorData?.unitId === unit.id && current(), "The inspector did not show the task in review.");
+    // The next full load is held until the task has changed and its own refresh has run.
+    const fetch = desktop.app.api.fetch;
+    let held = false, release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    desktop.app.api.fetch = async (url, options) => {
+      const response = await fetch(url, options);
+      if (String(url).includes("/tasks?unitId=") && !held) { held = true; await gate; }
+      return response;
+    };
+    const ticket = desktop.app.inspectorTicket;
+    desktop.app.activeHandlers.onActivate({ id: unit.id, kind: "unit", unit }, "double");
+    await waitFor(() => held && desktop.app.inspectorTicket > ticket, "The full load did not start.");
+    const ready = (await request(desktop.app.api, "GET", `/tasks/${encodeURIComponent(taskId)}`)).data;
+    await changeTaskStatus(desktop.app.api, ready.task ?? ready, "done");
+    await waitFor(() => desktop.app.store.indexes.tasks.get(taskId)?.status === "done", "The task change did not arrive.");
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(current(), false, "the older full load does not bring back the task in review");
+    if (side === "executor") assert.equal(status(), "done");
+  });
 });
 
 test("pairing that cannot reach the computer says so instead of calling the code wrong", async t => {
