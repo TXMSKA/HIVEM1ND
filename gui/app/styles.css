@@ -1028,9 +1028,9 @@ html[data-mode="focus"] body { background: #000000; color: #d8d4cc; }
 .dialog[data-form="cluster-rename"] .dialog-actions .btn:not(.primary), .dialog[data-form="move-agent"] .dialog-actions .btn:not(.primary), .dialog[data-form="selection-lead"] .dialog-actions .btn:not(.primary), .dialog[data-form="detach-agent"] .dialog-actions .btn:not(.primary), .dialog.connection-dialog .dialog-actions .btn:not(.primary) { background: transparent; border-color: transparent; color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
 .context-item.is-danger { color: var(--error); }
 .context-item:disabled { color: var(--mute); cursor: default; }
-.map-toast { position: fixed; z-index: 30; left: 50%; bottom: 46px; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; max-width: min(560px, calc(100vw - 32px)); background: var(--text); color: var(--bg); padding: 11px 16px; border-radius: 14px; font-size: 13px; font-weight: 700; box-shadow: 0 8px 28px rgba(0, 0, 0, .35); }
-.map-toast .icon { width: 15px; height: 15px; flex: none; order: -1; }
-.map-toast .btn { background: transparent; border: 0; color: inherit; text-decoration: underline; text-underline-offset: 3px; padding: 0 0 0 6px; min-height: 0; }
+/* The notice is a card of the theme, not an inverted white bar; Undo is its one action, in the accent. */
+.map-toast { position: fixed; z-index: 30; left: 50%; bottom: 46px; transform: translateX(-50%); display: flex; align-items: center; gap: 12px; max-width: min(560px, calc(100vw - 32px)); background: var(--card2); color: var(--text); border: 1px solid var(--line2); padding: 8px 8px 8px 14px; border-radius: 14px; font-size: 13px; font-weight: 600; box-shadow: 0 8px 28px rgba(0, 0, 0, .45); }
+.map-toast .icon { width: 15px; height: 15px; flex: none; order: -1; color: var(--accent); }
 .alias-edit { display: grid; gap: 4px; padding: 4px 8px 4px 24px; grid-template-columns: 1fr auto; }
 .alias-edit input { color: var(--text); background: var(--card); border: 1px solid var(--accent); border-radius: 9px; padding: 6px 10px; width: 100%; font-size: 13.5px; font-weight: 700; }
 .alias-edit .field-hint, .alias-edit > small, .alias-edit > p { grid-column: 1 / -1; }
@@ -1811,13 +1811,13 @@ button[data-busy="true"]::before {
 .shared-library > .editor-actions { padding: 0 10px 10px; }
 
 /* Choosers, menus, tool rows and toasts hold buttons that pick or toggle rather than act: the quiet bordered look. */
-:is(.settings-machine-menu, .settings-machine-picker, .map-menu, .void-format-bar, .void-find-scopes, .board-toolbar, .start-runs-field, .start-segment, .settings-segment, .void-page-dots, .library-toast, .map-toast) .btn {
+:is(.settings-machine-menu, .settings-machine-picker, .map-menu, .void-format-bar, .void-find-scopes, .board-toolbar, .start-runs-field, .start-segment, .settings-segment, .void-page-dots, .library-toast) .btn {
   background: var(--control-bg); border-color: var(--control-border); color: var(--control-text); box-shadow: none;
 }
-:is(.settings-machine-menu, .settings-machine-picker, .map-menu, .void-format-bar, .void-find-scopes, .board-toolbar, .start-runs-field, .start-segment, .settings-segment, .void-page-dots, .library-toast, .map-toast) .btn:hover:not(:disabled) {
+:is(.settings-machine-menu, .settings-machine-picker, .map-menu, .void-format-bar, .void-find-scopes, .board-toolbar, .start-runs-field, .start-segment, .settings-segment, .void-page-dots, .library-toast) .btn:hover:not(:disabled) {
   background: var(--control-bg-hover); border-color: var(--control-border-hover); color: var(--control-text);
 }
-:is(.settings-machine-menu, .settings-machine-picker, .map-menu, .void-format-bar, .void-find-scopes, .board-toolbar, .start-runs-field, .start-segment, .settings-segment, .void-page-dots, .library-toast, .map-toast) .btn:active:not(:disabled) {
+:is(.settings-machine-menu, .settings-machine-picker, .map-menu, .void-format-bar, .void-find-scopes, .board-toolbar, .start-runs-field, .start-segment, .settings-segment, .void-page-dots, .library-toast) .btn:active:not(:disabled) {
   background: var(--control-bg-active);
 }
 :is(.start-segment, .settings-segment, .void-find-scopes, .void-page-dots) .btn[aria-pressed="true"] { border-color: var(--accent); }
@@ -1867,3 +1867,11 @@ summary:focus-visible, .row:focus-visible, .library-item:focus-visible { outline
 .look-choice[aria-pressed="true"]:hover .look-preview { outline-color: var(--accent); }
 .look-choice:hover .look-preview-name { color: var(--text); }
 .settings-segment .btn.is-selected, .settings-segment .btn[aria-pressed="true"] { border-color: var(--accent); }
+
+/* Undo on the Map notice is an action button in the accent. */
+.map-toast .btn.ghost[data-action="map-undo"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); min-height: 30px; padding: 5px 14px; }
+.map-toast .btn.ghost[data-action="map-undo"]:hover:not(:disabled) { background: var(--control-primary-hover); border-color: var(--control-primary-hover); color: var(--accent-ink); }
+.map-toast .btn.ghost[data-action="map-undo"]:active:not(:disabled) { background: var(--control-primary-active); transform: translateY(1px); }
+
+/* Inside an agent's Details the inner disclosures are opened flat, so their own Details headings would only repeat it. */
+.agent-controls :is(.unit-metadata, .inspector-details) > summary { display: none; }

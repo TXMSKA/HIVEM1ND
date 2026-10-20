@@ -143,7 +143,9 @@ export function renderContext(document, view, language, onAction) {
     root.append(element(document, 'div', { class: 'context-bar' + (waiting ? ' is-full' : ''), role: 'meter', 'aria-label': label,
       'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': percent }, fill));
   }
-  if (waiting && !context.dismissed || view.contextError || context?.operation?.state === 'pending') {
+  // With no reading of the context there is nothing to compact or clear: the label says so, and no notice offers actions
+  // that cannot run.
+  if (waiting && !context.dismissed || view.contextError && percent !== null || context?.operation?.state === 'pending') {
     const pending = Boolean(view.pending || context?.operation?.state === 'pending');
     const button = action => element(document, 'button', { type: 'button', class: action === 'compact' ? 'btn primary' : 'btn',
       'data-action': `context-${action}`, 'aria-label': t(action === 'dismiss' ? 'close' : action), disabled: pending ? '' : null,

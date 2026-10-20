@@ -1332,9 +1332,21 @@ function renderWorkspace(app, t, view, counts) {
       }
       // Asks and task cards belong to the conversation: they scroll with the messages, in one scroll area.
       if (cards) {
+        // Only what waits for a decision joins the conversation: asks, and tasks in review. Every other task stays listed
+        // in Details, so an old task is not drawn in the middle of the chat.
+        const later = element(document, 'div', { class: 'action-cards later-cards', 'data-later-cards': 'true' });
+        for (const card of [...cards.children]) {
+          const id = card.getAttribute?.('data-task') ?? card.getAttribute?.('data-task-detail');
+          if (!id) continue;
+          const status = (card.getAttribute?.('data-task-status') ?? cards.querySelector?.(`[data-task='${id}']`)?.getAttribute?.('data-task-status')) || later.querySelector?.(`[data-task='${id}']`)?.getAttribute?.('data-task-status');
+          if (status !== 'review') { card.remove(); later.append(card); }
+        }
+        if (later.children.length) controls.append(later);
         const field = panel.querySelector('.field');
-        if (scroll) scroll.append(cards);
-        else if (!(field && placeBefore(field, cards))) panel.append(cards);
+        if (cards.children.length) {
+          if (scroll) scroll.append(cards);
+          else if (!(field && placeBefore(field, cards))) panel.append(cards);
+        }
       }
       inspectorBody.append(panel);
     } else {
@@ -4266,18 +4278,26 @@ function stopWorkStep(app, view) {
   }, error => { view.stopOperation = unconfirmedStartOperation(error); finish('failed', error); });
 }
 
+// The ··· of an agent opens a menu under it, as the right-click menu does, not a dialog: the full transcript, rename,
+// pin or remove its chat from the list, and remove the agent.
 function openAgentMore(app, unit) {
-  const document = app.root.ownerDocument, session = sessionForUnit(app, unit.id);
-  const dialog = showDialog(document, { title: startText(app.language, 'moreMenu'), cancel: startText(app.language, 'close') });
-  const menu = element(document, 'div', { class: 'dialog-menu', 'data-agent-menu': unit.id });
-  if (session) menu.append(mapButton(app, 'full-transcript', startText(app.language, 'transcript'), () => { dialog.close(); openSessionTranscript(app, session); }));
-  if (app.store.capabilities.includes('unit.create')) menu.append(mapButton(app, 'agent-rename', text(app.language, 'rename'), () => { dialog.close(); beginAlias(app, unit.id); }));
-  // Removing an agent starts here, in the inspector, without first opening Details.
-  if (app.store.capabilities.includes('unit.create') && typeof unit.id === 'string' && unit.id !== 'root:master' && unit.role !== 'master') {
-    menu.append(mapButton(app, 'agent-remove', removalText(app, 'confirm'), () => { dialog.close(); removeSelectedUnit(app, unit); }, { class: 'btn is-danger' }));
+  const document = app.root.ownerDocument, session = sessionForUnit(app, unit.id), caps = app.store.capabilities ?? [];
+  const chat = app.thread?.chat?.kind === 'direct' && app.thread.chat.members?.includes(unit.id) ? app.thread.chat : null;
+  const items = [];
+  if (session) items.push({ id: 'full-transcript', label: startText(app.language, 'transcript'), run: () => openSessionTranscript(app, session) });
+  if (caps.includes('unit.create')) items.push({ id: 'agent-rename', label: text(app.language, 'rename'), run: () => beginAlias(app, unit.id) });
+  if (chat && caps.includes('chat.manage')) {
+    if (chat.pinned !== true) items.push({ id: 'pin', label: text(app.language, 'pin'), run: () => changeChat(app, { pinned: true }) });
+    if (chat.listed !== false) items.push({ id: 'unlist', label: text(app.language, 'removeFromList'), run: () => changeChat(app, { listed: false }) });
+    else items.push({ id: 'reopen', label: text(app.language, 'reopenChat'), run: () => changeChat(app, { listed: true }) });
   }
-  const actions = dialog.querySelector('.dialog-actions');
-  if (typeof dialog.insertBefore === 'function' && actions) dialog.insertBefore(menu, actions); else dialog.append(menu);
+  // Removing an agent starts here, in the inspector, without first opening Details.
+  if (caps.includes('unit.create') && typeof unit.id === 'string' && unit.id !== 'root:master' && unit.role !== 'master') {
+    items.push({ id: 'agent-remove', label: removalText(app, 'confirm'), danger: true, run: () => removeSelectedUnit(app, unit) });
+  }
+  if (!items.length) return;
+  const box = app.root.querySelector('[data-action="agent-more"]')?.getBoundingClientRect?.();
+  openContextMenu(document, { x: box ? box.right - 220 : 0, y: box ? box.bottom + 6 : 0, items, label: startText(app.language, 'moreMenu') });
 }
 
 function openSessionTranscript(app, session) {
@@ -7455,7 +7475,8 @@ function chatPanel(app, t) {
   });
   const row = element(document, "div", { class: "action-row" });
   const caps = app.store.capabilities ?? [];
-  if (caps.includes("chat.manage") && !group) {
+  // An agent's conversation keeps Pin and Remove from the list in its ··· menu, not between the messages and the composer.
+  if (caps.includes("chat.manage") && !group && !agentTabs) {
     const managing = activityPending(app, `chat-manage:${thread.chat.id}`);
     const manageButton = (action, label, change) => element(document, "button", {
       type: "button",
@@ -7901,7 +7922,10 @@ function renderInspector(app, t, selected) {
   details.append(element(document, "summary", { text: t("details") }));
   const machine = (data.machines ?? []).find((item) => item.id === selected?.machine);
   if (machine) details.append(renderMachine(document, machine, t));
-  for (const session of data.sessions ?? []) details.append(renderSession(document, session, t));
+  // The running sessions are listed; with none running, only the last one, so old stopped sessions do not pile up here.
+  const running = (data.sessions ?? []).filter((session) => session.state !== "stopped");
+  const listed = running.length ? running : (data.sessions ?? []).slice().sort((left, right) => String(right.registeredAt ?? "").localeCompare(String(left.registeredAt ?? ""))).slice(0, 1);
+  for (const session of listed) details.append(renderSession(document, session, t));
   const caps = app.store.capabilities ?? [];
   if (caps.includes("grant.revoke")) {
     const busyGrant = [...(app.activity?.entries() ?? [])].find(([key, record]) => key.startsWith("grant:") && record.phase === "pending")?.[0]?.slice(6) ?? null;

@@ -8099,7 +8099,7 @@ test('the agent menu offers to remove the agent and asks before removing it', as
   desktop.app.mapState.onSelection([executor.id]);
   renderShell(desktop.app);
   click(desktop.root.querySelector('[data-action="agent-more"]'));
-  const remove = desktop.document.querySelector('[data-action="agent-remove"]');
+  const remove = desktop.document.querySelector('[data-action="context-agent-remove"]');
   assert.ok(remove, 'the agent menu has a Remove agent button');
   click(remove);
   const dialog = desktop.document.querySelector('[data-remove-unit]');
