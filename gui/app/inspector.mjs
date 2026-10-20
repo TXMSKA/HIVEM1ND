@@ -69,7 +69,7 @@ export function renderUnit(document, unit, t, language = "en") {
   const lines = [
     ["scope", unit?.scope?.name ?? unit?.scope?.kind],
     // The lead by its name, never its scoped id.
-    ["lead", unit?.leadId ? readableIdentity(unit.leadId) : null],
+    ["lead", unit?.leadId ? readableIdentity(unit.leadId, t("person")) : null],
     ["model", unit?.model],
     ["machine", unit?.machine],
     ["branch", unit?.branch],

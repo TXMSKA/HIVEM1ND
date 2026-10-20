@@ -7561,6 +7561,12 @@ test('the Hierarchy names a custom or preset role under the unit and a role the 
   assert.equal(line({ unit: 'a', role: 'agent' }), 'Role: Agent');
   assert.equal(line({ unit: 'a' }), 'Role: Unknown');
   assert.equal(renderUnit(desktop.document, { unit: 'a', role: 'wizard' }, (key, values) => text('es', key, values), 'es').querySelectorAll('p').find(node => node.textContent.startsWith('Rol')).textContent, 'Rol: Agente');
+  // An agent led by the person names the person in the inspector's language.
+  const leadLine = (language, leadId) => renderUnit(desktop.document, { unit: 'a', leadId }, (key, values) => text(language, key, values), language).querySelectorAll('p').find(node => node.textContent.startsWith(text(language, 'lead'))).textContent;
+  assert.equal(leadLine('es', 'root:master'), `Líder: ${text('es', 'person')}`);
+  assert.equal(leadLine('es', 'root:person'), `Líder: ${text('es', 'person')}`);
+  assert.equal(leadLine('en', 'root:master'), 'Lead: You');
+  assert.equal(leadLine('es', 'env:web:overlord-web'), 'Líder: overlord-web');
 });
 
 test("a task changed elsewhere updates the inspector's copy of it", async (t) => {
