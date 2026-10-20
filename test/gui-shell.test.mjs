@@ -7897,6 +7897,7 @@ test('the Hierarchy list says it is loading only while it has nothing to show, a
   assert.equal(root.querySelectorAll('[data-list-progress]').length, 1);
   assert.equal(total.className.includes('visually-hidden'), false);
   assert.equal(root.querySelector('[data-collection]').getAttribute('aria-busy'), 'true');
+});
 
 test('a button that starts an action shows a loader while it runs, again after a redraw, and is released when it ends', async () => {
   const { document, root } = createTestDocument(1440);
