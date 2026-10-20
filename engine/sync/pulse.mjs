@@ -20,6 +20,9 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
   let first = null;
   let last = null;
   let pending = [];
+  // A published pack never changes, so the hashes it carries and a dependency check that passed are kept by its digest.
+  // Decoding every earlier pack again for each publication made a large first publish slower with every pack.
+  const packIndex = new Map();
   let timer = null;
   let flushing = null;
   let holdUntil = null;
@@ -240,15 +243,27 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
         throw error;
       }
       for (const entry of [...published.packs].reverse()) {
-        const bytes = await provider.readPack(machine, entry.sequence);
-        if (!bytes || bytes.length !== entry.bytes) continue;
+        const key = `${machine}:${entry.sequence}:${entry.hash}`;
+        let known = packIndex.get(key);
+        let bytes = null;
         try {
-          const decoded = decodePack(bytes, { expectedHash: entry.hash, machine });
-          if (decoded.header.sequence !== entry.sequence) continue;
-          const hashes = [...decoded.objects.keys()].filter((hash) => objects.has(hash) && !committed.has(hash));
+          if (!known) {
+            bytes = await provider.readPack(machine, entry.sequence);
+            if (!bytes || bytes.length !== entry.bytes) continue;
+            const decoded = decodePack(bytes, { expectedHash: entry.hash, machine });
+            if (decoded.header.sequence !== entry.sequence) continue;
+            known = { hashes: [...decoded.objects.keys()], ready: false };
+            packIndex.set(key, known);
+          }
+          const hashes = known.hashes.filter((hash) => objects.has(hash) && !committed.has(hash));
           if (hashes.length === 0) continue;
-          const resolved = await resolveDependencies(bytes, provider);
-          if (resolved.status !== 'ready') continue;
+          if (!known.ready) {
+            bytes ??= await provider.readPack(machine, entry.sequence);
+            if (!bytes || bytes.length !== entry.bytes) continue;
+            const resolved = await resolveDependencies(bytes, provider);
+            if (resolved.status !== 'ready') continue;
+            known.ready = true;
+          }
           for (const hash of hashes) committed.set(hash, { hash, machine, sequence: entry.sequence, packHash: entry.hash });
           if (committed.size === objects.size) return committed;
         } catch (error) {
