@@ -21,6 +21,7 @@ Every implementation file below is new. This is the complete GUI write boundary.
 | `gui/app/map.mjs` | Map gestures, selection and layout saves | 5 |
 | `gui/app/hierarchy.mjs` | Hierarchy and project groups | 4 |
 | `gui/app/chats.mjs` | Chat and mailbox presentation | 7 |
+| `gui/app/chat-media.mjs` | Chat pictures, gallery views and message buttons | 7 |
 | `gui/app/inspector.mjs` | Unit, session, grants and deliveries | 8 |
 | `gui/app/actions.mjs` | Confirmed desktop actions | 6 |
 | `gui/app/settings.mjs` | Persistent settings and home access | 12 |
@@ -39,6 +40,7 @@ Every implementation file below is new. This is the complete GUI write boundary.
 | `test/gui-map.test.mjs` | Map geometry, gestures and save races | 5 |
 | `test/gui-actions.test.mjs` | Unit, session, chat, approval and task checks | 6 |
 | `test/gui-editors.test.mjs` | Editor, unknown-field, offset and proposal checks | 9 |
+| `test/gui-chat-media.test.mjs` | Gallery, message button and composer part checks | 7 |
 | `test/gui-shell.test.mjs` | Copy, look, QR, phone and embedding checks | 3 |
 | `test/gui-browser.md` | Concrete browser scenarios and recorded results | 3 |
 

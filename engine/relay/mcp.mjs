@@ -20,7 +20,11 @@ export const RELAY_TOOLS = [
     to: { type: 'string', maxLength: 80 }, subject: { type: 'string', maxLength: 240 },
     body: { type: 'string', maxLength: 262144, description: 'At most 262144 UTF-8 bytes.' },
     priority: { type: 'string', enum: ['normal', 'urgent'] }, replyTo: { type: 'string', maxLength: 180 }, threadId: { type: 'string', maxLength: 180 },
-    replyRequested: { type: 'boolean' }, attachments: { type: 'array', maxItems: 32, items: { type: 'string', maxLength: 2048 } },
+    replyRequested: { type: 'boolean' },
+    attachments: { type: 'array', maxItems: 32, description: 'Path references, or parts a chat shows under the text: {kind:"image",path:<absolute path of a PNG, JPEG or WebP file of at most 10 MB>} is copied into the mind and shown in the gallery; {kind:"link",path:<http, https or mailto address>}, {kind:"board",path:<Blueprint board id>}, {kind:"text",path:<Void text id>} and {kind:"task",path:<task id>} are buttons. Every part takes an optional label of at most 120 characters.',
+      items: { anyOf: [{ type: 'string', maxLength: 2048 }, { type: 'object', properties: {
+        kind: { type: 'string', enum: ['image', 'link', 'board', 'text', 'task'] }, path: { type: 'string', maxLength: 4096 }, label: { type: 'string', maxLength: 120 },
+      }, required: ['kind', 'path'], additionalProperties: false }] } },
   }, ['to', 'subject', 'body']),
   tool('list_inbox', 'List unread message metadata for the registered unit.', { limit: { type: 'integer', minimum: 1, maximum: 100 } }),
   tool('read_inbox', 'Read selected unread messages and archive their original bytes.', {
@@ -124,6 +128,11 @@ export async function validateToolArguments(name, args) {
     if (rule.minimum !== undefined && value < rule.minimum || rule.maximum !== undefined && value > rule.maximum) throw Object.assign(new Error(`Argument is out of range: ${key}`), { code: 'INVALID_ARGUMENTS' });
     if (rule.maxItems && value.length > rule.maxItems) throw Object.assign(new Error(`Too many values for argument: ${key}`), { code: 'INVALID_ARGUMENTS' });
     if (rule.type === 'array' && rule.items?.type === 'string' && value.some((item) => typeof item !== 'string' || item.length > (rule.items.maxLength ?? Infinity))) {
+      throw Object.assign(new Error(`Invalid list value for argument: ${key}`), { code: 'INVALID_ARGUMENTS' });
+    }
+    if (rule.type === 'array' && rule.items?.anyOf && value.some((item) => !rule.items.anyOf.some((choice) => choice.type === 'string'
+      ? typeof item === 'string' && item.length <= (choice.maxLength ?? Infinity)
+      : Boolean(item && typeof item === 'object' && !Array.isArray(item))))) {
       throw Object.assign(new Error(`Invalid list value for argument: ${key}`), { code: 'INVALID_ARGUMENTS' });
     }
     if (key === 'quota' && Object.entries(value).some(([quotaKey, quotaValue]) => !/^[a-zA-Z][a-zA-Z0-9_-]{0,39}$/.test(quotaKey)

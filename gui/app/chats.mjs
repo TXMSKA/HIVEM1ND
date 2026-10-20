@@ -1,5 +1,6 @@
 import { createOperation, perform, request, retryOperation } from "./api.mjs";
 import { collectPages } from "./lists.mjs";
+import { IMAGE_MAX_BYTES, IMAGE_TYPES, encodeBase64 } from "./chat-media.mjs";
 
 export function createThread(chat = null) {
   return {
@@ -238,8 +239,17 @@ function markOptimistic(thread, operation, now) {
     thread.messages = [...thread.messages, row];
   }
   row.body = body;
+  row.attachments = operation.body?.attachments ?? [];
   row.pending = true;
   row.failed = false;
+}
+
+// A picture goes up before the message that shows it, and the message then names it by the id the service gave it.
+export async function uploadChatImage(api, chatId, file, retained = null) {
+  if (!retained && !IMAGE_TYPES.includes(file?.type)) throw Object.assign(new Error("The image type is not supported."), { code: "invalid_asset" });
+  if (!retained && file.size > IMAGE_MAX_BYTES) throw Object.assign(new Error("The image is too large."), { code: "asset_too_large" });
+  const body = retained ? {} : { contentType: file.type, bytesBase64: encodeBase64(new Uint8Array(await file.arrayBuffer())) };
+  return perform(api, { method: "POST", path: "/chats/:chatId/assets", params: { chatId }, body }, retained);
 }
 
 export async function manageChat(api, chat, change, retained = null) {

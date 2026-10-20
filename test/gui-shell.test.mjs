@@ -618,7 +618,7 @@ test("phone capabilities select the phone shell and desktop capabilities stay de
 });
 
 test("the shell has no remote assets, token storage, or inline code", async () => {
-  const files = ["gui/app/index.html", "gui/app/favicon.svg", "gui/app/main.mjs", "gui/app/i18n.mjs", "gui/app/styles.css", "gui/app/components.mjs", "gui/app/lists.mjs", "gui/app/hierarchy.mjs", "gui/app/map.mjs", "gui/app/map-geometry.mjs", "gui/app/actions.mjs", "gui/app/chats.mjs", "gui/app/inspector.mjs", "gui/app/editors.mjs", "gui/app/blueprint.mjs", "gui/app/markup.mjs", "gui/app/void.mjs", "gui/app/settings.mjs", "gui/app/qr.mjs", "gui/app/qr-render.mjs", "gui/app/phone.mjs", "gui/app/embed.mjs"];
+  const files = ["gui/app/index.html", "gui/app/favicon.svg", "gui/app/main.mjs", "gui/app/i18n.mjs", "gui/app/styles.css", "gui/app/components.mjs", "gui/app/lists.mjs", "gui/app/hierarchy.mjs", "gui/app/map.mjs", "gui/app/map-geometry.mjs", "gui/app/actions.mjs", "gui/app/chats.mjs", "gui/app/chat-media.mjs", "gui/app/inspector.mjs", "gui/app/editors.mjs", "gui/app/blueprint.mjs", "gui/app/markup.mjs", "gui/app/void.mjs", "gui/app/settings.mjs", "gui/app/qr.mjs", "gui/app/qr-render.mjs", "gui/app/phone.mjs", "gui/app/embed.mjs"];
   const sources = await Promise.all(files.map(async (file) => [file, await readFile(file, "utf8")]));
   for (const [file, source] of sources) {
     if (file !== "gui/app/main.mjs") assert.equal(source.includes("localStorage"), false, file);
@@ -644,7 +644,7 @@ test("the shell has no remote assets, token storage, or inline code", async () =
   assert.equal(html.includes("session="), false);
   const main = sources[2][1];
   const imports = [...new Set([...main.matchAll(/from "([^"]+)"/g)].map((match) => match[1]))].sort();
-  assert.deepEqual(imports, ["./actions.mjs", "./api.mjs", "./blueprint.mjs", "./chats.mjs", "./components.mjs", "./editors.mjs", "./embed.mjs", "./hierarchy.mjs", "./i18n.mjs", "./inspector.mjs", "./lists.mjs", "./map.mjs", "./markup.mjs", "./phone.mjs", "./settings.mjs", "./state.mjs", "./stream.mjs", "./void.mjs"]);
+  assert.deepEqual(imports, ["./actions.mjs", "./api.mjs", "./blueprint.mjs", "./chat-media.mjs", "./chats.mjs", "./components.mjs", "./editors.mjs", "./embed.mjs", "./hierarchy.mjs", "./i18n.mjs", "./inspector.mjs", "./lists.mjs", "./map.mjs", "./markup.mjs", "./phone.mjs", "./settings.mjs", "./state.mjs", "./stream.mjs", "./void.mjs"]);
   const css = sources[4][1];
   assert.match(css, /--bg:\s*#0f0b13/);
   assert.match(css, /--bg:\s*#050505/);
@@ -7717,4 +7717,56 @@ test("an element's inline style is set through the object model, which the conte
   const node = element(document, "span", { class: "spinner", style: "width:15px;height:15px" });
   assert.equal(node.getAttribute("style"), null, "a style attribute would be blocked by style-src 'self'");
   assert.equal(node.style.cssText, "width:15px;height:15px");
+});
+
+test("a chat message shows its pictures as a carousel with its buttons, and the composer sends a picture and a link", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const api = apiFrom(fixture.desktopUrl);
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.chatList?.catalog?.length, "The chat list did not load.");
+  const chat = desktop.app.chatList.catalog[0];
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+  const assets = `/chats/${encodeURIComponent(chat.id)}/assets`;
+  const upload = async () => (await request(api, "POST", assets, { operation: createOperation({ method: "POST", path: assets, body: { contentType: "image/png", bytesBase64: png.toString("base64") } }) })).data.id;
+  const [first, second] = [await upload(), await upload()];
+  const path = `/chats/${encodeURIComponent(chat.id)}/messages`;
+  await request(api, "POST", path, { operation: createOperation({ method: "POST", path, body: { body: "The checkout screens", subject: "", replyTo: null, priority: "normal",
+    attachments: [{ kind: "image", path: first, label: "Checkout" }, { kind: "image", path: second }, { kind: "link", path: "https://example.com/pr/1", label: "Pull request" }, { kind: "task", path: "project:shop:029" }] } }) });
+  navigate(desktop.app, "chats");
+  desktop.app.activeHandlers.onActivate({ id: chat.id, kind: "chat" }, "double");
+  await waitFor(() => desktop.root.querySelector("[data-gallery-stage]")?.querySelector("img"), "The picture did not load.");
+  const gallery = desktop.root.querySelector("[data-gallery]");
+  assert.equal(gallery.getAttribute("data-gallery"), "2");
+  const picture = gallery.querySelector("[data-gallery-stage]").querySelector("img");
+  assert.match(picture.getAttribute("src"), /^blob:/);
+  assert.equal(picture.getAttribute("alt"), "Checkout");
+  assert.equal(gallery.querySelector("[data-gallery-strip]").querySelectorAll("[data-gallery-index]").length, 2);
+  click(gallery.querySelector("[data-gallery-view='grid']"));
+  assert.ok(desktop.root.querySelector("[data-gallery-grid]"), "the grid replaces the carousel");
+  const link = desktop.root.querySelector("[data-chat-action='link']");
+  assert.deepEqual([link.getAttribute("href"), link.getAttribute("target"), link.getAttribute("rel"), link.children.at(-1).textContent], ["https://example.com/pr/1", "_blank", "noopener noreferrer", "Pull request"]);
+  assert.ok(desktop.root.querySelector("[data-chat-action='task']"));
+
+  click(desktop.root.querySelector("[data-action='attach']"));
+  await waitFor(() => desktop.document.querySelector("[data-attach-dialog]"), "The attach dialog did not open.");
+  let dialog = desktop.document.querySelector("[data-attach-dialog]");
+  dialog.querySelector("[data-attach-link]").value = "https://example.com/spec";
+  click(dialog.querySelector("[data-action='attach-link']"));
+  await waitFor(() => desktop.root.querySelector("[data-composer-parts='1']"), "The link did not join the composer.");
+  click(desktop.root.querySelector("[data-action='attach']"));
+  await waitFor(() => desktop.document.querySelector("[data-attach-dialog]"), "The attach dialog did not open again.");
+  dialog = desktop.document.querySelector("[data-attach-dialog]");
+  const input = dialog.querySelector("[data-attach-images]");
+  input.files = [new File([png], "shot.png", { type: "image/png" })];
+  for (const handler of input.listeners.get("change") ?? []) handler({});
+  await waitFor(() => desktop.app.thread.parts?.length === 2 && desktop.app.thread.parts.every((part) => part.path), "The picture did not upload.");
+  click(desktop.root.querySelector("[data-action='send']"));
+  await waitFor(() => desktop.app.thread.messages.some((message) => !message.pending && message.attachments?.length === 2 && message.fromId === "root:master"), "The parts were not sent.");
+  const sent = desktop.app.thread.messages.find((message) => !message.pending && message.attachments?.length === 2);
+  assert.deepEqual(sent.attachments.map((part) => part.kind), ["link", "image"]);
+  assert.equal(sent.body, "");
+  assert.equal(desktop.root.querySelector("[data-composer-parts]"), null, "the composer is empty after sending");
+  await waitFor(() => desktop.root.querySelectorAll("[data-gallery]").length === 2, "The sent picture did not show.");
 });

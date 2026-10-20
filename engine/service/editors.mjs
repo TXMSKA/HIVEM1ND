@@ -850,6 +850,18 @@ export function imageComplete(bytes, contentType) {
   return false;
 }
 
+// The type, extension and size of bytes that are a whole PNG, JPEG or WebP image, or null. A picture in a chat is
+// checked as strictly as one on a board.
+export function verifiedImage(bytes) {
+  if (!Buffer.isBuffer(bytes)) return null;
+  const head = bytes.subarray(0, 64).toString('utf8').trimStart().toLowerCase();
+  if (head.startsWith('<svg') || head.startsWith('<html') || head.startsWith('<!doctype')) return null;
+  const kind = sniff(bytes);
+  const size = kind ? imageSize(bytes, kind.type) : null;
+  if (!kind || !size || size.width < 1 || size.height < 1 || size.width > 16384 || size.height > 16384) return null;
+  return { type: kind.type, ext: kind.ext, width: size.width, height: size.height };
+}
+
 export async function createAsset(context, id, input) {
   await requireAttachment(context, id);
   const found = await resourceOf(context, id);
@@ -1017,7 +1029,7 @@ async function convertedAsset(context, bytes, kind) {
   return { bytes: converted.bytes, kind: nextKind };
 }
 
-function strictBase64(value) {
+export function strictBase64(value) {
   if (value.length === 0 || value.length % 4 !== 0) return false;
   let padding = 0;
   for (let index = value.length - 1; index >= 0 && value[index] === '='; index -= 1) padding += 1;

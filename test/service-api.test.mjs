@@ -1290,6 +1290,26 @@ test('every contract route has a success result and an authority or boundary fai
   });
   expectStatus(read, 200, 'chat read');
   hit('POST', '/chats/:chatId/read');
+  // The phone posts the picture, which also keeps these calls out of the desktop credential's request window.
+  const chatPhone = core.credentials.issue({ audience: 'phone', unitId: 'root:master', expiresAt: '2027-01-01T00:00:00.000Z' });
+  const chatImage = await call(port, 'POST', `/api/v1/chats/${chatId}/assets`, {
+    token: chatPhone.token,
+    body: { contentType: 'image/png', bytesBase64: PNG.toString('base64') },
+    headers: { 'idempotency-key': randomUUID() },
+  });
+  expectStatus(chatImage, 201, 'chat image');
+  assert.equal(chatImage.json.data.url, `/api/v1/chats/${chatId}/assets/${chatImage.json.data.id}`);
+  hit('POST', '/chats/:chatId/assets');
+  expectStatus(await call(port, 'GET', `/api/v1/chats/${chatId}/assets/${chatImage.json.data.id}`, { token: chatPhone.token }), 404, 'an image no message shows');
+  expectStatus(await call(port, 'POST', `/api/v1/chats/${chatId}/messages`, {
+    token: chatPhone.token,
+    body: { body: '', attachments: [{ kind: 'image', path: chatImage.json.data.id }, { kind: 'link', path: 'https://example.com/notes', label: 'Notes' }] },
+    headers: { 'idempotency-key': randomUUID() },
+  }), 201, 'chat message with an image and a link');
+  const shownImage = await call(port, 'GET', `/api/v1/chats/${chatId}/assets/${chatImage.json.data.id}`, { token: chatPhone.token });
+  expectStatus(shownImage, 200, 'chat image read');
+  assert.equal(shownImage.headers['content-type'], 'image/png');
+  hit('GET', '/chats/:chatId/assets/:assetId');
   const chatNow = await call(port, 'GET', `/api/v1/chats/${chatId}`, { token });
   const pinned = await call(port, 'PATCH', `/api/v1/chats/${chatId}`, {
     token,

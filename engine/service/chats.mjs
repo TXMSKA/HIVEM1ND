@@ -7,6 +7,7 @@ import { customRoleText, readUnitState, stateCustomRole } from './state.mjs';
 import { admitMessage } from '../sync/limits.mjs';
 import { commitTransaction, readBytes, revisionOf, withLocalChanges } from './store.mjs';
 import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
+import { ASSET_MAX_BYTES, ASSET_NAME, ASSET_TYPES, MESSAGE_ASSETS, messagePart } from './message-parts.mjs';
 
 const RECORD_MAX = 1000000;
 const MEMBER_MAX = 256;
@@ -425,6 +426,7 @@ async function buildMessage(context, input, target) {
   }
   const attachments = attachmentList(input?.attachments);
   if (!body && !subject && attachments.length === 0) throw new CoreError(422, 'invalid_body', 'A message needs a body, subject, or attachment.');
+  await requireAssets(context, attachments);
   const priority = enumField(input, 'priority', ['normal', 'urgent'], 'normal');
   const replyRequested = booleanField(input, 'replyRequested', false);
   const id = randomUUID();
@@ -484,13 +486,57 @@ function booleanField(input, name, fallback) {
 function attachmentList(value) {
   if (value == null) return [];
   if (!Array.isArray(value) || value.length > 64) throw new CoreError(422, 'invalid_body', 'A message can include at most 64 attachments.');
-  return value.map((item) => {
-    if (!item || typeof item !== 'object' || typeof item.path !== 'string' || item.path.length < 1 || item.path.length > 2048 || /[\u0000-\u001f]/.test(item.path)) {
-      throw new CoreError(422, 'invalid_body', 'An attachment needs a path of at most 2048 characters.');
+  return value.map((item) => messagePart(item, (reason) => { throw new CoreError(422, 'invalid_body', reason); }));
+}
+
+// A picture is sent after its upload, so every image part names an asset that is already stored.
+async function requireAssets(context, attachments) {
+  for (const part of attachments) {
+    if (part.kind !== 'image') continue;
+    if (!(await readBytes(context.store, absolute(context, `${MESSAGE_ASSETS}/${part.path}`)))) {
+      throw new CoreError(422, 'unknown_asset', 'An image of the message was not uploaded.');
     }
-    if (item.kind != null && typeof item.kind !== 'string') throw new CoreError(422, 'invalid_body', 'An attachment kind must be text.');
-    return { path: item.path, kind: item.kind ?? null };
-  });
+  }
+}
+
+export async function postChatAsset(context, chatId, input) {
+  const chat = await loadChat(context, chatId);
+  if (!chat.members.includes(author(context)) && context.principal?.audience !== 'desktop') {
+    throw new CoreError(403, 'not_chat_member', 'The author is not a member of this chat.');
+  }
+  const contentType = input?.contentType;
+  if (!ASSET_TYPES.includes(contentType)) throw new CoreError(422, 'invalid_asset', 'The image type is not supported.');
+  const encoded = input?.bytesBase64;
+  if (typeof encoded === 'string' && encoded.length > 16_000_000) throw new CoreError(413, 'asset_too_large', 'The image is too large.');
+  const { strictBase64, verifiedImage } = await import('./editors.mjs');
+  if (typeof encoded !== 'string' || !strictBase64(encoded)) throw new CoreError(422, 'invalid_asset', 'The image is not strict base64.');
+  const bytes = Buffer.from(encoded, 'base64');
+  if (bytes.toString('base64') !== encoded) throw new CoreError(422, 'invalid_asset', 'The image is not strict base64.');
+  if (bytes.length > ASSET_MAX_BYTES) throw new CoreError(413, 'asset_too_large', 'The image is too large.');
+  const image = verifiedImage(bytes);
+  if (!image || image.type !== contentType) throw new CoreError(422, 'invalid_asset', 'The image is not a verified image.');
+  const id = `${randomUUID()}.${image.ext}`;
+  const asset = { id, contentType: image.type, bytes: bytes.length, width: image.width, height: image.height, url: `/api/v1/chats/${chatId}/assets/${id}` };
+  context.receiptBody = asset;
+  context.receiptStatus = 201;
+  await commitOne(context, `${MESSAGE_ASSETS}/${id}`, null, bytes, []);
+  return asset;
+}
+
+// A picture is read through a chat whose messages show it: whoever can read the chat sees its pictures, and only those.
+export async function readChatAsset(context, chatId, assetId) {
+  if (typeof assetId !== 'string' || !ASSET_NAME.test(assetId)) throw new CoreError(404, 'not_found', 'The image does not exist.');
+  await loadChat(context, chatId);
+  const { readProjection } = await import('./projection.mjs');
+  const shown = (await readProjection(context)).messages.some((message) => (message.chatIds?.includes(chatId) || message.path?.includes(`/chats/${chatId}/`))
+    && (message.attachments ?? []).some((part) => part?.kind === 'image' && part.path === assetId));
+  if (!shown) throw new CoreError(404, 'not_found', 'The image is not in this chat.');
+  const bytes = await readBytes(context.store, absolute(context, `${MESSAGE_ASSETS}/${assetId}`));
+  if (!bytes) throw new CoreError(404, 'not_found', 'The image does not exist.');
+  const { verifiedImage } = await import('./editors.mjs');
+  const image = verifiedImage(bytes);
+  if (!image || !assetId.endsWith(`.${image.ext}`)) throw new CoreError(422, 'invalid_asset', 'The image is not a verified image.');
+  return { bytes, type: image.type, revision: hashBytes(bytes) };
 }
 
 function fanoutFor(message, members, fromId) {

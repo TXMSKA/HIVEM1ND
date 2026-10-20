@@ -33,7 +33,9 @@ import {
   sentLineState,
   postVisibleReads,
   updateNearBottom,
+  uploadChatImage,
 } from "./chats.mjs";
+import { IMAGE_MAX_BYTES, IMAGE_TYPES, galleryState, messageParts, renderActions, renderAttachDialog, renderGallery, renderPendingParts } from "./chat-media.mjs";
 import { addNode, addBoardFrame, appendBoardNode, boardBounds, boardColors, boardCommentAnchor, boardDocument, dragNodeGeometry, editedBoard, hitBoardNode, indexNodes, loadAssets, parentPoint, patchNode, releaseAssets, removeNode, renderBoard, replaceBoard, setBoardDraft, sketchStroke, touchedStrokes, uploadAsset } from "./blueprint.mjs";
 import { ApiError, clearCredentials, createApi, createOperation, dispose as disposeApi, fetchAsset, operationId, perform, request } from "./api.mjs";
 import { clusterGlyph, element, icon, labelDialog, labeledField, pathIcon, progressMark, runAction, setBusy, showDialog, showError } from "./components.mjs";
@@ -6950,9 +6952,17 @@ function chatPanel(app, t) {
       text: message.body || message.subject || "",
     });
     article.append(row);
+    const parts = messageParts(message.attachments);
+    if (parts.images.length) {
+      thread.galleries ??= new Map();
+      article.append(renderGallery(document, { images: parts.images, t, state: galleryState(thread.galleries, message.id, parts.images.length),
+        imageFor: (id) => message.pending ? null : chatImage(app, thread.chat.id, id), onChange: () => renderShell(app) }));
+    }
+    if (parts.actions.length) article.append(renderActions(document, parts.actions, { t, titleOf: (action) => chatActionTitle(app, action), onOpen: (action) => openChatAction(app, action) }));
     if (own) {
       Object.assign(article.style, { background: "transparent", color: "var(--text)", padding: "0 0 0 28px", gap: "4px" });
-      Object.assign(row.style, { background: "var(--me)", color: "var(--me-text)", padding: "10px 14px", borderRadius: "18px", fontSize: "14.5px", ...(message.failed ? { border: "1px solid var(--error)" } : {}) });
+      // A message of pictures or buttons alone has no text, so it draws no empty bubble.
+      if (row.textContent || message.failed) Object.assign(row.style, { background: "var(--me)", color: "var(--me-text)", padding: "10px 14px", borderRadius: "18px", fontSize: "14.5px", ...(message.failed ? { border: "1px solid var(--error)" } : {}) });
       const meta = article.querySelector(".bubble-meta");
       Object.assign(meta.style, { fontFamily: "var(--mono)", fontSize: "12px", fontWeight: "700", color: "var(--mute)" });
       const { key: state, at } = sentLineState(message);
@@ -7068,12 +7078,128 @@ function chatPanel(app, t) {
     composer.setAttribute("placeholder", name);
     const hintId = `composer-hint-${thread.chat.id}`;
     composer.setAttribute("aria-describedby", hintId);
+    const attach = element(document, "button", { type: "button", class: "composer-attach", "data-action": "attach", "aria-label": t("attachToMessage"), title: t("attachToMessage"),
+      onclick: () => openAttachDialog(app, thread) }, icon(document, "plus"));
     panel.append(element(document, "label", { class: "field composer-field" },
       element(document, "span", { class: "field-label visually-hidden", text: name }),
-      element(document, "div", { class: "composer-row" }, composer, send),
+      thread.parts?.length ? renderPendingParts(document, thread.parts, { t, titleOf: (action) => chatActionTitle(app, action), onRemove: (part) => removePart(app, thread, part) }) : null,
+      element(document, "div", { class: "composer-row" }, attach, composer, send),
       element(document, "p", { class: "field-hint", id: hintId, text: hint })));
   }
   return panel;
+}
+
+// A picture of a chat is fetched once with the credential and kept as a blob URL; the view asks again on every draw.
+function chatImage(app, chatId, assetId) {
+  app.chatImages ??= new Map();
+  const key = `${chatId}/${assetId}`;
+  const known = app.chatImages.get(key);
+  if (known) return known.state === "ready" ? { url: known.image.url } : known.state === "failed" ? { failed: true } : null;
+  const record = { state: "loading", image: null };
+  app.chatImages.set(key, record);
+  fetchAsset(app.api, { url: `/api/v1/chats/${encodeURIComponent(chatId)}/assets/${encodeURIComponent(assetId)}` }).then((image) => {
+    if (app.disposed) return image.revoke();
+    record.state = "ready";
+    record.image = image;
+    // The oldest pictures are let go once many are held, and fetched again if they are shown again.
+    for (const [old, entry] of app.chatImages) {
+      if (app.chatImages.size <= CHAT_IMAGES_HELD) break;
+      if (entry.state !== "ready" || old === key) continue;
+      entry.image.revoke();
+      app.chatImages.delete(old);
+    }
+  }).catch(() => { record.state = "failed"; }).finally(() => { if (!app.disposed) renderShell(app); });
+  return null;
+}
+
+const CHAT_IMAGES_HELD = 120;
+
+function chatActionTitle(app, action) {
+  if (action.kind === "task") return app.store.indexes.tasks.get(action.target)?.title ?? "";
+  return app.editors?.catalog?.find((item) => item.id === action.target)?.title ?? "";
+}
+
+function openChatAction(app, action) {
+  if (action.kind === "task") {
+    openWaitingItem(app, { id: `chat-task:${action.target}`, taskId: action.target, title: action.label || action.target });
+    if (app.layout === "phone") navigate(app, "waiting");
+    else {
+      app.waitingOpen = true;
+      app.mode = "map";
+      renderShell(app);
+    }
+    return;
+  }
+  if (app.layout === "phone" || !(app.store.capabilities ?? []).includes("editor.read")) {
+    explain(app, "chatOpensOnComputer");
+    return;
+  }
+  const kind = action.kind === "text" ? "void" : "blueprint";
+  app.mode = kind === "void" ? "document" : "blueprint";
+  selectEditor(app, { id: action.target, kind, title: action.label || chatActionTitle(app, action) });
+}
+
+async function openAttachDialog(app, thread) {
+  const document = app.root.ownerDocument;
+  if (document.querySelector?.("[data-attach-dialog]")) return;
+  const t = (key, values) => text(app.language, key, values);
+  const choices = { task: [...app.store.indexes.tasks.values()].filter((task) => task.status === "open" || task.status === "review")
+    .map((task) => ({ id: task.id, title: `${task.number ?? ""} ${task.title ?? ""}`.trim() })) };
+  // Boards and texts are offered where they can be opened: on the computer.
+  if (app.layout !== "phone" && (app.store.capabilities ?? []).includes("editor.read")) {
+    const [boards, texts] = await Promise.allSettled([collectPages(app.api, "/blueprint/boards", { limit: 50 }), collectPages(app.api, "/void/texts", { limit: 50 })]);
+    choices.board = boards.status === "fulfilled" ? boards.value.items.map((item) => ({ id: item.id, title: item.title || item.path || item.id })) : [];
+    choices.text = texts.status === "fulfilled" ? texts.value.items.map((item) => ({ id: item.id, title: item.title || item.path || item.id })) : [];
+  }
+  if (app.disposed || document.querySelector?.("[data-attach-dialog]")) return;
+  const dialog = renderAttachDialog(document, { t, choices,
+    onImages: (files) => addImages(app, thread, files),
+    onAdd: (part) => { (thread.parts ??= []).push(part); renderShell(app); } });
+  document.body.append(dialog);
+  dialog.showModal();
+}
+
+// A picture the service would refuse is named at once, and so is one it did refuse; any other failure reads as usual.
+function noteImage(app, error, key) {
+  if (!["asset_too_large", "invalid_asset"].includes(error?.code)) return noteAction(app, error, key);
+  showOutcome(app, text(app.language, "attachImageRejected"), error.code, "error", null, key);
+  if (!app.disposed) renderShell(app);
+}
+
+function addImages(app, thread, files) {
+  const chatId = thread.chat.id;
+  for (const file of files) {
+    if (!IMAGE_TYPES.includes(file.type) || file.size > IMAGE_MAX_BYTES) {
+      noteImage(app, { code: IMAGE_TYPES.includes(file.type) ? "asset_too_large" : "invalid_asset" }, `chat:${chatId}`);
+      continue;
+    }
+    const preview = app.api.createObjectURL?.(file) ?? null;
+    if (preview) app.api.blobs.add(preview);
+    const part = { kind: "image", path: null, uploading: true, preview };
+    (thread.parts ??= []).push(part);
+    uploadChatImage(app.api, chatId, file).then((result) => {
+      part.path = result.data.id;
+      part.uploading = false;
+      clearMatchedError(app, `chat:${chatId}`);
+    }).catch((error) => {
+      removePart(app, thread, part, false);
+      noteImage(app, error, `chat:${chatId}`);
+    }).finally(() => { if (!app.disposed) renderShell(app); });
+  }
+  renderShell(app);
+}
+
+function removePart(app, thread, part, render = true) {
+  thread.parts = (thread.parts ?? []).filter((item) => item !== part);
+  releasePart(app, part);
+  if (render && !app.disposed) renderShell(app);
+}
+
+function releasePart(app, part) {
+  if (!part.preview) return;
+  app.api.blobs.delete(part.preview);
+  app.api.revokeObjectURL?.(part.preview);
+  part.preview = null;
 }
 
 function dropPendingReads(thread) {
@@ -7250,8 +7376,13 @@ function submitComposer(app, composer) {
   const thread = app.thread;
   const chatId = thread?.chat?.id;
   const draft = composer.value;
-  if (!chatId || !draft.trim()) return;
-  const task = postMessage(app.api, thread, { body: draft });
+  const parts = thread?.parts ?? [];
+  // A picture still uploading has no id yet, so the message waits for it.
+  if (!chatId || (!draft.trim() && !parts.length) || parts.some((part) => part.uploading || !part.path)) return;
+  const attachments = parts.map(({ kind, path, label }) => ({ kind, path, ...(label ? { label } : {}) }));
+  const task = postMessage(app.api, thread, attachments.length ? { body: draft, attachments } : { body: draft });
+  for (const part of parts) releasePart(app, part);
+  thread.parts = [];
   composer.value = "";
   clearInputDraft(app, "chat", chatId);
   inputDrafts(app).focus = { kind: "field", id: keepId("chat", chatId), start: 0, end: 0 };

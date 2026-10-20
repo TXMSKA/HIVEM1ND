@@ -35,7 +35,7 @@ const CLUSTER_ROLES = new Set(["executor", "overlord", ...PRESET_ROLES, "custom"
 const ROLES = new Set(["overseer", "adjutant", "executive", "overlord", "executor", "incubator", "genesis", "master", ...PRESET_ROLES, "custom"]);
 const DESKTOP_CAPS = ["read", "chat.post", "chat.manage", "mailbox.read", "approval.answer", "grant.revoke", "task.status", "task.undo", "unit.create", "unit.connect", "session.start", "session.stop", "layout.write", "settings.write", "home.manage", "editor.read", "editor.write", "comment.write", "proposal.answer", "asset.write", "watch", "viewer.write"];
 const PHONE_CAPS = ["read", "chat.post", "master.read", "approval.answer", "task.accept", "task.send-back"];
-const APP_FILES = ["index.html", "favicon.svg", "main.mjs", "api.mjs", "stream.mjs", "state.mjs", "i18n.mjs", "styles.css", "components.mjs", "lists.mjs", "map-geometry.mjs", "map.mjs", "hierarchy.mjs", "chats.mjs", "inspector.mjs", "actions.mjs", "settings.mjs", "qr.mjs", "qr-render.mjs", "phone.mjs", "embed.mjs", "editors.mjs", "blueprint.mjs", "void.mjs", "markup.mjs", "find-worker.mjs", "start-api.mjs", "start-copy.mjs", "cluster-geometry.mjs", "clusters.mjs", "plan-view.mjs", "session-work.mjs", "plan-controller.mjs"];
+const APP_FILES = ["index.html", "favicon.svg", "main.mjs", "api.mjs", "stream.mjs", "state.mjs", "i18n.mjs", "styles.css", "components.mjs", "lists.mjs", "map-geometry.mjs", "map.mjs", "hierarchy.mjs", "chats.mjs", "chat-media.mjs", "inspector.mjs", "actions.mjs", "settings.mjs", "qr.mjs", "qr-render.mjs", "phone.mjs", "embed.mjs", "editors.mjs", "blueprint.mjs", "void.mjs", "markup.mjs", "find-worker.mjs", "start-api.mjs", "start-copy.mjs", "cluster-geometry.mjs", "clusters.mjs", "plan-view.mjs", "session-work.mjs", "plan-controller.mjs"];
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 class HttpError extends Error {
@@ -2041,6 +2041,8 @@ function routeTable() {
     { pattern: "/chats/:chatId", PATCH: { capability: "chat.manage", validate: validateChatPatch } },
     { pattern: "/chats/:chatId", GET: { query: [] } },
     { pattern: "/chats/:chatId/messages", GET: { query: ["q", "limit", "cursor", "before"] }, POST: { capability: "chat.post", validate: validateMessage } },
+    { pattern: "/chats/:chatId/assets", POST: { capability: "chat.post", validate: validateAsset } },
+    { pattern: "/chats/:chatId/assets/:assetId", GET: { query: [] } },
     { pattern: "/chats/:chatId/read", POST: { capability: "master.read", allow: ["read", "master.read"], validate: validateRead } },
     { pattern: "/mailboxes", GET: { query: ["q", "limit", "cursor", "archived"] } },
     { pattern: "/mailboxes/:unitId/messages", GET: { query: ["q", "limit", "cursor", "state"] }, POST: { capability: "chat.post", validate: validateMessage } },
@@ -2841,7 +2843,7 @@ function bodyLimit(method, apiPath) {
   if (method === "PUT" && (/^\/blueprint\/boards\/[^/]+$/.test(apiPath) || /^\/void\/texts\/[^/]+$/.test(apiPath))) return LARGE_BODY;
   if (method === "POST" && (apiPath === "/blueprint/boards" || apiPath === "/blueprint/boards/import" || apiPath === "/void/texts")) return LARGE_BODY;
   if (method === "POST" && apiPath === "/void/replace") return LARGE_BODY;
-  if (method === "POST" && (/^\/void\/texts\/[^/]+\/ranges$/.test(apiPath) || /^\/editors\/[^/]+\/assets$/.test(apiPath))) return LARGE_BODY;
+  if (method === "POST" && (/^\/void\/texts\/[^/]+\/ranges$/.test(apiPath) || /^\/(?:editors|chats)\/[^/]+\/assets$/.test(apiPath))) return LARGE_BODY;
   return GENERAL_BODY;
 }
 
@@ -2972,8 +2974,9 @@ async function handleApi(fx, request, response, audience) {
   }
   const query = queryMap(url);
   if (request.method === "GET" || request.method === "HEAD") {
-    if (spec.pattern === "/editors/:resourceId/assets/:assetId") {
-      const asset = await readAsset(fx, matched.params.resourceId, matched.params.assetId);
+    if (spec.pattern === "/editors/:resourceId/assets/:assetId" || spec.pattern === "/chats/:chatId/assets/:assetId") {
+      const asset = spec.pattern === "/chats/:chatId/assets/:assetId" ? await readChatAsset(fx, matched.params.chatId, matched.params.assetId)
+        : await readAsset(fx, matched.params.resourceId, matched.params.assetId);
       response.writeHead(200, { "Content-Type": asset.contentType, ETag: `"${sha256(asset.bytes)}"`, "Cache-Control": "no-store", "Content-Length": asset.bytes.length });
       response.end(request.method === "HEAD" ? undefined : asset.bytes);
       return;
@@ -4635,6 +4638,36 @@ async function writeText(fx, editor, document, change) {
   };
 }
 
+// A chat picture is stored among the message assets of the mind and read through a chat whose messages show it.
+async function prepareChatAsset(fx, chatId, body, principal) {
+  const chat = (await projection(fx)).chats.find((item) => item.id === chatId);
+  if (!chat) throw new HttpError(404, "chat_not_found", "The chat was not found.");
+  if (!chat.members.includes(principal.unitId)) throw new HttpError(403, "not_chat_member", "The sender is not a member of the chat.");
+  const bytes = Buffer.from(body.bytesBase64, "base64");
+  if (bytes.length > 10_000_000) throw new HttpError(413, "asset_too_large", "The image is too large.");
+  const id = `${uuid()}.${imageExtension(bytes, body.contentType)}`;
+  const revision = sha256(bytes);
+  return { status: 201, data: { id, contentType: body.contentType, bytes: bytes.length, url: `/api/v1/chats/${chatId}/assets/${id}` },
+    writes: [{ path: join(fx.tree.user, "relay", "assets", id), beforeRevision: null, afterRevision: revision, afterBytesBase64: bytes.toString("base64") }], events: [] };
+}
+
+async function readChatAsset(fx, chatId, assetId) {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(png|jpg|webp)$/.test(assetId)) throw new HttpError(404, "not_found", "The image does not exist.");
+  const snap = await projection(fx);
+  const shown = snap.messages.some((message) => message.chatId === chatId && (message.attachments ?? []).some((part) => part?.kind === "image" && part.path === assetId));
+  if (!shown) throw new HttpError(404, "not_found", "The image is not in this chat.");
+  const extension = assetId.split(".").at(-1);
+  const contentType = extension === "png" ? "image/png" : extension === "jpg" ? "image/jpeg" : "image/webp";
+  try {
+    const bytes = await readFile(join(fx.tree.user, "relay", "assets", assetId));
+    imageExtension(bytes, contentType);
+    return { bytes, contentType };
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    throw new HttpError(404, "not_found", "The image does not exist.");
+  }
+}
+
 async function readAsset(fx, resourceId, assetId) {
   const editor = requireEditor(await projection(fx), resourceId);
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(png|jpg|webp)$/.test(assetId)) {
@@ -5327,6 +5360,7 @@ async function prepareMutation(fx, pattern, params, body, principal, operationId
   if (pattern === "/blueprint/boards/:resourceId/nodes/:nodeId" && body.changes) return preparePatchNode(fx, params, body);
   if (pattern === "/blueprint/boards/:resourceId/nodes/:nodeId") return prepareDeleteNode(fx, params, body);
   if (pattern === "/editors/:resourceId/assets") return prepareAsset(fx, params.resourceId, body);
+  if (pattern === "/chats/:chatId/assets") return prepareChatAsset(fx, params.chatId, body, principal);
   if (pattern === "/void/texts/:resourceId") return prepareTextPut(fx, params.resourceId, body);
   if (pattern === "/void/texts/:resourceId/ranges") return prepareRange(fx, params.resourceId, body);
   if (pattern === "/void/texts/:resourceId/proposals/:proposalId/answer") return prepareProposal(fx, params, body);
