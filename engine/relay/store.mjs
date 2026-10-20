@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { assertWithin } from '../records.mjs';
 import { uuidV8, inboxDirectory, parseUnitId } from '../service/identity.mjs';
+import { ASSET_MAX_BYTES, ASSET_NAME, MESSAGE_ASSETS, messagePart } from '../service/message-parts.mjs';
 
 const MAX_BODY_BYTES = 256 * 1024;
 const MAX_MESSAGE_BYTES = 1024 * 1024;
@@ -120,6 +121,32 @@ function parseHeaders(raw) {
   return { headers, body, bodyBytes };
 }
 
+// A string stays the path reference it always was. An object is a part a chat shows under the text (messagePart): an image
+// is either the absolute path of a PNG, JPEG or WebP file on this machine, copied when the message is sent, or the name of
+// an image already among the message assets.
+function checkedParts(values) {
+  const invalid = (reason) => { throw relayError('INVALID_ATTACHMENTS', reason); };
+  if (!Array.isArray(values) || values.length > MAX_ATTACHMENTS) invalid(`attachments must contain at most ${MAX_ATTACHMENTS} entries.`);
+  return values.map((value) => {
+    if (typeof value === 'string') {
+      if (value.length > 2048 || /[\u0000-\u001f\u007f]/.test(value) || value.split(/[\\/]+/).some((segment) => segment === '..')) {
+        invalid(`attachments must contain at most ${MAX_ATTACHMENTS} single-line path references.`);
+      }
+      return value;
+    }
+    const file = value?.kind === 'image' && typeof value.path === 'string' && !ASSET_NAME.test(value.path) ? value.path : null;
+    if (file === null) {
+      const part = messagePart(value, invalid);
+      if (part.path.split(/[\\/]+/).includes('..')) invalid('An attachment path cannot step out of its folder.');
+      return part;
+    }
+    if (!path.isAbsolute(file) || file.length > 4096 || /[\u0000-\u001f\u007f]/.test(file)) invalid('An image attachment needs the absolute path of an image file.');
+    // The file becomes a stored name when it is copied; its label is checked now, beside a stand-in name.
+    const part = messagePart({ ...value, path: '00000000-0000-4000-8000-000000000000.png' }, invalid);
+    return { ...part, file };
+  });
+}
+
 function attachmentPath(entry) {
   if (typeof entry !== 'string' || entry.length > 2048 || /[\u0000-\u001f\u007f]/.test(entry) || entry.split(/[\\/]+/).includes('..')) {
     throw relayError('MALFORMED_MESSAGE', 'The attachment metadata contains an unsafe path reference.');
@@ -175,7 +202,9 @@ function parseMessage(raw, sourcePath, archived = false) {
     }
     const kind = entry.kind === undefined ? null : entry.kind;
     if (kind !== null && typeof kind !== 'string') throw relayError('MALFORMED_MESSAGE', 'The attachment metadata is malformed.');
-    return { path: attachmentPath(entry.path), kind };
+    // A label is only the name a chat shows on the part, so one that is not short single-line text is left out.
+    const label = typeof entry.label === 'string' && entry.label.length <= 120 && !/[\u0000-\u001f\u007f]/.test(entry.label) ? entry.label : '';
+    return { path: attachmentPath(entry.path), kind, ...(label ? { label } : {}) };
   });
   const explicitId = header(headers, 'id');
   if (explicitId && !/^[a-zA-Z0-9_-]{1,180}$/.test(explicitId)) throw relayError('MALFORMED_MESSAGE', 'The message id is invalid.');
@@ -1287,6 +1316,39 @@ export async function createRelay(options = {}) {
     await publishExclusive(mindPath, destination, bytes);
   }
 
+  function assetFile(name) {
+    return path.join(mindPath, ...MESSAGE_ASSETS.split('/'), name);
+  }
+
+  // An image given as a file is kept as a copy among the message assets, so the message never depends on a file that may
+  // move or change. Names of stored images are checked before anything is copied.
+  async function storedParts(parts) {
+    for (const part of parts) {
+      if (typeof part !== 'string' && part.kind === 'image' && !part.file && !(await lstatOrNull(assetFile(part.path)))?.isFile()) {
+        throw relayError('INVALID_ATTACHMENTS', 'An image attachment names an image that is not stored.');
+      }
+    }
+    const stored = [];
+    for (const part of parts) {
+      if (typeof part === 'string' || !part.file) {
+        stored.push(part);
+        continue;
+      }
+      const { file, ...rest } = part;
+      const state = await lstatOrNull(file);
+      if (!state?.isFile()) throw relayError('INVALID_ATTACHMENTS', 'An image attachment needs a regular file.');
+      if (state.size > ASSET_MAX_BYTES) throw relayError('INVALID_ATTACHMENTS', 'An image attachment is larger than 10 MB.');
+      const bytes = await readFile(file);
+      const { verifiedImage } = await import('../service/editors.mjs');
+      const image = bytes.length <= ASSET_MAX_BYTES ? verifiedImage(bytes) : null;
+      if (!image) throw relayError('INVALID_ATTACHMENTS', 'An image attachment must be a whole PNG, JPEG or WebP image of at most 10 MB.');
+      const name = `${randomUUID()}.${image.ext}`;
+      await publish(assetFile(name), bytes);
+      stored.push({ ...rest, path: name });
+    }
+    return stored;
+  }
+
   async function scopedUnit(args) {
     if (!scopeLock) return args.unit === undefined ? (await requireRegistration()).unit : validUnit(args.unit);
     const registration = await requireRegistration();
@@ -1594,12 +1656,7 @@ export async function createRelay(options = {}) {
       if (!['normal', 'urgent'].includes(priority)) throw relayError('INVALID_PRIORITY', 'priority must be normal or urgent.');
       const replyRequested = args.replyRequested ?? false;
       if (typeof replyRequested !== 'boolean') throw relayError('INVALID_METADATA', 'replyRequested must be a boolean.');
-      const attachments = args.attachments ?? [];
-      if (!Array.isArray(attachments) || attachments.length > MAX_ATTACHMENTS
-        || attachments.some((value) => typeof value !== 'string' || value.length > 2048 || /[\u0000-\u001f\u007f]/.test(value)
-          || value.split(/[\\/]+/).some((segment) => segment === '..'))) {
-        throw relayError('INVALID_ATTACHMENTS', `attachments must contain at most ${MAX_ATTACHMENTS} single-line path references.`);
-      }
+      const parts = checkedParts(args.attachments ?? []);
       const id = randomUUID();
       let threadId = args.threadId === undefined ? id : scalar(args.threadId, 'threadId', 180);
       const replyTo = args.replyTo === undefined ? null : scalar(args.replyTo, 'replyTo', 180);
@@ -1619,9 +1676,11 @@ export async function createRelay(options = {}) {
           throw relayError('UNKNOWN_THREAD', 'threadId must identify an existing thread involving this registered unit.');
         }
       }
+      // Pictures are copied last, once nothing else can refuse the message.
+      const attachments = await storedParts(parts);
       const message = {
         id, from: sender.unit, to, machine: hostname, timestamp: isoNow(), date: formatLocalDate(new Date()), priority,
-        subject, threadId, replyTo, replyRequested, attachments: [...attachments],
+        subject, threadId, replyTo, replyRequested, attachments,
         archived: false, body: args.body,
       };
       const stamp = new Date(message.timestamp);

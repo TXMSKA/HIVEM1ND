@@ -9,7 +9,7 @@ import { atomicWrite, undoChange, withReceipt } from './store.mjs';
 import { authorize, checkHost, checkLimits, checkOrigin, checkPeer, createSecuritySink, safeError } from './security.mjs';
 import { readCollection, readDetail, readProjection, readSync, viewBatch } from './projection.mjs';
 import { connectLead, createUnit, patchLayout, patchSettings, removeUnit, resolveUnitCluster, setUnitAlias, setUnitRunsIn } from './units.mjs';
-import { createChat, deliverNotifications, patchChat, postChat, postMailbox, readChat, readMailbox } from './chats.mjs';
+import { createChat, deliverNotifications, patchChat, postChat, postChatAsset, postMailbox, readChat, readChatAsset, readMailbox } from './chats.mjs';
 import { createGroup, listGroups, patchGroup, removeGroup } from './groups.mjs';
 import { clusterOwner, createCluster, listClusters, patchCluster, readCluster, removeCluster } from './clusters.mjs';
 import { openClusterEditor, readClusterChanges, readClusterGit } from './cluster-git.mjs';
@@ -108,6 +108,8 @@ const ROUTES = [
   ['GET', '/chats/:chatId/messages', 'read', 'DPA', 'collection', 'messages'],
   ['POST', '/chats', 'chat.manage', 'D', 'createChat'],
   ['POST', '/chats/:chatId/messages', 'chat.post', 'DPA', 'postChat'],
+  ['POST', '/chats/:chatId/assets', 'chat.post', 'DPA', 'postChatAsset'],
+  ['GET', '/chats/:chatId/assets/:assetId', 'read', 'DPA', 'chatAsset'],
   ['POST', '/chats/:chatId/read', 'read', 'DPA', 'readChat'],
   ['PATCH', '/chats/:chatId', 'chat.manage', 'D', 'patchChat'],
   ['GET', '/mailboxes', 'read', 'DPA', 'collection', 'mailboxes'],
@@ -228,6 +230,7 @@ function bodyLimitFor(route, pathname) {
   if (route?.template === '/void/texts/:resourceId/ranges') return REPLACEMENT_LIMIT;
   if (route?.template === '/void/replace') return REPLACEMENT_LIMIT;
   if (route?.method === 'POST' && route.template === '/editors/:resourceId/assets') return REPLACEMENT_LIMIT;
+  if (route?.method === 'POST' && route.template === '/chats/:chatId/assets') return REPLACEMENT_LIMIT;
   if (route?.template === '/blueprint/boards/import') return REPLACEMENT_LIMIT;
   return JSON_LIMIT;
 }
@@ -955,7 +958,7 @@ async function credentialFor(req, route, credentials, listener, options) {
   return record;
 }
 
-const PHONE_WRITES = new Set(['postChat', 'postMailbox', 'readChat', 'readMailbox', 'answerApproval', 'changeStatus', 'logout']);
+const PHONE_WRITES = new Set(['postChat', 'postChatAsset', 'postMailbox', 'readChat', 'readMailbox', 'answerApproval', 'changeStatus', 'logout']);
 const AGENT_COLLECTIONS = new Set(['units', 'leads', 'squads', 'projects', 'machines', 'sync', 'mailboxes', 'sessions', 'waiting', 'tasks', 'approvals']);
 
 function expandAudience(value) {
@@ -1161,6 +1164,7 @@ function allowedBody(route) {
     'DELETE /groups/:groupId': ['confirmed', 'expectedRevision'],
     'POST /changes/:changeId/undo': [],
     'POST /chats/:chatId/messages': ['body', 'subject', 'replyTo', 'attachments', 'priority'],
+    'POST /chats/:chatId/assets': ['contentType', 'bytesBase64'],
     'POST /chats/:chatId/read': ['messageIds'],
     'PATCH /chats/:chatId': ['pinned', 'listed', 'expectedRevision'],
     'POST /mailboxes/:unitId/messages': ['body', 'subject', 'replyTo', 'attachments', 'priority'],
@@ -1505,6 +1509,11 @@ async function invoke(route, scope) {
     return { status: 201, body: { message: sent.message, notifications: sent.notifications.map(({ unitId, state }) => ({ unitId, state })) } };
   }
   if (route.handler === 'readChat') return { status: 200, body: await readChat(domain, params.chatId, body ?? {}) };
+  if (route.handler === 'postChatAsset') return { status: 201, body: await postChatAsset(domain, params.chatId, body) };
+  if (route.handler === 'chatAsset') {
+    const asset = await readChatAsset(domain, params.chatId, params.assetId);
+    return { status: 200, raw: asset.bytes, type: asset.type, etag: asset.revision };
+  }
   if (route.handler === 'patchChat') {
     const chat = await readDetail(domain, 'chats', params.chatId);
     if (chat.archived && chat.kind === 'direct' && body.listed === true) throw new CoreError(409, 'chat_changed', 'Restore the archived unit with Undo.');
