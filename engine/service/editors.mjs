@@ -1817,7 +1817,8 @@ export async function listComments(context, id, query = {}) {
   const status = query.status ?? 'all';
   const threads = (projected.threads ?? []).filter((thread) => status === 'all' || thread.status === status);
   const pages = found.entry.kind === 'void' ? await currentPages(context, found) : [];
-  const board = found.entry.kind === 'blueprint' ? parseJson((await loadBytes(inside(found.project.localPath, found.entry.path))).bytes ?? Buffer.from('{}')) : null;
+  // A board kept as a script module is read only and has no JSON to place comments on; its threads list without a place.
+  const board = found.entry.kind === 'blueprint' && /\.json$/i.test(found.entry.path) ? parseJson((await loadBytes(inside(found.project.localPath, found.entry.path))).bytes ?? Buffer.from('{}')) : null;
   const items = [];
   for (const thread of threads) {
     items.push(await presentThread(context, thread, found.entry.id, loaded.revision, found.entry.kind === 'void' ? place(pages, thread) : blueprintPlace(board, thread)));
@@ -1936,6 +1937,7 @@ async function notificationsFor(context, thread) {
 }
 
 function blueprintPlace(document, thread) {
+  if (!document) return null;
   const anchor = thread?.anchor;
   if (!anchor || (anchor.screen == null && anchor.element == null)) return null;
   const screen = (document?.screens ?? []).find((item) => item.id === anchor.screen);
