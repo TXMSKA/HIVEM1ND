@@ -5,7 +5,7 @@ import { CoreError, canonicalTaskId, hashBytes, isPersonAlias, parseTaskId, pars
 import { publishDomainEvents } from './events.mjs';
 import { canonicalJson } from './identity.mjs';
 import { createChat } from './chats.mjs';
-import { readUnitState, readUnitStates } from './state.mjs';
+import { readUnitState, readUnitStates, stateHeader } from './state.mjs';
 import { resolveUnit } from './identity.mjs';
 import { atomicWrite, commitTransaction, readBytes, recoverTransactions, revisionOf, withLocalChanges, withLocks, withReceipt } from './store.mjs';
 import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
@@ -99,7 +99,8 @@ export function leadApproved(body, leadName, date) {
 
 export function reviewAuthority(task) {
   const requesterId = requesterOf(task, task.aliases ?? []);
-  const reviewable = Boolean(task.toId) && task.status === 'review' && requesterId === 'root:master' && (!task.leadId || leadApproved(task.body, task.leadUnit || '', task.date));
+  // The person accepts a delivery whoever wrote the task, the Overseer for them included; a lead approves first.
+  const reviewable = Boolean(task.toId) && task.status === 'review' && (!task.leadId || leadApproved(task.body, task.leadUnit || '', task.date));
   return { reviewable, requesterId, leadId: task.leadId ?? null };
 }
 
@@ -154,7 +155,7 @@ async function writeChange(context, taskId, input, receipt) {
     throw new CoreError(409, 'status_unchanged', 'The task is already in that status.');
   } else if (!EDGES.has(`${task.status}>${nextStatus}`)) {
     throw new CoreError(422, 'invalid_transition', 'That status transition is not allowed.');
-  } else if (!permitted(task, authority, actor, nextStatus)) {
+  } else if (!permitted(task, authority, actor, nextStatus, await actorRole(context, actor, `${task.status}>${nextStatus}`))) {
     throw new CoreError(403, 'forbidden', 'The actor cannot make that transition.');
   }
   const note = typeof input?.note === 'string' ? input.note : '';
@@ -175,18 +176,33 @@ async function writeChange(context, taskId, input, receipt) {
   });
 }
 
-function permitted(task, authority, actor, next) {
+// Who may change a status, as the transitions table of files.md says.
+function permitted(task, authority, actor, next, role = null) {
   const edge = `${task.status}>${next}`;
   const assignee = actor === task.toId;
   const lead = Boolean(task.leadId) && actor === task.leadId;
   const master = actor === 'root:master';
   const requester = actor === authority.requesterId;
-  if (edge === 'open>review') return assignee || lead || (master && requester);
-  if (edge === 'review>done') return master && requester && authority.reviewable && !assignee;
-  if (edge === 'review>open') return lead || (master && requester && authority.reviewable);
+  if (edge === 'open>review') return assignee || lead || master;
+  if (edge === 'review>done') return master && authority.reviewable && !assignee;
+  // The person sends back once the lead has approved, as with acceptance, so the lead's review comes first.
+  if (edge === 'review>open') return lead || (master ? authority.reviewable : requester) || role === 'qa' && sameScope(actor, task.id);
   if (edge === 'done>closed') return requester;
   if (edge === 'closed>open') return requester;
   return false;
+}
+
+// Only sending a delivery back needs the role of the unit asking: the QA unit of the task's project may.
+async function actorRole(context, actor, edge) {
+  if (edge !== 'review>open' || actor === 'root:master') return null;
+  try {
+    const state = await readUnitState(context, parseUnitId(actor));
+    return state ? stateHeader(state.bytes, 'role') : null;
+  } catch { return null; }
+}
+
+function sameScope(actor, taskId) {
+  try { return parseUnitId(actor).scope?.id === parseTaskId(taskId).scope.id; } catch { return false; }
 }
 
 async function commitChange(context, task, change) {

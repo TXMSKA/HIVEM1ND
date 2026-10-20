@@ -361,3 +361,22 @@ test('listing the unit states opens each state file once and still finds a unit 
   for (const relative of Object.keys(files).filter((item) => item !== 'user/state/old.md')) assert.equal(opened(relative), 1, `${relative} was opened ${opened(relative)} times`);
   assert.equal(opened('user/state/old.md'), 2);
 });
+
+test('the person accepts a delivery the Overseer asked for, and the QA unit of the project may send one back', async (t) => {
+  const { fixture, context, file } = await world(t);
+  const root = fixture.paths.mind;
+  await writeFile(path.join(root, 'user', 'state', 'qa-shop.md'), state('qa-shop', 'project:shop:qa-shop', 'qa'));
+  await writeFile(path.join(root, 'user', 'state', 'qa-other.md'), state('qa-other', 'project:other:qa-other', 'qa'));
+  const approved = taskText('', 'review').replace('from: user', 'from: overseer').replace('Existing report.', 'Existing report.\r\nApproved for review by overlord-web on 2026-10-10');
+  await writeFile(file, approved);
+  const master = as(context, 'root:master');
+  let task = await loadTask(master, TASK);
+  assert.equal(reviewAuthority(task).reviewable, true, 'a task written by the Overseer is reviewable by the person once its lead approved');
+  await assert.rejects(() => changeStatus(as(context, 'project:other:qa-other'), TASK, { status: 'open', expectedRevision: task.revision, note: 'Fails on mobile.' }), (error) => error.status === 403);
+  await changeStatus(as(context, 'project:shop:qa-shop'), TASK, { status: 'open', expectedRevision: task.revision, note: 'Fails on mobile.' });
+  assert.equal((await readFile(file, 'utf8')).includes('status: open'), true);
+  await writeFile(file, approved);
+  task = await loadTask(master, TASK);
+  await changeStatus(master, TASK, { status: 'done', expectedRevision: task.revision });
+  assert.equal((await readFile(file, 'utf8')).includes('status: done'), true);
+});
