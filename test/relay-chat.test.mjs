@@ -35,10 +35,17 @@ test('a chat message of the app reaches the agent inbox, and the agent answers i
   assert.match(read.messages[0].body, /^Hola/);
   assert.match(read.messages[0].body, new RegExp(`send_message to "chat:${CHAT}"`));
   assert.equal(read.messages[0].from, 'master');
+  // Reading the copy leaves the agent's read receipt in the chat, in the form the service reads.
+  const readerDir = path.join(chat, 'read', Buffer.from('root:overseer').toString('base64url'), os.hostname());
+  const receipts = await readdir(readerDir);
+  assert.equal(receipts.length, 1);
+  const receipt = JSON.parse(await readFile(path.join(readerDir, receipts[0]), 'utf8'));
+  assert.deepEqual(receipt.messageIds, [notice.messageId]);
+  assert.equal(receipt.unitId, 'root:overseer');
 
   const sent = await relay.send({ to: `chat:${CHAT}`, subject: '', body: 'OK' });
   assert.equal(sent.to, `chat:${CHAT}`);
-  const written = (await readdir(chat)).filter((name) => name !== 'chat.md');
+  const written = (await readdir(chat)).filter((name) => name.endsWith('.md') && name !== 'chat.md');
   assert.deepEqual(written, [`${sent.id}.md`]);
   const bytes = await readFile(path.join(chat, written[0]), 'utf8');
   assert.match(bytes, /^from-id: root:overseer$/m);

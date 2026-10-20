@@ -5,7 +5,7 @@ import { mkdir, open, lstat, readdir, readFile, rename, realpath, unlink, link a
 import os from 'node:os';
 import path from 'node:path';
 import { assertWithin } from '../records.mjs';
-import { uuidV8, inboxDirectory, parseUnitId } from '../service/identity.mjs';
+import { canonicalJson, uuidV8, inboxDirectory, parseUnitId } from '../service/identity.mjs';
 import { ASSET_MAX_BYTES, ASSET_NAME, MESSAGE_ASSETS, messagePart } from '../service/message-parts.mjs';
 
 const MAX_BODY_BYTES = 256 * 1024;
@@ -237,6 +237,11 @@ function parseMessage(raw, sourcePath, archived = false) {
     legacyFilenameSender: legacySender ? rawFrom : null,
     body,
   };
+}
+
+// Relay names the root scope "user"; the app names its units "root:<unit>".
+function appScopeId(scopeId) {
+  return scopeId === 'user' ? 'root' : scopeId;
 }
 
 function metadata(message) {
@@ -1293,6 +1298,28 @@ export async function createRelay(options = {}) {
     return records[0];
   }
 
+  // Reading the inbox copy of a chat message is reading that message: the chat gets the agent's read receipt, in the form the
+  // service writes, so the app stops counting it as unread for the agent.
+  async function markChatCopiesRead(messages, unit, target) {
+    const byChat = new Map();
+    for (const message of messages) {
+      if (message.kind !== 'chat-copy' || message.archive?.alreadyArchived) continue;
+      const raw = await readRegularFileSafe(mindPath, path.join(userPath, message.archive.path)).catch(() => null);
+      const header = raw ? raw.toString('utf8').split(/\r?\n\r?\n/, 1)[0] : '';
+      const chatId = header.match(/^chat-id:\s*([0-9a-f-]{36})\s*$/mi)?.[1]?.toLowerCase();
+      const messageId = header.match(/^chat-message-id:\s*([0-9a-f-]{36})\s*$/mi)?.[1]?.toLowerCase();
+      if (!chatId || !messageId) continue;
+      byChat.set(chatId, [...(byChat.get(chatId) ?? []), messageId]);
+    }
+    const reader = target?.unitId ?? (target?.scope?.id ? `${appScopeId(target.scope.id)}:${unit}` : null);
+    if (!reader) return;
+    for (const [chatId, messageIds] of byChat) {
+      const record = { format: 'hivem1nd-chat-read-v1', chatId, unitId: reader, machine: hostname, messageIds, at: isoNow() };
+      const destination = path.join(mindPath, 'user', 'relay', 'chats', chatId, 'read', Buffer.from(reader).toString('base64url'), hostname, `${randomUUID()}.json`);
+      try { await publish(destination, Buffer.from(`${canonicalJson(record)}\n`)); } catch { /* the message was read; a missed receipt only keeps its badge */ }
+    }
+  }
+
   // An agent answers in a chat of the app: the message is written into that chat in the form the service writes, from the
   // registered unit, which has to be a member of the chat. The service's watcher shows it in the chat.
   async function sendToChat(sender, chatId, args) {
@@ -1308,7 +1335,7 @@ export async function createRelay(options = {}) {
     let members = [];
     try { members = JSON.parse(header.match(/^members:\s*(.*)$/m)?.[1] ?? '[]'); } catch { members = []; }
     const resolved = await resolveUnit(sender.unit);
-    const fromId = sender.unitId ?? resolved.unitId ?? `${resolved.scope.id}:${sender.unit}`;
+    const fromId = sender.unitId ?? resolved.unitId ?? `${appScopeId(resolved.scope.id)}:${sender.unit}`;
     if (!Array.isArray(members) || !members.includes(fromId)) throw relayError('NOT_CHAT_MEMBER', 'This unit is not a member of that chat.');
     const attachments = await storedParts(checkedParts(args.attachments ?? []));
     const id = randomUUID(), timestamp = isoNow();
@@ -1803,6 +1830,7 @@ export async function createRelay(options = {}) {
           if (archived?.archived) messages.push({ ...metadata(archived), body: archived.body, archive: { path: path.relative(userPath, archived.sourcePath).replaceAll('\\', '/'), archived: true, alreadyArchived: true } });
         }
       }
+      await markChatCopiesRead(messages, unit, target);
       messages.sort(sortByTimestamp);
       return { messages, malformed };
     },

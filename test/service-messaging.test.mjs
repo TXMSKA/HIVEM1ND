@@ -378,6 +378,8 @@ for (const failure of ['response loss', 'partial transaction']) test(`a chat ${f
   const key = randomUUID();
   const options = { token, body: { body: 'Only once', subject: 'Receipt' }, headers: { 'idempotency-key': key } };
   if (failure === 'partial transaction') {
+    // A file watcher pass between the crash and the retry would complete the half-applied write first.
+    await core.runtime?.unwatchProject?.();
     fixture.store.fault = { afterRenames: 1 };
     assert.equal((await httpCall(core.http.port, 'POST', target, options)).status, 500);
   } else {
