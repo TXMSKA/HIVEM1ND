@@ -793,9 +793,11 @@ async function onStream(app, event) {
     if (task) replaceTask(app, task);
     if (app.waitingList) reloadList(app.waitingList).catch(() => {});
     // The inspector keeps its own waiting items for its unit; a task change can add or remove one.
+    // Only the latest request applies, so an older answer arriving last cannot bring back a finished task.
     const unitId = app.inspectorData?.unitId;
+    const ticket = app.inspectorWaitingTicket = (app.inspectorWaitingTicket ?? 0) + 1;
     if (unitId) collectPages(app.api, "/waiting", { query: { unitId }, limit: 50 }).then((waiting) => {
-      if (app.disposed || app.inspectorData?.unitId !== unitId) return;
+      if (app.disposed || ticket !== app.inspectorWaitingTicket || app.inspectorData?.unitId !== unitId) return;
       Object.assign(app.inspectorData, { waiting: waiting.items, waitingTotal: waiting.total, waitingIssues: waiting.issues });
       renderShell(app);
     }).catch(() => {});

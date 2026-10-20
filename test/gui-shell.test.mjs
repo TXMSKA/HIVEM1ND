@@ -6,7 +6,7 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import test from "node:test";
 import { createApi, createOperation, dispose as disposeApi, request, retryOperation } from "../gui/app/api.mjs";
-import { answerApproval, changeTaskStatus, createGroup, createUnit, setUnitAlias, startSession } from "../gui/app/actions.mjs";
+import { answerApproval, changeTaskStatus, createGroup, createUnit, setUnitAlias, startSession, undoTask } from "../gui/app/actions.mjs";
 import { documentSaver, findTextMatches, textDraft } from "../gui/app/void.mjs";
 import { markMailboxRead } from "../gui/app/chats.mjs";
 import { dispose as disposeEmbed, handleParentMessage, publishDirty, publishReady, startEmbedChannel } from "../gui/app/embed.mjs";
@@ -7582,6 +7582,37 @@ test("a task changed elsewhere updates the inspector's copy of it", async (t) =>
   const path = `/tasks/${encodeURIComponent(open.id)}/status`;
   await request(desktop.app.api, "POST", path, { operation: createOperation({ method: "POST", path, body: { status: "review", expectedRevision: open.revision } }) });
   await waitFor(() => desktop.app.inspectorData.tasks.find((task) => task.id === open.id)?.status === "review", "The inspector kept the old task.");
+});
+
+test("an older waiting answer arriving last does not undo a newer one", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  const taskId = "project:shop:029";
+  const review = (await request(desktop.app.api, "GET", "/waiting")).data.items.find((item) => item.taskId === taskId);
+  await waitFor(() => desktop.app.unitList?.catalog?.some((unit) => unit.id === review.unitId), "The unit list did not load.");
+  const reviewer = desktop.app.unitList.catalog.find((unit) => unit.id === review.unitId);
+  desktop.app.activeHandlers.onActivate({ id: reviewer.id, kind: "unit", unit: reviewer }, "double");
+  const waits = () => desktop.app.inspectorData?.waiting?.some((item) => item.taskId === taskId);
+  await waitFor(() => desktop.app.inspectorData?.unitId === reviewer.id && waits(), "The inspector did not list the review as waiting.");
+  // The answer to the first task change is held until the second one has been answered.
+  const fetch = desktop.app.api.fetch;
+  let held = false, answered = 0, release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  desktop.app.api.fetch = async (url, options) => {
+    const response = await fetch(url, options);
+    if (String(url).includes("/waiting?unitId=")) { if (!held) { held = true; await gate; } else answered += 1; }
+    return response;
+  };
+  const ready = (await request(desktop.app.api, "GET", `/tasks/${encodeURIComponent(taskId)}`)).data;
+  const accepted = (await changeTaskStatus(desktop.app.api, ready.task ?? ready, "done")).data.task;
+  await waitFor(() => held, "The first waiting request did not start.");
+  await undoTask(desktop.app.api, accepted);
+  await waitFor(() => answered > 0 && waits(), "The task back in review did not wait again.");
+  release();
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(waits(), true, "the older answer arriving last does not remove it");
 });
 
 test("pairing that cannot reach the computer says so instead of calling the code wrong", async t => {
