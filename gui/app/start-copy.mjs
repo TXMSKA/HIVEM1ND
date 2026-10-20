@@ -57,6 +57,8 @@ export const START_COPY=Object.freeze({
   reported:['Task reported','Informe de la tarea recibido'],exited:['Process ended','Proceso finalizado'],cleaned:['Owned leftovers closed','Procesos restantes propios cerrados'],
   pending:['Pending','Pendiente'],busy:['In progress','En curso'],done:['Done','Finalizado'],stuck:['Needs attention','Requiere atención'],failed:['Failed','Falló'],
   removeLink:['Remove link','Quitar el vínculo'],removeHint:['The link leaves the cluster list. Files and work stay. Undo is available for 10 s.','El vínculo se quita de la lista de clústeres. Se conservan los archivos y el trabajo. Deshacer está disponible durante 10 s.'],
+  loadingFolder:['Reading the folder','Leyendo la carpeta'],folderNotHere:['This folder is not set up on this machine.','Esta carpeta no está configurada en esta máquina.'],
+  runsInNone:['Not chosen yet','Sin elegir'],startNeedsRunsIn:['Choose where this agent runs before starting it.','Elegir dónde se ejecuta este agente antes de iniciarlo.'],chooseRunsIn:['Choose where it runs','Elegir dónde se ejecuta'],
   unavailable:['This action is unavailable for the current connection. Work is kept.','Esta acción no está disponible con la conexión actual. Se conserva el trabajo.'],
   noConnectedAgent:['No agent is connected on this machine.','No hay ningún agente conectado en esta máquina.'],connectAgent:['Connect an agent','Conectar un agente'],
   working:['Working','Procesando'],

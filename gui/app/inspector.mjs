@@ -6,13 +6,20 @@ import { readableIdentity, unitDisplayName } from './hierarchy.mjs';
 import { roleLabel, startText } from './start-copy.mjs';
 import { addText } from './add-view.mjs';
 
+// "Starts fresh every session" is only true of an Overseer that holds nothing: a unit with sessions, unread messages or a
+// recorded state keeps what it has, so it does not say so.
+export function startsFresh(unit) {
+  if (unit?.role !== 'overseer' || unit.fresh === false) return false;
+  return !(unit.sessionIds?.length || unit.unread > 0 || unit.context || unit.date);
+}
+
 export function renderAgentHeader(document, unit, session, language, onMore) {
   const t = key => startText(language, key), working = ['busy', 'working', 'active'].includes(session?.activity);
   return element(document, 'header', { class: 'agent-heading' },
     element(document, 'span', { class: 'agent-avatar', 'aria-hidden': 'true' }, icon(document, unit.role === 'overseer' ? 'crown' : 'executor')),
     element(document, 'div', {}, element(document, 'h2', { text: unitDisplayName(unit) }),
       element(document, 'p', { class: 'agent-status' }, working ? element(document, 'span', { class: 'spinner', 'aria-hidden': 'true' }) : null,
-        unit.role === 'overseer' && unit.fresh !== false ? t('freshStatus') : t(working ? 'busy' : 'pending'))),
+        startsFresh(unit) ? t('freshStatus') : t(working ? 'busy' : 'pending'))),
     element(document, 'button', { type: 'button', class: 'icon-button agent-more', 'data-action': 'agent-more', 'aria-label': t('moreMenu'), text: '···', onclick: onMore }));
 }
 
@@ -36,7 +43,10 @@ export function renderCluster(document, model, actions = {}) {
     if (git.lastCommit) facts.append(element(document, 'p', { class: 'start-hint', text: [git.lastCommit.subject, formatWhen(model.language, git.lastCommit.at)].join(' · ') }));
     facts.append(element(document, 'div', { class: 'action-row' }, action('changes', 'cluster-changes', actions.onChanges), action('openEditor', 'cluster-open-editor', actions.onEditor)));
   } else if (kind === 'none') facts.append(element(document, 'p', { class: 'start-hint', text: t('noLinkBody') }), action('linkFolder', 'link-folder', actions.onLink));
-  else facts.append(element(document, 'code', { text: model.link?.localPath ?? t('unavailable') }));
+  // The folder is shown once the machine's reports are in; until then it loads, and without it the folder is said to be missing here.
+  else if (model.link?.localPath) facts.append(element(document, 'code', { text: model.link.localPath }));
+  else if (model.loading) facts.append(progressMark(document, t('loadingFolder')));
+  else facts.append(element(document, 'p', { class: 'start-hint', 'data-folder-missing': 'true', text: t(model.unreadable ? 'unavailable' : 'folderNotHere') }));
   if (model.error) facts.append(element(document, 'p', { role: 'alert', text: model.error }));
   root.append(facts);
   if (model.addition) {
@@ -79,7 +89,7 @@ export function renderUnit(document, unit, t, language = "en") {
   for (const [label, value] of lines) {
     facts.append(element(document, "p", { text: `${t(label)}: ${value ?? t("unknown")}` }));
   }
-  if (unit?.context) facts.append(element(document, "p", { text: unit.context }));
+  if (unit?.context) facts.append(element(document, "p", { class: "unit-context", text: unit.context }));
   card.append(facts);
   return card;
 }
@@ -230,11 +240,12 @@ export function renderTask(document, task, t, onStatus, onUndo, draft = "", onDr
     text: t("accept"),
     onclick: () => onStatus?.(task, "done"),
   });
+  let acceptHint = null, backHint = null;
   if (!canAccept(task) || busy) accept.disabled = true;
   if (!canAccept(task) && !busy) {
     const hint = element(document, "p", { id: `reason-accept-${task.id}`, class: "field-hint", "data-disabled-reason": "accept", text: t("acceptNeedsReview") });
     accept.setAttribute("aria-describedby", hint.id ?? `reason-accept-${task.id}`);
-    block.append(hint);
+    acceptHint = hint;
   }
   const note = element(document, "input", { "data-note": task.id, "data-keep": `note|${encodeURIComponent(task.id)}` });
   note.value = draft;
@@ -253,9 +264,10 @@ export function renderTask(document, task, t, onStatus, onUndo, draft = "", onDr
   if (!allowSendBack && !busy) {
     const hint = element(document, "p", { id: `reason-back-${task.id}`, class: "field-hint", "data-disabled-reason": "send-back", text: t("sendBackNeedsReview") });
     back.setAttribute("aria-describedby", `reason-back-${task.id}`);
-    block.append(hint);
+    backHint = hint;
   }
-  block.append(accept, labeledField(document, t("sendBack"), t("sendBackHint"), note), back);
+  // Each control is followed by the reason it cannot be used.
+  block.append(...[accept, acceptHint, labeledField(document, t("sendBack"), t("sendBackHint"), note), back, backHint].filter(Boolean));
   if (task.undoAvailable && onUndo) {
     block.append(element(document, "button", {
       type: "button",

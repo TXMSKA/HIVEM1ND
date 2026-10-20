@@ -152,6 +152,8 @@ export async function loadAll(list, generation = list.generation) {
     if (result?.stale) return result;
     if (list.status === "error") return result;
     guard += 1;
+    // Every page is shown as it arrives; the last one is announced below.
+    if (list.nextCursor && generation === list.generation) list.onUpdate?.();
   } while (list.nextCursor && guard < 10000);
   if (generation === list.generation) list.onUpdate?.();
   return { stale: generation !== list.generation };
