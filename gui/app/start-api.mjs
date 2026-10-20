@@ -28,7 +28,9 @@ export function createClusterAgent(api,clusterId,input,retained=null){
   const{machine,role,runsIn,useAsDefault,expectedRevision}=input;
   // Only a custom role carries a name and a description; the service refuses them on any other role.
   const custom=role==='custom'?{roleName:input.roleName,roleDescription:input.roleDescription}:{};
-  return write(api,'/clusters/:clusterId/agents',{machine,role,runsIn,useAsDefault,expectedRevision,...custom},{clusterId},retained);
+  // A lead is sent only when one was chosen on the Map; without it the service takes the cluster's own.
+  const lead=input.leadId?{leadId:input.leadId}:{};
+  return write(api,'/clusters/:clusterId/agents',{machine,role,runsIn,useAsDefault,expectedRevision,...custom,...lead},{clusterId},retained);
 }
 export function createOverseer(api,input,retained=null){
   const{machine,runsIn,fresh,expectedRevision}=input;return write(api,'/overseer',{machine,runsIn,fresh,expectedRevision},undefined,retained);

@@ -567,11 +567,16 @@ export function pointerUp(map, event) {
       map.selection = new Set([gesture.source]);
       map.focusId = gesture.source;
       map.onSelection?.([...map.selection]);
-      requestConnect(map);
+      requestConnect(map, { x: event.clientX, y: event.clientY });
     } else if (dropped.target) {
       map.pendingConnect = { source: dropped.source, target: dropped.target };
       map.onConnect?.(map.pendingConnect);
-    } else map.pendingConnect = null;
+    } else {
+      // Dropped on empty space: the menu there creates a new agent that reports to the source. A drop on a node that
+      // cannot take the connection, or back on the source, only cancels it.
+      map.pendingConnect = null;
+      if (!dropped.invalid && !hitNode(world, paintNodes(map), map.view.zoom, 8)) map.onConnectDrop?.({ source: gesture.source, x: event.clientX, y: event.clientY, world, groupId: hitPersonalGroup(map, world)?.id ?? null });
+    }
     refresh(map);
     return;
   }
@@ -743,10 +748,10 @@ function connectionAt(map, gesture, world) {
   return { source: gesture.source, target: valid ? hit.id : null, invalid: hit && !valid && hit.id !== gesture.source ? hit.id : null, point: world };
 }
 
-export function requestConnect(map) {
+export function requestConnect(map, point = null) {
   const ids = [...map.selection];
   map.pendingConnect = { source: ids[0] ?? null, targets: ids.slice(1) };
-  map.onGroupConnect?.(map.pendingConnect);
+  map.onGroupConnect?.(map.pendingConnect, point);
 }
 
 export function requestGroupMessage(map) {
@@ -1015,8 +1020,9 @@ function bindMap(host, map) {
     const unitId = focusedUnitId(event), titleId = event.target?.closest?.("[data-group-id]")?.getAttribute?.("data-group-id");
     const target = unitId ? { kind: "unit", id: unitId } : titleId ? { kind: "cluster", id: titleId } : null;
     const group = target ? null : hitPersonalGroup(map, toWorld({ x: event.clientX, y: event.clientY }, hostRect(host), map.view));
-    const chosen = target ?? (group ? { kind: "cluster", id: group.id } : null);
-    if (!chosen) return;
+    // The empty Map has its own menu, so a right click never falls through to the browser's.
+    const world = toWorld({ x: event.clientX, y: event.clientY }, hostRect(host), map.view);
+    const chosen = target ?? (group ? { kind: "cluster", id: group.id } : { kind: "map", world });
     event.preventDefault?.();
     // From the keyboard the event has no position, so the menu opens at the control itself.
     const box = !event.clientX && !event.clientY ? event.target?.getBoundingClientRect?.() : null;

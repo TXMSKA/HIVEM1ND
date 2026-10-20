@@ -1149,7 +1149,7 @@ function allowedBody(route) {
     'DELETE /units/:unitId': ['confirmed', 'expectedRevision'],
     'PUT /units/:unitId/lead': ['leadId', 'confirmed', 'expectedRevision'],
     'POST /units/:unitId/session': ['prompt', 'runMode', 'taskId', 'expectedRevision'],
-    'POST /clusters/:clusterId/agents': ['machine', 'role', 'roleName', 'roleDescription', 'runsIn', 'useAsDefault', 'expectedRevision'],
+    'POST /clusters/:clusterId/agents': ['machine', 'role', 'roleName', 'roleDescription', 'runsIn', 'useAsDefault', 'leadId', 'expectedRevision'],
     'POST /overseer': ['machine', 'runsIn', 'fresh', 'expectedRevision'],
     'PATCH /units/:unitId/runs-in': ['machine', 'runsIn', 'useAsDefault', 'expectedRevision'],
     'POST /session-requests/:requestId/cancel': [],

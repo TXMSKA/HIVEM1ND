@@ -3941,7 +3941,9 @@ function openRunsPicker(app, model, onChange, anchor = null) {
   return picker;
 }
 
-async function openStartAgent(app, cluster, overseer = false) {
+// From the Map a new agent can come with its role chosen, the lead it reports to, and, when no cluster is implied, the
+// clusters to choose from.
+async function openStartAgent(app, cluster, overseer = false, options = {}) {
   if (app.startDialog || app.layout === 'phone') return;
   // The form needs only the connected agents. They are read on their own, so a folder report that is slow or failed
   // never keeps a new agent from being created; the rest of the reports load beside it.
@@ -3953,9 +3955,10 @@ async function openStartAgent(app, cluster, overseer = false) {
   if (app.disposed || app.startDialog) return;
   const clients = app.startAgents?.connectedClients ?? [], preferred = app.startAgents?.defaultRunsIn;
   const model = { language: app.language, kind: overseer ? 'overseer' : 'agent', agentKind: preferred?.client === 'lyra' ? 'local' : 'external',
-    cluster, role: 'executor', roleName: '', roleDescription: '', roleProblems: {}, clients, choice: initialRunsIn(clients, preferred, overseer ? preferred?.client === 'lyra' ? 'local' : 'external' : null), fresh: true, useAsDefault: false,
+    cluster, role: options.role ?? 'executor', roleName: '', roleDescription: '', roleProblems: {}, clients,
+    clusterChoices: options.clusterChoices ?? null, leadId: options.leadId ?? null, leadName: options.leadId ? unitDisplayName(unitById(app, options.leadId) ?? { unit: options.leadId }) : '', choice: initialRunsIn(clients, preferred, overseer ? preferred?.client === 'lyra' ? 'local' : 'external' : null), fresh: true, useAsDefault: false,
     automatic: false };
-  const anchor = app.root.querySelector('[data-action="new-agent"]');
+  const anchor = options.anchor === undefined ? app.root.querySelector('[data-action="new-agent"]') : options.anchor;
   let flow, retained = null, created = null, defaultOperation = null, granted = false, grantOperation = null;
   const cancel = () => { if (flow.busy || flow.uncertain) return; if (overseer) rememberOverseerOffer(app); flow.dialog.close(); };
   // A custom role is checked before anything is sent; the problems show under their fields and the first one takes focus.
@@ -3976,6 +3979,7 @@ async function openStartAgent(app, cluster, overseer = false) {
         if (role === 'custom') flow.dialog.querySelector('[data-custom-role]')?.scrollIntoView?.({ block: 'nearest' });
       },
       onFresh: value => { model.fresh = value; },
+      onCluster: id => { const next = model.clusterChoices?.find(group => group.id === id); if (next) { model.cluster = next; retained = null; flow.paint(); } },
       onRoleName: value => { model.roleName = value; delete model.roleProblems.roleName; },
       onRoleDescription: value => { model.roleDescription = value; delete model.roleProblems.roleDescription; },
       onPicker: () => openRunsPicker(app, model, () => { model.agentKind = model.choice?.client === 'lyra' ? 'local' : 'external'; flow.paint(); }, flow.dialog.querySelector('[data-action="open-runs-picker"]')),
@@ -3985,7 +3989,7 @@ async function openStartAgent(app, cluster, overseer = false) {
         let result;
         try {
           result = created ?? (overseer ? await startApi.createOverseer(app.api, { machine: startMachine(app), runsIn: model.choice, fresh: model.fresh, expectedRevision: null }, retained)
-            : await startApi.createClusterAgent(app.api, cluster.id, { machine: startMachine(app), role: model.role, roleName: model.roleName.trim(), roleDescription: model.roleDescription.trim(), runsIn: model.choice, useAsDefault: model.useAsDefault, expectedRevision: cluster.revision }, retained));
+            : await startApi.createClusterAgent(app.api, model.cluster.id, { machine: startMachine(app), role: model.role, roleName: model.roleName.trim(), roleDescription: model.roleDescription.trim(), runsIn: model.choice, useAsDefault: model.useAsDefault, leadId: model.leadId, expectedRevision: model.cluster.revision }, retained));
           created = result;
           if (overseer && model.useAsDefault) {
             try { result = await startApi.setRunsIn(app.api, result.data.id, { machine: startMachine(app), runsIn: result.data.runsIn, useAsDefault: true, expectedRevision: result.data.revision }, defaultOperation); }
@@ -4432,6 +4436,19 @@ function openItemMenu(app, target) {
   const groups = [...app.store.indexes.groups.values()].filter(group => !group.deleted);
   const items = [];
   let name = '';
+  if (target.kind === 'map') {
+    if (!desktop) return;
+    const place = newAgentPlace(app, target.groupId ?? null, null);
+    if (caps.includes('unit.create')) {
+      if (!overseerExists(app)) items.push({ id: 'create-overseer', label: startText(app.language, 'createOverseer'), primary: true, run: () => createOverseer(app) });
+      items.push({ id: 'new-agent', label: place ? t('menuNewAgentMap') : t('menuNeedsCluster'), disabled: !place, primary: overseerExists(app),
+        run: () => place && openStartAgent(app, place.cluster, false, { clusterChoices: place.choices, anchor: null }) });
+    }
+    if (caps.includes('chat.manage')) items.push({ id: 'new-cluster', label: t('menuNewCluster'), run: () => openStartCluster(app) });
+    items.push({ id: 'fit', label: t('menuFit'), run: () => fitMapView(app) });
+    openContextMenu(app.root.ownerDocument, { x: target.x, y: target.y, items, label: t('mapMenuLabel') });
+    return;
+  }
   if (target.kind === 'unit') {
     const unit = unitById(app, target.id);
     if (!unit || unit.role === 'master' || unit.removed) return;
@@ -4442,6 +4459,7 @@ function openItemMenu(app, target) {
     else if (caps.includes('session.start')) items.push({ id: 'start', label: text(app.language, 'startSession'), run: () => openSessionForm(app, unit) });
     if (desktop && caps.includes('unit.create') && unit.revision) items.push({ id: 'rename', label: t('menuRename'), run: () => beginAlias(app, unit.id) });
     if (desktop && caps.includes('unit.connect') && leadChoices(app).some(lead => lead.id !== unit.id)) items.push({ id: 'connect', label: t('menuConnect'), run: () => chooseSelectionLead(app, [unit.id]) });
+    if (desktop && caps.includes('unit.create')) items.push({ id: 'new-report', label: t('menuNewReport'), run: () => openReportMenu(app, { source: unit.id, x: target.x, y: target.y, groupId: null }) });
     if (desktop && caps.includes('chat.manage') && groups.some(group => group.id !== home?.id)) items.push({ id: 'move', label: t('menuMove'), run: () => openMoveAgent(app, unit) });
     if (desktop) items.push({ id: 'details', label: text(app.language, 'details'), run: () => showUnitDetails(app, unit) });
     if (desktop && caps.includes('chat.manage') && home) items.push({ id: 'remove', label: t('menuRemove'), run: () => detachAgent(app, unit, home) });
@@ -4465,6 +4483,40 @@ function openItemMenu(app, target) {
     if (desktop && caps.includes('chat.manage') && !children.length) items.push({ id: 'delete', label: t('menuDelete'), danger: true, run: () => removeStartCluster(app, cluster) });
   }
   openContextMenu(app.root.ownerDocument, { x: target.x, y: target.y, items, label: t('menuLabel', { name }) });
+}
+
+// The cluster a new agent made from the Map goes to: the one under the pointer, else the lead's own. With neither, every
+// cluster is offered in the form, the first one chosen; with no cluster at all there is nothing to create it in.
+function newAgentPlace(app, groupId, leadId) {
+  const groups = [...app.store.indexes.groups.values()].filter(group => !group.deleted);
+  const under = groupId ? groups.find(group => group.id === groupId) : null;
+  if (under) return { cluster: under, choices: null };
+  const lead = leadId ? unitById(app, leadId) : null, home = lead ? unitCluster(app, lead) : null;
+  if (home) return { cluster: home, choices: null };
+  if (!groups.length) return null;
+  // The top clusters come first, as the Hierarchy lists them; the ones inside them follow.
+  const sorted = groups.sort((left, right) => Number(Boolean(left.parentId)) - Number(Boolean(right.parentId))
+    || String(left.title).localeCompare(String(right.title), app.language));
+  return { cluster: sorted[0], choices: sorted.length > 1 ? sorted : null };
+}
+
+// A connection dropped on empty space, or the source's own menu, offers a new agent that reports to the source.
+function openReportMenu(app, { source, x, y, groupId }) {
+  const t = (key, values) => startText(app.language, key, values), lead = unitById(app, source);
+  if (!lead || app.layout === 'phone' || !app.store.capabilities?.includes('unit.create')) return;
+  const place = newAgentPlace(app, groupId, source);
+  const create = role => () => place && openStartAgent(app, place.cluster, false, { role, leadId: source, clusterChoices: place.choices, anchor: null });
+  const items = place ? [
+    { id: 'new-overlord', label: t('menuNewOverlord'), primary: true, run: create('overlord') },
+    { id: 'new-executor', label: t('menuNewExecutor'), run: create('executor') },
+    { id: 'new-custom', label: t('menuNewCustom'), run: create('custom') },
+  ] : [{ id: 'new-cluster', label: t('menuNeedsCluster'), primary: true, run: () => openStartCluster(app) }];
+  openContextMenu(app.root.ownerDocument, { x, y, items, label: t('dropMenuLabel', { name: unitDisplayName(lead) }), title: t('dropMenuLabel', { name: unitDisplayName(lead) }) });
+}
+
+function fitMapView(app) {
+  const map = ensureMap(app);
+  if (map.host) fitMap(map);
 }
 
 function unitCluster(app, unit) {
@@ -4613,7 +4665,8 @@ function ensureMap(app) {
   app.mapState.onServices = () => { navigate(app, 'settings'); };
   app.mapState.onRename = (id) => beginAlias(app, id);
   app.mapState.onConnect = (pending) => confirmConnection(app, pending.source, [pending.target]);
-  app.mapState.onGroupConnect = () => chooseSelectionLead(app);
+  app.mapState.onConnectDrop = (drop) => openReportMenu(app, drop);
+  app.mapState.onGroupConnect = (pending, point) => chooseSelectionLead(app, null, point);
   app.mapState.onGroupMessage = (ids) => {
     settle(app, "group-chat", text(app.language, "loadingConversation"), async (record) => {
       const result = await openGroupChat(app.api, ids, undefined, record.operation);
@@ -6758,11 +6811,26 @@ function selectionInspector(app, t, units) {
   return panel;
 }
 
-function chooseSelectionLead(app, picked = null) {
+function chooseSelectionLead(app, picked = null, point = null) {
   const ids = (picked ?? [...app.mapState.selection]).filter((id) => unitById(app, id)?.role !== "master");
+  const choices = leadChoices(app).filter((unit) => !ids.includes(unit.id) && unit.role !== "master");
+  if (!ids.length) return;
+  // With nothing to connect to, an empty list is never shown: one agent gets the menu that creates a report for it, and a
+  // selection is told why there is no lead.
+  if (!choices.length) {
+    if (ids.length === 1 && app.store.capabilities?.includes("unit.create")) {
+      const box = app.root.ownerDocument.querySelector?.(`[data-unit-id="${ids[0]}"]`)?.getBoundingClientRect?.();
+      openReportMenu(app, { source: ids[0], x: point?.x ?? (box ? box.left + box.width / 2 : 0), y: point?.y ?? (box ? box.bottom : 0), groupId: null });
+      return;
+    }
+    const names = ids.map((id) => unitDisplayName(unitById(app, id) ?? { unit: id })).join(", ");
+    const dialog = showDialog(app.root.ownerDocument, { title: startText(app.language, "noLeadTitle"), body: startText(app.language, "noLeadBody", { name: names }), cancel: text(app.language, "close") });
+    dialog.setAttribute("data-form", "no-lead");
+    return;
+  }
   let leadId;
   openChoiceForm(app, "selection-lead", text(app.language, "connectToLead"), (form) => {
-    appendSelect(form.ownerDocument, form, "leadId", text(app.language, "finalReportsTo"), leadChoices(app).filter((unit) => !ids.includes(unit.id)).map((unit) => ({ value: unit.id, label: unitDisplayName(unit) })), "");
+    appendSelect(form.ownerDocument, form, "leadId", text(app.language, "finalReportsTo"), choices.map((unit) => ({ value: unit.id, label: unitDisplayName(unit) })), choices[0].id);
   }, async (form) => { leadId = fieldValue(form, "leadId"); if (!leadId) return false; return true; }, "connect-lead");
   const dialog = app.root.ownerDocument.querySelector("[data-form='selection-lead']");
   dialog?.addEventListener("close", () => { if (leadId) confirmConnection(app, leadId, ids); });

@@ -402,7 +402,8 @@ async function deriveClusterUnit(context, input) {
   const base = `${custom ? roleSlug(custom.name) : input.role}-${scope.name ?? cluster.id.slice(0, 8)}`.slice(0, 70);
   let unit = base, index = 2;
   while (records.some(record => record.id === unitIdFor(unit, scope))) unit = `${base}-${index++}`;
-  let current = cluster, leadId = null;
+  // A lead chosen on the Map, by dropping a connection, wins over the one the cluster implies.
+  let current = input.leadId ? null : cluster, leadId = input.leadId ?? null;
   const seen = new Set();
   while (current && !seen.has(current.id)) {
     seen.add(current.id);

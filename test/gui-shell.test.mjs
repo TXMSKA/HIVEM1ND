@@ -7815,12 +7815,12 @@ async function startMenuDesktop(t) {
 test('the right-click menu of an agent and of a cluster lists only what the state allows, from the Map and from the Hierarchy, and every entry opens its action', async t => {
   const { root, app, document, state, calls } = await startMenuDesktop(t);
   const menu = () => document.querySelector('[data-context-menu]');
-  const actions = () => [...menu().children].map(item => item.getAttribute('data-action').replace('context-', ''));
+  const actions = () => [...menu().children].filter(item => item.getAttribute('data-action')).map(item => item.getAttribute('data-action').replace('context-', ''));
   const choose = async id => { const item = [...menu().children].find(child => child.getAttribute('data-action') === `context-${id}`); item.listeners.get('click')[0](); await delay(0); };
   const member = state.units[1], clusterId = state.cluster.id;
   const openMenu = target => { app.mapState.onContextMenu({ ...target, x: 30, y: 40 }); return actions(); };
 
-  assert.deepEqual(openMenu({ kind: 'unit', id: member.id }), ['open', 'start', 'rename', 'connect', 'details', 'remove', 'delete'], 'with one cluster there is nowhere to move an agent to');
+  assert.deepEqual(openMenu({ kind: 'unit', id: member.id }), ['open', 'start', 'rename', 'connect', 'new-report', 'details', 'remove', 'delete'], 'with one cluster there is nowhere to move an agent to');
   assert.ok(menu().children[0].className.includes('is-primary'), 'Open chat is the primary action');
   assert.equal(menu().getAttribute('aria-label'), `Actions for ${member.unit}`);
   assert.match(menu().style.left, /px$/, 'the menu is placed');
@@ -7876,6 +7876,21 @@ test('the right-click menu of an agent and of a cluster lists only what the stat
   await waitFor(() => calls.some(call => call.method === 'PATCH' && call.body?.title === 'Shipping'), 'Rename did not reach the service.');
   openMenu({ kind: 'cluster', id: clusterId }); await choose('new-agent');
   await waitFor(() => app.startDialog, 'New agent here did not open its form.');
+  app.startDialog.dialog.close();
+
+  // The empty Map has its own menu, and a connection dropped on empty space offers a new agent that reports to its source.
+  const mapItems = openMenu({ kind: 'map', groupId: null });
+  assert.ok(['new-agent', 'new-cluster', 'fit'].every(id => mapItems.includes(id)), mapItems.join());
+  assert.equal(menu().getAttribute('aria-label'), 'Map actions');
+  await choose('fit');
+  app.mapState.onConnectDrop({ source: member.id, x: 50, y: 60, groupId: null });
+  assert.deepEqual(actions(), ['new-overlord', 'new-executor', 'new-custom']);
+  assert.match(menu().querySelector('[data-context-title]').textContent, /reporting to/);
+  await choose('new-overlord');
+  await waitFor(() => app.startDialog, 'New Overlord did not open its form.');
+  assert.equal(app.startDialog.model.role, 'overlord');
+  assert.equal(app.startDialog.model.leadId, member.id);
+  assert.ok(app.startDialog.dialog.querySelector('[data-start-lead]'), 'the form names the lead');
   app.startDialog.dialog.close();
   openMenu({ kind: 'cluster', id: clusterId }); await choose('delete');
   await waitFor(() => [...document.querySelectorAll('.dialog')].some(dialog => /^Delete: /.test(dialog.querySelector('h2')?.textContent ?? '')), 'Delete did not ask for confirmation.');

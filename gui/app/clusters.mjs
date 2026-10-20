@@ -253,7 +253,19 @@ export function renderAgentForm(document, model, actions) {
   const t = (key, values) => startText(model.language, key, values);
   const overseer = model.kind === 'overseer';
   const root = element(document, 'section', { class: overseer ? 'overseer-view' : 'new-agent-view' },
-    element(document, 'h2', { text: overseer ? t('createOverseer') : t('newAgentIn', { name: model.cluster.title }) }));
+    element(document, 'h2', { text: overseer ? t('createOverseer') : model.clusterChoices?.length > 1 ? t('newAgent') : t('newAgentIn', { name: model.cluster.title }) }));
+  // Created from the Map with no cluster under it, the agent's cluster is chosen here; the lead it reports to is named.
+  if (!overseer && model.clusterChoices?.length > 1) {
+    const select = element(document, 'select', { name: 'clusterId', 'data-start-field': 'clusterId', onchange: () => actions.onCluster?.(select.value) });
+    for (const group of model.clusterChoices) {
+      const option = element(document, 'option', { value: group.id, text: group.title });
+      option.value = group.id;
+      select.append(option);
+    }
+    select.value = model.cluster.id;
+    root.append(element(document, 'label', { class: 'field start-cluster-field' }, element(document, 'span', { text: t('moveTo') }), select));
+  }
+  if (!overseer && model.leadName) root.append(element(document, 'p', { class: 'start-hint start-lead', 'data-start-lead': 'true', text: t('reportsToLead', { name: model.leadName }) }));
   if (overseer) {
     root.append(element(document, 'p', { class: 'start-hint', text: t('overseerHint') }),
       element(document, 'div', { class: 'overseer-kinds' }, ...['external', 'local'].map(kind => {

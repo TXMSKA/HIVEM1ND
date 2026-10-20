@@ -381,10 +381,11 @@ test('the context menu key and Shift+F10 open the menu of the focused unit or ti
   const frame = personalZones(map)[0], inside = toScreen({ x: frame.bounds.x + 5, y: frame.bounds.y + frame.bounds.h - 5 }, rect, map.view);
   send('contextmenu', { clientX: inside.x, clientY: inside.y, target: targetOf(null), preventDefault: () => prevented.push(true) });
   assert.equal(seen.at(-1).kind, 'cluster');
-  const count = seen.length;
+  // Empty space has the Map's own menu, so the browser's never opens there.
   send('contextmenu', { clientX: 5000, clientY: 5000, target: targetOf(null), preventDefault: () => prevented.push(true) });
-  assert.equal(seen.length, count, 'empty space has no menu');
-  assert.equal(prevented.length, 3);
+  assert.equal(seen.at(-1).kind, 'map');
+  assert.deepEqual([seen.at(-1).x, seen.at(-1).y], [5000, 5000]);
+  assert.equal(prevented.length, 4);
   keyDown(map, { key: 'ContextMenu', target: targetOf(unitNode, { 'data-unit-id': 'a' }), preventDefault: () => prevented.push(true) });
   assert.deepEqual(seen.at(-1), { kind: 'unit', id: 'a', x: 120, y: 120, keyboard: true });
   keyDown(map, { key: 'F10', shiftKey: true, target: targetOf(titleOf(surface, 'c'), { 'data-group-id': 'c' }), preventDefault: () => prevented.push(true) });

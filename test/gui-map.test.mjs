@@ -403,6 +403,32 @@ function unit(id, name, role, kind, scopeName = null, leadId = null) {
   };
 }
 
+test('a connection dropped on empty space asks for a new report, a tap asks for a lead at the handle, and the empty Map has its own menu', () => {
+  const units = [unit('overseer', 'overseer', 'overseer', 'root'), unit('worker', 'worker', 'executor', 'root')];
+  const map = createMap({ units, saved: { nodes: { overseer: { x: 100, y: 100 }, worker: { x: 400, y: 100 } }, groups: {} } });
+  const host = createHost(); renderMap(host.ownerDocument, host, map);
+  const rect = { left: 0, top: 0, width: 760, height: 700 };
+  const drops = [], connects = [], asks = [], menus = [];
+  map.onConnectDrop = drop => drops.push(drop); map.onConnect = pending => connects.push(pending);
+  map.onGroupConnect = (pending, at) => asks.push({ pending, at }); map.onContextMenu = target => menus.push(target);
+  map.onSelection = () => {};
+  const from = toScreen(map.positions.overseer, rect, map.view), to = toScreen(map.positions.worker, rect, map.view);
+  pointerDown(map, point(from.x, from.y, { rect, unitId: 'overseer', handle: 'connect' }));
+  pointerMove(map, point(from.x + 40, from.y + 260, { rect }));
+  pointerUp(map, point(from.x + 40, from.y + 260, { rect }));
+  assert.equal(drops.length, 1); assert.equal(drops[0].source, 'overseer'); assert.equal(connects.length, 0);
+  pointerDown(map, point(from.x, from.y, { rect, unitId: 'overseer', handle: 'connect' }));
+  pointerMove(map, point(to.x, to.y, { rect }));
+  pointerUp(map, point(to.x, to.y, { rect }));
+  assert.equal(drops.length, 1); assert.deepEqual(connects.map(item => item.target), ['worker']);
+  pointerDown(map, point(from.x, from.y, { rect, unitId: 'overseer', handle: 'connect' }));
+  pointerUp(map, point(from.x, from.y, { rect, unitId: 'overseer', handle: 'connect' }));
+  assert.deepEqual(asks.at(-1).at, { x: from.x, y: from.y });
+  let prevented = false;
+  for (const listener of host.listeners.get('contextmenu')) listener({ clientX: 600, clientY: 600, target: { closest: () => null, getAttribute: () => null }, preventDefault() { prevented = true; } });
+  assert.equal(prevented, true); assert.equal(menus.at(-1).kind, 'map'); assert.equal(menus.at(-1).x, 600);
+});
+
 function point(x, y, extra) {
   return {
     clientX: x,

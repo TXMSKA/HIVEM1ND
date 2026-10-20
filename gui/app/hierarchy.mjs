@@ -159,7 +159,7 @@ export function unitDisplayName(unit) {
 
 // The right-click menu of a Map node, a Map cluster and a Hierarchy row. It opens at the pointer, stays on screen and closes on
 // Escape, on a click elsewhere, on scrolling and on a choice. Each item is { id, label, danger, disabled, run }.
-export function openContextMenu(document, { x = 0, y = 0, items = [], label = '' } = {}) {
+export function openContextMenu(document, { x = 0, y = 0, items = [], label = '', title = '' } = {}) {
   document.querySelector?.('[data-context-menu]')?.remove();
   const view = document.defaultView, invoker = document.activeElement;
   // The Map and the list draw themselves again while the menu is open, so the control that opened it may be gone by then.
@@ -169,6 +169,8 @@ export function openContextMenu(document, { x = 0, y = 0, items = [], label = ''
     if (mark) document.querySelector?.(`[${mark[0]}="${String(mark[1]).replace(/["\\]/g, '\\$&')}"]`)?.focus?.();
   };
   const menu = element(document, 'div', { class: 'context-menu', role: 'menu', 'aria-label': label, 'data-context-menu': 'true' });
+  // A title says what the entries make, as when a dropped connection offers a new agent.
+  if (title) menu.append(element(document, 'p', { class: 'context-title', role: 'presentation', 'data-context-title': 'true', text: title }));
   const entries = items.map(item => {
     const entry = element(document, 'button', { type: 'button', class: `context-item${item.primary ? ' is-primary' : ''}${item.danger ? ' is-danger' : ''}`, role: 'menuitem',
       'data-action': `context-${item.id}`, disabled: item.disabled ? '' : null, text: item.label });
