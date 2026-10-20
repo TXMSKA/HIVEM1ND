@@ -296,7 +296,9 @@ export async function connectNativeService({ env = process.env, nativeSessionId 
     async callTool(name, args) {
       const response = await request(connection, {
         path: '/mcp',
-        timeoutMs: name === 'native_permission' ? 125000 : 3000,
+        // A tool that writes waits for the M1ND's own commit, which takes seconds on a large M1ND in a synced folder. Three
+        // seconds made the agent give up on a call that then landed, and its retry sent the same message twice.
+        timeoutMs: name === 'native_permission' ? 125000 : TOOL_TIMEOUT_MS,
         body: { jsonrpc: '2.0', id: args.requestId ?? randomUUID(), method: 'tools/call', params: { name, arguments: args } },
       });
       if (response.status !== 200 || !response.json?.result) {
@@ -308,6 +310,8 @@ export async function connectNativeService({ env = process.env, nativeSessionId 
     close() { connection.closed = true; },
   };
 }
+
+const TOOL_TIMEOUT_MS = 60000;
 
 export function nativeHook({ env = process.env, nativeSessionId, client, event, evidence = null }) {
   return dispatchNative(env.HIVEM1ND_SERVICE_BRIDGE, env.HIVEM1ND_SERVICE_GRANT, 'hook', { nativeSessionId, client, event, ...(evidence ? { evidence } : {}) });
