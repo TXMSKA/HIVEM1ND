@@ -1058,7 +1058,7 @@ html[data-mode="focus"] body { background: #000000; color: #d8d4cc; }
 [data-look="coffee-cat"] {
   --bg: #2c1c40; --panel: #3e2761; --card: #513875; --card2: #6942af;
   --line: rgba(105, 66, 175, 0.55); --line2: #6942af; --text: #f7f7f7;
-  --body: rgba(247, 247, 247, 0.88); --mute: #e6e2ec;
+  --body: rgba(247, 247, 247, 0.88); --mute: #e6e2ec; --error: #ffd2c8;
   --accent: #a8f205; --accent-ink: #2c1c40; --ring: #a8f205; --ground: #26183a; --me: #6942af;
   --accent-soft: rgba(168, 242, 5, .10); --waiting-soft: rgba(230, 192, 111, .14); --ring-soft: rgba(168, 242, 5, .10);
   --label-bg: rgba(44, 28, 64, .86); --zone: rgba(168, 242, 5, .5); --zone-label: #2c1c40;
@@ -1122,7 +1122,7 @@ html[data-mode="focus"] body { background: #000000; color: #d8d4cc; }
 .settings-panel input[type="checkbox"], .settings-review input[type="checkbox"] { appearance: none; width: 18px; height: 18px; padding: 0; flex: 0 0 auto; border: 1px solid var(--ring); border-radius: 4px; background: var(--panel); }
 .settings-panel input[type="checkbox"]:checked, .settings-review input[type="checkbox"]:checked { background: var(--accent); }
 .settings-panel input[type="checkbox"]:checked::after, .settings-review input[type="checkbox"]:checked::after { content: ""; display: block; width: 8px; height: 4px; margin: 4px; border: solid var(--accent-ink); border-width: 0 0 2px 2px; transform: rotate(-45deg); }
-.settings-looks { display: grid; grid-template-columns: repeat(3, 166px); gap: 12px; }
+.settings-looks { display: grid; grid-template-columns: repeat(auto-fill, 166px); gap: 12px; max-width: 522px; }
 .settings-segment { display: flex; padding: 4px; gap: 4px; border-radius: 12px; background: var(--card); }
 .settings-segment .btn { flex: 1; justify-content: center; border-radius: 9px; white-space: nowrap; }
 .settings-fact { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; color: var(--mute); }
@@ -1221,6 +1221,7 @@ button, [role="button"], a[href], summary, select, textarea, [contenteditable="t
 .add-actions button { min-height: 32px; padding: 7px 12px; border-radius: 10px; font-size: 12.5px; font-weight: 600; }
 .add-content-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: center; gap: 10px; min-width: 0; min-height: 32px; padding: 9px 12px; border: 1px solid var(--accent); border-radius: 10px; background: var(--card2); }
 .add-content-row .add-origin { min-width: 0; overflow-wrap: anywhere; text-align: right; font-size: 12.5px; color: var(--accent); }
+[data-look="txmska"] .add-content-row .add-origin { color: var(--body); }
 .add-content-row button.add-origin { padding: 0; border: 0; background: transparent; font-family: var(--font); cursor: pointer; }
 .add-content-row input { accent-color: var(--accent); width: 18px; height: 18px; }
 .add-content-choice { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 32px; }

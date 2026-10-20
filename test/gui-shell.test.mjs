@@ -6538,6 +6538,29 @@ test("T062 measures exact six-look text and alpha surfaces and retains its evide
   }
 });
 
+test("provenance links and the Remove action keep 4.5:1 on their surfaces in every look", async () => {
+  const rules = accessibilityRules(await readFile(new URL("../gui/app/styles.css", import.meta.url), "utf8"));
+  const value = (selector, property) => rules.filter(rule => rule.selectors.includes(selector)).map(rule => rule.values[property]).filter(Boolean).at(-1);
+  for (const look of ["modern", "high-contrast", "nebula", "txmska", "coffee-cat", "ntk"]) {
+    const palette = accessibilityPalette(rules, look);
+    const resolve = raw => accessibilityColor(raw.replace(/^var\((--[\w-]+)\)$/, (_, name) => palette[name]));
+    for (const [selector, surface] of [[".add-content-row .add-origin", ".add-content-row"], [".library-menu-row.is-danger", ".library-menu"]]) {
+      const background = resolve(value(surface, "background"));
+      const foreground = accessibilityComposite(resolve(value(`[data-look="${look}"] ${selector}`, "color") ?? value(selector, "color")), background);
+      const ratio = accessibilityRatio(foreground, background);
+      assert.ok(ratio >= 4.5, `${look} ${selector}: ${ratio.toFixed(2)}`);
+    }
+  }
+});
+
+test("Settings fits the look previews to the width its section has", async () => {
+  const rules = accessibilityRules(await readFile(new URL("../gui/app/styles.css", import.meta.url), "utf8"));
+  const looks = rules.find(rule => rule.selectors.includes(".settings-looks")).values;
+  // At 1280 px two Settings columns leave about 470 px inside a section; three 166 px previews need 522 px.
+  assert.equal(looks["grid-template-columns"], "repeat(auto-fill, 166px)");
+  assert.equal(looks["max-width"], `${3 * 166 + 2 * parseFloat(looks.gap)}px`);
+});
+
 test("T062 retains local faces, minimum hit geometry, zoom reflow and status shapes", async () => {
   const css = await readFile(new URL("../gui/app/styles.css", import.meta.url), "utf8");
   const rules = accessibilityRules(css);
