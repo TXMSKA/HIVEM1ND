@@ -1,6 +1,6 @@
 ---
 name: msg
-description: Writes a message into a unit's inbox and, when its agent has a CLI and the unit is in, tells it to read the inbox.
+description: Sends a message to a unit through Relay, or writes it into the unit's inbox when Relay is not available.
 ---
 
 # /msg
@@ -8,12 +8,11 @@ description: Writes a message into a unit's inbox and, when its agent has a CLI 
 Mind: {{mind}}
 Argument: <unit> <text>
 
-## Start
-
-Locate the mind through the Mind line above. Read `machines/<host>.md` in its `user/` folder, where `<host>` is the hostname of this machine, and take the paths from its `Paths` section. Resolve the current project from the working directory against those paths, and the unit as the role of the current chat plus that project; executive roles use the role name alone. When no role is active, say so and ask which unit to act as, in one line. The layout of the mind and the format of every file are in `files.md`, next to `rules.md`: the steps name the files and do not repeat the formats.
+Locate the mind and the unit as the Locate section of `{{mind}}/rules.md` says; the formats of the records are in `{{mind}}/files.md`, and the steps name the files without repeating the formats.
 
 ## Steps
 
-1. Resolve the recipient's inbox folder from the unit name: project, environment or root.
-2. Write the message file with `from`, `to`, `date`, `subject` (the first line of the text) and the body.
-3. If the recipient's agent has a CLI installed on this machine and the unit is `in`, run it once with the instruction to read its inbox. Otherwise nothing else: the file waits.
+1. Read the state file of the recipient, in its project, its environment or the root of `user/`. When none exists, report that the unit is unknown, and stop.
+2. With the Relay tools, call `send_message` with `to` the unit, `subject` the first line of the text and `body` the text; then report the message id, and stop. A failed call is reported with its error, and the message is not written by hand.
+3. Without the Relay tools, in a session the service did not start, write the message file into `inbox/<unit>/` of the recipient's scope, with the filename and the headers of the Message section of files.md: `id`, `from` the current unit, `to`, `machine`, `timestamp`, `date`, `priority: normal`, `subject`, `thread-id` (the `id` for a new thread), `reply-to`, `reply-requested: false`, `attachments: []`, a blank line and the text.
+4. A recipient that is `out` reads the message on its next entry; nothing else is done to reach it.

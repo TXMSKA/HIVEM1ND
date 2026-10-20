@@ -33,7 +33,8 @@ for (const directory of ["engine", "cli", "gui", "migrations"]) {
 const counts = [];
 for (const directory of ["roles", "commands", "features"]) {
   const entries = await readdir(path.join(root, directory), { withFileTypes: true });
-  const commands = entries.filter(entry => entry.name !== "README.md" && (entry.isDirectory() || entry.name.endsWith(".md")));
+  // A feature may be a folder; a folder inside roles/ holds a role's on-demand files, never a role.
+  const commands = entries.filter(entry => entry.name !== "README.md" && ((entry.isDirectory() && directory !== "roles") || entry.name.endsWith(".md")));
   if (commands.length === 0) throw new Error(`${directory}: no installable command found.`);
   counts.push(`${commands.length} ${directory}`);
 }

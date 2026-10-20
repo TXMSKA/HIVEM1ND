@@ -56,9 +56,9 @@ Any agent attaches in one of two modes. In on-demand mode nothing loads by itsel
 
 Knowledge packs hold what an agent should know before it builds, one per discipline: `security`, `design`, `copy` and `product` ship with the kit; the first three each install a command (`/cyberattack`, `/uify`, `/humanize`), and `product` holds the protocol that writes the product document of a product. A pack is organized as a two-level index. `INDEX.md` lists the categories in one line each; a category file lists its subcategories, when each one applies, a `Build:` line with how to get it right the first time, the options to choose from, and which protocols to open.
 
-Packs are read while planning. Asked for a contact page with a form, the executor reads each index, opens only the categories the work touches, such as forms, interface copy and API security, and writes their `Build:` lines into the plan as requirements, each naming the file it came from. A large pack costs a few hundred words to consult instead of all of it, and a task that touches no category reads nothing more.
+Packs are read while planning. Asked for a contact page with a form, the executor reads each index, opens only the categories the work touches, such as forms, interface copy and API security, and cites their `Build:` lines in the plan as recipes to start from, each naming the file it came from; the floors in each pack's `essentials.md` are the requirements. A large pack costs a few hundred words to consult instead of all of it, and a task that touches no category reads nothing more.
 
-A protocol is a checklist an agent can actually run: a strict sequence of steps, each with a task, a time limit and a result that proves it happened, such as a measured contrast ratio, a status code or a search that returns nothing. A step without its result is not done, and a run stops at the first step that fails.
+A protocol is a checklist an agent can actually run: a strict sequence of steps, each with a task, a time limit and a result that proves it happened, such as a measured contrast ratio, a status code or a search that returns nothing. A step without its result is not done; each step ends in pass, fail, not applicable, not run or not verifiable, a fail ends its step, and the run reports every fail at the end.
 
 Protocols are offered, not imposed. While a task is planned, the protocols that cover something the plan actually builds are listed next to it, and before the report the agent asks which ones to run; only the confirmed ones run. A pack can be left out at setup, and a user adds private protocols and packs the same way under `user/`: global protocols in `user/protocols/`, and local ones for a single project in `user/projects/<project>/protocols/`.
 
@@ -83,7 +83,7 @@ No install is left half done. A destination that cannot be written stops on that
 
 ### Roles
 
-A role is a markdown file in `roles/`, and that file is also the command that starts a chat in that role. A role added inside the mind is installed the same way, so it becomes a command on every machine. See [roles/README.md](roles/README.md).
+A role is a markdown file in `roles/`, and that file is also the command that starts a chat in that role. A role added inside the mind is installed the same way, so it becomes a command on every machine. A role file holds only its mission, limits, reads and procedures; the authority, start, work, exit and report every role shares are in [rules.md](rules.md), which every session receives. See [roles/README.md](roles/README.md).
 
 <details>
 <summary>Executive, operative and preset roles</summary>
@@ -118,10 +118,10 @@ Every role is a command, and a few more operate the system. Every command also w
 
 | Command | Description |
 | --- | --- |
-| `/relay` | Starts and ends a role's session. On entry it fetches, aligns the repos with the recorded branches and reads the state and the inbox; on exit it commits and pushes everything, writes the state and the log, and clears the conversation. |
+| `/relay` | Starts and ends a role's session. On entry it reads the state and the inbox through Relay and, for a session the desktop app did not start, registers it and aligns the repos with the recorded branches; on exit it writes the state and the log, and commits or pushes only on an explicit instruction. |
 | `/evolve` | Updates the mind base, applies private migrations in order and reinstalls the included commands for this machine. |
 | `/task` | Creates a task file with the next id for a unit and leaves it a message that the task is ready. |
-| `/msg` | Writes a message into a unit's inbox and, when its agent has a CLI and the unit is in, tells it to read the inbox. |
+| `/msg` | Sends a message to a unit through Relay, or writes it into the unit's inbox when Relay is not available. |
 | `/absorb` | Stores a piece of feedback as a preference, for the current project or globally, with the date and the reason. |
 | `/migrate` | Absorbs a structure a person already has, the rules and memories of their agents and repositories, into the mind, without touching the original. |
 | `/pylon` | Adds shared team state to a repository without switching or changing its code branch. |
@@ -136,15 +136,15 @@ Every role is a command, and a few more operate the system. Every command also w
 A feature is a workflow that runs on a repo, with a start and an end, one markdown file in `features/`, or a folder with its scripts when the feature has any. Most are included in the base; the rest are installed with a knowledge module and require it.
 
 <details>
-<summary>Seventeen features</summary>
+<summary>Eighteen features</summary>
 
 | Feature | Category | Description |
 | --- | --- | --- |
 | `/report` | Planning | Investigates a defect or request and writes an evidence-backed task for the project executor without changing code. |
 | `/plan` | Planning | Splits a request into ordered task files for the owning units and sends each unit a message without implementing it. |
 | `/brainstorm` | Planning | Develops a topic one approved decision at a time and records agreed text separately from open questions. |
-| `/blueprint` | Planning | Serves the screen-flow boards of every project on the machine in one local viewer and writes the comments left on them into each repo. This is Blueprint Lite; the full editor is [Blueprint](https://blueprint.txmska.com/). |
-| `/void` | Planning | Opens a long text in a quiet reader where the person corrects it in place, and saves every edit into the file on disk, keeping the original and each version, where agents read it. |
+| `/blueprint` | Planning | Reads and changes Blueprint boards through the editor tools, answers their comments, and serves the boards of every project on the machine in one local browser view. The local view is Blueprint Lite; the full editor is [Blueprint](https://blueprint.txmska.com/). |
+| `/void` | Planning | Reads and changes Void texts through the editor tools, answers their comments, and opens a text in a quiet local reader where the person corrects and comments in place. |
 | `/qa` | Quality | Runs every open project task in non-overlapping groups, verifies the results and records what passed or failed. |
 | `/tribunal` | Quality | Convenes three judges, cross-examines their findings and records an evidence-backed verdict without editing code. |
 | `/corpo` | Quality | Stress-tests delivered work with three deliberately difficult reviewers and records every finding for the user. |
@@ -154,6 +154,7 @@ A feature is a workflow that runs on a repo, with a start and an end, one markdo
 | `/cleaner` | Continuity | Measures how bloated the mind is, proposes every cleanup in one list for a single yes, applies it and verifies that nothing was lost. The startup check offers it when a threshold is crossed. |
 | `/docs` | Continuity | Updates only the documentation affected by the current diff or a supplied commit range. |
 | `/release` | Continuity | Prepares a local release from commits since the last tag and reports the commands needed to publish it. |
+| `/relay-client-setup` | Continuity | Installs, removes and troubleshoots Relay MCP, turn reminders and wakes for Claude Code, Codex, Cursor, OpenCode, GitHub Copilot, the Antigravity CLI and a host application. |
 | `/cyberattack` | Quality | Audits security, the whole project or one feature, and warns before the full pass. Installed with the `security` module. |
 | `/uify` | Quality | Reviews design and interface, the whole project or one feature, and applies the pass. Installed with the `design` module. |
 | `/humanize` | Quality | Rewrites copy that reads as written by an AI, the whole project or one feature. Installed with the `copy` module. |
