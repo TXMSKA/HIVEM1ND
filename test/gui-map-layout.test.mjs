@@ -139,8 +139,8 @@ test('the real mind of 92 units in 26 groups has no overlap between boxes, units
   const placed = placeUnits(units, { nodes: {}, groups: {} }, groups);
   const clustered = units.filter(item => item.clusterId);
   assert.equal(clustered.length, 70);
-  assert.equal(Object.keys(placed.positions).length, 71, 'seventy clustered units and the Overseer have a place');
-  const cells = clustered.map(item => cellOf(placed.positions[item.id]));
+  assert.equal(Object.keys(placed.positions).length, 92, 'every unit has a place, the twenty-one outside any group beside the Overseer');
+  const cells = units.filter(item => item.role !== 'overseer').map(item => cellOf(placed.positions[item.id]));
   for (const [index, cell] of cells.entries()) for (const other of cells.slice(index + 1)) assert.equal(overlaps(cell, other), false);
   const overseer = placed.positions['root:overseer'];
   assert.ok(frames.every(frame => !overlaps({ x: overseer.x - 30, y: overseer.y - 30, w: 60, h: 100 }, frame.bounds)), 'the Overseer is outside every box');
@@ -157,7 +157,7 @@ test('the real mind of 92 units in 26 groups has no overlap between boxes, units
       assert.ok(width <= (CELL_W - 8) * zoom + 0.001, `a name is never wider than its cell, zoom ${zoom}`);
       return { circle: { x: cx - size / 2, y: cy - size / 2, w: size, h: size }, name: { x: cx - width / 2, y: cy + size / 2, w: width, h: 16 * zoom } };
     });
-    assert.equal(shown.length, 71);
+    assert.equal(shown.length, 92);
     for (const [index, one] of shown.entries()) for (const other of shown.slice(index + 1)) {
       assert.equal(overlaps(one.circle, other.circle) || overlaps(one.name, other.name) || overlaps(one.circle, other.name) || overlaps(one.name, other.circle), false, `units overlap at zoom ${zoom}`);
     }
@@ -168,15 +168,15 @@ test('the real mind of 92 units in 26 groups has no overlap between boxes, units
 test('a cluster collapses to one chip that counts the agents inside, and expands again', () => {
   const { units, groups } = realMind();
   const map = createMap({ units, groups, saved: { nodes: {}, groups: {} } });
-  assert.equal(paintNodes(map).length, 71);
+  assert.equal(paintNodes(map).length, 92);
   assert.equal(toggleCollapsed(map, 'folder-web'), true);
   assert.equal(isCollapsed(map, 'folder-web'), true);
   const chip = personalZones(map).find(frame => frame.group.id === 'folder-web');
   assert.ok(chip.compact && chip.collapsed && chip.count === 60 && chip.bounds.h < 50);
   assert.equal(personalZones(map).some(frame => frame.group.id === 'repo-Nebula'), false);
-  assert.equal(paintNodes(map).length, 11, 'the Web agents are hidden; Unity, ntk.solutions and the Overseer stay');
+  assert.equal(paintNodes(map).length, 32, 'the Web agents are hidden; Unity, ntk.solutions, the Overseer and the agents outside any group stay');
   assert.equal(toggleCollapsed(map, 'folder-web'), false);
-  assert.equal(paintNodes(map).length, 71);
+  assert.equal(paintNodes(map).length, 92);
 });
 
 test('dragging a cluster title moves the cluster, what is inside it and the places saved for its units, and saves them in one request', async () => {
@@ -460,4 +460,21 @@ test('the context menu opens at the pointer inside the window, moves with the ar
   assert.equal(document.body.children.length, 0, 'a click elsewhere closes it');
   void third;
   assert.deepEqual(ran, ['open']);
+});
+
+test('agents that belong to no cluster stand in the Overseer row and never on a box', () => {
+  const { units, groups } = box(3);
+  const overseer = { ...unit('root:overseer', 'overseer', 'overseer'), scope: { kind: 'root' } };
+  const adjutant = unit('root:adjutant', 'adjutant', 'adjutant');
+  const helper = unit('root:helper', 'helper', 'helper');
+  const all = [...units, overseer, adjutant, helper];
+  const { positions } = placeUnits(all, {}, groups);
+  for (const id of [overseer.id, adjutant.id, helper.id]) assert.ok(positions[id], `${id} is placed`);
+  assert.equal(positions[adjutant.id].y, positions[overseer.id].y);
+  assert.notEqual(positions[adjutant.id].x, positions[helper.id].x);
+  const frames = clusterFrames(groups, {}, null, all);
+  for (const id of [adjutant.id, helper.id]) {
+    const cell = cellOf(positions[id]);
+    for (const frame of frames) assert.equal(overlaps(cell, frame.bounds), false, `${id} clears ${frame.group.title}`);
+  }
 });

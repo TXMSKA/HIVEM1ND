@@ -115,6 +115,9 @@ function overseerPoint(frames) {
   return { x: Math.round((left + right) / 2), y: Math.round(Math.min(...frames.map(frame => frame.bounds.y)) - 110) };
 }
 
+const LOOSE_PER_ROW = 8;
+const looseSlot = (overseer, index) => ({ x: overseer.x + CELL_W * (index % LOOSE_PER_ROW + 1), y: overseer.y - CELL_H * Math.floor(index / LOOSE_PER_ROW) });
+
 export function placeUnits(units, saved, clusters = []) {
   const layout = saved.layout ?? saved ?? {};
   if (clusters.length) {
@@ -134,6 +137,14 @@ export function placeUnits(units, saved, clusters = []) {
       if (unit.role === 'master' || unit.removed || homes.has(unit.id) || !canonicalOverseer(unit)) continue;
       const current = layout.nodes?.[unit.id];
       positions[unit.id] = chosenPoint(current) && clearsFrames(current, nodeRadius(unit), frames) ? { x: current.x, y: current.y } : { ...overseer };
+    }
+    // A unit that belongs to no cluster, such as a new root agent, stands beside the Overseer instead of being left out;
+    // the row wraps upward, away from the boxes below the Overseer.
+    let next = 0;
+    for (const unit of units) {
+      if (unit.role === 'master' || unit.removed || homes.has(unit.id) || canonicalOverseer(unit) || hidden.has(unit.id)) continue;
+      const current = layout.nodes?.[unit.id];
+      positions[unit.id] = chosenPoint(current) && clearsFrames(current, nodeRadius(unit), frames) ? { x: current.x, y: current.y } : looseSlot(overseer, next++);
     }
     return { origins, positions };
   }
