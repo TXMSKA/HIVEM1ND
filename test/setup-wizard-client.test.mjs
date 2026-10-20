@@ -109,6 +109,48 @@ async function openWizard(step, routes, hivem1nd) {
 }
 const spinnerIn = (node) => node.querySelector(".button-spinner");
 
+test("Browse replaces Change, asks the local server for a folder and shows a loader while it waits", async () => {
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  const { document, calls } = await openWizard(locationStep, {
+    browse: async () => { await held; return { data: { path: "C:/chosen" } }; },
+    answer: async () => ({ data: { ...locationStep, values: { ...locationStep.values, mindPath: "C:/chosen" } } }),
+  });
+  assert.equal(document.getElementById("change-folder"), null);
+  const browse = document.getElementById("browse-folder");
+  assert.equal(browse.textContent, "Browse");
+  assert.equal(spinnerIn(browse), null);
+  const click = browse.listeners.get("click")[0]();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.ok(spinnerIn(browse), "the Browse button shows a loader while the picker is open");
+  assert.equal(browse.disabled, true);
+  assert.equal(document.getElementById("continue-button").disabled, true);
+  release();
+  await click;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(calls.filter((call) => call.route === "browse").map((call) => call.body), [{}]);
+  assert.deepEqual(calls.find((call) => call.route === "answer").body, { values: { mindPath: "C:/chosen", changeFolder: true } });
+  assert.equal(document.getElementById("mind-path").value, "C:/chosen");
+  assert.equal(spinnerIn(document.getElementById("browse-folder")), null);
+  assert.equal(document.getElementById("browse-folder").disabled, false);
+});
+
+test("Browse uses the Electron dialog when the app provides one and keeps the path editable when no picker exists", async () => {
+  const chosen = [];
+  const electron = await openWizard(locationStep, { answer: async (options) => { chosen.push(JSON.parse(options.body).values.mindPath); return { data: locationStep }; } },
+    { browseFolder: async () => "C:/native" });
+  await electron.document.getElementById("browse-folder").listeners.get("click")[0]();
+  assert.deepEqual(chosen, ["C:/native"]);
+  assert.equal(electron.calls.some((call) => call.route === "browse"), false);
+
+  const plain = await openWizard(locationStep, { browse: async () => ({ error: { message: "No picker here." } }) });
+  await plain.document.getElementById("browse-folder").listeners.get("click")[0]();
+  assert.equal(plain.document.getElementById("status-message").textContent, "No picker here.");
+  assert.equal(plain.document.getElementById("mind-path").value, "C:/M1ND", "the typed path stays");
+  assert.equal(spinnerIn(plain.document.getElementById("browse-folder")), null);
+  assert.equal(plain.document.getElementById("mind-path").disabled, false);
+});
+
 test("Continue and Back show a loader while their request runs, including Continue with the Migrate option", async () => {
   let release;
   const held = new Promise((resolve) => { release = resolve; });

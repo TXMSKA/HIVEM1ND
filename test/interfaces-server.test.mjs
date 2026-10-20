@@ -433,10 +433,56 @@ test("setup detects accurate repository and folder counts without editing projec
   assert.deepEqual(await Promise.all(directories.map(legacyTreeInventory)), before);
 });
 
-test("Folder Change uses the native bridge with an editable browser fallback",async context=>{
+test("Folder Browse uses the native bridge, then the local server, with an editable path",async context=>{
  const {server}=await start();context.after(()=>server.close());const script=await(await fetch(server.origin+'/app.js')).text();assert.match(script,/window\.hivem1nd\.browseFolder/);assert.match(script,/changeFolder: true/);assert.doesNotMatch(script,/removeEnvironment|removeProject|addRoot/);
 });
 
 test("setup reaches service with no detected agents and rejects removed controls",async context=>{
  const root=await mkdtemp(path.join(os.tmpdir(),'hivem1nd-no-agents-'));context.after(()=>rm(root,{recursive:true,force:true}));const homeDir=path.join(root,'home'),mindPath=path.join(root,'mind');await mkdir(homeDir);const server=await createWizardServer({sessionOptions:{kitPath:path.dirname(path.dirname(fileURLToPath(import.meta.url))),mindPath,homeDir,hostname:'INTERFACE-TEST',language:'en',env:{},aclRunner:stubAclRunner()}});context.after(()=>server.close());const headers={Authorization:'Bearer '+server.token,Origin:server.origin,'Content-Type':'application/json'};const post=values=>fetch(server.origin+'/api/v1/answer',{method:'POST',headers,body:JSON.stringify({values})});for(const key of ['installMode','sync','originKind'])assert.equal((await post({[key]:'custom'})).status,400);await post({});assert.equal((await post({changeFolder:'yes'})).status,400);const service=await post({mindPath});assert.equal(service.status,200);assert.equal((await service.json()).data.id,'service');assert.equal((await post({scan:true})).status,400);assert.equal((await fetch(server.origin+'/api/v1/back',{method:'POST',headers,body:'{}'})).status,409);
+});
+
+test("Browse asks the local server for a native folder and treats a cancel as no folder", async (context) => {
+  const asked = [];
+  const answers = ["/tmp/chosen", null];
+  const server = await createWizardServer({ session: createStubSession(), token: "a".repeat(43), browseFolder: async (options) => { asked.push(options); return answers.shift(); } });
+  context.after(() => server.close());
+  const headers = { Authorization: `Bearer ${server.token}`, Origin: server.origin, "Content-Type": "application/json" };
+  const post = (body = "{}", extra = {}) => fetch(`${server.origin}/api/v1/browse`, { method: "POST", headers: { ...headers, ...extra }, body });
+  assert.deepEqual((await (await post()).json()).data, { path: "/tmp/chosen" });
+  assert.deepEqual((await (await post()).json()).data, { path: null });
+  assert.deepEqual(asked, [{ title: "Choose the folder for the M1ND" }, { title: "Choose the folder for the M1ND" }]);
+  assert.equal((await post("{}", { Authorization: "Bearer wrong" })).status, 401);
+  assert.equal((await post('{"path":"/x"}')).status, 400);
+  assert.equal(asked.length, 2, "a rejected request never opens a dialog");
+  const script = await (await fetch(`${server.origin}/app.js`)).text();
+  assert.match(script, /api\('browse'/);
+  const step = await (await fetch(`${server.origin}/api/v1/step`, { headers: { Authorization: headers.Authorization } })).json();
+  assert.equal(step.data.ui.browse, "Browse");
+  assert.equal(Object.hasOwn(step.data.ui, "change"), false);
+});
+
+test("Browse names the missing picker in the session language and opens one dialog at a time", async (context) => {
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  let mode = "missing";
+  const session = createStubSession({ language: "es" });
+  const server = await createWizardServer({ session, token: "a".repeat(43), browseFolder: async () => {
+    if (mode === "missing") throw Object.assign(new Error("none"), { code: "browse_unavailable" });
+    await held;
+    return "/tmp/late";
+  } });
+  context.after(() => server.close());
+  const headers = { Authorization: `Bearer ${server.token}`, Origin: server.origin, "Content-Type": "application/json" };
+  const post = () => fetch(`${server.origin}/api/v1/browse`, { method: "POST", headers, body: "{}" });
+  const missing = await post();
+  assert.equal(missing.status, 501);
+  assert.deepEqual((await missing.json()).error.message, "El selector de carpetas no está disponible aquí. Escribir la ruta de la carpeta.");
+  mode = "open";
+  const first = post();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const second = await post();
+  assert.equal(second.status, 409);
+  assert.equal((await second.json()).error.message, "Ya hay un selector de carpetas abierto.");
+  release();
+  assert.deepEqual((await (await first).json()).data, { path: "/tmp/late" });
 });

@@ -3,6 +3,7 @@ import http from "node:http";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { text as engineText } from "../engine/texts.mjs";
+import { pickFolder } from "./folder-picker.mjs";
 
 const HOST = "127.0.0.1";
 const MAX_BODY_BYTES = 64 * 1024;
@@ -13,9 +14,9 @@ const UI_KEYS = [
   "firstCommand", "actionCreate", "actionUpdate", "actionUnchanged", "actionAppend", "actionConflict",
   "documentTitle", "environmentPlaceholder", "reportSaved",
   "step1Title", "step2Title", "step3Title", "step4Title",
-  "stepOfFour", "startSetup", "folder", "change", "cancel", "retry", "openMap",
+  "stepOfFour", "startSetup", "folder", "cancel", "retry", "openMap",
   "progressDone", "progressBusy", "progressTodo", "progressFail", "onMachine",
-  "sessionMissing", "requestFailed",
+  "sessionMissing", "requestFailed", "browseUnavailable",
 ];
 
 function buildUi(language) {
@@ -166,6 +167,7 @@ export async function createWizardServer({
   sessionOptions = {},
   token = crypto.randomBytes(32).toString("base64url"),
   openCompletedViewer,
+  browseFolder = pickFolder,
 } = {}) {
   if (host !== HOST) throw new Error("The wizard server can only bind to 127.0.0.1.");
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("Invalid wizard server port.");
@@ -173,6 +175,7 @@ export async function createWizardServer({
 
   const activeSession = session ?? await createSession(sessionOptions);
   let viewerOpened = false;
+  let browsing = false;
   const assetRoot = fileURLToPath(new URL("./", import.meta.url));
   const assets = new Map();
   for (const [route, [name, contentType]] of STATIC_FILES) {
@@ -298,6 +301,23 @@ export async function createWizardServer({
           return result;
         });
         sendJson(response, 200, { data: result });
+        return;
+      }
+      if (url.pathname === "/api/v1/browse" && request.method === "POST") {
+        requireExactKeys(await readJson(request), new Set());
+        const language = (await activeSession.getStep()).language;
+        if (browsing) throw new HttpError(409, "browse_busy", engineText(language, "browseBusy"));
+        browsing = true;
+        try {
+          // The dialog belongs to the person at this computer; the request waits for the answer and a cancel is a null path.
+          const chosen = await browseFolder({ title: engineText(language, "browseTitle") });
+          sendJson(response, 200, { data: { path: typeof chosen === "string" && chosen ? chosen : null } });
+        } catch (error) {
+          if (error?.code !== "browse_unavailable") throw error;
+          throw new HttpError(501, "browse_unavailable", engineText(language, "browseUnavailable"));
+        } finally {
+          browsing = false;
+        }
         return;
       }
       if (url.pathname === "/api/v1/open" && request.method === "POST") {

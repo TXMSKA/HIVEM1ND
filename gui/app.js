@@ -115,26 +115,38 @@ function renderLocation(step) {
   const label = el('label', '', ui().folder); label.htmlFor = 'mind-path';
   const path = el('div', 'path-control');
   const input = el('input'); input.type = 'text'; input.id = 'mind-path'; input.required = true; input.value = step.values.mindPath;
-  const change = el('button', 'button plain', ui().change); change.type = 'button'; change.id = 'change-folder';
-  change.addEventListener('click', async () => {
-    if (busy) return;
-    if (typeof window.hivem1nd?.browseFolder === 'function') {
-      const chosen = await window.hivem1nd.browseFolder();
-      if (chosen) { input.value = chosen; await changeFolder(); }
-    } else { input.focus(); input.select(); }
-  });
-  input.addEventListener('change', changeFolder);
-  path.append(icon('folder'), input, change); field.append(label, path); elements.fields.append(field);
+  const browse = el('button', 'button plain'); browse.type = 'button'; browse.id = 'browse-folder';
+  paint(browse, loading => [...(loading ? [icon('spinner', 'button-spinner')] : []), document.createTextNode(ui().browse)]);
+  // The Electron app opens its own dialog; the browser wizard asks its local server to open the system one.
+  browse.addEventListener('click', () => browseFolder(input, browse));
+  input.addEventListener('change', () => changeFolder(browse));
+  path.append(icon('folder'), input, browse); field.append(label, path); elements.fields.append(field);
   if (step.join) elements.fields.append(offer(step.join.title, step.join.body, { id: 'join-mind', checked: step.values.attach }));
   else if (step.legacy) elements.fields.append(offer(step.legacy.title, step.legacy.body, { id: 'migrate-legacy', checked: step.values.migrateLegacy }));
   elements.fields.append(offer(step.relayPlus.title, step.relayPlus.body, { id: 'relay-plus', disabled: true, badge: step.relayPlus.badge }));
 }
-async function changeFolder() {
+async function reviewFolder() {
+  render(await api('answer', { method: 'POST', body: { values: { mindPath: document.getElementById('mind-path').value.trim(), changeFolder: true } } }));
+}
+async function changeFolder(button) {
   if (busy) return;
-  setBusy(true); setError();
-  try { render(await api('answer', { method: 'POST', body: { values: { mindPath: document.getElementById('mind-path').value.trim(), changeFolder: true } } })); }
+  setBusy(true, button); setError();
+  try { await reviewFolder(); }
   catch (error) { setError(error.message); }
   finally { setBusy(false); }
+}
+async function browseFolder(input, button) {
+  if (busy) return;
+  setBusy(true, button); setError();
+  try {
+    const chosen = typeof window.hivem1nd?.browseFolder === 'function'
+      ? await window.hivem1nd.browseFolder()
+      : (await api('browse', { method: 'POST', body: {} })).path;
+    if (chosen) { input.value = chosen; await reviewFolder(); }
+  } catch (error) {
+    setError(error.message);
+    input.focus();
+  } finally { setBusy(false); }
 }
 function renderLegacyDialog(step) {
   const legacy = step.legacy;

@@ -87,7 +87,7 @@ export const cases = {
       deferPageStop(ctx);
       await openWizard(ctx, server);
       await startSetup(ctx);
-      await ctx.page.click('#change-folder');
+      await ctx.page.click('#browse-folder');
       await ctx.page.fill('#mind-path', sandbox.joinPath);
       await ctx.page.press('Tab');
       await ctx.visible('#join-mind');
