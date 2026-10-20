@@ -3,9 +3,10 @@ import { open, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { admitMessage } from '../sync/limits.mjs';
 import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
-import { CoreError, ROLES, canonicalJson, hashBytes, isUuid, parseTaskId, uuidV8 } from './identity.mjs';
+import { CoreError, ROLES, canonicalJson, hashBytes, isUuid, parseTaskId, parseUnitId, uuidV8 } from './identity.mjs';
 import { safeError } from './security.mjs';
-import { readEditor, addNode, updateNode, removeNode, replaceRange, replyComment, requireAttachment } from './editors.mjs';
+import { readEditor, addNode, updateNode, removeNode, replaceRange, replyComment, requireAttachment, createBoard, createText } from './editors.mjs';
+import { addScreen, newSketch } from '../../features/blueprint/review/sketch-format.mjs';
 import { publishDomainEvents } from './events.mjs';
 import { readApproval, requestApproval } from './approvals.mjs';
 import { completeSessionTask, ownsSessionExecution } from './adapters.mjs';
@@ -23,7 +24,7 @@ import { assertNoLinks } from './paths.mjs';
 import { assertPlanActor, callPlanTool, planToolSchemas, planBindingForSession, planFileTool, assertOrdinaryRunSend, readPlanInbox } from './runs.mjs';
 
 const PROTOCOL = '2025-03-26';
-const MUTATIONS = new Set(['blueprint_add_node', 'blueprint_update_node', 'blueprint_remove_node', 'blueprint_reply_comment', 'void_replace_range', 'void_reply_comment']);
+const MUTATIONS = new Set(['blueprint_create', 'void_create', 'blueprint_add_node', 'blueprint_update_node', 'blueprint_remove_node', 'blueprint_reply_comment', 'void_replace_range', 'void_reply_comment']);
 
 export function localToolNames(context) {
   return lyraToolDefinitions().filter(tool => context.localPlanBinding?.unitId !== null || tool.name.startsWith('plan_') || ['m1nd_read', 'file_read', 'file_write'].includes(tool.name)).filter(tool => !tool.name.startsWith('plan_') || tool.name === 'plan_propose'
@@ -239,6 +240,7 @@ const label = { type: 'string', maxLength: 180 };
 const revision = { type: 'string', format: 'hash', maxLength: 64 };
 const requestId = { type: 'string', format: 'uuid', maxLength: 36 };
 const text = { type: 'string', maxLength: 10000 };
+const documentTitle = { type: 'string', minLength: 1, maxLength: 120 };
 
 export function toolSchemas() {
   return [
@@ -253,11 +255,13 @@ export function toolSchemas() {
       paths: { type: 'array', maxItems: 256, items: { type: 'string', maxLength: 4096 } }, message: { type: 'string', maxLength: 10000 }, remote: label, requestId }, ['action', 'repository', 'branch', 'paths', 'requestId']),
     tool('session_open', 'Ask the person to open one connected CLI for a registered unit on this machine.', { client: { type: 'string', enum: ['claude', 'codex', 'cursor'], maxLength: 32 }, machine: label, unitId: { type: 'string', maxLength: 256 }, runMode: { type: 'string', enum: ['task', 'chat'] }, taskId: { type: ['string', 'null'], maxLength: 256 }, requestId }, ['client', 'machine', 'unitId', 'runMode', 'taskId', 'requestId']),
     tool('session_complete', 'Acknowledge terminal delivery or failure of this assigned task; wait for native completion before the CLI closes.', { outcome: { type: 'string', enum: ['delivered', 'failed'] }, taskId: { type: ['string', 'null'], maxLength: 256 }, requestId }, ['outcome', 'requestId']),
+    tool('blueprint_create', 'Create a Blueprint board in this agent\'s project, for interface or flow design; the agent is attached to it.', { title: documentTitle, requestId }, ['title', 'requestId']),
     tool('blueprint_open', 'Read one Blueprint board.', { resourceId }, ['resourceId']),
     tool('blueprint_add_node', 'Add a node to a board.', { resourceId, screenId: label, parentId: label, index: { type: 'integer', minimum: 0 }, node: { type: 'object' }, expectedRevision: revision, requestId }, ['resourceId', 'screenId', 'parentId', 'node', 'expectedRevision', 'requestId']),
     tool('blueprint_update_node', 'Change a node.', { resourceId, nodeId: label, changes: { type: 'object' }, expectedRevision: revision, requestId }, ['resourceId', 'nodeId', 'changes', 'expectedRevision', 'requestId']),
     tool('blueprint_remove_node', 'Remove a node.', { resourceId, nodeId: label, expectedRevision: revision, requestId }, ['resourceId', 'nodeId', 'expectedRevision', 'requestId']),
     tool('blueprint_reply_comment', 'Reply on a board comment.', { resourceId, threadId: label, text, expectedCommentsRevision: revision, requestId }, ['resourceId', 'threadId', 'text', 'expectedCommentsRevision', 'requestId']),
+    tool('void_create', 'Create a Void text in this agent\'s project, for a document or copy; the agent is attached to it.', { title: documentTitle, requestId }, ['title', 'requestId']),
     tool('void_open', 'Read one Void text.', { resourceId }, ['resourceId']),
     tool('void_replace_range', 'Apply or propose a text range.', { resourceId, k: { type: 'string', maxLength: 240 }, lang: { type: 'string', maxLength: 16 }, start: { type: 'integer', minimum: 0 }, end: { type: 'integer', minimum: 0 }, expectedText: text, replacement: text, expectedRevision: revision, mode: { type: 'string', enum: ['apply', 'propose'] }, threadId: label, expectedCommentsRevision: revision, requestId }, ['resourceId', 'k', 'lang', 'start', 'end', 'expectedText', 'replacement', 'expectedRevision', 'requestId']),
     tool('void_reply_comment', 'Reply on a Void comment.', { resourceId, threadId: label, text, expectedCommentsRevision: revision, requestId }, ['resourceId', 'threadId', 'text', 'expectedCommentsRevision', 'requestId']),
@@ -390,7 +394,7 @@ async function mutateTool(context, name, args) {
     requestId: args.requestId,
   }, async (receipt) => {
     const value = await runMutation(context, name, args);
-    noteActivity(context, args.resourceId, focusFor(name, args), name.startsWith('void_') ? 'void' : 'blueprint');
+    noteActivity(context, args.resourceId ?? value?.id, focusFor(name, args), name.startsWith('void_') ? 'void' : 'blueprint');
     await atomicWrite(context.store, path.join(context.store.localDirectory, 'receipts', receipt.principalHash, `${receipt.key}.json`), Buffer.from(`${canonicalJson({
       ...receipt,
       status: 200,
@@ -690,6 +694,7 @@ async function commitMindFileLocked(context, destination, bytes) {
 }
 
 async function runMutation(context, name, args) {
+  if (name === 'blueprint_create' || name === 'void_create') return createForAgent(context, name === 'void_create' ? 'void' : 'blueprint', args);
   if (name === 'blueprint_add_node') return addNode(context, args.resourceId, args);
   if (name === 'blueprint_update_node') return updateNode(context, args.resourceId, args.nodeId, { changes: args.changes, expectedRevision: args.expectedRevision });
   if (name === 'blueprint_remove_node') return removeNode(context, args.resourceId, args.nodeId, { expectedRevision: args.expectedRevision });
@@ -704,6 +709,27 @@ function focusFor(name, args) {
   if (name.startsWith('void_') && args.k) return { k: args.k, lang: args.lang ?? null, start: args.start ?? null, end: args.end ?? null };
   if (args.nodeId) return { screenId: args.screenId ?? null, nodeId: args.nodeId };
   return null;
+}
+
+// Any agent of a project may start a board or a text there and is attached to what it starts; a document the person made
+// still needs the person to attach the agent before the agent can change it.
+async function createForAgent(context, kind, args) {
+  // The same identity decides attachment, so the agent that creates is the one attached.
+  const unitId = context.principal?.unitId ?? context.credential?.unitId ?? null;
+  if ((context.principal?.audience ?? context.credential?.audience) !== 'agent' || !unitId) throw new CoreError(403, 'forbidden', 'Only an agent creates through its tools.');
+  const scope = parseUnitId(unitId).scope;
+  if (scope.kind !== 'project') throw new CoreError(409, 'project_required', 'Only an agent of a project can create a board or a text.');
+  const title = String(args.title ?? '').trim();
+  if (!title || title.length > 120) throw new CoreError(422, 'invalid_body', 'The title must be 1 to 120 characters.');
+  const slug = title.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/, '');
+  const id = `${slug || kind}-${args.requestId.slice(0, 8)}`;
+  if (kind === 'void') {
+    return createText(context, { project: scope.name, path: `docs/${id}.json`, attached: [unitId],
+      document: { formatVersion: 1, id, title, pages: [{ k: 'Intro', en: '' }] } });
+  }
+  const document = newSketch(id, title);
+  addScreen(document, { title, x: 0, y: 0 });
+  return createBoard(context, { project: scope.name, document, attached: [unitId] });
 }
 
 function noteActivity(context, resourceId, focus, kind) {

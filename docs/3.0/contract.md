@@ -824,6 +824,7 @@ For each tool, `inputSchema` is JSON Schema `{type:"object",additionalProperties
 | `blueprint_update_node` | `{resourceId,nodeId:string,changes:object,expectedRevision:Revision,requestId:UUID}` | `Editor`; `blueprint.changed`, `editor.activity` |
 | `blueprint_remove_node` | `{resourceId,nodeId:string,expectedRevision:Revision,requestId:UUID}` | `Editor`; `blueprint.changed`, `editor.activity` |
 | `blueprint_reply_comment` | `{resourceId,threadId:ThreadId,text:string,expectedCommentsRevision:Revision,requestId:UUID}` | `{thread,commentsRevision}`; `comment.changed`, `notification.changed`, `editor.activity` |
+| `blueprint_create`, `void_create` | `{title:string,requestId:UUID}` | `Editor` created in the calling agent's project with that agent attached; `409 project_required` for an agent outside a project |
 | `void_open` | `{resourceId:ResourceId}` | `Editor`; `editor.activity` with null focus |
 | `void_replace_range` | `{resourceId,k:string,lang:string,start:integer,end:integer,expectedText:string,replacement:string,expectedRevision:Revision,mode?:apply\|propose,threadId?:ThreadId,expectedCommentsRevision?:Revision,requestId:UUID}` | `{editor,proposal}`; apply emits `void.changed`, propose emits `comment.changed` and `void.proposal.changed`; both emit `editor.activity` |
 | `void_reply_comment` | `{resourceId,threadId:ThreadId,text:string,expectedCommentsRevision:Revision,requestId:UUID}` | `{thread,commentsRevision}`; `comment.changed`, `notification.changed`, `editor.activity` |

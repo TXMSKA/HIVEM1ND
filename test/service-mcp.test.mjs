@@ -35,9 +35,9 @@ async function boot(t) {
 test('HTTP MCP accepts only the pinned protocol and lists the editor tools', async (t) => {
   const { port, token, desktop } = await boot(t);
   // Editor, session and actor-bound filesystem/Git tools share the pinned protocol.
-  assert.equal(toolSchemas().length, 24);
+  assert.equal(toolSchemas().length, 26);
   assert.equal(toolSchemas().filter(tool => tool.name.startsWith('plan_')).length, 9);
-  assert.equal(toolSchemas().filter((tool) => /^(blueprint|void)_/.test(tool.name)).length, 8);
+  assert.equal(toolSchemas().filter((tool) => /^(blueprint|void)_/.test(tool.name)).length, 10);
   assert.deepEqual(Object.keys(toolSchemas().find((tool) => tool.name === 'session_open').inputSchema.properties), ['client', 'machine', 'unitId', 'runMode', 'taskId', 'requestId']);
   assert.deepEqual(Object.keys(toolSchemas().find((tool) => tool.name === 'session_complete').inputSchema.properties), ['outcome', 'taskId', 'requestId']);
   assert.equal(toolSchemas().find((tool) => tool.name === 'blueprint_open').inputSchema.required.includes('requestId'), false);
@@ -392,3 +392,38 @@ function call(port, method, target, { token = null, body = undefined, raw = null
     else req.end();
   });
 }
+
+test('an agent of a project creates a board and a text it can then change, and an agent of the mind root cannot', async (t) => {
+  const fixture = await makeCoreFixture();
+  t.after(() => dispose(fixture));
+  const localPath = path.join(fixture.paths.localDirectory, 'shop');
+  await mkdir(localPath, { recursive: true });
+  const context = {
+    store: fixture.store,
+    paths: fixture.paths,
+    projects: [{ name: 'shop', localPath }],
+    now: () => fixture.clock.now,
+    credential: { audience: 'agent', unitId: 'project:shop:writer-shop', attached: true, token: 'agent-token' },
+    principal: { unitId: 'project:shop:writer-shop', audience: 'agent', stableId: 'agent-1' },
+  };
+  const state = path.join(fixture.paths.mind, 'user', 'projects', 'shop', 'state');
+  await mkdir(state, { recursive: true });
+  await writeFile(path.join(state, 'writer-shop.md'), `unit: writer-shop\nunit-id: project:shop:writer-shop\nrole: writer\nstate: in\nmachine: ${fixture.machine}\n\nReady.\n`);
+  const call = (id, name, args, as = context) => dispatch(as, { jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } });
+  const board = await call(1, 'blueprint_create', { title: 'Checkout flow', requestId: randomUUID() });
+  assert.equal(board.result.isError, false, JSON.stringify(board));
+  const created = JSON.parse(board.result.content[0].text).data ?? JSON.parse(board.result.content[0].text);
+  const opened = await call(2, 'blueprint_open', { resourceId: created.id });
+  assert.equal(opened.result.isError, false);
+  assert.ok(JSON.parse(opened.result.content[0].text).data.attached.includes('project:shop:writer-shop'));
+  const text = await call(3, 'void_create', { title: 'Launch notes', requestId: randomUUID() });
+  assert.equal(text.result.isError, false, JSON.stringify(text));
+  const written = JSON.parse(text.result.content[0].text).data ?? JSON.parse(text.result.content[0].text);
+  assert.equal((await call(4, 'void_open', { resourceId: written.id })).result.isError, false);
+  const other = { ...context, credential: { ...context.credential, unitId: 'project:shop:qa-shop' }, principal: { ...context.principal, unitId: 'project:shop:qa-shop' } };
+  assert.equal((await call(5, 'void_open', { resourceId: written.id }, other)).result.isError, true, 'another agent still needs the text attached');
+  const root = { ...context, credential: { ...context.credential, unitId: 'root:writer' }, principal: { ...context.principal, unitId: 'root:writer' } };
+  const refused = await call(6, 'void_create', { title: 'Nowhere', requestId: randomUUID() }, root);
+  assert.equal(refused.result.isError, true);
+  assert.match(JSON.stringify(refused), /project_required/);
+});
