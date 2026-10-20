@@ -30,7 +30,7 @@ const HOME_CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 const DAY_MS = 86400000;
 const HOME_MS = 12 * 3600_000;
 // The presets a person can pick for a cluster agent, and `custom`, which carries a name and a description of its own.
-const PRESET_ROLES = ["ux-designer", "ui-designer", "writer", "game-designer", "security-consultant", "qa", "code-reviewer", "product-manager"];
+const PRESET_ROLES = ["ux-designer", "ui-designer", "writer", "game-designer", "security-consultant", "qa", "code-reviewer", "product-manager", "helper"];
 const CLUSTER_ROLES = new Set(["executor", "overlord", ...PRESET_ROLES, "custom"]);
 const ROLES = new Set(["overseer", "adjutant", "executive", "overlord", "executor", "incubator", "genesis", "master", ...PRESET_ROLES, "custom"]);
 const DESKTOP_CAPS = ["read", "chat.post", "chat.manage", "mailbox.read", "approval.answer", "grant.revoke", "task.status", "task.undo", "unit.create", "unit.connect", "session.start", "session.stop", "layout.write", "settings.write", "home.manage", "editor.read", "editor.write", "comment.write", "proposal.answer", "asset.write", "watch", "viewer.write"];

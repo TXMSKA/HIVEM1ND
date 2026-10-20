@@ -235,6 +235,7 @@ test('a cluster agent takes any preset role or a custom one with its own name an
   const create = (input) => createUnit(context, { clusterId: team.id, machine: fixture.machine, ...input });
   const security = (await create({ role: 'security-consultant' })).unit;
   assert.match(security.unit, /^security-consultant-/);
+  assert.match((await create({ role: 'helper' })).unit.unit, /^helper-/);
   await assert.rejects(create({ role: 'qa', roleName: 'QA' }), { code: 'invalid_body' });
   await assert.rejects(create({ role: 'custom' }), { code: 'invalid_body' });
   await assert.rejects(create({ role: 'custom', roleName: 'Two\nlines', roleDescription: 'Text' }), { code: 'invalid_body' });

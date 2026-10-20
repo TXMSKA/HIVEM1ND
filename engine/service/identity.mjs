@@ -13,7 +13,7 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 
 // Roles a person picks for an agent of a cluster: the kit's presets, each one file under roles/, and `custom`, whose name and
 // description the person writes into the agent itself.
-export const PRESET_ROLES = Object.freeze(['ux-designer', 'ui-designer', 'writer', 'game-designer', 'security-consultant', 'qa', 'code-reviewer', 'product-manager']);
+export const PRESET_ROLES = Object.freeze(['ux-designer', 'ui-designer', 'writer', 'game-designer', 'security-consultant', 'qa', 'code-reviewer', 'product-manager', 'helper']);
 export const CLUSTER_ROLES = Object.freeze(['executor', 'overlord', ...PRESET_ROLES, 'custom']);
 export const ROLES = Object.freeze(['overseer', 'adjutant', 'executive', 'overlord', 'executor', 'incubator', 'genesis', 'master', ...PRESET_ROLES, 'custom']);
 const ROLE_NAME_MAX = 60;

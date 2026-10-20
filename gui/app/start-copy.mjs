@@ -76,7 +76,7 @@ export const START_COPY=Object.freeze({
   role:['Role','Rol'],
   uxDesigner:['UX designer','Diseñador UX'],uiDesigner:['UI designer','Diseñador UI'],writer:['Writer','Redactor'],gameDesigner:['Game designer','Game designer'],
   securityConsultant:['Security consultant','Consultor de ciberseguridad'],qa:['QA','QA'],codeReviewer:['Code reviewer','Revisor de código'],
-  productManager:['Product manager','Product manager'],customRole:['Custom','Personalizado'],
+  productManager:['Product manager','Product manager'],helper:['Helper','Ayudante'],customRole:['Custom','Personalizado'],
   executorHint:['Carries out the tasks it is given.','Realiza las tareas que se le asignan.'],
   overlordHint:['Leads the cluster and hands work to its agents.','Dirige el clúster y reparte el trabajo entre sus agentes.'],
   uxDesignerHint:['Shapes user flows, screens and how the product is used.','Define los flujos, las pantallas y el uso del producto.'],
@@ -87,6 +87,7 @@ export const START_COPY=Object.freeze({
   qaHint:['Tests the work and reports what does not hold up.','Prueba el trabajo e informa lo que no funciona.'],
   codeReviewerHint:['Reads changes and flags bugs and style problems.','Revisa los cambios y señala errores y problemas de estilo.'],
   productManagerHint:['Decides what to build, for whom and in what order.','Decide qué construir, para quién y en qué orden.'],
+  helperHint:['Does concrete requests in one project, investigating first and loading little.','Resuelve pedidos concretos en un proyecto, investiga primero y carga poco contexto.'],
   customRoleHint:['Name the role and describe what it does.','Se nombra el rol y se describe lo que hace.'],
   roleName:['Role name','Nombre del rol'],roleDescription:['Description','Descripción'],
   roleDescriptionHint:['It becomes the agent’s context.','Se convierte en el contexto del agente.'],roleCount:['{count} of {max}','{count} de {max}'],
@@ -101,10 +102,10 @@ export function startText(language,key,values={}){
   return pair[language==='es'?1:0].replace(/\{([a-zA-Z]+)\}/g,(_match,name)=>String(values[name]??'{'+name+'}'));
 }
 // The roles a person can give a new agent, in the order the picker lists them. The service takes the same ids.
-export const AGENT_ROLES=Object.freeze(['executor','overlord','ux-designer','ui-designer','writer','game-designer','security-consultant','qa','code-reviewer','product-manager','custom']);
+export const AGENT_ROLES=Object.freeze(['executor','overlord','ux-designer','ui-designer','writer','game-designer','security-consultant','qa','code-reviewer','product-manager','helper','custom']);
 export const ROLE_NAME_MAX=60,ROLE_DESCRIPTION_MAX=4000;
 const ROLE_KEYS=Object.freeze({executor:'executor',overlord:'overlord','ux-designer':'uxDesigner','ui-designer':'uiDesigner',writer:'writer','game-designer':'gameDesigner',
-  'security-consultant':'securityConsultant',qa:'qa','code-reviewer':'codeReviewer','product-manager':'productManager',custom:'customRole',
+  'security-consultant':'securityConsultant',qa:'qa','code-reviewer':'codeReviewer','product-manager':'productManager',helper:'helper',custom:'customRole',
   overseer:'overseer',adjutant:'adjutant',executive:'executive',incubator:'incubator',genesis:'genesis',master:'master',agent:'agent',
   coordinator:'coordinator',planner:'planner',builder:'builder',reviewer:'reviewer'});
 // A role id the app does not know reads as a plain agent, never as the id. A custom role reads as the name its person gave it.

@@ -3,7 +3,7 @@ import { AGENT_ROLES, roleLabel } from './start-copy.mjs';
 
 // The roles a person can pick beyond Executor and Overlord, each with the existing icon that suits it. The Map draws the same ones.
 export const PRESET_ICON = Object.freeze({ 'ux-designer': 'blueprint', 'ui-designer': 'focus', writer: 'document', 'game-designer': 'move',
-  'security-consultant': 'alert', qa: 'check', 'code-reviewer': 'graph', 'product-manager': 'map', custom: 'settings' });
+  'security-consultant': 'alert', qa: 'check', 'code-reviewer': 'graph', 'product-manager': 'map', helper: 'adjutant', custom: 'settings' });
 const ROLE_ICON = { overseer: 'crown', overlord: 'executive', executor: 'executor', genesis: 'genesis', incubator: 'genesis', adjutant: 'adjutant', executive: 'executive', ...PRESET_ICON };
 
 export function pathFolder(value) {

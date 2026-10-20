@@ -325,7 +325,7 @@ test('the Runs in picker shows readable names for catalog ids and never prints n
 const PICKER = [['executor', 'Executor', 'Executor'], ['overlord', 'Overlord', 'Overlord'], ['ux-designer', 'UX designer', 'Diseñador UX'],
   ['ui-designer', 'UI designer', 'Diseñador UI'], ['writer', 'Writer', 'Redactor'], ['game-designer', 'Game designer', 'Game designer'],
   ['security-consultant', 'Security consultant', 'Consultor de ciberseguridad'], ['qa', 'QA', 'QA'], ['code-reviewer', 'Code reviewer', 'Revisor de código'],
-  ['product-manager', 'Product manager', 'Product manager'], ['custom', 'Custom', 'Personalizado']];
+  ['product-manager', 'Product manager', 'Product manager'], ['helper', 'Helper', 'Ayudante'], ['custom', 'Custom', 'Personalizado']];
 const agentModel = (extra = {}) => ({ language: 'en', kind: 'agent', cluster: cluster('Ideas'), clients, role: 'executor', choice: initialRunsIn(clients), fresh: true,
   roleName: '', roleDescription: '', roleProblems: {}, ...extra });
 const startField = (view, name) => nodes(view).find(node => node.attributes?.['data-start-field'] === name);

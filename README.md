@@ -104,10 +104,11 @@ A role is a markdown file in `roles/`, and that file is also the command that st
 | QA | Preset | Tests a project under adverse conditions and verifies delivered tasks, recording reproducible findings as tasks. |
 | Code Reviewer | Preset | Reviews delivered work without editing code and reports ranked findings with file and line evidence. |
 | Product Manager | Preset | Writes what the product is, for whom and what it must do, and keeps the product document of the project. |
+| Helper | Preset | Does the person's concrete requests in one project with little context: investigates first, proposes, then acts on a yes, and delegates scans and mechanical work. |
 
 </details>
 
-The eight presets are the roles a person picks when creating an agent in the desktop app. Each does one kind of work in one project and reads the knowledge module that matches it. The `qa` preset installs as the command `/qa-agent`, since `/qa` is the feature that runs the open tasks.
+The nine presets are the roles a person picks when creating an agent in the desktop app. Eight do one kind of work in one project and read the knowledge module that matches it; the Helper is a light pair of hands for the person's requests in one project. The `qa` preset installs as the command `/qa-agent`, since `/qa` is the feature that runs the open tasks.
 
 ### Commands
 

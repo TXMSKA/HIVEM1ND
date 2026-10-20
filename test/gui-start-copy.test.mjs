@@ -13,8 +13,8 @@ test('copy values remain text data and task count placeholders are explicit',()=
   assert.throws(()=>startText('en','invented'),/Unknown start copy/);
 });
 test('every role of the picker has a label and a one-line description in both languages, and an unknown role reads as an agent',()=>{
-  const labels={en:['Executor','Overlord','UX designer','UI designer','Writer','Game designer','Security consultant','QA','Code reviewer','Product manager','Custom'],
-    es:['Executor','Overlord','Diseñador UX','Diseñador UI','Redactor','Game designer','Consultor de ciberseguridad','QA','Revisor de código','Product manager','Personalizado']};
+  const labels={en:['Executor','Overlord','UX designer','UI designer','Writer','Game designer','Security consultant','QA','Code reviewer','Product manager','Helper','Custom'],
+    es:['Executor','Overlord','Diseñador UX','Diseñador UI','Redactor','Game designer','Consultor de ciberseguridad','QA','Revisor de código','Product manager','Ayudante','Personalizado']};
   for(const language of['en','es']){
     assert.deepEqual(AGENT_ROLES.map(role=>roleLabel(language,role)),labels[language]);
     for(const role of AGENT_ROLES){const hint=roleHint(language,role);assert.ok(hint.length>12&&!hint.includes('\n'),role);}
