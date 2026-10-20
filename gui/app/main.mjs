@@ -792,6 +792,13 @@ async function onStream(app, event) {
     const task = app.store.indexes.tasks.get(dataOf(event).task?.id);
     if (task) replaceTask(app, task);
     if (app.waitingList) reloadList(app.waitingList).catch(() => {});
+    // The inspector keeps its own waiting items for its unit; a task change can add or remove one.
+    const unitId = app.inspectorData?.unitId;
+    if (unitId) collectPages(app.api, "/waiting", { query: { unitId }, limit: 50 }).then((waiting) => {
+      if (app.disposed || app.inspectorData?.unitId !== unitId) return;
+      Object.assign(app.inspectorData, { waiting: waiting.items, waitingTotal: waiting.total, waitingIssues: waiting.issues });
+      renderShell(app);
+    }).catch(() => {});
   }
   if (['unit.unread', 'message.read', 'message.created'].includes(event?.name) && app.unitList) {
     for (const unit of app.unitList.catalog ?? []) { const current = app.store.indexes.units.get(unit.id); if (current) unit.unread = current.unread; }
