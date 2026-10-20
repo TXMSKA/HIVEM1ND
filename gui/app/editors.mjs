@@ -548,7 +548,11 @@ export async function refreshRemoteEditor(api, editors, resourceId) {
   const route = current.kind === "void" ? "/void/texts/:resourceId" : "/blueprint/boards/:resourceId";
   const result = await request(api, "GET", route, { params: { resourceId } });
   const changed = reconcileEditor(editors, result.data, generation);
-  if (changed && current.kind === "blueprint" && current.resourceId === resourceId && !current.dirty) await loadAssets(api, current);
+  if (changed && current.kind === "blueprint" && current.resourceId === resourceId && !current.dirty) {
+    await loadAssets(api, current);
+    // An editor dropped while its images loaded keeps none of them.
+    if (editors.drafts.get(resourceId) !== current && editors.current !== current) releaseAssets(current);
+  }
   return changed;
 }
 

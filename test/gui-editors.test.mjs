@@ -1755,3 +1755,28 @@ test("a failed image does not block switching, and a draft saved in the backgrou
   await openEditor(api, editors, { id: first.data.id, kind: "blueprint" });
   assert.equal(editors.drafts.has(second.data.id), false, "once saved, the background draft goes at the next switch");
 });
+
+test("a board dropped while a remote refresh loads its images keeps none of them", async () => {
+  const editors = createEditors(), src = "assets/00000000-0000-4000-8000-000000000000.png";
+  const document = { title: "Board", screens: [{ id: "s", root: { id: "root", kids: [{ id: "img", t: "image", src }] } }] };
+  const current = { resourceId: "board", kind: "blueprint", revision: "a".repeat(64), baseRevision: "a".repeat(64), authoritative: { id: "board", revision: "a".repeat(64), document }, assets: new Map(), remoteStale: true };
+  editors.current = current; editors.drafts.set("board", current);
+  const revoked = [];
+  let releaseFetch;
+  const held = new Promise((resolve) => { releaseFetch = resolve; });
+  const api = createApi({
+    location: { origin: "http://127.0.0.1:9", pathname: "/", search: "", hash: "#session=token" },
+    history: { replaceState() {}, state: null },
+    createObjectURL: () => "blob:late", revokeObjectURL: (url) => revoked.push(url),
+    fetch: async (url) => {
+      if (String(url).includes("/assets/")) { await held; return new Response(new Blob([new Uint8Array([1])]), { status: 200, headers: { "content-type": "image/png" } }); }
+      return jsonResponse({ id: "board", revision: "b".repeat(64), commentsRevision: null, document });
+    },
+  });
+  const refresh = refreshRemoteEditor(api, editors, "board");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  editors.drafts.delete("board"); editors.current = null;
+  releaseFetch();
+  assert.equal(await refresh, true);
+  assert.deepEqual(revoked, ["blob:late"]); assert.equal(current.assets.size, 0);
+});
