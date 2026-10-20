@@ -67,8 +67,20 @@ export function createWindowOptions(icon, preload) {
   };
 }
 
+// Only a plain http or https address of bounded length, without credentials, may leave the app for the system browser.
+export function externalLink(value) {
+  if (typeof value !== "string" || value.length > 2048) return null;
+  try {
+    const target = new URL(value);
+    if (!["http:", "https:"].includes(target.protocol) || target.username || target.password) return null;
+    return target.href;
+  } catch {
+    return null;
+  }
+}
+
 export async function startElectronApp(electron, argv = process.argv.slice(2), dependencies = {}) {
-  const { app, BrowserWindow, dialog, ipcMain, session } = electron;
+  const { app, BrowserWindow, dialog, ipcMain, session, shell } = electron;
   const launchOptions = parseElectronOptions(argv, app.getPath("home"));
   if (launchOptions.userDataDir) app.setPath("userData", launchOptions.userDataDir);
   if (!app.requestSingleInstanceLock()) {
@@ -140,7 +152,22 @@ export async function startElectronApp(electron, argv = process.argv.slice(2), d
     ));
     window = createdWindow;
     const allowedOrigin = wizard.origin;
-    createdWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+    // A link the verified Map follows, such as one in a Void text, opens in the system browser; the window itself never leaves.
+    const openOutside = (value) => {
+      const link = externalLink(value);
+      if (!link || !viewerTarget || createdWindow.isDestroyed()) return;
+      try {
+        const shown = new URL(createdWindow.webContents.mainFrame.url);
+        if (shown.origin !== viewerTarget.origin || shown.pathname !== viewerTarget.pathname) return;
+      } catch {
+        return;
+      }
+      Promise.resolve(shell?.openExternal?.(link)).catch(() => {});
+    };
+    createdWindow.webContents.setWindowOpenHandler(({ url } = {}) => {
+      openOutside(url);
+      return { action: "deny" };
+    });
     createdWindow.webContents.on("will-attach-webview", (event) => event.preventDefault());
     createdWindow.webContents.on("will-navigate", (event, targetUrl) => {
       try {
@@ -152,6 +179,7 @@ export async function startElectronApp(electron, argv = process.argv.slice(2), d
         // Invalid navigation targets are blocked below.
       }
       event.preventDefault();
+      openOutside(targetUrl);
     });
     createdWindow.once("ready-to-show", () => createdWindow.show());
     createdWindow.on("closed", () => {

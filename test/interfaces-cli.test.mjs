@@ -22,7 +22,7 @@ test('Electron recovery accepts only the verified main viewer frame and preload 
     constructor() {
       super(); windows.push(this); this.visible = false;
       this.webContents = new EventEmitter(); this.webContents.mainFrame = { url: '' };
-      this.webContents.setWindowOpenHandler = () => {};
+      this.webContents.setWindowOpenHandler = (handler) => { this.openHandler = handler; };
     }
     static fromWebContents(sender) { return windows.find(window => window.webContents === sender); }
     isDestroyed() { return false; }
@@ -34,7 +34,9 @@ test('Electron recovery accepts only the verified main viewer frame and preload 
   const app = Object.assign(new EventEmitter(), { getPath: () => os.tmpdir(), getAppPath: () => KIT_PATH,
     requestSingleInstanceLock: () => true, whenReady: async () => {}, quit() {} });
   const viewerUrl = 'http://127.0.0.1:43123/gui/viewer';
+  const opened = [];
   await startElectronApp({ app, BrowserWindow: Window, dialog: {}, ipcMain: { handle(name, handler) { handlers.set(name, handler); } },
+    shell: { async openExternal(url) { opened.push(url); } },
     session: { defaultSession: { setPermissionCheckHandler() {}, setPermissionRequestHandler() {} } } }, [], {
     async startConfiguredViewer() { return { viewerUrl, recovery: { async serviceStatus() { return { state: 'stopped' }; },
       async recover() { recovered++; return { origin: 'http://127.0.0.1:43123', viewerId: 'renewed' }; }, async stop() {} } }; },
@@ -44,12 +46,21 @@ test('Electron recovery accepts only the verified main viewer frame and preload 
   const invoke = handlers.get('hivem1nd:recover-service');
   const event = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
   await assert.rejects(invoke(event), /verified local Map/);
+  const navigate = (url) => { let blocked = false; window.webContents.emit('will-navigate', { preventDefault() { blocked = true; } }, url); return blocked; };
+  assert.equal(navigate('https://example.test/from-setup'), true);
+  assert.deepEqual(opened, [], 'The setup page opens nothing outside.');
   window.webContents.mainFrame.url = viewerUrl;
   await assert.rejects(invoke({ ...event, senderFrame: { url: viewerUrl } }), /verified local Map/);
   await assert.rejects(invoke({ ...event, sender: {} }), /verified local Map/);
   assert.equal((await handlers.get('hivem1nd:service-status')(event)).state, 'stopped');
   assert.equal((await invoke(event)).viewerId, 'renewed');
   assert.equal(recovered, 1);
+  // From the Map, a plain web link leaves for the system browser while the window stays.
+  for (const url of ['https://example.test/doc?q=1', 'javascript:alert(1)', 'file:///C:/Windows/win.ini', 'https://user:secret@example.test/', `https://example.test/${'a'.repeat(2048)}`]) assert.equal(navigate(url), true, url);
+  assert.equal(navigate(viewerUrl), false);
+  assert.deepEqual(window.openHandler({ url: 'http://example.test/new' }), { action: 'deny' });
+  assert.deepEqual(window.openHandler({ url: 'mailto:a@example.test' }), { action: 'deny' });
+  assert.deepEqual(opened, ['https://example.test/doc?q=1', 'http://example.test/new']);
   const preload = await readFile(new URL('../gui/preload.cjs', import.meta.url), 'utf8');
   assert.match(preload, /recoverService: \(\) => ipcRenderer.invoke\('hivem1nd:recover-service'\)/);
   assert.doesNotMatch(preload, /postMessage|localStorage|sessionStorage|console\.|exec|spawn/);
