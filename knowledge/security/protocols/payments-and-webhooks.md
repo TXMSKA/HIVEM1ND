@@ -1,11 +1,11 @@
 name: payments-and-webhooks
-purpose: Prove the server decides every amount, and that an inbound webhook is authentic and cannot act twice.
-scope: checkout, prices, quantities, discounts, vouchers, subscriptions, refunds, calls to the payment provider and inbound webhook handlers
-trigger: task close when the closed work matches the scope, or manual
-repeat: once per audit, before every launch, and again whenever a price path or a webhook handler is added
-inputs: the checkout and order handlers, the webhook handlers, the provider's test mode, test accounts created for the pass, the data store
-stop: an amount sent by the client is charged or stored as sent, or an unsigned webhook is accepted, which is a P0 and is reported before the pass continues
-report: the price fields read from the request per handler, the tampered order results, the webhook signature results, the replay result read from the store, the return URL result, the card data search, and the reconciliation job
+purpose: Prove the server decides every amount, an inbound webhook is authentic and cannot act twice, and access follows the subscription the provider holds.
+scope: checkout, prices, quantities, discounts, vouchers, subscriptions, entitlements, refunds, calls to the payment provider and inbound webhook handlers
+trigger: task close
+repeat: once
+inputs: the checkout and order handlers, the webhook handlers, the entitlement checks, the provider's test mode, test accounts created for the pass, the test store
+stop: an amount sent by the client is charged or stored as sent, or an unsigned webhook is accepted, which is reported at once and ends the protocol
+report: the price fields read from the request per handler, the tampered order results, the webhook signature results, the replay result read from the store, the return URL result, the card data search, the reconciliation job, and the entitlement results per subscription state
 
 ## Steps
 
@@ -20,21 +20,26 @@ report: the price fields read from the request per handler, the tampered order r
    Result: per tampered request, the status code and the stored order row read from the store, showing the server's amount rather than the sent one, and the amount the provider recorded matching the stored row.
 
 3. Verify every webhook signature before reading the body.
-   Task: the model of the flow is in [payments.md](../payments.md). Confirm each handler checks the provider's signature, usually an HMAC over the raw body with a shared secret, compares it in constant time, and checks the timestamp window. Then send the handler a request with no signature, with a wrong one, and with a valid one over a modified body.
+   Task: read each handler against [payments.md](../payments.md#webhooks-received). Then send it a request with no signature, one with a wrong signature, and one carrying the signature captured from a test-mode delivery over a modified body, so no secret is handled.
    Time: 30 minutes. Repository, plus running application.
-   Result: all three rejected with their status codes, and the store unchanged after each, read from the store rather than from the response. The source also shows, with file references, that a verified event's amount and currency are compared with the local record before any state changes, and that an event for an unknown record or an unhandled type is answered 2xx and logged rather than acted on. The construction is in [payments.md](../payments.md#webhooks-received).
+   Result: all three rejected with their status codes and the store unchanged after each, read from the store. The source shows, with file references, the raw body verified in constant time within the timestamp window, the amount and currency compared with the local record before any state changes, and an unknown record or event type answered 2xx and logged.
 
 4. Make the handler idempotent.
-   Task: replay a correctly signed event twice, and deliver two events for the same payment out of order.
+   Task: replay a captured test-mode delivery twice inside the timestamp window, or resend it from the provider's test-mode dashboard, and deliver two events for the same payment out of order.
    Time: 20 minutes. Running application, provider test mode only.
-   Result: the store read after the replay shows one charge, one grant or one fulfilment, keyed on the provider's event identifier, stored in the same transaction as the state change, and the out-of-order pair leaves the record in the state the precedence rule in [payments.md](../payments.md#webhooks-received) gives, never in the state of whichever event arrived last. Every create or capture call the server makes to the provider carries an idempotency key derived from the order identifier, quoted from the source with a file reference.
+   Result: the store read after the replay showing one charge, one grant or one fulfilment, keyed on the provider's event identifier and stored in the same transaction as the state change, and the out-of-order pair leaving the record in the state the precedence rule in [payments.md](../payments.md#webhooks-received) gives. Every create or capture call to the provider carries an idempotency key derived from the order identifier, quoted from the source with a file reference.
 
-5. Confirm the state against the provider, not against the client.
-   Task: check that fulfilment, access grants and refunds are driven by the verified webhook or by a server-side call to the provider, never by a return URL or a client message saying the payment succeeded.
+5. Take the paid state from the provider, never from the client.
+   Task: read where an order becomes paid and where access is granted or a refund applied, against [payments.md](../payments.md#the-flow). Then request the success return URL with no completed payment, and send a client message claiming the payment succeeded.
    Time: 20 minutes. Repository, plus running application.
-   Result: a request to the success return URL with no completed payment grants nothing, recorded with the store read after it.
+   Result: the transitions to paid found only in the verified webhook handler and in a reconciliation that fetches that payment from the provider by its identifier, each with file and line, and both requests granting nothing, recorded with the store read after them.
 
 6. Keep card data off the servers and reconcile against the provider.
-   Task: search the source, the schema and the logs for fields holding a card number, a security code or track data, and confirm the checkout uses hosted or provider-rendered fields. Then read the reconciliation job that compares orders against the provider's charges and payouts.
+   Task: search the source and the schema for fields holding card data: `git grep -n -I -i -E 'card_?number|cardnum|ccnum|cvv|cvc|security_?code|track_?data'`, with a planted `card_number` column as the positive control; the logs are searched with the same expression in step 5 of [logging-and-errors](logging-and-errors.md). Confirm the checkout uses hosted or provider-rendered fields, and read the reconciliation job that compares orders against the provider's charges and payouts.
    Time: 25 minutes. Repository, plus the data store.
-   Result: zero hits for stored card data, with the search expressions recorded, the checkout type named, and the reconciliation job's last run with the number of disagreements it flagged. A missing reconciliation job is a finding at P2.
+   Result: zero hits for stored card data, the checkout type named, and the reconciliation job's last run with the number of disagreements it flagged. A missing reconciliation job is a finding at P2.
+
+7. Compute entitlements from the mirrored subscription state.
+   Task: read where access to a paid feature is decided: on the server, from the subscription state mirrored from verified webhooks as [payments.md](../payments.md#state) sets out, never from a plan named in the request, a client flag or whether the last payment succeeded. Then, in the provider's test mode, move a test subscription to past due, canceled and unpaid, change it to a cheaper plan, start a second trial on the same account, and send a request that names a higher plan.
+   Time: 30 minutes. Repository, plus running application, provider test mode only.
+   Result: the entitlement check quoted with file and line, and per state the access granted or refused at the moment the recorded policy says, read from the response and the entitlement row; the downgrade removing the higher features, the second trial refused, and the request naming a higher plan granting nothing. Needs a person: the grace period and the cancellation timing, when no decision is recorded.

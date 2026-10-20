@@ -1,40 +1,40 @@
 name: supply-chain
 purpose: Prove what installs is what was reviewed, and that a freshly poisoned release cannot land.
 scope: the manifest, the lockfile, package manager settings, added dependencies and the continuous integration workflows
-trigger: task close when the closed work matches the scope, or manual
-repeat: once per audit, and again on every dependency addition or major upgrade
-inputs: the manifest, the lockfile, the package manager configuration, the pipeline definitions
-stop: an install script runs during a clean install without being listed, which is reported before the pass continues
-report: the two settings with the values the tool reports back, the install command used by the pipeline, the action pinning count, the audit counts, and the review note per added package
+trigger: task close
+repeat: once
+inputs: the manifest, the lockfile, the package manager configuration, the pipeline definitions, a scratch folder outside the repository
+stop: an install script runs during a clean install without being listed, which is reported at once and ends the protocol
+report: the two settings with the values the tool reports back, the install command used by the pipeline, the action pinning count, the audit reading, and the review note per added package
 
 ## Steps
 
-1. Read the install scripts, then refuse them by default.
-   Task: first read the lifecycle scripts the manifest itself declares, `preinstall`, `install`, `postinstall` and `prepare`: a script that downloads, pipes or executes remote code is a P1 finding on its own. Then read the project's own package manager configuration file, since `npm config get` also reports the machine's settings. Set the package manager to run no lifecycle scripts, and list the few packages that genuinely need a build step explicitly. The setting is `ignore-scripts` for npm, default false, documented as "npm does not run scripts specified in package.json files". The equivalent for pnpm is `ignoreScripts`, which is configured in the workspace or global configuration file rather than in an npm-style configuration file.
-   Time: 25 minutes. Repository.
-   Result: the manifest's lifecycle scripts quoted, or a note that it declares none. `npm config get ignore-scripts` returns `true` from the project directory, and a fresh install into an empty directory produces an install log containing no lifecycle script output. The explicitly allowed packages are listed by name with the reason each one needs a build.
+1. Read the install scripts and whether they are refused by default.
+   Task: read the lifecycle scripts the manifest declares, `preinstall`, `install`, `postinstall` and `prepare`: a script that downloads, pipes or executes remote code is a P1 finding on its own. Then read the project's own package manager configuration file, since `npm config get` also reports the machine's settings. The npm setting is `ignore-scripts`, default false; the pnpm one is `ignoreScripts`, in the workspace or global configuration file. Install once into an empty scratch folder outside the repository, from a copy of the manifest and the lockfile.
+   Time: 25 minutes. Repository, plus the scratch folder.
+   Result: the manifest's lifecycle scripts quoted, or a note that it declares none; `npm config get ignore-scripts` returning `true` from the project directory; the scratch install log holding no lifecycle script output; and the packages allowed to build listed by name with the reason each one needs it. A setting left at its default is a finding whose fix is the setting.
 
-2. Refuse versions that are too young to have been looked at.
-   Task: set a minimum release age of about a week. The npm setting is `min-release-age`, default null, documented as building the tree "such that only versions that were available more than the given number of days ago will be installed". The pnpm setting is `minimumReleaseAge`, in the workspace or global configuration. These two settings, together with step 1, are what would have stopped every recent registry worm.
-   Time: 20 minutes. Repository.
-   Result: `npm config get min-release-age` returns the configured value, and an install that would resolve a version published inside the window fails, recorded with the command output.
+2. Read the minimum release age.
+   Task: read the project's configuration for a minimum release age of about a week. The npm setting is `min-release-age`, in days, added in npm 11.10.0 (https://github.com/npm/cli/blob/latest/CHANGELOG.md) and documented as building the tree "such that only versions that were available more than the given number of days ago will be installed"; record `npm -v` beside it, since an older npm ignores the setting. The pnpm setting is `minimumReleaseAge`. These two settings, with step 1, are what would have stopped every recent registry worm.
+   Time: 20 minutes. Repository, plus the scratch folder.
+   Result: `npm config get min-release-age` returning the configured value from the project directory, the npm version at or above 11.10.0, and an install in the scratch folder of a version published inside the window failing, recorded with the command output. A missing setting is a finding whose fix is the setting.
 
 3. Install from the lockfile in the pipeline, never resolve fresh.
-   Task: continuous integration uses the clean install command. It requires a lockfile to exist, and where the lockfile disagrees with the manifest it "will exit with an error, instead of updating the package lock", and it "will never write to package.json or any of the package-locks".
-   Time: 20 minutes. Repository.
-   Result: the pipeline log showing the clean install command, and a job run against a deliberately mismatched lockfile that exits non-zero with the mismatch error.
+   Task: read the pipeline's install command. The clean install command requires a lockfile, and where the lockfile disagrees with the manifest it "will exit with an error, instead of updating the package lock". Prove it in the scratch folder: change one version in the copied manifest and run the clean install there.
+   Time: 20 minutes. Repository, plus the scratch folder.
+   Result: the pipeline's install line quoted with file and line, and the scratch clean install exiting non-zero with the mismatch error.
 
-4. Pin the pipeline's own dependencies and shrink its token.
-   Task: pin every workflow action to a full length commit hash, which the platform documents as "the only way to use an action as an immutable release". Set the default token to read access on repository contents and raise it per job where a job needs more. Pass untrusted values through an intermediate environment variable rather than interpolating them into a script body.
+4. Read the pinning of the pipeline's own dependencies and its token.
+   Task: list the workflow actions referenced by tag or branch rather than by a full commit hash, which the platform documents as "the only way to use an action as an immutable release": `git grep -n -I -E -e 'uses: *[^ .][^ ]*@' --and --not -e '@[0-9a-f]{40}( |$)' -- .github/workflows`. Read the default token permissions, and list the untrusted values interpolated into a script body rather than passed through an environment variable: `git grep -n -I -E '\$\{\{ *(github\.event\.|github\.head_ref|inputs\.)' -- .github/workflows`, each hit read for whether it sits in a `run:` block. Positive control: a planted workflow line `uses: actions/checkout@v4` and a planted `run: echo ${{ github.event.issue.title }}`, each found by its expression.
    Time: 40 minutes. Repository.
-   Result: a search across the workflow files returning zero action references by tag or branch, the token permission block quoted, and zero direct interpolations of an untrusted context value into a script.
+   Result: zero action references by tag or branch, the token permission block quoted with read access to contents as the default, and zero untrusted values interpolated into a `run:` block, each count recorded with its expression and control.
 
-5. Run the audit, and read the result for what it is.
-   Task: `npm audit` over the full tree, development and transitive packages included, and record what comes back per severity. Without a lockfile or without the tool, the step ends as not run with the reason, as in step 4 of [version-floor](version-floor.md).
-   Time: 10 minutes. Repository.
-   Result: the advisory count per severity with the fixed version offered for each; critical and high block a release. A clean result is recorded as a clean audit and nothing more: it does not read install scripts, and a version poisoned in the last few hours has no advisory yet.
+5. Read the audit for what it is.
+   Task: take the audit counts from step 4 of [version-floor](version-floor.md); this step adds what they do not prove.
+   Time: 5 minutes. Repository.
+   Result: the counts and ranks from that step quoted, with the note in [evidence.md](../evidence.md#what-is-not-evidence) beside them. Without that step, this one is not run.
 
 6. Read what a new dependency actually ships.
-   Task: for every added package and every new major, record the reason it is needed, read its lifecycle scripts and the file list it publishes, check the maintainer change since the last version, and check that the version has a matching commit or tag in its source repository. Packages nothing imports any more are removed. Provenance attestation proves where a package was built, not that it is safe: every recent registry worm published from a legitimately authenticated session. **Needs a person**: accepting a package whose scripts do real work is a decision.
+   Task: for every added package and every new major, record the reason it is needed, read its lifecycle scripts and the file list it publishes, check the maintainer change since the last version, and check that the version has a matching commit or tag in its source repository. List the packages nothing imports with the import count of step 2 of [version-floor](version-floor.md). Provenance attestation proves where a package was built, not that it is safe: every recent registry worm published from a legitimately authenticated session. Needs a person: accepting a package whose scripts do real work.
    Time: 20 minutes per added package. Repository.
-   Result: per added package, the reason, the contents of its lifecycle scripts or a note that it declares none, the published file list, the source commit or tag, and the acceptance recorded with a name against it. Plus the list of unused packages found, and zero left.
+   Result: per added package, the reason, its lifecycle scripts or a note that it declares none, the published file list, the source commit or tag, and the acceptance recorded with a name against it. Plus the unused packages, each a finding whose fix is its removal.

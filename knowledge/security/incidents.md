@@ -17,23 +17,23 @@ Categories: the categories in INDEX.md it belongs to.
 
 ## 2026-08-25: Remote code execution on framework servers hosted on Windows
 
-A path traversal in the framework's pathname handling allowed unauthenticated remote code execution when the server ran on a Windows filesystem, with both routers in use and without cache components. CVE-2026-75604, GHSA-p293-qw3h-jr36, critical, CVSS 9.0. Affected `next` from 13.4.0 below 15.5.24 and from 16.0.0 below 16.3.3, patched in 15.5.24 and 16.3.3.
+A path traversal in the framework's pathname handling gave unauthenticated remote code execution on a Windows host, with both routers in use and no cache components. CVE-2026-75604, GHSA-p293-qw3h-jr36, critical, CVSS 9.0; `next` from 13.4.0 below 15.5.24 and from 16.0.0 below 16.3.3.
 Source: https://github.com/advisories/GHSA-p293-qw3h-jr36
-Check: the host operating system of every deployment is recorded next to the framework version, because the same version is exploitable on one host and not on another. Where several repositories share a package that declares the framework as a dependency, one fixed version is pinned across all of them, since a consumer on an older version pulls the shared package back into the vulnerable range. A repository whose output is a purely static export runs no framework server in production, so its exposure is limited to the development server; that is recorded as the reason for a lower rank, not as a pass. Steps 1 to 3 of [version-floor](protocols/version-floor.md).
+Check: the host operating system is recorded beside the framework version, one fixed version is pinned across repositories that share a package declaring the framework, and a static export is recorded as exposed only in development. Steps 1 to 3 and 6 of [version-floor](protocols/version-floor.md).
 Categories: dependencies, deployment.
 
 ## 2026-08-25: Remote code execution through AVIF images in the image optimization endpoint
 
-A flaw in `libheif`, reached through the image processing library the framework uses for optimization, allowed unauthenticated remote code execution when AVIF files were processed. GHSA-2xp9-vwfh-vxw4, critical, CVSS 9.5, no CVE assigned at the time of reading. Affected `next` from 10.0.0 below 15.5.24 and below 16.3.3, patched in 15.5.24 and 16.3.3. The vendor mitigation was to disable AVIF optimization until the fix propagated.
+A flaw in `libheif`, reached through the image library the framework uses for optimization, gave unauthenticated remote code execution on AVIF input. GHSA-2xp9-vwfh-vxw4, critical, CVSS 9.5, no CVE at the time of reading; `next` from 10.0.0 below 15.5.24 and below 16.3.3. The vendor mitigation was to disable AVIF optimization.
 Source: https://github.com/vercel/next.js/security/advisories/GHSA-2xp9-vwfh-vxw4
-Check: the image endpoint is a decoder exposed to the network. The image processing library is read from the lockfile alongside the framework, and a format that cannot be made safe is disabled in the configuration. Step 4 of [file-upload](protocols/file-upload.md), step 3 of [version-floor](protocols/version-floor.md).
+Check: the image library is read from the lockfile beside the framework, and a format that cannot be made safe is disabled. Step 4 of [file-upload](protocols/file-upload.md), step 3 of [version-floor](protocols/version-floor.md).
 Categories: files, outbound, dependencies.
 
 ## 2026-08-04: ChainDrop registry worm
 
-A self-propagating worm of the Shai-Hulud family poisoned more than 400 packages on the npm registry. Entry was through stolen maintainer credentials, and it spread through stolen publishing tokens and continuous integration publishing access. The payload ran from a `preinstall` hook and harvested registry, source host, cloud, cluster and vault credentials, including runner and workflow secrets. Many poisoned versions had no matching commit, tag or release in the source repository.
+A worm of the Shai-Hulud family poisoned more than 400 npm packages through stolen maintainer credentials and publishing tokens. Its `preinstall` hook harvested registry, source host, cloud, cluster, vault and runner credentials, and many poisoned versions had no matching commit or tag in their source repository.
 Source: https://www.microsoft.com/en-us/security/blog/2026/08/04/chaindrop-supply-chain-compromise-anatomy-self-propagating-worm/
-Check: install scripts refused by default and a minimum release age set, per steps 1 and 2 of [supply-chain](protocols/supply-chain.md). A version with no source commit or tag behind it is a signal worth reading in step 6. Caches and artifact stores are part of the cleanup, because a poisoned tarball survives there after the registry removes it.
+Check: steps 1, 2 and 6 of [supply-chain](protocols/supply-chain.md); caches and artifact stores are part of the cleanup, since a poisoned tarball survives there.
 Categories: dependencies, secrets and configuration.
 
 ## 2025-12-03: Remote code execution in the server components protocol

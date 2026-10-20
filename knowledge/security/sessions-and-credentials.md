@@ -1,6 +1,6 @@
 # Sessions and credentials
 
-Who the caller is, and how that is proved on every request. Every rule here exists because the opposite failure has a name: session fixation, account enumeration, credential stuffing, token forgery. The checks are in [authentication-and-session](protocols/authentication-and-session.md).
+Who the caller is, and how that is proved on every request. Every rule here exists because the opposite failure has a name: session fixation, account enumeration, credential stuffing, token forgery. The values are in [essentials.md](essentials.md#default-values) and the checks in [authentication-and-session](protocols/authentication-and-session.md).
 
 ## Identity comes from the session
 
@@ -10,72 +10,67 @@ The user identifier and the role are read from the server-side session or from a
 
 | Choice | When | Cost |
 | --- | --- | --- |
-| Server-side session: a random identifier of at least 128 bits in a cookie, mapped to a row or a store entry that holds only its hash | The default for an application that serves its own pages | One store lookup per request. Revocation is a delete. |
-| Signed token such as a JSON web token, short lived, in minutes, with a refresh flow | Only when a third party must verify the caller without calling the service | Revocation needs a deny list or a short lifetime. The signing key becomes a secret with its own rotation. |
+| Server-side session: a random identifier in a cookie, mapped to a store entry that holds only its hash | The default for an application that serves its own pages | One store lookup per request. Revocation is a delete. |
+| Signed token, short lived, in minutes, with a single-use refresh token | Only when a third party must verify the caller without calling the service | Revocation needs a deny list or a short lifetime. The signing key is a secret with its own rotation. |
 
-A signed token uses a long random secret loaded from the environment and never written in the source. The verifier pins the expected algorithm and rejects `none`. Keys rotate, and the refresh token is single use.
+A signed token uses a long random secret loaded from the environment and never written in the source, and the verifier pins the expected algorithm and rejects `none`.
 
-A session identifier or a token never goes in a URL, a log line or `localStorage`. Browser storage holds only what is local to the device; anything that belongs to the account lives on the server.
+## Tokens in URLs
+
+A session identifier, an access token or a refresh token never goes in a URL, a log line or browser storage; it travels in a cookie or in the `Authorization` header. Browser storage holds only what is local to the device.
+
+The one exception is a single-use, short-lived, purpose-bound token in an emailed link, such as a reset, verification, invitation or setup link:
+
+- The link's origin comes from configuration, never from the request's `Host` header.
+- The token rides in the fragment where the flow allows, since the browser sends the fragment to no server, log or referrer.
+- The page that receives it answers with `Referrer-Policy: no-referrer` and exchanges the token on first load for a short-lived value bound to that browser session; the token is spent by the exchange.
 
 ## Cookie attributes
 
-`HttpOnly`, `Secure`, an explicit `SameSite` (`Lax` by default, `Strict` for an administrative surface), a `Path` and an expiry. The `__Host-` prefix is preferred so a subdomain cannot set the cookie; the browser accepts it only with `Secure`, `Path=/`, no `Domain` attribute and from a secure origin.
-
-`SameSite` is not the forgery defence. It is defence in depth behind a token, for the reasons in [cross-site-requests](protocols/cross-site-requests.md).
+`HttpOnly`, `Secure`, an explicit `SameSite` (`Lax` by default, `Strict` for an administrative surface), a `Path` and an expiry. The `__Host-` prefix keeps a subdomain from setting the cookie; the browser accepts it only with `Secure`, `Path=/`, no `Domain` attribute and from a secure origin. `SameSite` is defence in depth behind a forgery token, never the control.
 
 ## Session lifetime
 
-The identifier rotates on login, on a privilege change and after a password change. A password change or reset invalidates every other session of the account. Sessions carry both an idle timeout and an absolute timeout, at the values in [essentials.md](essentials.md), checked on every request against the stored last-seen and created times. Signing out deletes or revokes the session on the server; clearing the cookie alone leaves the session alive for whoever holds a copy.
+The identifier rotates on login, on a privilege change and after a password change. A password change or reset invalidates every other session of the account. Sessions carry an idle and an absolute timeout, checked on every request against the stored last-seen and created times. Signing out deletes or revokes the session on the server; clearing the cookie alone leaves the session alive for whoever holds a copy.
 
 ## Password storage
 
-Argon2id is the first choice, at one of the published configurations, such as 19 MiB of memory, 2 iterations and 1 degree of parallelism, or higher where the server's memory allows. Scrypt is the alternative, and bcrypt the fallback, with a work factor of 10 or more and a maximum password length of 72 bytes, because most implementations ignore anything past it. The values are in [essentials.md](essentials.md). The salt is part of the algorithm and is never rolled by hand. Hashes are compared in constant time.
+Argon2id first, scrypt as the alternative and bcrypt as the fallback, at the parameters in [essentials.md](essentials.md#default-values). The salt is part of the algorithm and is never rolled by hand. How it runs matters as much as the parameters:
 
-How it is run matters as much as the parameters:
+- Stored as a PHC string, which carries the algorithm, the parameters and the salt, so old hashes are upgraded at the next login.
+- Taken from the runtime's standard library where it ships, which removes a native dependency.
+- Bounded in concurrency: a small fixed number of hashes run at once, a short queue waits, and anything beyond answers 503.
+- Compared in constant time, with a fixed dummy hash made at startup verified when no account matches, so both paths cost the same.
 
-- **Stored as a PHC string**, which carries the algorithm, the parameters and the salt, so the parameters can be raised later and old hashes upgraded at the next login.
-- **Taken from the runtime where it ships.** Some runtimes now include Argon2id or scrypt in their standard library, which removes a native dependency.
-- **Bounded in concurrency.** Each hash holds its memory for its duration, so a burst of logins can exhaust the server. A small fixed number of hashes run at once, a short queue waits, and anything beyond answers 503.
-- **A dummy hash for an unknown account.** Login verifies the submitted password against a fixed hash made at startup with the same parameters when no account matches, so both paths cost the same.
-
-Plain text, MD5, SHA-1 and unsalted SHA-256 are never acceptable. Length is required rather than composition rules, the password is verified exactly as received, and new passwords are refused when they appear on a list of at least the 3,000 most common passwords, bundled with the application and updated with its releases. A breached-password range service, queried with a hash prefix so the password never leaves, adds coverage; it is an outbound dependency under [categories/outbound.md](categories/outbound.md), and when it is unreachable the bundled list still applies rather than the check being skipped.
+Plain text, MD5, SHA-1 and unsalted SHA-256 are never acceptable. Length is required rather than composition rules, and new passwords are refused when they appear on the bundled list of common passwords. A breached-password range service, queried with a hash prefix, adds coverage; it is an outbound dependency, and when it is unreachable the bundled list still applies.
 
 ## Uniform answers
 
-Login, registration and reset answer with the same status, the same text and the same timing whether the account exists or not. A different answer is a user list for whoever asks. The login error never says which factor failed. Each one has a construction:
+Login, registration and reset answer with the same status, the same text and the same timing whether the account exists or not. The login error never says which factor failed.
 
-- **Login.** The same message for an unknown account and a wrong password, and the dummy hash above verified when no account matches, so the timing does not tell them apart.
-- **Registration confirms the address first.** The endpoint always answers 202 with the same body. A new address receives a verification link, and the account is created only when that link is used; an address already registered receives a notice that someone tried to register it. This also stops an attacker from holding an unverified account under someone else's address before its owner arrives.
-- **Reset answers before the lookup.** The response is sent first, and the lookup, the token and the mail happen after it, so the time to answer never depends on whether the account exists.
+- Login: the same message for an unknown account and a wrong password, and the dummy hash verified when no account matches.
+- Registration confirms the address first: the endpoint always answers 202 with the same body; a new address receives a verification link and the account is created only when it is used; an address already registered receives a notice that someone tried to register it.
+- Reset answers before the lookup: the response is sent first, and the lookup, the token and the mail happen after it.
 
 ## Throttling
 
-Every endpoint a stranger can reach, login, registration, reset and verification, is rate limited per account and per address with backoff. Reset and verification mail is also limited per target address and answers the same when limited, so the endpoint cannot flood one inbox. A soft lock, a growing delay, comes before a hard lock, so an attacker cannot keep the owner locked out, and consecutive failures on one account never exceed the ceiling in [essentials.md](essentials.md). The unlock path expires on its own or goes through the verified reset flow. Bot protection is proportional to the risk: a honeypot field, a short delay, proof of work or a challenge. A third-party challenge brings cookies and a privacy notice update, so it is chosen deliberately.
+Every endpoint a stranger can reach, login, registration, reset and verification, is rate limited per account and per address with backoff. Reset and verification mail is also limited per target address and answers the same when limited. A soft lock, a growing delay, comes before a hard lock, and consecutive failures on one account never exceed the ceiling in [essentials.md](essentials.md#default-values). The unlock path expires on its own or goes through the verified reset flow.
 
-Those limits alone do not stop an automated attack on login. Blocking addresses fails because the traffic comes from thousands of them. The hash is expensive on purpose, so every fake attempt burns CPU and a flood becomes an outage. A limit per account misses credential stuffing, which tries one or two passwords on each account, and a hard lockout can be turned against the real owners. The answer is a cheap risk check placed before the hash, combining signals such as the TLS fingerprint of the client, that client's failure rate and whether the device is known into one score: a low score goes on to the hash, a medium score gets a challenge, and a high score is dropped before the hash runs. Real users are not locked out, and refused traffic spends no hashing.
+Under automated attack those limits fail: the traffic comes from thousands of addresses, credential stuffing tries one or two passwords per account, and every fake attempt burns a hash. A cheap risk check placed before the hash combines signals such as the client's TLS fingerprint, its failure rate and whether the device is known into one score: low goes on to the hash, medium gets a challenge, high is dropped before the hash runs.
 
 ## Reset, invitation and setup links
 
-A reset token is random, single use, bound to the account, expires in minutes and is invalidated when used or when a new one is issued. The link goes only to the address already on file. An invitation link follows the same rules: never reusable. The lifetime and the token length are in [essentials.md](essentials.md).
+A reset token is random, single use, bound to the account, expires in minutes and is invalidated when used or when a new one is issued. The link goes only to the address already on file and is built as [Tokens in URLs](#tokens-in-urls) sets out. Only the hash of the token is stored. The new password is validated before the exchanged value is spent, so a rejected password does not burn the link. Using it revokes every other session of the account and marks the address verified; the user signs in afterwards. An invitation link follows the same rules.
 
-An emailed link is a URL by nature, which the rule against tokens in URLs has to meet:
+The first administrative account gets no privileged path of its own:
 
-- **The link's origin comes from configuration**, never from the request's `Host` header, which a caller can set to point the link at their own site.
-- **The token stays out of the request line.** It rides in the fragment, which the browser never sends to a server, a log or a referrer, and the page posts it in a request body. Where the token must sit in the query, the page answers with `Referrer-Policy: no-referrer` and the token is spent on the first request.
-- **Only the hash of the token is stored**, and the new password is validated before the token is spent, so a rejected password does not burn the link.
-- **Using the link revokes every other session** of the account and marks the address verified. The user signs in afterwards rather than being signed in by the reset.
+- One-time setup link: the migration that creates the first account prints a single-use setup link, and the owner sets a username, a password and a second factor through the same flow any invited account uses. A password from an earlier scheme is discarded.
+- Bootstrap variable: the first password is read from an environment variable only while the accounts table is empty, and the variable is removed after first use.
 
-The first administrative account gets no privileged path of its own. Two patterns hold up:
-
-- **One-time setup link.** The migration that creates the first account prints a single-use setup link, and the owner sets a username, a password and a second factor through the same flow any invited account uses. A password from an earlier scheme is discarded rather than carried into the new row.
-- **Bootstrap variable.** The first password is read from an environment variable only while the accounts table is empty, and the variable is removed after first use.
-
-A login branch that accepts a legacy credential for one account is the pattern to avoid: it exists for one account and has to be maintained forever.
+A login branch that accepts a legacy credential for one account is the pattern to avoid.
 
 ## Second factor
 
-A second factor is required for anything that administers money, accounts or content. Time-based one-time codes or passkeys; text messages only as a last resort. Whether the whole population needs one is a policy decision with a name against it.
+A second factor is required for anything that administers money, accounts or content: passkeys or time-based one-time codes, text messages only as a last resort. A passkey is verified against the relying party identifier and the exact origin list, per step 9 of [authentication-and-session](protocols/authentication-and-session.md). Whether the whole population needs one is a policy decision with a name against it.
 
-## Events
-
-Login success and failure, reset, password change and role change are logged with the time, the account identifier and the address. A failed login for an unknown account is logged with a keyed hash of the typed address rather than the address itself. Passwords, tokens and session identifiers are never logged, and neither is the development mail that carries links. The event list is in [logging-and-errors](protocols/logging-and-errors.md).
+The events these flows write are listed in step 4 of [logging-and-errors](protocols/logging-and-errors.md).

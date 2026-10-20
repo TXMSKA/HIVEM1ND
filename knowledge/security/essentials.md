@@ -1,28 +1,21 @@
 # Essentials
 
-The one file to read first for a build from scratch or a pass over a whole application. It holds the floor of the discipline and the concrete values a builder would otherwise invent. The category files add a `Build:` line per subcategory for how to build each part, and the protocols prove it afterwards. Work on one part of an application starts from [INDEX.md](INDEX.md) instead.
+The one file to read first for a build from scratch or a pass over a whole application. It holds the floor of the discipline and the concrete values a builder would otherwise invent. Each floor line points to the file that owns the rule. The category files add a `Build:` line per subcategory, and the protocols prove it afterwards. Work on one part of an application starts from [INDEX.md](INDEX.md) instead.
 
 ## Floor
 
-**Access.** Identity comes from the server-side session and nothing in the request. Every handler checks the caller against the record in its first statements, a record belonging to another account answers 404, and a route with no declared access rule refuses. Writes accept an allowlist of fields; responses are built by a view function and never send a stored record as it is.
-
-**Input and output.** Every input passes an allowlist schema with length and count caps, and unknown fields are refused. Queries bind every value, and identifiers that cannot be bound map through a fixed table. A filesystem path from a request is canonicalized and refused outside its base directory. Output is escaped at every sink by the same helper, and an enforcing content policy sits behind it.
-
-**Sessions and credentials.** A random identifier in a `__Host-` cookie, its hash in the store, replaced at login and deleted at logout, with an idle and an absolute timeout checked on every request. Passwords are hashed with the parameters below and compared in constant time. Login, registration and reset answer the same way whether the account exists, built as in [sessions-and-credentials.md](sessions-and-credentials.md#uniform-answers).
-
-**Secrets.** Read once at startup from the environment into one object, the boot fails on a missing one, and no secret has a fallback in code. Environment files are ignored from the first commit, and an example file lists every variable with an empty value.
-
-**Outbound.** A server-side fetch of a URL from input goes through a host allowlist, and every resolved address is checked against [address-ranges.md](address-ranges.md) inside the connection's own address lookup.
-
-**Money.** The server computes every amount from its own catalog in integer minor units. A webhook is verified over the raw body before anything reads it, and its amount and currency are compared with the record before any state changes, per [payments.md](payments.md#webhooks-received).
-
-**Files.** Type decided by the first bytes against an allowlist, a generated name, storage outside the web root, and serving through a handler that checks the owner and sends `nosniff` and `Content-Disposition: attachment`.
-
-**Limits.** Every entry point has a rate limit keyed on the address and the account, every body a size cap, every list a page cap, every outbound call a timeout, and every model call an input cap and an output token cap.
-
-**Failure.** Errors fail closed, the caller gets a stable code and a request identifier, and the log gets the detail without secrets, tokens or bodies. Security events carry time, actor, address and outcome.
-
-**Supply.** A supported runtime line, a committed lockfile, install scripts refused by default and a minimum release age, per [categories/dependencies.md](categories/dependencies.md).
+- Access: identity comes from the server-side session and nothing in the request. Every handler checks the caller against the record in its first statements, another account's record answers as [api-conventions.md](api-conventions.md#status-codes-that-do-not-leak) sets out, and a route with no declared access rule refuses. Writes accept an allowlist of fields; responses are built by a view function.
+- Input and output: every input passes an allowlist schema with length and count caps, and unknown fields are refused. Queries bind every value, and identifiers that cannot be bound map through a fixed table. A filesystem path from a request is canonicalized and refused outside its base directory. Output is escaped at every sink by the same helper, behind an enforcing content policy.
+- Sessions and credentials: a random identifier in a `__Host-` cookie, its hash in the store, replaced at login and deleted at logout, with both timeouts checked on every request. Passwords hashed with the parameters below. Uniform answers and tokens in links as [sessions-and-credentials.md](sessions-and-credentials.md#uniform-answers) and [its token rule](sessions-and-credentials.md#tokens-in-urls) set out.
+- Secrets: read once at startup from the environment into one object, the boot fails on a missing one, and no secret has a fallback in code, per [configuration.md](configuration.md). Environment files are ignored from the first commit.
+- Outbound: a server-side fetch of a URL from input goes through a host allowlist and the address check placed as in [address-ranges.md](address-ranges.md#where-the-check-sits).
+- Money: the server computes every amount from its own catalog in integer minor units, and an order becomes paid only as [payments.md](payments.md#the-flow) sets out.
+- Bounded values: a single-use or bounded value, such as a voucher, a credit or a seat, is spent by one conditional update or a unique constraint, never by a read followed by a separate write.
+- Files: type decided by the first bytes against an allowlist, a generated name, storage outside the web root, and serving through a handler that checks the owner and sends `nosniff` and `Content-Disposition: attachment`.
+- Browser code: a window message is read only after its origin matches an exact list, and no value from the URL, storage or a message reaches a page sink unescaped.
+- Limits: every entry point has a rate limit keyed on the address and the account, every body a size cap, every list a page cap, every outbound call a timeout, and every model call an input cap and an output token cap.
+- Failure: errors fail closed, the caller gets a stable code and a request identifier, and the log gets the detail without secrets, tokens or bodies.
+- Supply: a supported runtime line, a committed lockfile, install scripts refused by default and a minimum release age, per [categories/dependencies.md](categories/dependencies.md).
 
 ## Default values
 
@@ -32,6 +25,7 @@ Each value was read at the source on 2026-09-18. Where the source gives a range 
 | --- | --- | --- |
 | Session identifier | At least 128 bits from a secure random generator; 32 random bytes | [1] V7.2.3 |
 | Any other unguessable token (reset, verification, invitation, forgery token) | At least 128 bits from a secure random generator, stored hashed; a UUID does not qualify | [1] V11.5.1 |
+| Signing secret for an HMAC-signed token | At least the hash output size: 32 random bytes for HMAC with SHA-256 | [15], read 2026-10-20 |
 | Session idle timeout | 30 minutes (pick; 15 to 30 for low risk, 2 to 5 for high value) | [2]; [3] AAL2 at most 1 hour |
 | Session absolute timeout | 8 hours (pick; 4 to 8 for a working day) | [2]; [3] AAL2 at most 24 hours, AAL3 at most 12 |
 | Reset or verification link sent by email | 30 minutes (pick), single use; never past 24 hours | [3] recovery codes by email; [4] |
@@ -55,7 +49,7 @@ Each value was read at the source on 2026-09-18. Where the source gives a range 
 | Emitted webhook | Secret of 24 to 64 random bytes, signature over `id.timestamp.body`, receiver timeout 15 to 30 seconds, payload under 20 kB | [12] |
 | Outbound fetch | A timeout and a response size cap stated per integration; no published number | [1] V13.1.3 |
 | Outbound address check | Every range in [address-ranges.md](address-ranges.md), IPv4 and IPv6 | [13]; [14] |
-| Idempotency key | Stored with a fingerprint of the request; reused with another body 422, still in progress 409, missing where required 400 | [15] |
+| Idempotency key | Kept 24 hours per account with a fingerprint of the request (pick); the answers in [api-conventions.md](api-conventions.md#idempotency) | This module's rule, stated there on its merits |
 | Rate limit response | 429 with `Retry-After` | [9] |
 | Model endpoint | Input size cap and explicit output token cap on every call, stubbed or not; the values are a decision | [1] V2.4.1 |
 
@@ -75,4 +69,4 @@ Each value was read at the source on 2026-09-18. Where the source gives a range 
 12. Standard Webhooks specification: https://github.com/standard-webhooks/standard-webhooks/blob/main/spec/standard-webhooks.md
 13. IANA IPv4 and IPv6 special-purpose address registries: https://www.iana.org/assignments/iana-ipv4-special-registry/ and https://www.iana.org/assignments/iana-ipv6-special-registry/
 14. OWASP Server-Side Request Forgery Prevention Cheat Sheet: https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html
-15. The Idempotency-Key HTTP header field, IETF draft 07: https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/
+15. RFC 7518, JSON Web Algorithms, section 3.2, the key size for HMAC with SHA-2: https://www.rfc-editor.org/rfc/rfc7518#section-3.2

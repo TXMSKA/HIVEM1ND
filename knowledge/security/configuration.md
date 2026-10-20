@@ -6,7 +6,7 @@ A secret is anything that grants access: API keys, database connection strings, 
 
 Secrets are environment values set in the hosting panel or a secret manager, never in a file the repository can see. Locally, an ignored environment file. Environment files, service account files, keystores, provisioning profiles and private keys are never committed, not even to a private repository: repositories change visibility and get cloned.
 
-A secret is never pasted into a chat, an issue, a screenshot or a prompt. When an agent needs a secret to run something, a person sets the variable.
+A secret value is never pasted anywhere: when an agent needs one to run something, a person sets the variable, and the agent handles it only as [rules-of-engagement.md](rules-of-engagement.md#secret-values) sets out.
 
 ## The example file
 
@@ -30,7 +30,7 @@ Development, preview and production differ only by environment values. A branch 
 
 ## When a secret leaks
 
-The secret is rotated at the provider first, because the old value is compromised from the moment it was pushed. The history rewrite comes second, followed by a force push and a notice to every clone. Deleting the file in a new commit changes nothing, and forks, mirrors and caches survive a rewrite. A leaked key is never kept alive because nobody noticed.
+The secret is rotated at the provider first, because the old value is compromised from the moment it was pushed, and the rotation is confirmed in the provider's console. The history rewrite comes second, followed by a force push and a notice to every clone. Deleting the file in a new commit changes nothing, and forks, mirrors and caches survive a rewrite. A leaked key is never kept alive because nobody noticed.
 
 ## Scanning
 
