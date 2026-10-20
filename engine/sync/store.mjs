@@ -3,7 +3,7 @@ import path from 'node:path';
 import { CoreError, canonicalJson, hashBytes, hashText, isUuid, uuidV8 } from '../service/identity.mjs';
 import { resolveTarget } from '../service/paths.mjs';
 import { atomicWrite, exclusiveRecord, readBytes, withLocalChanges, withLocks } from '../service/store.mjs';
-import { compressObject, decompressObject, isTemporaryName, normalizeTarget, resolveDependencies, sanitizeSessionRecord, sessionVerdict, validateChange } from './pack.mjs';
+import { compressObjectAsync, decompressObject, isTemporaryName, normalizeTarget, resolveDependencies, sanitizeSessionRecord, sessionVerdict, validateChange } from './pack.mjs';
 
 const LOCK = 'sync-stage';
 const TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
@@ -488,7 +488,7 @@ async function stageUnlocked(sync, entries, options = {}, retainedVersion = null
 }
 
 async function publishObject(sync, hash, raw) {
-  const compressed = compressObject(raw);
+  const compressed = await compressObjectAsync(raw);
   try {
     await exclusiveRecord(sync.store, objectPath(sync, hash), compressed);
   } catch (error) {

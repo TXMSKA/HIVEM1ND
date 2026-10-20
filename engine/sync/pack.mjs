@@ -1,4 +1,4 @@
-import { brotliCompressSync, brotliDecompressSync } from 'node:zlib';
+import { brotliCompress, brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from 'node:zlib';
 import { CoreError, canonicalJson, hashBytes, isUuid, uuidV8, validateMachineName, validateName } from '../service/identity.mjs';
 import { safeRelative } from '../service/paths.mjs';
 
@@ -26,10 +26,24 @@ const CHANGE_KEYS = ['at', 'baseHash', 'format', 'hash', 'id', 'machine', 'messa
 const LOCAL_PREFIXES = ['user/relay/leases/', 'user/relay/credentials/', 'user/relay/endpoints/'];
 const LOCAL_FIELDS = new Set(['endpoint', 'endpoints', 'credential', 'credentials', 'token', 'secret', 'secrets', 'pid', 'lease', 'bootstrap', 'password', 'authorization', 'socket', 'pipe']);
 
+// Brotli quality 11 (the zlib default) compressed this M1ND at about 8 files per second and held the event loop for up to
+// 15 s on one file. Quality 5 is about 100 times faster and about 15% larger on text, and every Brotli stream decodes alike.
+export const COMPRESSION_QUALITY = 5;
+const COMPRESSION_OPTIONS = { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: COMPRESSION_QUALITY } };
+
 export function compressObject(raw) {
   const bytes = asBuffer(raw);
   if (bytes.length > MAX_OBJECT_BYTES) throw new CoreError(413, 'resource_too_large', 'An object exceeds 16 MB.');
-  return brotliCompressSync(bytes);
+  return brotliCompressSync(bytes, COMPRESSION_OPTIONS);
+}
+
+// The same bytes as compressObject, compressed on the thread pool so a large batch does not hold the event loop.
+export function compressObjectAsync(raw) {
+  const bytes = asBuffer(raw);
+  if (bytes.length > MAX_OBJECT_BYTES) return Promise.reject(new CoreError(413, 'resource_too_large', 'An object exceeds 16 MB.'));
+  return new Promise((resolve, reject) => {
+    brotliCompress(bytes, COMPRESSION_OPTIONS, (error, result) => (error ? reject(error) : resolve(result)));
+  });
 }
 
 export function decompressObject(compressed, maxOutputLength) {

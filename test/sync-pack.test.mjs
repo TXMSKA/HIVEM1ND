@@ -1,10 +1,10 @@
-import { brotliCompressSync } from 'node:zlib';
+import { brotliCompressSync, constants as zlibConstants } from 'node:zlib';
 import { mkdir, readdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { canonicalJson, hashBytes, uuidV8 } from '../engine/service/identity.mjs';
-import { countLogicalMessages, decodePack, decompressObject, encodePack, isDeterministicNotice, packFileName, validateHead } from '../engine/sync/pack.mjs';
+import { COMPRESSION_QUALITY, compressObject, compressObjectAsync, countLogicalMessages, decodePack, decompressObject, encodePack, isDeterministicNotice, packFileName, validateHead } from '../engine/sync/pack.mjs';
 import { ackPublished, eligibleTargets, listStaged, observationSnapshot, observeLocalChange, openSync, readObject, resolveIncoming, stageBaselines, stageTransaction, withVersionBatch } from '../engine/sync/store.mjs';
 import { withLocalChanges } from '../engine/service/store.mjs';
 import { assertContained, dispose, makeCoreFixture } from './core-fixture.mjs';
@@ -628,4 +628,22 @@ test('a local reconcile pass writes the sync version record once, and a restart 
   const again = await observeLocalChange(restarted, { kind: 'mind', path: 'user/notes/note-150.md' }, { bytes: Buffer.from('Note 150.') });
   assert.equal(again.staged, false);
   assert.equal((await listStaged(restarted)).length, 151);
+});
+
+test('objects are compressed at a fast quality and still decode like any Brotli stream', async () => {
+  const text = Buffer.from(Array.from({ length: 400 }, (_, index) => `Line ${index}: the quick brown fox jumps over the lazy dog.
+`).join(''));
+  const fast = compressObject(text);
+  assert.equal(COMPRESSION_QUALITY < 11, true);
+  assert.deepEqual(decompressObject(fast, text.length), text);
+  assert.deepEqual(await compressObjectAsync(text), fast);
+  // An object staged by an earlier build at quality 11 is read the same way, so staged data survives the change.
+  const slow = brotliCompressSync(text, { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 11 } });
+  assert.deepEqual(decompressObject(slow, text.length), text);
+  const raw = Buffer.alloc(4 * 1024 * 1024);
+  for (let index = 0; index < raw.length; index += 1) raw[index] = (index * 2654435761) >>> 24;
+  const started = performance.now();
+  compressObject(raw);
+  assert.ok(performance.now() - started < 3000, 'a 4 MB object takes seconds to compress');
+  await assert.rejects(() => compressObjectAsync(Buffer.alloc(16000001)), (error) => error.code === 'resource_too_large');
 });
