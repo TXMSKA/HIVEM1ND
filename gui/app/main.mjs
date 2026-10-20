@@ -1149,7 +1149,7 @@ export function renderBar(app, t, counts) {
       app.inspectorOpen = !app.inspectorOpen;
       renderShell(app);
     },
-  }, icon(document, "hierarchy"));
+  }, icon(document, "inspector"));
   const phone = element(document, "button", {
     type: "button", class: "icon-button", "data-action": "open-phone",
     "aria-label": t("settingsOpenPhone"), onclick: () => openPhoneSettings(app),
