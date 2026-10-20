@@ -187,10 +187,13 @@ export function renderRunsInPicker(document, model, actions) {
     return option(`runs-client-${client.id}`, displayName(client.title, client.id, id => clientLabel(id, model.language)), launchable(client) ? quota : t('scopeUnavailable'), current?.id === client.id,
       () => actions.onChoice(initialRunsIn([client])), !launchable(client) || !initialRunsIn([client]));
   })));
-  columns.append(column(t('model'), (current?.models ?? []).map(item => {
+  // "Default" and the model it stands for can share an id; only the first of them reads as chosen, so one row is checked.
+  const models = current?.models ?? [];
+  const chosenIndex = models.findIndex(item => item.id === selectedModel?.id);
+  columns.append(column(t('model'), models.map((item, index) => {
     const choice = { ...model.choice, model: item.id };
     // A model change keeps the selected mode/effort. An incompatible pair needs an explicit new choice.
-    return option(`runs-model-${item.id}`, displayName(item.title, item.id), validRunsIn(choice, clients) ? '' : t('unavailable'), selectedModel?.id === item.id,
+    return option(`runs-model-${item.id}-${index}`, displayName(item.title, item.id), validRunsIn(choice, clients) ? '' : t('unavailable'), index === chosenIndex,
       () => actions.onChoice(choice));
   })));
   const local = current?.id === 'lyra';

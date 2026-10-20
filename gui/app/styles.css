@@ -1410,11 +1410,13 @@ button, [role="button"], a[href], summary, select, textarea, [contenteditable="t
 .runs-in-option > span { display: flex; flex-direction: column; gap: 1px; overflow-wrap: anywhere; }
 .runs-in-option strong { font-weight: 500; }
 .runs-in-option small { font-size: 11px; color: var(--mute); }
+.runs-in-option:hover:not(:disabled) { background: var(--control-bg-hover); }
 .runs-in-option[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
 .runs-in-option[aria-pressed="true"] strong { font-weight: 700; }
 .runs-in-footer { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 10px 14px; border-top: 1px solid var(--line); }
 .runs-in-footer .start-check { font-size: 12.5px; }
-.runs-in-footer > button { margin-left: auto; color: var(--accent); font-size: 12px; font-weight: 700; }
+/* The closing button is an accent button: its label is dark on the accent, never accent on accent. */
+.runs-in-footer > button { margin-left: auto; color: var(--accent-ink); font-size: 12.5px; font-weight: 700; }
 .runs-in-warning { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 8px 10px; margin: 0 14px 10px; padding: 12px 14px; border: 1px solid var(--waiting); border-radius: 14px; background: var(--waiting-soft); }
 .runs-in-warning > .icon { width: 15px; height: 15px; margin-top: 2px; color: var(--waiting); }
 .runs-in-warning > p { margin: 0; font-size: 12.5px; color: var(--body); overflow-wrap: anywhere; }
