@@ -6315,7 +6315,7 @@ function decorateHierarchy(app, host) {
   const t = (key, variables) => text(app.language, key, variables);
   const decorate = () => {
     for (const node of host.querySelectorAll("[data-row]")) {
-      const row = app.activeRows?.find((item) => item.id === node.getAttribute("data-id"));
+      const row = app.activeRows?.find((item) => String(item.id) === node.getAttribute("data-id"));
       if (!row) continue;
       if (row.unit) {
         node.setAttribute("aria-label", row.text);
