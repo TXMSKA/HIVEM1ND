@@ -7263,8 +7263,12 @@ function noteSession(app, data) {
 function noteSessionRequest(app, data) {
   const state = data?.state;
   if (!state || !SESSION_COPY[state]) return;
+  // Loading the inspector checks the tracked request again; acting only on a change keeps that check from reloading the
+  // inspector, which checked again, without end.
+  const previous = app.sessionRequest && app.sessionRequest.requestId === data.requestId ? app.sessionRequest.state : null;
   if (data.requestId) app.sessionRequestId = data.requestId;
   app.sessionRequest = data;
+  if (previous === state) return;
   showOutcome(app, text(app.language, data.error?.code === 'launch_ambiguous' ? 'launchAmbiguous' : SESSION_COPY[state]), state);
   if (state === 'started' && data.unitId && !app.disposed) loadInspector(app, data.unitId);
 }
