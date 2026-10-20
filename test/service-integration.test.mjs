@@ -123,7 +123,8 @@ test('desktop HTTP covers chat, task, editor, watch, phone denial, receipts and 
   });
   assert.equal(posted.status, 201);
   assert.equal(posted.json.data.message.body, 'Ship the notes.');
-  assert.deepEqual(posted.json.data.notifications, [{ unitId: builder.id, state: 'pending' }]);
+  // The service puts the chat message in the agent's inbox itself, so the notice is submitted.
+  assert.deepEqual(posted.json.data.notifications, [{ unitId: builder.id, state: 'submitted' }]);
 
   const taskId = 'project:shop:029';
   const taskPath = path.join(fixture.paths.mind, 'user', 'tasks', '029.md');

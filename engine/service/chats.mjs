@@ -391,8 +391,9 @@ async function builtInNotice(context, notice) {
       fromUnit: parseUnitId(message.fromId ?? 'root:master').unit, subject: message.subject ?? '', body: message.body ?? '',
       attachments: message.attachments ?? [], priority: message.priority, at: message.timestamp ?? stamp(context),
     });
+    // Only a person's direct chat with an agent starts the agent; a group or a plan's chat is served by the sessions already open.
     // Starting the session runs behind the answer, so sending a message never waits for an agent to start.
-    setTimeout(() => {
+    if (chat.kind === 'direct' && context.chatAutoStart !== false) setTimeout(() => {
       withoutLocalChanges(() => startOnMessage({ ...context, receipt: null }, notice.unitId))
         .catch((error) => { process.stderr.write(`HIVEM1ND: ${notice.unitId} did not start on its message: ${error?.code ?? 'error'} ${error?.message ?? ''}\n`); });
     }, 0).unref?.();

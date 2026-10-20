@@ -1274,7 +1274,8 @@ test('every contract route has a success result and an authority or boundary fai
   });
   expectStatus(posted, 201, 'chat message');
   assert.equal(posted.json.data.message.body, 'Ship the notes.');
-  assert.deepEqual(posted.json.data.notifications, [{ unitId: 'root:builder', state: 'pending' }]);
+  // The service puts the chat message in the agent's inbox itself, so the notice is submitted.
+  assert.deepEqual(posted.json.data.notifications, [{ unitId: 'root:builder', state: 'submitted' }]);
   const forgedSender = await call(port, 'POST', `/api/v1/chats/${chatId}/messages`, {
     token,
     body: { body: 'Stolen', fromId: 'root:two', role: 'master' },
