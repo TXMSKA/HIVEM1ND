@@ -288,7 +288,39 @@ async function revokeAgentPermission(context, id) {
 
 export async function publishMachineSettings(context, section = null) {
   context = ownerOf(context);
-  return withLocks(context.store, [`settings-report-build:${context.paths.machine}`], () => publishOwnedSettings(context, section));
+  const report = await withLocks(context.store, [`settings-report-build:${context.paths.machine}`], () => publishOwnedSettings(context, section));
+  context.lastReport = { report, builtAt: Date.now(), stamp: context.store.projectionCache?.generation ?? null };
+  return report;
+}
+
+// A running service answers a read of its own report with the last report it built. Building one reads the whole M1ND, and
+// the interface asks for it on every click, so a read used to cost as much as a rebuild (97 s on a large M1ND under load).
+// The report is built again when something in the M1ND changed since the last build and the answer waits for that only
+// briefly; a change that leaves the report as it was writes nothing. A store without a projection cache (tests, the CLI)
+// keeps building on every read.
+const REPORT_MAX_AGE_MS = 60000;
+const REPORT_WAIT_MS = 1500;
+const REPORT_REWRITE_MS = 5 * 60000;
+
+async function currentReport(context) {
+  const owner = ownerOf(context);
+  const cache = owner.store.projectionCache;
+  if (!cache) return publishMachineSettings(context);
+  if (!owner.lastReport) {
+    // The report the last run left is good enough to answer with while the new one is built.
+    const stored = await readPublishedSettings(owner, owner.paths.machine).catch(() => null);
+    if (!stored) return publishMachineSettings(context);
+    owner.lastReport = { report: stored, builtAt: 0, stamp: null, restored: true };
+  }
+  const last = owner.lastReport;
+  if (last.stamp === cache.generation && Date.now() - last.builtAt <= REPORT_MAX_AGE_MS) return last.report;
+  owner.refreshing ??= publishMachineSettings(owner).catch((error) => { owner.lastError = error; }).finally(() => { owner.refreshing = null; });
+  // The report the last run left answers at once; the new one replaces it behind the answer.
+  if (last.restored) return last.report;
+  let timer;
+  await Promise.race([owner.refreshing, new Promise((resolve) => { timer = setTimeout(resolve, REPORT_WAIT_MS); timer.unref?.(); })]);
+  clearTimeout(timer);
+  return owner.lastReport.report;
 }
 
 async function publishOwnedSettings(context, section) {
@@ -310,11 +342,11 @@ async function publishOwnedSettings(context, section) {
   const permissions = { unitGrants, agentPermissions: await readAgentPermissions(context) };
   const projects = { folders: [...folders.values()] };
   const links = await clusterLinks(context);
-  const offer = await discoveryOffer(context);
+  const offer = await discoveryOffer(context, { wait: !context.store.projectionCache });
   const contentRevision = revisionOf(await readBytes(context.store, absolute(context, CONTENT_PATH)));
   const refreshAgents = !existing || section === 'agents' || context.contentRevision !== contentRevision;
   context.contentRevision = contentRevision;
-  const report = await signed(context, {
+  const body = {
     format: 'hivem1nd-machine-settings-v1', machine, reportedAt: stamp(context),
     locations: { mind: context.paths.mind, staging: context.paths.staging },
     service: { machine, state: context.active === false ? 'stopped' : 'running', version: '3.0.0', startedAt: context.startedAt ?? stamp(context), startWithWindows: config.startWithWindows === true, revision: revisionOf(configSource) },
@@ -322,7 +354,12 @@ async function publishOwnedSettings(context, section) {
     permissions: { ...permissions, revision: revision(permissions) }, projects: { ...projects, revision: revision(projects) },
     clusterLinks: links.map(link => ({ ...link, localPath: null })), discoveryOffer: publicOffer(offer),
     connectedClients: refreshAgents ? await connectedClients(context) : existing.connectedClients ?? [],
-  });
+  };
+  if (context.store.projectionCache && existing && !refreshAgents && Date.parse(existing.reportedAt) > Date.parse(body.reportedAt) - REPORT_REWRITE_MS) {
+    const { publicKey, signature, ...kept } = existing;
+    if (canonicalJson({ ...kept, reportedAt: null }) === canonicalJson({ ...body, agents: existing.agents, reportedAt: null })) return existing;
+  }
+  const report = await signed(context, body);
   if (report.agents.revision === null) {
     report.agents.revision = revision(report.agents.items);
     const { publicKey, signature, ...unsigned } = report;
@@ -385,7 +422,7 @@ async function agentItems(context, legacy) {
 export async function readMachineSettings(context, machine = context.paths.machine, section = null) {
   validateMachineName(machine);
   const readOnly = !await machineOnline(context, machine);
-  const report = machine === context.paths.machine ? await publishMachineSettings(context) : await readPublishedSettings(context, machine);
+  const report = machine === context.paths.machine ? await currentReport(context) : await readPublishedSettings(context, machine);
   const shared = await json(context, 'user/gui/settings.json') ?? { format: 'hivem1nd-settings-v1', look: 'modern', language: 'en' };
   const common = { machine, readOnly, reportedAt: report?.reportedAt ?? null };
   if (section === 'agents') return { ...common, revision: report?.agents.revision ?? null, items: report?.agents.items ?? [],
@@ -393,7 +430,7 @@ export async function readMachineSettings(context, machine = context.paths.machi
   if (section === 'permissions') return { ...common, revision: report?.permissions.revision ?? null, unitGrants: report?.permissions.unitGrants ?? [], agentPermissions: report?.permissions.agentPermissions ?? [] };
   if (section === 'projects') return { ...common, revision: report?.projects.revision ?? null, folders: report?.projects.folders ?? [],
     clusterLinks: machine === context.paths.machine ? await clusterLinks(ownerOf(context)) : report?.clusterLinks ?? [],
-    discoveryOffer: machine === context.paths.machine ? await discoveryOffer(ownerOf(context)) : report?.discoveryOffer ?? null };
+    discoveryOffer: machine === context.paths.machine ? await discoveryOffer(ownerOf(context), { wait: !context.store.projectionCache }) : report?.discoveryOffer ?? null };
   if (section) fail(422, 'invalid_body', 'The Settings section is not valid.');
   const settingsBytes = await readBytes(context.store, absolute(context, 'user/gui/settings.json'));
   return { settings: shared, revision: revisionOf(settingsBytes), selectedMachine: machine, readOnly, reportedAt: report?.reportedAt ?? null,
@@ -968,14 +1005,22 @@ function offerView(record) {
   const { repositories, format, machine, ...offer } = record;
   return { ...offer, revision: revision(record) };
 }
-export async function discoveryOffer(context) {
-  return withLocalChanges(context.store, async () => {
+export async function discoveryOffer(context, { wait = true } = {}) {
+  const owner = ownerOf(context);
+  const read = async () => {
     const saved = await offerRecord(context);
     if (saved.record) {
       if (saved.record.format !== 'hivem1nd-discovery-offer-v1' || saved.record.machine !== context.paths.machine) fail(409, 'cluster_changed', 'The discovery owner changed.');
-      return offerView(saved.record);
+      return { saved, view: offerView(saved.record) };
     }
-    const owner = ownerOf(context);
+    return { saved, view: null };
+  };
+  const first = await withLocalChanges(context.store, read);
+  if (first.view) return first.view;
+  // The first discovery walks the home folder looking for repositories, which takes tens of seconds on a real one. It reads
+  // only, so it runs outside the local-observation lock that every read of the M1ND and every write waits on; the lock is
+  // taken to save the offer, and one walk is shared by the callers that ask meanwhile.
+  owner.discovering ??= (async () => {
     const candidates = owner.discoveryRoots ?? [owner.homeDir ?? owner.home ?? os.homedir()];
     const roots = [];
     for (const candidate of candidates) {
@@ -986,8 +1031,24 @@ export async function discoveryOffer(context) {
       const state = await lstat(candidate).catch(error => { if (['ENOENT', 'EACCES', 'EPERM'].includes(error.code)) return null; throw error; });
       if (state?.isDirectory() && !state.isSymbolicLink()) roots.push(candidate);
     }
-    const found = await discoverProjects(roots, { gitRunner: owner.gitRunner,
+    return discoverProjects(roots, { gitRunner: owner.gitRunner,
       skip: name => name.startsWith('.') || ['AppData', 'Library'].includes(name) });
+  })().finally(() => { owner.discovering = null; });
+  if (!wait) {
+    // A read that cannot wait for the walk gets no offer yet; the offer is saved when the walk ends and the interface is told.
+    owner.discoverySaved ??= owner.discovering.then(found => saveOffer(context, found, read)).then(() => {
+      const projects = owner.lastReport?.report.projects;
+      publishDomainEvents(owner, [{ name: 'machine.settings.changed', data: { machine: owner.paths.machine, section: 'projects', reportedAt: stamp(owner), revision: projects?.revision ?? null } }]);
+    }, error => { owner.lastError = error; }).finally(() => { owner.discoverySaved = null; });
+    return null;
+  }
+  return saveOffer(context, await owner.discovering, read);
+}
+
+function saveOffer(context, found, read) {
+  return withLocalChanges(context.store, async () => {
+    const { saved, view } = await read();
+    if (view) return view;
     const accepted = (await readClusterMappings(context)).record.links;
     const groups = new Map(), repositories = [];
     for (const project of found) {

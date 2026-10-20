@@ -628,21 +628,89 @@ test('an idle hour writes no pack and a beat writes only its own metadata', asyn
   assert.equal(await readHead(origin, fixture.machine), null);
 });
 
-test('publishing many staged changes compresses each object once, not once per change', async (t) => {
+test('publishing many staged changes compresses nothing: a staged object is already in the form a pack carries', async (t) => {
   const { sync, origin, clock, io, pulse } = await pulseWorld(t);
   const ids = [];
   for (let index = 0; index < 150; index += 1) ids.push((await stageNote(sync, `note-${index}.txt`, stamp(clock.now())))[0].id);
   const zlib = (await import('node:zlib')).default;
   const { syncBuiltinESMExports } = await import('node:module');
-  const original = zlib.brotliCompressSync;
+  const original = { sync: zlib.brotliCompressSync, async: zlib.brotliCompress };
   let compressions = 0;
-  zlib.brotliCompressSync = function (...args) { compressions += 1; return original.apply(this, args); };
+  zlib.brotliCompressSync = function (...args) { compressions += 1; return original.sync.apply(this, args); };
+  zlib.brotliCompress = function (...args) { compressions += 1; return original.async.apply(this, args); };
   syncBuiltinESMExports();
-  t.after(() => { zlib.brotliCompressSync = original; syncBuiltinESMExports(); });
+  t.after(() => { zlib.brotliCompressSync = original.sync; zlib.brotliCompress = original.async; syncBuiltinESMExports(); });
   await pulse.changed(ids);
   await clock.advance(2000);
   assert.equal(io.pack, 1);
   assert.equal((await publishedPacks(origin)).length, 1);
-  assert.ok(compressions <= 160, `objects were compressed ${compressions} times for 150 changes`);
+  assert.equal(compressions, 0, `objects were compressed ${compressions} times while publishing 150 changes`);
   assert.equal((await listStaged(sync)).length, 0);
+});
+
+test('each earlier pack is decoded once however many packs a machine has published', async (t) => {
+  const { sync, origin, clock, pulse } = await pulseWorld(t);
+  const zlib = (await import('node:zlib')).default;
+  const { syncBuiltinESMExports } = await import('node:module');
+  const original = zlib.brotliDecompressSync;
+  const decoded = new Map();
+  zlib.brotliDecompressSync = function (input, ...rest) {
+    const key = hashBytes(Buffer.from(input));
+    decoded.set(key, (decoded.get(key) ?? 0) + 1);
+    return original.call(this, input, ...rest);
+  };
+  syncBuiltinESMExports();
+  t.after(() => { zlib.brotliDecompressSync = original; syncBuiltinESMExports(); });
+  const packs = 8;
+  for (let index = 0; index < packs; index += 1) {
+    const staged = await stageNote(sync, `series-${index}.txt`, stamp(clock.now()));
+    await pulse.changed(staged.map((change) => change.id));
+    await clock.advance(2000);
+  }
+  // One object per pack. Staging read it once and the origin checked the new pack once; the lookup of committed objects
+  // before each later publication used to decode it again, so the first pack was decoded once per pack published after it.
+  const worst = Math.max(...decoded.values());
+  assert.ok(worst <= 3, `an earlier pack was decoded ${worst} times over ${packs} publications`);
+  assert.equal((await publishedPacks(origin)).length, packs);
+});
+
+test('a backlog that only filled the last pack follows at once, not after a minute', async (t) => {
+  const { sync, origin, clock, pulse } = await pulseWorld(t);
+  // Five objects of 14 MB: a pack takes at most 64 MB of objects, so four go out and one is left over. The quota has
+  // room for it, and a flat one-minute hold used to leave it, and every pack after it, waiting.
+  const ids = [];
+  for (let index = 0; index < 5; index += 1) {
+    const staged = await stageTransaction(sync, [{ target: { kind: 'mind', path: `user/large-${index}.bin` }, bytes: Buffer.alloc(14000000, index + 1), at: stamp(clock.now()) }], { at: stamp(clock.now()) });
+    ids.push(staged[0].id);
+  }
+  const started = clock.now();
+  await pulse.changed(ids);
+  await clock.advance(2000);
+  const packs = await publishedPacks(origin);
+  assert.deepEqual(packs.map((pack) => pack.length), [4, 1]);
+  assert.ok(clock.now() - started <= 2000);
+  assert.equal((await listStaged(sync)).length, 0);
+});
+
+test('a full quota window holds the next pack until the window names room, not for a fixed minute', async (t) => {
+  const { fixture, sync, origin, ledger, clock, pulse } = await pulseWorld(t);
+  const ids = [];
+  for (let index = 0; index < 90; index += 1) {
+    ids.push((await stageMessage(sync, uuidV8(['hold', String(index)]), stamp(clock.now())))[0].id);
+  }
+  const start = clock.now();
+  await pulse.changed(ids);
+  await clock.advance(2000);
+  assert.equal((await publishedPacks(origin)).length, 1);
+  assert.equal((await limitsFor(ledger, 'publication')).messages.used, 60);
+  assert.equal((await listStaged(sync)).length, 30);
+  // The window opens 60 seconds after the first charge, which was made at the first flush.
+  const opens = Date.parse((await limitsFor(ledger, 'publication')).retryAt);
+  assert.ok(opens > start && opens <= start + 62000);
+  await clock.advance(opens - clock.now() - 1);
+  assert.equal((await publishedPacks(origin)).length, 1);
+  await clock.advance(1);
+  assert.equal((await publishedPacks(origin)).length, 2);
+  assert.equal((await listStaged(sync)).length, 0);
+  void fixture;
 });

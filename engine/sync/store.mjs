@@ -3,9 +3,10 @@ import path from 'node:path';
 import { CoreError, canonicalJson, hashBytes, hashText, isUuid, uuidV8 } from '../service/identity.mjs';
 import { resolveTarget } from '../service/paths.mjs';
 import { atomicWrite, exclusiveRecord, readBytes, withLocalChanges, withLocks } from '../service/store.mjs';
-import { compressObject, decompressObject, isTemporaryName, normalizeTarget, resolveDependencies, sanitizeSessionRecord, sessionVerdict, validateChange } from './pack.mjs';
+import { compressObjectAsync, decompressObject, isTemporaryName, normalizeTarget, resolveDependencies, sanitizeSessionRecord, sessionVerdict, validateChange } from './pack.mjs';
 
 const LOCK = 'sync-stage';
+const STAGED_READS = 32;
 const TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 export function openSync({ store, paths, now = () => Date.now(), projects = [] } = {}) {
@@ -230,12 +231,18 @@ export async function stageBaselines(sync, at = timestamp(sync.now())) {
 }
 
 export async function readObject(sync, hash) {
+  return (await readStagedObject(sync, hash)).raw;
+}
+
+// A staged object is kept compressed in the form a pack carries, so a caller that builds a pack takes both the bytes
+// and their compressed form and compresses nothing again.
+export async function readStagedObject(sync, hash) {
   if (!/^[0-9a-f]{64}$/.test(hash ?? '')) throw new CoreError(422, 'invalid_pack', 'The object hash is not valid.');
-  const bytes = await readBytes(sync.store, objectPath(sync, hash));
-  if (!bytes) throw new CoreError(404, 'not_found', 'The staged object does not exist.');
-  const raw = decompressObject(bytes, 16000000);
+  const compressed = await readBytes(sync.store, objectPath(sync, hash));
+  if (!compressed) throw new CoreError(404, 'not_found', 'The staged object does not exist.');
+  const raw = decompressObject(compressed, 16000000);
   if (hashBytes(raw) !== hash) throw new CoreError(422, 'corrupt_resource', 'The staged object does not match its hash.');
-  return raw;
+  return { raw, compressed };
 }
 
 export async function ackPublished(sync, ids) {
@@ -488,7 +495,7 @@ async function stageUnlocked(sync, entries, options = {}, retainedVersion = null
 }
 
 async function publishObject(sync, hash, raw) {
-  const compressed = compressObject(raw);
+  const compressed = await compressObjectAsync(raw);
   try {
     await exclusiveRecord(sync.store, objectPath(sync, hash), compressed);
   } catch (error) {
@@ -721,15 +728,18 @@ async function stagedChanges(sync) {
   const cache = sync.stagedCache ??= new Map();
   const present = new Set();
   const changes = [];
-  for (const name of names) {
-    if (!name.endsWith('.json') || isTemporaryName(name)) continue;
-    present.add(name);
-    if (!cache.has(name)) {
+  const listed = names.filter((name) => name.endsWith('.json') && !isTemporaryName(name));
+  // The first listing after a start reads every staged change. They are read a few at a time instead of one after another.
+  const unread = listed.filter((name) => !cache.has(name));
+  for (let at = 0; at < unread.length; at += STAGED_READS) {
+    await Promise.all(unread.slice(at, at + STAGED_READS).map(async (name) => {
       const parsed = await readJson(sync, path.join(directory, name));
-      if (!parsed) continue;
-      cache.set(name, Object.freeze(parsed));
-    }
-    changes.push(cache.get(name));
+      if (parsed) cache.set(name, Object.freeze(parsed));
+    }));
+  }
+  for (const name of listed) {
+    present.add(name);
+    if (cache.has(name)) changes.push(cache.get(name));
   }
   for (const name of cache.keys()) if (!present.has(name)) cache.delete(name);
   return changes;

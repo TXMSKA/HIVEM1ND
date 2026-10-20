@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { lstat, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { CLIENTS, CoreError, ROLES, canonicalJson, canonicalTaskId, hashBytes, hashText, isUuid, parseTaskId, parseUnitId, resolvePerson, resolveUnit, uuidV8, validateRole } from './identity.mjs';
@@ -126,23 +127,76 @@ export async function readCollection(context, name, query = {}) {
 }
 
 async function projectRecords(context, query) {
-  return projectionRead(context, async () => {
-    const aliases = await resolveAliases(context);
-    const scoped = { ...context, aliases };
-    const loaded = await loadMind(scoped);
-    const editors = await completeEditorSummaries(scoped, loaded.catalog);
-    return assemble(loaded, query, aliases, scoped.paths?.machine ?? null, editors);
-  });
+  const { loaded, aliases, editors } = await builtProjection(context);
+  return assemble(loaded, query, aliases, context.paths?.machine ?? null, editors);
 }
 
 export async function projectChat(context, id) {
-  return projectionRead(context, async () => {
-    const aliases = await resolveAliases(context);
-    const loaded = await loadMind({ ...context, aliases });
-    const chat = loaded.chats.find((item) => item.id === id);
-    if (!chat) throw new CoreError(404, 'chat_not_found', 'The chat does not exist.');
-    return chat;
+  const { loaded } = await builtProjection(context);
+  const chat = loaded.chats.find((item) => item.id === id);
+  if (!chat) throw new CoreError(404, 'chat_not_found', 'The chat does not exist.');
+  return chat;
+}
+
+// A service reuses its last build of the M1ND until something it was built from changes (see createProjectionCache).
+// Each reader gets its own copy, so a caller that changes what it was given cannot change what the next one reads.
+// A build that is only old, with nothing known to have changed, is answered at once while a new one is built behind it:
+// the beats and observations in it expire with the clock, but not in the second a reader waits.
+const PROJECTION_CLOCK_SKEW_MS = 5000;
+const PROJECTION_ENTRIES = 4;
+
+async function builtProjection(context) {
+  const cache = context.store?.projectionCache;
+  if (!cache) return projectionRead(context, () => buildProjection(context));
+  const key = projectionKey(context);
+  const now = context.now();
+  const slot = cache.entries.get(key) ?? { ready: null, pending: null };
+  const near = (at) => Math.abs(now - at) <= PROJECTION_CLOCK_SKEW_MS;
+  const ready = slot.ready;
+  if (ready && ready.generation === cache.generation && near(ready.now) && Date.now() - ready.builtAt <= cache.maxAgeMs) {
+    if (Date.now() - ready.builtAt > cache.refreshAfterMs && !slot.pending) startProjectionBuild(cache, key, context, now).promise.catch(() => {});
+    return structuredClone(ready.value);
+  }
+  // Readers share a build that started after the last change; one that started before it may predate what they just wrote.
+  let pending = slot.pending;
+  if (!pending || pending.generation !== cache.generation || !near(pending.now)) pending = startProjectionBuild(cache, key, context, now);
+  const built = await pending.promise;
+  return structuredClone(built.value);
+}
+
+function startProjectionBuild(cache, key, context, now) {
+  const pending = { generation: cache.generation, now, promise: null };
+  cache.builds += 1;
+  pending.promise = projectionRead(context, () => buildProjection(context)).then((value) => {
+    const built = { generation: pending.generation, now, builtAt: Date.now(), value };
+    const slot = cache.entries.get(key);
+    if (slot && (!slot.ready || slot.ready.builtAt <= built.builtAt)) slot.ready = built;
+    return built;
+  }).finally(() => {
+    const slot = cache.entries.get(key);
+    if (slot?.pending === pending) slot.pending = null;
   });
+  const slot = cache.entries.get(key) ?? { ready: null, pending: null };
+  slot.pending = pending;
+  cache.entries.delete(key);
+  cache.entries.set(key, slot);
+  while (cache.entries.size > PROJECTION_ENTRIES) cache.entries.delete(cache.entries.keys().next().value);
+  return pending;
+}
+
+function projectionKey(context) {
+  const principal = context.principal;
+  const projects = (context.projects ?? []).filter((item) => item?.localPath).map((item) => `${item.name}=${item.localPath}`).join('|');
+  return JSON.stringify([context.paths?.mind, context.paths?.machine, context.paths?.origin ?? null, context.paths?.localDirectory ?? null,
+    principal?.audience ?? null, principal?.unitId ?? null, Array.isArray(context.aliases) ? context.aliases : null, projects]);
+}
+
+async function buildProjection(context) {
+  const aliases = await resolveAliases(context);
+  const scoped = { ...context, aliases };
+  const loaded = await loadMind(scoped);
+  const editors = await completeEditorSummaries(scoped, loaded.catalog);
+  return { loaded, aliases, editors };
 }
 
 async function projectionRead(context, operation) {
@@ -294,7 +348,15 @@ export function collectIssues(issues) {
   return unique;
 }
 
-async function loadMind(context) {
+// One build of the M1ND lists the files under user/ once and every section takes its own files from that listing. The sections
+// used to walk their folders one after another, and the receipts walked all of user/ again.
+const build = new AsyncLocalStorage();
+
+function loadMind(context) {
+  return build.run({ root: context.paths?.mind, listing: null }, () => loadMindFiles(context));
+}
+
+async function loadMindFiles(context) {
   const mind = context.paths?.mind;
   if (!mind) throw new CoreError(503, 'mind_unavailable', 'The M1ND is not available.');
   try {
@@ -1204,14 +1266,34 @@ function personId(value, units = [], aliases = [], scope = null) {
     try { return resolveUnit(text, { units: units.filter((unit) => !unit.malformed).map((unit) => ({ ...unit, unitId: unit.id })), scope, aliases }).unitId; }
     catch { return null; }
   }
-  try {
-    const parsed = parseUnitId(text);
+  // Most senders are written as a unit name, which is not a unit id: parseUnitId throws for it, and building that error for
+  // every message of a large M1ND cost more than the rest of the projection. Only text shaped like an id is parsed.
+  let parsed = null;
+  if (/^(?:root|env|project):/.test(text)) {
+    try { parsed = parseUnitId(text); } catch { parsed = null; }
+  }
+  if (parsed) {
     if (parsed.id === 'root:master') return 'root:master';
     return units.some((unit) => unit.id === parsed.id) ? parsed.id : null;
-  } catch {
-    const matches = units.filter((unit) => !unit.malformed && unit.unit?.toLowerCase() === text.toLowerCase());
-    return matches.length === 1 ? matches[0].id : null;
   }
+  const matches = unitsNamed(units).get(text.toLowerCase());
+  return matches?.length === 1 ? matches[0].id : null;
+}
+
+// The units by lower-case name, kept for the array they were read from so a message does not scan and lower-case every unit.
+const namedUnits = new WeakMap();
+function unitsNamed(units) {
+  const known = namedUnits.get(units);
+  if (known && known.size === units.length) return known.index;
+  const index = new Map();
+  for (const unit of units) {
+    if (unit.malformed || typeof unit.unit !== 'string') continue;
+    const name = unit.unit.toLowerCase();
+    if (index.has(name)) index.get(name).push(unit);
+    else index.set(name, [unit]);
+  }
+  namedUnits.set(units, { size: units.length, index });
+  return index;
 }
 
 function personQuestions(units, aliases = []) {
@@ -1575,8 +1657,10 @@ function taskSections(body) {
   return { request: request ?? '', report: report ?? '' };
 }
 
+const SECTION_PATTERNS = new Map(['Request', 'Report'].map((name) => [name, new RegExp(`(?:^|\\n)## ${name}\\n([\\s\\S]*?)(?=\\n## |$)`)]));
+
 function sectionText(body, name) {
-  const match = body.match(new RegExp(`(?:^|\\n)## ${name}\\n([\\s\\S]*?)(?=\\n## |$)`));
+  const match = body.match(SECTION_PATTERNS.get(name));
   return match ? match[1].trim() : null;
 }
 
@@ -1597,6 +1681,18 @@ function parseList(value, relative, issues) {
 }
 
 async function filesUnder(root, relative) {
+  const current = build.getStore();
+  if (current && current.root === root && (relative === 'user' || relative.startsWith('user/'))) {
+    current.listing ??= (async () => {
+      const everything = [];
+      await walk(path.join(root, 'user'), 'user', everything);
+      return everything;
+    })();
+    const all = await current.listing;
+    if (relative === 'user') return [...all];
+    const prefix = `${relative}/`;
+    return all.filter((file) => file.startsWith(prefix));
+  }
   const found = [];
   await walk(path.join(root, ...relative.split('/')), relative, found);
   return found;
