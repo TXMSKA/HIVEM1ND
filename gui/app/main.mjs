@@ -577,7 +577,7 @@ function paintShell(app) {
 
 // Every drawing replaces the whole shell. The panels that scroll keep where they were, so reading a long panel is not
 // interrupted by a retry, a refresh or a message arriving.
-const SCROLLING = ['.panel.side', '.panel.stage', '.panel.inspector', '.inspector-body', '.agent-controls', '.chat-panel', '.settings-panel', '.transcript', '.session-work'];
+const SCROLLING = ['.panel.side', '.panel.stage', '.panel.inspector', '.inspector-body', '.agent-controls', '.agent-details', '.chat-panel', '.settings-panel', '.transcript', '.session-work'];
 
 function captureScrolls(root) {
   const saved = [];
@@ -1303,51 +1303,21 @@ function renderWorkspace(app, t, view, counts) {
     if (agent) {
       inspectorBody.className += ' agent-inspector';
       inspectorBody.append(renderAgentHeader(document, agent, sessionForUnit(app, agent.id), app.language, () => openAgentMore(app, agent)));
-      const controls = trackDisclosure(app, element(document, 'details', { class: 'agent-controls' }, element(document, 'summary', { text: t('details') }), actionControls(app, t, agent)), `agent-controls:${agent.id}`);
-      inspectorBody.append(controls);
       const review = renderInspector(app, t, agent);
-      const facts = review.querySelector('[data-unit-facts]');
-      // The facts sit inside Details with the controls; the board keeps the conversation in front.
-      if (facts) {
-        facts.remove();
-        facts.className += ' agent-facts';
-        controls.append(facts);
-      }
       const progress = review.querySelector('[data-session-progress]');
       if (progress) {
         progress.remove();
         inspectorBody.append(progress);
       }
       const panel = chatPanel(app, t);
-      const cards = review.querySelector('[data-action-cards]');
-      if (cards) cards.remove();
-      const scroll = panel.querySelector('.transcript') ?? panel.querySelector('[data-session-work]') ?? panel.querySelector('[data-unit-work]');
-      // What is left of the unit card (its metadata, the machine, sessions, grants and waiting) belongs with the
-      // controls in Details; the conversation keeps only messages, as the board draws it.
-      for (const part of [...review.children]) {
-        part.remove();
-        // Nested disclosures open flat inside Details: one Details, not three.
-        for (const inner of [part, ...(part.querySelectorAll?.('details') ?? [])]) if (inner.matches?.('details')) inner.setAttribute('open', '');
-        controls.append(part);
-      }
-      // Asks and task cards belong to the conversation: they scroll with the messages, in one scroll area.
-      if (cards) {
-        // Only what waits for a decision joins the conversation: asks, and tasks in review. Every other task stays listed
-        // in Details, so an old task is not drawn in the middle of the chat.
-        const later = element(document, 'div', { class: 'action-cards later-cards', 'data-later-cards': 'true' });
-        for (const card of [...cards.children]) {
-          const id = card.getAttribute?.('data-task') ?? card.getAttribute?.('data-task-detail');
-          if (!id) continue;
-          const status = (card.getAttribute?.('data-task-status') ?? cards.querySelector?.(`[data-task='${id}']`)?.getAttribute?.('data-task-status')) || later.querySelector?.(`[data-task='${id}']`)?.getAttribute?.('data-task-status');
-          if (status !== 'review') { card.remove(); later.append(card); }
-        }
-        if (later.children.length) controls.append(later);
-        const field = panel.querySelector('.field');
-        if (cards.children.length) {
-          if (scroll) scroll.append(cards);
-          else if (!(field && placeBefore(field, cards))) panel.append(cards);
-        }
-      }
+      const details = agentDetails(app, t, agent, review, panel);
+      const tab = panel.getAttribute('data-agent-tab');
+      // Details is the third tab: while it is open the conversation is hidden, not removed, so a draft and the scroll stay.
+      if (tab === 'details') {
+        for (const part of [...panel.children]) if (!part.matches?.('.session-tabs')) part.setAttribute('hidden', '');
+      } else details.setAttribute('hidden', '');
+      const tabs = panel.querySelector('.session-tabs');
+      if (tabs && typeof panel.insertBefore === 'function' && tabs.nextSibling) panel.insertBefore(details, tabs.nextSibling); else panel.append(details);
       inspectorBody.append(panel);
     } else {
       const heading = element(document, "h2", { text: selected ? unitDisplayName(selected) : t("nothingSelected") });
@@ -4539,6 +4509,80 @@ function fitMapView(app) {
   if (map.host) fitMap(map);
 }
 
+// An agent's Details tab, in separate sections: how it runs, the agent itself, its session, its tasks and what waits.
+// Only asks and tasks in review stay in the conversation; every other task is listed here.
+function agentDetails(app, t, agent, review, panel) {
+  const document = app.root.ownerDocument;
+  const tabId = panel.querySelector?.('[data-action="session-details"]')?.getAttribute?.('id');
+  const root = element(document, 'section', { class: 'agent-details', 'data-agent-details': agent.id, role: 'tabpanel', ...(tabId ? { 'aria-labelledby': tabId } : {}) });
+  const section = (key, ...parts) => {
+    const shown = parts.filter(Boolean);
+    if (!shown.length) return;
+    root.append(element(document, 'section', { class: 'details-section', 'data-details-section': key },
+      element(document, 'h3', { class: 'details-section-title', text: startText(app.language, key) }), ...shown));
+  };
+  section('detailsRun', actionControls(app, t, agent));
+  const facts = review.querySelector('[data-unit-facts]');
+  facts?.remove();
+  if (facts) facts.className += ' agent-facts';
+  // The card's own lines repeat the facts; only what the facts do not say is kept.
+  const shownLabels = new Set([...(facts?.children ?? [])].map(line => String(line.textContent).split(':')[0]));
+  const extra = [...(review.querySelector('.unit-metadata')?.querySelectorAll?.('p') ?? [])]
+    .filter(line => !shownLabels.has(String(line.textContent).split(':')[0]) && !String(line.textContent).endsWith(`: ${t('unknown')}`));
+  for (const line of extra) line.remove();
+  const more = extra.length ? element(document, 'div', { class: 'unit-facts agent-extra' }, ...extra) : null;
+  // Each fact reads as a muted label and its value; the text stays "Label: value".
+  for (const line of [...(facts?.children ?? []), ...extra]) {
+    const textValue = String(line.textContent ?? ''), cut = textValue.indexOf(': ');
+    if (cut < 0 || line.children?.length) continue;
+    line.className = `${line.className ?? ''} fact`.trim();
+    line.replaceChildren(element(document, 'span', { class: 'fact-label', text: textValue.slice(0, cut + 2) }), element(document, 'span', { class: 'fact-value', text: textValue.slice(cut + 2) }));
+  }
+  section('detailsAgent', facts, more);
+  const inspector = review.querySelector('.inspector-details');
+  const waiting = inspector?.querySelector('.waiting-list');
+  waiting?.remove();
+  const sessionParts = inspector ? [...inspector.children].filter(part => !part.matches?.('summary')) : [];
+  for (const part of sessionParts) part.remove();
+  section('detailsSession', ...sessionParts.filter(part => part.children?.length || part.textContent));
+  const cards = review.querySelector('[data-action-cards]');
+  cards?.remove();
+  const later = [];
+  if (cards) {
+    for (const card of [...cards.children]) {
+      const id = card.getAttribute?.('data-task') ?? card.getAttribute?.('data-task-detail');
+      if (!id) continue;
+      const status = card.getAttribute?.('data-task-status') ?? cards.querySelector?.(`[data-task='${id}']`)?.getAttribute?.('data-task-status')
+        ?? later.find(item => item.getAttribute?.('data-task') === id)?.getAttribute?.('data-task-status');
+      if (status !== 'review') { card.remove(); later.push(card); }
+    }
+    const scroll = panel.querySelector('.transcript') ?? panel.querySelector('[data-session-work]') ?? panel.querySelector('[data-unit-work]');
+    const field = panel.querySelector('.field');
+    if (cards.children.length) {
+      if (scroll) scroll.append(cards);
+      else if (!(field && placeBefore(field, cards))) panel.append(cards);
+    }
+  }
+  // A task that waits for nothing is one line; its card, with what can be done and why not, opens under it.
+  const rows = [];
+  for (const card of later) {
+    const id = card.getAttribute?.('data-task');
+    if (id) rows.push(element(document, 'details', { class: 'task-row', 'data-task-row': id },
+      element(document, 'summary', { text: String(card.children?.[0]?.textContent ?? id).trim() }), card));
+    else {
+      const row = rows.at(-1);
+      if (!row) continue;
+      row.append(card);
+      // A task with no title is named by the start of its request.
+      const summary = row.querySelector('summary'), request = String(card.querySelector?.('h3')?.textContent || card.querySelector?.('p')?.textContent || '').trim();
+      if (summary && request && !/\s/.test(summary.textContent.trim())) summary.textContent = `${summary.textContent.trim()} · ${request.length > 64 ? `${request.slice(0, 63)}…` : request}`;
+    }
+  }
+  section('detailsTasks', rows.length ? element(document, 'div', { class: 'later-cards', 'data-later-cards': 'true' }, ...rows) : null);
+  section('detailsWaiting', waiting);
+  return root;
+}
+
 function unitCluster(app, unit) {
   const groups = [...app.store.indexes.groups.values()].filter(group => !group.deleted);
   return groups.find(group => group.id === unit.clusterId) ?? groups.find(group => group.members?.includes(unit.id)) ?? null;
@@ -4565,11 +4609,10 @@ function showUnitDetails(app, unit) {
   app.store.selected.groupId = null;
   if (app.mapState) { app.mapState.selectedGroupId = null; app.mapState.selection = new Set([unit.id]); }
   loadInspector(app, unit.id);
+  // Details is the agent's third tab.
+  const tabs = sessionViewFor(app, sessionForUnit(app, unit.id)) ?? unitConversation(app, unit.id);
+  tabs.tab = 'details';
   renderShell(app);
-  // Drawn closed first, then opened, and remembered so the next drawing keeps it open.
-  const key = `agent-controls:${unit.id}`, node = app.root.querySelector(`[data-disclosure="${key}"]`);
-  inputDrafts(app).disclosures.set(key, true);
-  if (node) { node.open = true; node.setAttribute('open', ''); }
 }
 
 function hierarchyMenu(app, event) {
@@ -7300,6 +7343,7 @@ function frameAgentTabs(app, panel, subject) {
   const document = app.root.ownerDocument;
   const sessionView = sessionViewFor(app, sessionForUnit(app, subject.id));
   const agentTabs = sessionView ?? unitConversation(app, subject.id);
+  agentTabs.detailsTab = app.layout !== 'phone';
   panel.className += ' agent-conversation';
   panel.setAttribute('data-agent-tab', agentTabs.tab);
   panel.append(renderSessionTabs(document, agentTabs, app.language, tab => selectSessionTab(app, agentTabs, tab)));
@@ -7338,6 +7382,7 @@ function chatPanel(app, t) {
   const subject = inspectorAgent(app) ?? (directUnit && app.layout !== 'phone' ? directUnit : null);
   const sessionView = subject ? sessionViewFor(app, sessionForUnit(app, subject.id)) : null;
   const agentTabs = subject ? (sessionView ?? unitConversation(app, subject.id)) : null;
+  if (agentTabs) agentTabs.detailsTab = app.layout !== 'phone';
   let contextNotice = null;
   if (directUnit) heading.querySelector("h2").replaceChildren(unitNameNode(document, directUnit));
   if (members.length > 2) {
@@ -7926,9 +7971,10 @@ function renderInspector(app, t, selected) {
   details.append(element(document, "summary", { text: t("details") }));
   const machine = (data.machines ?? []).find((item) => item.id === selected?.machine);
   if (machine) details.append(renderMachine(document, machine, t));
-  // The running sessions are listed; with none running, only the last one, so old stopped sessions do not pile up here.
+  // Only the latest session is listed, the running one first, so old sessions do not pile up here.
+  const latest = (list) => list.slice().sort((left, right) => String(right.registeredAt ?? "").localeCompare(String(left.registeredAt ?? ""))).slice(0, 1);
   const running = (data.sessions ?? []).filter((session) => session.state !== "stopped");
-  const listed = running.length ? running : (data.sessions ?? []).slice().sort((left, right) => String(right.registeredAt ?? "").localeCompare(String(left.registeredAt ?? ""))).slice(0, 1);
+  const listed = latest(running.length ? running : data.sessions ?? []);
   for (const session of listed) details.append(renderSession(document, session, t));
   const caps = app.store.capabilities ?? [];
   if (caps.includes("grant.revoke")) {

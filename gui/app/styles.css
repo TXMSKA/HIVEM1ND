@@ -1875,3 +1875,29 @@ summary:focus-visible, .row:focus-visible, .library-item:focus-visible { outline
 
 /* Inside an agent's Details the inner disclosures are opened flat, so their own Details headings would only repeat it. */
 .agent-controls :is(.unit-metadata, .inspector-details) > summary { display: none; }
+
+/* An agent's Details tab: one scroll area of separate cards, each with a small heading. */
+.chat-panel.agent-conversation > [hidden] { display: none !important; }
+.agent-details { display: flex; flex-direction: column; gap: 12px; flex: 1 1 auto; min-height: 0; overflow: auto; padding: 14px 18px 18px; }
+.details-section { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border: 1px solid var(--line2); border-radius: 14px; background: var(--card); min-width: 0; }
+.details-section-title { margin: 0; color: var(--mute); font-size: 11.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.details-section .action-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; }
+.details-section .runs-in-choice { flex: 1 1 100%; justify-content: space-between; text-align: left; }
+.details-section .native-mode { flex: 1 1 100%; margin: 0; color: var(--mute); font-size: 12.5px; }
+.details-section .unit-facts { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; background: none; }
+.details-section .unit-facts p, .details-section section > p { margin: 0; font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
+.details-section .fact { display: grid; grid-template-columns: minmax(96px, 34%) 1fr; gap: 10px; }
+.details-section .fact-label { color: var(--mute); }
+.details-section .fact-value { color: var(--text); }
+.details-section > section { display: flex; flex-direction: column; gap: 4px; padding: 0; margin: 0; border: 0; background: none; }
+.details-section > section + section { padding-top: 10px; border-top: 1px solid var(--line2); }
+.details-section .waiting-list { gap: 6px; }
+.details-section .later-cards { display: flex; flex-direction: column; gap: 8px; }
+/* Rename and Remove are in the agent's ··· menu; Details does not repeat them. */
+.details-section .map-menu { display: none; }
+.details-section .task-row { border-top: 1px solid var(--line2); padding-top: 8px; }
+.details-section .task-row:first-child { border-top: 0; padding-top: 0; }
+.details-section .task-row > summary { cursor: pointer; font-size: 13px; color: var(--text); list-style-position: inside; }
+.details-section .task-row > summary:hover { color: var(--accent); }
+.details-section .task-row[open] > summary { margin-bottom: 8px; }
+.details-section .task-row .card { padding: 10px 12px; border-radius: 10px; background: var(--card2); }

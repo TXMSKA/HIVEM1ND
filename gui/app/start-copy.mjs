@@ -55,7 +55,7 @@ export const START_COPY=Object.freeze({
   contextUnknown:['Context usage unavailable','Uso del contexto no disponible'],contextNotice:['My context is {percent}% full','El contexto está al {percent}%'],
   contextHint:['Answers get slower and less precise from here. Compact keeps a summary of this conversation; Clear starts empty and reads the M1ND again.','Las respuestas pueden ser más lentas y menos precisas. Compactar conserva un resumen de esta conversación; Limpiar inicia un contexto vacío y vuelve a leer la M1ND.'],
   compact:['Compact','Compactar'],clear:['Clear','Limpiar'],close:['Close','Cerrar'],freshStatus:['Starts fresh every session','Cada sesión empieza desde cero'],
-  chat:['Chat','Chat'],work:['Work','Trabajo'],startedWith:['Started with','Contexto inicial'],startedSummary:['{role} of {cluster}, the M1ND, and the task {task}','{role} de {cluster}, la M1ND y la tarea {task}'],
+  chat:['Chat','Chat'],work:['Work','Trabajo'],details:['Details','Detalles'],detailsRun:['Run','Ejecución'],detailsAgent:['Agent','Agente'],detailsSession:['Session','Sesión'],detailsTasks:['Tasks','Tareas'],detailsWaiting:['Waiting','En espera'],startedWith:['Started with','Contexto inicial'],startedSummary:['{role} of {cluster}, the M1ND, and the task {task}','{role} de {cluster}, la M1ND y la tarea {task}'],
   everyCluster:['every cluster','todos los clústeres'],startedNoTask:['{role} of {cluster} and the M1ND','{role} de {cluster} y la M1ND'],
   startedNoCluster:['{role}, the M1ND, and the task {task}','{role}, la M1ND y la tarea {task}'],startedBare:['{role} and the M1ND','{role} y la M1ND'],
   workHint:['What the session is doing, step by step. Nothing here is a message.','Actividad de la sesión, paso a paso. Estos registros no son mensajes.'],

@@ -3174,10 +3174,11 @@ test("editor forms, chats, and the inspector stay compact", async (t) => {
   navigate(desktop.app, "map");
   const executor = desktop.app.unitList.catalog.find((unit) => unit.id === "project:shop:executor-shop");
   desktop.app.activeHandlers.onActivate({ id: executor.id, kind: "unit", unit: executor }, "double");
-  await waitFor(() => desktop.root.querySelector(".inspector-details")?.querySelector("summary")?.textContent === "Details", "The inspector details did not appear.");
-  assert.equal(desktop.root.querySelector(".unit-card") != null, true);
+  // Details is the agent's third tab, in separate sections.
+  await waitFor(() => desktop.root.querySelector("[data-details-section='detailsWaiting']") && desktop.root.querySelector("[data-action='session-details']")?.textContent === "Details", "The inspector details did not appear.");
+  assert.equal(desktop.root.querySelector("[data-details-section='detailsAgent']") != null, true);
   assert.equal(desktop.root.querySelector("[data-unit-facts]") != null, true);
-  assert.equal(desktop.root.querySelector("[data-action-cards]")?.querySelector("[data-task]") != null, true);
+  assert.equal(desktop.root.querySelector("[data-task]") != null, true);
   desktop.app.actionNote = "The task is done.";
   desktop.app.actionCode = "done";
   desktop.app.actionScope = "unit";
@@ -7141,7 +7142,7 @@ async function openShopExecutor(t, options, urls = []) {
   await waitFor(() => desktop.app.unitList?.catalog?.some(unit => unit.id === 'project:shop:executor-shop'), 'The unit list did not load.');
   const executor = desktop.app.unitList.catalog.find(unit => unit.id === 'project:shop:executor-shop');
   desktop.app.activeHandlers.onActivate({ id: executor.id, kind: 'unit', unit: executor }, 'double');
-  await waitFor(() => desktop.root.querySelector('.inspector-details'), 'The inspector details did not appear.');
+  await waitFor(() => desktop.root.querySelector("[data-details-section='detailsWaiting']"), 'The inspector details did not appear.');
   const facts = () => Object.fromEntries(desktop.root.querySelectorAll('[data-unit-facts]')[0].children
     .map(node => [node.textContent.split(': ')[0], { text: node.textContent.split(': ').slice(1).join(': '), title: node.getAttribute('title') }]));
   return { fixture, desktop, facts };
@@ -7359,8 +7360,10 @@ test('every agent inspector keeps the header, tabs, facts, and composer in separ
   assert.equal(facts.className.includes('agent-facts'), true);
   assert.equal(facts.closest('.transcript'), null);
   assert.equal(body.querySelector(':scope > h2, h2')?.textContent === 'Nothing selected', false);
+  // The facts are in the Details tab, after the tabs and apart from the conversation.
   const order = documentOrder(body);
-  assert.ok(order.indexOf(heading) < order.indexOf(facts) && order.indexOf(facts) < order.indexOf(tabs));
+  assert.ok(order.indexOf(heading) < order.indexOf(tabs) && order.indexOf(tabs) < order.indexOf(facts));
+  assert.ok(facts.closest('[data-agent-details]'));
   click(desktop.root.querySelector('[data-action="session-work"]'));
   await waitFor(() => desktop.root.querySelector('[data-unit-work]'), 'Work did not open for an agent that has not started.');
   assert.equal([...desktop.root.querySelector('[data-unit-work]').children].some(node => node.textContent === 'Not started'), true);
@@ -7380,7 +7383,8 @@ test('every agent inspector keeps the header, tabs, facts, and composer in separ
   const chatFacts = desktop.root.querySelector('[data-unit-facts]');
   assert.equal(transcript.contains(composer), false);
   assert.equal(transcript.contains(chatFacts), false);
-  assert.equal(column.contains(chatFacts), false);
+  // The facts are in the Details tab, hidden while the chat is shown.
+  assert.notEqual(chatFacts.closest('[data-agent-details]')?.getAttribute('hidden'), null);
   const chatOrder = documentOrder(column);
   assert.ok(chatOrder.indexOf(transcript) < chatOrder.indexOf(composer));
   const started = transcript.querySelector('[data-started-with]');
