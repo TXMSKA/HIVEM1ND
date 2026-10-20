@@ -256,7 +256,8 @@ export async function ackPublished(sync, ids) {
         const existing = await readBytes(sync.store, destination);
         if (!existing || !existing.equals(bytes)) throw new CoreError(409, 'revision_conflict', 'The published change does not match the staged bytes.');
       });
-      await unlink(source);
+      // The acknowledgment is recorded by now, so a staged file another pass already removed is not an error.
+      await unlink(source).catch((error) => { if (error?.code !== 'ENOENT') throw error; });
       acked.push(id);
     }
     return { acked };
