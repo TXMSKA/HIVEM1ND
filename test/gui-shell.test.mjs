@@ -740,6 +740,9 @@ test("later collection pages stay available and compact windows stay under 100 r
   const mounted = host.querySelectorAll("[data-row]").length;
   assert.equal(mounted < 100, true);
   assert.equal(mounted > 0, true);
+  const spacers = [host.children[0], host.children.at(-1)];
+  assert.deepEqual(spacers.map((spacer) => spacer.getAttribute("style")), [null, null]);
+  assert.deepEqual(spacers.map((spacer) => spacer.style.height), ["0px", `${(1200 - mounted) * 36}px`]);
   list.scrollTop = 4000;
   const short = rows.slice(0, 6);
   short[5].text = "unit-1200 Out";
@@ -7549,4 +7552,32 @@ test("pairing that cannot reach the computer says so instead of calling the code
   await waitFor(() => phone.root.querySelector(".phone-code-error"), "Pairing did not report the failure.");
   assert.equal(phone.root.querySelector(".phone-code-error").textContent, "The phone could not reach this computer. Check the connection and try again.");
   assert.notEqual(phone.root.querySelector("[data-phone-state]").getAttribute("data-phone-state"), "error");
+});
+
+test("the older messages of a long conversation can be reached, not only loaded", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const api = apiFrom(fixture.desktopUrl);
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.chatList?.catalog?.length, "The chat list did not load.");
+  const chat = desktop.app.chatList.catalog[0];
+  const path = `/chats/${encodeURIComponent(chat.id)}/messages`;
+  for (let index = 1; index <= 100; index += 1) {
+    const body = `Line ${String(index).padStart(3, "0")}`;
+    await request(api, "POST", path, { operation: createOperation({ method: "POST", path, body: { body, subject: "", replyTo: null, attachments: [], priority: "normal" } }) });
+  }
+  navigate(desktop.app, "chats");
+  desktop.app.activeHandlers.onActivate({ id: chat.id, kind: "chat" }, "double");
+  await waitFor(() => desktop.app.thread?.chat?.id === chat.id && desktop.root.querySelector("[data-composer]"), "The chat did not open.");
+  await waitFor(() => desktop.app.thread.messages.length >= 40 && desktop.root.querySelector(".bubble"), "The messages did not load.");
+  const first = () => desktop.app.thread.messages.find((message) => message.body === "Line 001")?.id;
+  const visible = () => [...desktop.root.querySelectorAll("[data-message]")].map((node) => node.getAttribute("data-message"));
+  for (let attempt = 0; attempt < 12 && !visible().includes(first()); attempt += 1) {
+    const older = desktop.root.querySelector("[data-action='older']");
+    if (!older) break;
+    click(older);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  assert.ok(visible().includes(first()), "the first message of the conversation stays out of reach");
 });

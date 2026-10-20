@@ -24,6 +24,7 @@ import {
   markMailboxRead,
   measureVisible,
   messageWindow,
+  MESSAGE_WINDOW,
   findDirectChat,
   openDirectChat,
   openGroupChat,
@@ -7024,7 +7025,8 @@ function chatPanel(app, t) {
     if (thread.chat.listed !== false) row.append(manageButton("unlist", t("removeFromList"), { listed: false }));
     if (thread.chat.listed === false) row.append(manageButton("reopen", t("reopenChat"), { listed: true }));
   }
-  if (thread.nextCursor) row.append(element(document, "button", { type: "button", class: "btn", "data-action": "older", text: t("loadOlder"), onclick: () => loadOlder(app) }));
+  // Older messages may still be on the service, or loaded and waiting above the window.
+  if (thread.nextCursor || (thread.windowStart ?? 0) > 0) row.append(element(document, "button", { type: "button", class: "btn", "data-action": "older", text: t("loadOlder"), onclick: () => loadOlder(app) }));
   if (agentTabs?.unitOnly && agentTabs.tab === 'work') panel.append(unitWork(document, agentTabs, app.language, t));
   else if (sessionView?.tab === 'work') {
     const work = renderSessionWork(document, sessionView, app.language, {
@@ -7176,17 +7178,30 @@ function loadOlder(app) {
     app.thread.nearBottom = false;
     if (measuredId) app.thread.anchorId = measuredId;
   }
-  const older = Boolean(app.thread.nextCursor);
-  track(app, `older:${app.thread.chat.id}`, text(app.language, "loadingConversation"), async () => {
-    await loadMessages(app.api, app.thread, older);
-  }).then(() => {
+  const keepInView = () => {
     if (app.disposed || !measuredId) return;
-    app.thread.anchorId = measuredId;
-    app.thread.nearBottom = false;
+    revealAbove(app.thread, measuredId);
+    renderShell(app);
     const next = app.root.querySelector?.(".transcript");
     const node = next?.querySelector?.(`[data-message="${measuredId}"]`);
     if (next && node) next.scrollTop += (node.offsetTop ?? 0) - measuredOffset;
-  }).catch((error) => noteAction(app, error));
+  };
+  // Messages already loaded above the window need no request: the window moves up to them.
+  if (!app.thread.nextCursor) { keepInView(); return; }
+  track(app, `older:${app.thread.chat.id}`, text(app.language, "loadingConversation"), async () => {
+    await loadMessages(app.api, app.thread, true);
+  }).then(keepInView).catch((error) => noteAction(app, error));
+}
+
+// The window opens above the message the person was reading, which stays in it near the bottom, so the older ones show.
+function revealAbove(thread, messageId) {
+  const list = authoredMessages(thread.messages);
+  const index = list.findIndex((message) => message.id === messageId);
+  if (index < 0) return;
+  const start = Math.max(0, index - (MESSAGE_WINDOW - 10));
+  thread.windowStart = start;
+  thread.anchorId = list[start]?.id ?? null;
+  thread.nearBottom = false;
 }
 
 function firstMessageComposer(app, t, unit) {
