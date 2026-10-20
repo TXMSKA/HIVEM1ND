@@ -90,7 +90,7 @@ export function initialPositions(units, saved, groupOrigins) {
 }
 
 const NODE_RADIUS = { overseer: 30, overlord: 25 };
-const nodeRadius = unit => NODE_RADIUS[unit.role] ?? 21;
+const nodeRadius = unit => Object.hasOwn(NODE_RADIUS, unit.role) ? NODE_RADIUS[unit.role] : 21;
 const canonicalOverseer = unit => unit.role === 'overseer' && unit.unit === 'overseer' && unit.scope?.kind === 'root';
 // A brand-new unit is stored at the origin. That point is not a chosen place on the Map.
 const chosenPoint = point => Number.isFinite(point?.x) && Number.isFinite(point?.y) && !(point.x === 0 && point.y === 0);

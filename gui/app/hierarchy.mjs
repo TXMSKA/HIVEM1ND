@@ -1,6 +1,10 @@
 import { element, icon } from './components.mjs';
+import { AGENT_ROLES, roleLabel } from './start-copy.mjs';
 
-const ROLE_ICON = { overseer: 'crown', overlord: 'executive', executor: 'executor', genesis: 'genesis', incubator: 'genesis', adjutant: 'adjutant', executive: 'executive' };
+// The roles a person can pick beyond Executor and Overlord, each with the existing icon that suits it. The Map draws the same ones.
+export const PRESET_ICON = Object.freeze({ 'ux-designer': 'blueprint', 'ui-designer': 'focus', writer: 'document', 'game-designer': 'move',
+  'security-consultant': 'alert', qa: 'check', 'code-reviewer': 'graph', 'product-manager': 'map', custom: 'settings' });
+const ROLE_ICON = { overseer: 'crown', overlord: 'executive', executor: 'executor', genesis: 'genesis', incubator: 'genesis', adjutant: 'adjutant', executive: 'executive', ...PRESET_ICON };
 
 export function pathFolder(value) {
   const parts = String(value ?? '').split(/[\\/]/).filter(Boolean);
@@ -24,7 +28,14 @@ export function readableIdentity(value, personLabel = 'You') {
 }
 
 export function hierarchyIcon(unit) {
-  return ROLE_ICON[unit?.role] ?? 'executor';
+  const role = unit?.role;
+  return typeof role === 'string' && Object.hasOwn(ROLE_ICON, role) ? ROLE_ICON[role] : 'executor';
+}
+
+// Executor and Overlord are told apart by their icon. Every other role a person can pick is named under the unit.
+export function unitRoleName(unit, language) {
+  const role = unit?.role;
+  return AGENT_ROLES.includes(role) && role !== 'executor' && role !== 'overlord' ? roleLabel(language, role, unit.roleName) : '';
 }
 
 export function hierarchyDisclosure(document, expanded) {

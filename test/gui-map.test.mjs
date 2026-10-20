@@ -26,7 +26,7 @@ import {
   requestConnect,
   wheelZoom,
 } from "../gui/app/map.mjs";
-import { buildHierarchy, flattenVisibleHierarchy } from '../gui/app/hierarchy.mjs';
+import { buildHierarchy, flattenVisibleHierarchy, unitRoleName } from '../gui/app/hierarchy.mjs';
 
 test('canonical unread counts stay on the same aliased agent in Hierarchy and Map without selection acknowledgments', () => {
   const agent = { ...unit('root:worker', 'worker', 'executor', 'root'), alias: 'Cart', unread: 2 };
@@ -426,3 +426,27 @@ function query(node, selector) {
   walk(node);
   return found;
 }
+
+test("the Map draws each new role with its own mark, names a role the icon cannot tell in the tooltip and keeps an unknown role plain", () => {
+  const roles = { a: "ux-designer", b: "ui-designer", c: "writer", d: "game-designer", e: "security-consultant", f: "qa", g: "code-reviewer", h: "product-manager",
+    i: "custom", j: "constructor", k: "invented", l: "executor" };
+  const marks = { a: "blueprint", b: "focus", c: "document", d: "move", e: "alert", f: "check", g: "graph", h: "map", i: "settings", j: "executor", k: "executor", l: "executor" };
+  const units = Object.entries(roles).map(([id, role]) => ({ ...unit(id, `agent-${id}`, role, "root"), roleName: role === "custom" ? "Release captain" : null }));
+  const saved = { nodes: Object.fromEntries(units.map((item, index) => [item.id, { x: 40 + index * 60, y: 40 }])), groups: {} };
+  const map = createMap({ units, saved });
+  const host = createHost();
+  renderMap(host.ownerDocument, host, map, { roleName: (node) => unitRoleName(node, "en") });
+  for (const [id, mark] of Object.entries(marks)) {
+    const node = host.querySelector(`[data-unit-id='${id}']`);
+    assert.equal(node.querySelector(`[data-role-icon='${mark}']`) != null, true, `${id} draws ${mark}`);
+    assert.equal(node.getAttribute("data-role"), roles[id]);
+  }
+  const title = (id) => host.querySelector(`[data-unit-id='${id}']`).getAttribute("title");
+  assert.equal(title("a"), "UX designer");
+  assert.equal(title("f"), "QA");
+  assert.equal(title("i"), "Release captain");
+  for (const id of ["j", "k", "l"]) assert.equal(title(id), null, id);
+  assert.equal(host.querySelector("[data-unit-id='j']").style.width, "42px");
+  renderMap(host.ownerDocument, host, map);
+  assert.equal(host.querySelector("[data-unit-id='i']").getAttribute("title"), null);
+});

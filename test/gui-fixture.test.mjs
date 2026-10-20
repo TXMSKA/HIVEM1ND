@@ -95,6 +95,87 @@ test("library fixture carries folders exact copies repository moves and true del
   assert.equal(current.document.foreign.kept, true);
 });
 
+test("the fixture takes the new roles, and the name and description of a custom one, with the service's validation", async (context) => {
+  const fixture = await open(context);
+  const mutate = (method, route, body) => request(fixture, method, `/api/v1${route}`, { body, key: randomUUID() });
+  const create = (body) => mutate("POST", "/units", { scope: { kind: "root" }, machine: "DESKTOP", ...body });
+  const presets = ["ux-designer", "ui-designer", "writer", "game-designer", "security-consultant", "qa", "code-reviewer", "product-manager"];
+  for (const role of presets) {
+    const made = await create({ unit: `agent-${role}`, role });
+    assert.equal(made.status, 201, role);
+    assert.equal(made.body.data.role, role); assert.equal(made.body.data.roleName, null); assert.equal(made.body.data.roleDescription, null);
+  }
+  const custom = await create({ unit: "captain", role: "custom", roleName: "  Release captain ", roleDescription: "Cuts the release.\r\nChecks the notes.\n" });
+  assert.equal(custom.status, 201);
+  assert.equal(custom.body.data.roleName, "Release captain"); assert.equal(custom.body.data.roleDescription, "Cuts the release.\nChecks the notes.");
+  const listed = (await request(fixture, "GET", "/api/v1/units?limit=200")).body.data.items;
+  assert.equal(listed.find((unit) => unit.id === "root:captain").roleName, "Release captain");
+  assert.equal(listed.find((unit) => unit.id === "root:captain").roleDescription, "Cuts the release.\nChecks the notes.");
+  assert.equal(listed.find((unit) => unit.id === "root:agent-qa").role, "qa");
+  assert.equal(listed.find((unit) => unit.id === "project:shop:executor-shop").roleName, null);
+  assert.equal((await create({ unit: "longest", role: "custom", roleName: "n".repeat(60), roleDescription: "d".repeat(4000) })).status, 201);
+  const refused = [
+    { unit: "a1", role: "custom" },
+    { unit: "a2", role: "custom", roleName: "Only a name" },
+    { unit: "a3", role: "custom", roleDescription: "Only a description" },
+    { unit: "a4", role: "custom", roleName: "   ", roleDescription: "Blank name" },
+    { unit: "a5", role: "custom", roleName: "n".repeat(61), roleDescription: "Long name" },
+    { unit: "a6", role: "custom", roleName: "two\nlines", roleDescription: "Two lines" },
+    { unit: "a7", role: "custom", roleName: "Blank description", roleDescription: " \n " },
+    { unit: "a8", role: "custom", roleName: "Long description", roleDescription: "d".repeat(4001) },
+    { unit: "a9", role: "qa", roleName: "Not for a preset" },
+    { unit: "b1", role: "executor", roleDescription: "Not for a preset" },
+    { unit: "b2", role: "wizard" },
+  ];
+  for (const body of refused) {
+    const answer = await create(body);
+    assert.equal(answer.status, 422, JSON.stringify(body));
+    assert.equal(answer.body.error.code, "invalid_body", JSON.stringify(body));
+  }
+  assert.equal((await request(fixture, "GET", "/api/v1/units/root:a1")).status, 404);
+});
+
+test("a cluster agent takes a preset or a custom role through the contract and joins its cluster", async (context) => {
+  const fixture = await open(context);
+  const mutate = (method, route, body) => request(fixture, method, `/api/v1${route}`, { body, key: randomUUID() });
+  const cluster = (await mutate("POST", "/clusters", { title: "Ideas", parentId: null, link: { kind: "none" }, machine: "DESKTOP", confirmed: true })).body.data;
+  const runsIn = { client: "codex", model: "observed", effort: "high", mode: null };
+  const revision = async () => (await request(fixture, "GET", `/api/v1/clusters/${cluster.id}`)).body.data.revision;
+  const agent = async (body, expectedRevision) => mutate("POST", `/clusters/${cluster.id}/agents`, { machine: "DESKTOP", runsIn, useAsDefault: false, expectedRevision: expectedRevision ?? await revision(), ...body });
+  const preset = await agent({ role: "code-reviewer" });
+  assert.equal(preset.status, 201);
+  assert.equal(preset.body.data.role, "code-reviewer"); assert.equal(preset.body.data.roleName, null); assert.deepEqual(preset.body.data.runsIn, runsIn);
+  const custom = await agent({ role: "custom", roleName: "Release captain", roleDescription: "Cuts the release.\nChecks the notes." });
+  assert.equal(custom.status, 201);
+  assert.equal(custom.body.data.roleName, "Release captain"); assert.equal(custom.body.data.roleDescription, "Cuts the release.\nChecks the notes.");
+  const again = await agent({ role: "custom", roleName: "Release captain", roleDescription: "A second captain." });
+  assert.equal(again.status, 201); assert.notEqual(again.body.data.id, custom.body.data.id);
+  const members = (await request(fixture, "GET", `/api/v1/clusters/${cluster.id}`)).body.data.members;
+  assert.deepEqual([...members].sort(), [preset.body.data.id, custom.body.data.id, again.body.data.id].sort());
+  const listed = (await request(fixture, "GET", "/api/v1/units?limit=200")).body.data.items;
+  assert.equal(listed.find((unit) => unit.id === custom.body.data.id).roleName, "Release captain");
+  assert.equal(listed.find((unit) => unit.id === preset.body.data.id).role, "code-reviewer");
+  const expected = await revision();
+  const refused = [
+    [{ role: "overseer" }, 422, "invalid_role"], [{ role: "wizard" }, 422, "invalid_role"],
+    [{ role: "custom" }, 422, "invalid_body"], [{ role: "custom", roleName: "Name only" }, 422, "invalid_body"],
+    [{ role: "custom", roleName: "n".repeat(61), roleDescription: "Long name" }, 422, "invalid_body"],
+    [{ role: "custom", roleName: "two\nlines", roleDescription: "Two lines" }, 422, "invalid_body"],
+    [{ role: "custom", roleName: "Long description", roleDescription: "d".repeat(4001) }, 422, "invalid_body"],
+    [{ role: "writer", roleName: "Not for a preset", roleDescription: "Not for a preset" }, 422, "invalid_body"],
+    [{ role: "executor", roleDescription: "Not for a preset" }, 422, "invalid_body"],
+    [{ role: "qa", nickname: "Unknown field" }, 400, "unknown_field"],
+  ];
+  for (const [body, status, code] of refused) {
+    const answer = await agent(body, expected);
+    assert.equal(answer.status, status, JSON.stringify(body)); assert.equal(answer.body.error.code, code, JSON.stringify(body));
+  }
+  const stale = await agent({ role: "qa" }, "0".repeat(64));
+  assert.equal(stale.status, 409); assert.equal(stale.body.error.code, "cluster_changed");
+  assert.equal((await mutate("POST", `/clusters/${randomUUID()}/agents`, { machine: "DESKTOP", role: "qa", runsIn, useAsDefault: false, expectedRevision: expected })).status, 404);
+  assert.equal((await request(fixture, "GET", `/api/v1/clusters/${cluster.id}`)).body.data.members.length, 3);
+});
+
 test("fixture trees stay inside their root and reject outside cleanup", async () => {
   const tree = await createFixtureTree();
   const seeded = await seedRecords(tree, { scenario: "standard" });

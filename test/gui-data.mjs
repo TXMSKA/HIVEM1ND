@@ -135,7 +135,8 @@ export async function seedFinalRepositories(fixture) {
   return { repositories, shop, worktree, calls, gitRunner };
 }
 
-const ROLES = new Set(["overseer", "adjutant", "executive", "overlord", "executor", "incubator", "genesis", "master"]);
+const ROLES = new Set(["overseer", "adjutant", "executive", "overlord", "executor", "incubator", "genesis", "master",
+  "ux-designer", "ui-designer", "writer", "game-designer", "security-consultant", "qa", "code-reviewer", "product-manager", "custom"]);
 
 export function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");

@@ -68,7 +68,7 @@ import {
   startWatch,
   stopWatch,
 } from "./editors.mjs";
-import { activateUnit, buildHierarchy, collapseNewClusters, flattenVisibleHierarchy, hierarchyDisclosure, hierarchyIcon, listedWorktrees, pathFolder, readableIdentity, revealGroup, toggleGroup, unitDisplayName, unitsForTree } from "./hierarchy.mjs";
+import { activateUnit, buildHierarchy, collapseNewClusters, flattenVisibleHierarchy, hierarchyDisclosure, hierarchyIcon, listedWorktrees, pathFolder, readableIdentity, revealGroup, toggleGroup, unitDisplayName, unitRoleName, unitsForTree } from "./hierarchy.mjs";
 import { checkoutFacts, openTaskDetail, renderApproval, renderGrants, renderMachine, renderSession, renderTask, renderUnit, renderWaiting } from "./inspector.mjs";
 import { cardinal, formatClock, formatNumber, formatShortTime, text } from "./i18n.mjs";
 import { collectPages, createPagedList, loadAll, reloadList, renderWindow, setQuery, windowRange } from "./lists.mjs";
@@ -82,7 +82,7 @@ import { assetIdentity, plainCaretFromSource, plainOffsets, plainText, sourceBou
 import { close as closeStream, resetCredentials, synchronize } from "./stream.mjs";
 import * as startApi from './start-api.mjs';
 import { startText } from './start-copy.mjs';
-import { acceptedRepositoryCluster, clientLabel, clusterLead, initialRunsIn, repositorySelection, renderAgentForm, renderClusterForm, renderRepositoryOffer, renderRunsInPicker, runsInLabel, startDialog, supervisedClient } from './clusters.mjs';
+import { acceptedRepositoryCluster, clientLabel, clusterLead, customRoleProblems, initialRunsIn, repositorySelection, renderAgentForm, renderClusterForm, renderRepositoryOffer, renderRunsInPicker, runsInLabel, startDialog, supervisedClient } from './clusters.mjs';
 import { renderAgentHeader, renderCluster, renderClusterChanges } from './inspector.mjs';
 import { fitMap, flyToCluster } from './map.mjs';
 import { changeContext, createSessionView, loadSessionView, loadTranscriptPage, renderContext, renderSessionTabs, renderSessionWork, renderStartedWith } from './session-work.mjs';
@@ -3811,23 +3811,39 @@ async function openStartAgent(app, cluster, overseer = false) {
   if (app.disposed || app.startDialog) return;
   const clients = app.startAgents?.connectedClients ?? [], preferred = app.startAgents?.defaultRunsIn;
   const model = { language: app.language, kind: overseer ? 'overseer' : 'agent', agentKind: preferred?.client === 'lyra' ? 'local' : 'external',
-    cluster, role: 'executor', clients, choice: initialRunsIn(clients, preferred, overseer ? preferred?.client === 'lyra' ? 'local' : 'external' : null), fresh: true, useAsDefault: false,
+    cluster, role: 'executor', roleName: '', roleDescription: '', roleProblems: {}, clients, choice: initialRunsIn(clients, preferred, overseer ? preferred?.client === 'lyra' ? 'local' : 'external' : null), fresh: true, useAsDefault: false,
     automatic: false };
   const anchor = app.root.querySelector('[data-action="new-agent"]');
   let flow, retained = null, created = null, defaultOperation = null, granted = false, grantOperation = null;
   const cancel = () => { if (flow.busy || flow.uncertain) return; if (overseer) rememberOverseerOffer(app); flow.dialog.close(); };
+  // A custom role is checked before anything is sent; the problems show under their fields and the first one takes focus.
+  const roleReady = () => {
+    if (overseer || model.role !== 'custom') return true;
+    model.roleProblems = customRoleProblems(model.roleName, model.roleDescription);
+    const first = Object.keys(model.roleProblems)[0];
+    if (!first) return true;
+    flow.paint(); flow.dialog.querySelector(`[data-start-field="${first}"]`)?.focus?.();
+    return false;
+  };
   flow = startDialog(app.root.ownerDocument, { view: overseer ? 'overseer' : 'agent', language: app.language, anchor: overseer ? null : anchor,
     onCancel: cancel, onClose: () => { if (app.startDialog === flow) app.startDialog = null; }, render: () => renderAgentForm(app.root.ownerDocument, model, {
       onKind: kind => { model.agentKind = kind; model.choice = initialRunsIn(clients, null, kind); flow.paint(); },
-      onRole: role => { model.role = role; flow.paint(); }, onFresh: value => { model.fresh = value; },
+      onRole: role => {
+        model.role = role; model.roleProblems = {}; flow.paint();
+        // The Custom fields open below a long list; they are brought into view.
+        if (role === 'custom') flow.dialog.querySelector('[data-custom-role]')?.scrollIntoView?.({ block: 'nearest' });
+      },
+      onFresh: value => { model.fresh = value; },
+      onRoleName: value => { model.roleName = value; delete model.roleProblems.roleName; },
+      onRoleDescription: value => { model.roleDescription = value; delete model.roleProblems.roleDescription; },
       onPicker: () => openRunsPicker(app, model, () => { model.agentKind = model.choice?.client === 'lyra' ? 'local' : 'external'; flow.paint(); }, flow.dialog.querySelector('[data-action="open-runs-picker"]')),
       onConnect: () => { flow.dialog.close(); settingsState(app).tab = 'agents'; navigate(app, 'settings'); },
       onCancel: cancel,
-      onCreate: () => flow.run('create-agent', async () => {
+      onCreate: () => roleReady() && flow.run('create-agent', async () => {
         let result;
         try {
           result = created ?? (overseer ? await startApi.createOverseer(app.api, { machine: startMachine(app), runsIn: model.choice, fresh: model.fresh, expectedRevision: null }, retained)
-            : await startApi.createClusterAgent(app.api, cluster.id, { machine: startMachine(app), role: model.role, runsIn: model.choice, useAsDefault: model.useAsDefault, expectedRevision: cluster.revision }, retained));
+            : await startApi.createClusterAgent(app.api, cluster.id, { machine: startMachine(app), role: model.role, roleName: model.roleName.trim(), roleDescription: model.roleDescription.trim(), runsIn: model.choice, useAsDefault: model.useAsDefault, expectedRevision: cluster.revision }, retained));
           created = result;
           if (overseer && model.useAsDefault) {
             try { result = await startApi.setRunsIn(app.api, result.data.id, { machine: startMachine(app), runsIn: result.data.runsIn, useAsDefault: true, expectedRevision: result.data.revision }, defaultOperation); }
@@ -4346,6 +4362,7 @@ function finishMap(app) {
     zoom: text(app.language, 'finalZoom'), zoomReset: text(app.language, 'finalZoomReset'),
     incubator: text(app.language, 'finalIncubator'), genesis: text(app.language, 'finalGenesis'),
     drag: startText(app.language, 'drag'), unread: count => startText(app.language, 'unread', { count }),
+    roleName: node => unitRoleName(node, app.language),
     inside: (name, count) => startText(app.language, 'inside', { name, count }),
   };
   renderMap(app.root.ownerDocument, host, app.mapState, app.mapState.labels);
@@ -4446,7 +4463,8 @@ function collectionRows(app, t, list) {
     if (row.kind === "unit") {
       const scope = row.unit.scope?.name;
       const name = labels.get(row.label) > 1 && scope ? `${row.label} · ${scope}` : row.label;
-      row.text = `${name} ${t(statusKey(row.unit.status))}`;
+      const roleText = unitRoleName(row.unit, app.language);
+      row.text = `${name}${roleText ? ` (${roleText})` : ''} ${t(statusKey(row.unit.status))}`;
     } else if (row.labelKey === 'clusters' || row.labelKey === 'more') row.text = startText(app.language, row.labelKey, { count: row.count });
     else if (row.labelKey === "showMore") row.text = t("showMore", { count: formatNumber(app.language, row.count) });
     else if (row.labelKey) row.text = t(row.labelKey);
@@ -6134,6 +6152,9 @@ function decorateHierarchy(app, host) {
         title.style.paddingLeft = `${row.depth * 16}px`;
         title.append(unitNameNode(document, row.unit));
         if (row.unit.role === "overseer") title.append(element(document, "span", { class: "hierarchy-sub", text: startText(app.language, "above") }));
+        // A role the icon does not tell apart is named under the unit.
+        const roleText = unitRoleName(row.unit, app.language);
+        if (roleText) title.append(element(document, "span", { class: "hierarchy-sub hierarchy-role", "data-unit-role": row.unit.role, text: roleText }));
         const glyph = icon(document, hierarchyIcon(row.unit));
         glyph.style.gridColumn = "2";
         const status = element(document, "i", { class: "map-status row-status", "data-status": row.unit.status, role: "img", "aria-label": t(statusKey(row.unit.status)) });
@@ -6891,7 +6912,7 @@ function chatPanel(app, t) {
     const descriptor = sessionView.session.startedWith;
     transcript.append(renderStartedWith(document, descriptor, app.language, { open: sessionView.startedOpen,
       onToggle: open => { sessionView.startedOpen = open; }, cluster: app.store.indexes.groups.get(subject.clusterId)?.title ?? subject.scope?.name ?? '',
-      task: app.store.indexes.tasks.get(descriptor.taskId)?.title ?? '' }));
+      task: app.store.indexes.tasks.get(descriptor.taskId)?.title ?? '', roleName: unitById(app, descriptor.unitId)?.roleName ?? null }));
   }
   const cards = planCards(app, thread.chat); let plansMounted = false;
   if (cards.length) panel.className += ' has-plans';

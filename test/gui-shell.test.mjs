@@ -45,6 +45,8 @@ import { registerNative } from '../engine/service/adapters.mjs';
 import { refreshPlan } from '../gui/app/plan-controller.mjs';
 import { element } from '../gui/app/components.mjs';
 import { runsInLabel } from '../gui/app/clusters.mjs';
+import { AGENT_ROLES } from '../gui/app/start-copy.mjs';
+import { hierarchyIcon } from '../gui/app/hierarchy.mjs';
 import { renderContext } from '../gui/app/session-work.mjs';
 
 test('R057 bar modes, waiting copy, destinations and shared buttons match the final controls', () => {
@@ -7391,4 +7393,134 @@ test("an agent with no conversation offers the composer and its first message op
     if (!posted) await new Promise((resolve) => setTimeout(resolve, 50));
   }
   assert.equal(posted, true, "The first message was not posted.");
+});
+
+// Opens the New agent dialog of a fresh cluster in the fixture app and records every agent creation the app sends.
+async function openNewAgent(t) {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const group = (await createGroup(apiFrom(fixture.desktopUrl), 'Ideas', ['project:shop:executor-shop'])).data;
+  const sent = [];
+  const desktop = await bootApp(fixture.desktopUrl, 1440, [], async (input, init) => {
+    if (init?.method === 'POST' && String(input).endsWith(`/clusters/${group.id}/agents`)) sent.push(JSON.parse(init.body));
+  });
+  t.after(() => dispose(desktop.app));
+  desktop.app.startDialog?.dialog.close();
+  click(desktop.root.querySelector(`[data-cluster-row="${group.id}"]`));
+  await waitFor(() => desktop.root.querySelector(`[data-cluster-inspector="${group.id}"]`), 'The cluster did not open.');
+  click(desktop.root.querySelector("[data-action='new-agent']"));
+  await waitFor(() => desktop.document.querySelector("[data-start-dialog='agent']"), 'The agent choices did not open.');
+  return { ...desktop, fixture, group, sent, dialog: desktop.document.querySelector("[data-start-dialog='agent']") };
+}
+
+test('the mounted New agent dialog offers every preset and Custom, and a preset is sent without a name or description', async (t) => {
+  const { app, root, document, dialog, sent, group } = await openNewAgent(t);
+  for (const id of AGENT_ROLES) assert.ok(dialog.querySelector(`[data-action="choose-${id}"]`), id);
+  assert.equal(dialog.querySelector('[data-action="choose-executor"]').getAttribute('aria-pressed'), 'true');
+  assert.equal(dialog.querySelector('[data-custom-role]'), null);
+  click(dialog.querySelector('[data-action="choose-code-reviewer"]'));
+  assert.equal(dialog.querySelector('[data-action="choose-code-reviewer"]').getAttribute('aria-pressed'), 'true');
+  assert.equal(dialog.querySelector('[data-action="choose-executor"]').getAttribute('aria-pressed'), 'false');
+  assert.equal(dialog.querySelector('[data-custom-role]'), null);
+  await clickAndWait(dialog.querySelector('[data-action="create-agent"]'));
+  await waitFor(() => !app.startDialog && app.unitList.catalog.some(unit => unit.role === 'code-reviewer'), 'The preset agent was not created.');
+  assert.equal(sent.length, 1);
+  assert.deepEqual(Object.keys(sent[0]).sort(), ['expectedRevision', 'machine', 'role', 'runsIn', 'useAsDefault']);
+  assert.equal(sent[0].role, 'code-reviewer');
+  const made = app.unitList.catalog.find(unit => unit.role === 'code-reviewer');
+  assert.equal(made.roleName, null);
+  await waitFor(() => root.querySelector(`[data-unit-id="${made.id}"]`), 'The new agent did not reach the Map.');
+  // The Map draws its own mark and names the role in the tooltip; the inspector says it in the Role line.
+  const node = root.querySelector(`[data-unit-id="${made.id}"]`);
+  assert.ok(node.querySelector(`[data-role-icon="${hierarchyIcon(made)}"]`));
+  assert.equal(node.getAttribute('title'), 'Code reviewer');
+  assert.ok(root.querySelectorAll('p').some(node => node.textContent === 'Role: Code reviewer'));
+});
+
+test('the mounted Custom role is checked inline, sent with its name and description, and shown as that name everywhere', async (t) => {
+  const { app, root, document, dialog, sent, group } = await openNewAgent(t);
+  const description = 'Cuts the release.\nChecks the notes before every tag.';
+  click(dialog.querySelector('[data-action="choose-custom"]'));
+  const name = () => dialog.querySelector('[data-start-field="roleName"]'), area = () => dialog.querySelector('[data-start-field="roleDescription"]');
+  assert.ok(name() && area());
+  assert.equal(name().getAttribute('maxlength'), '60'); assert.equal(area().getAttribute('maxlength'), '4000');
+  assert.equal(dialog.querySelector('[data-role-count]').textContent, '0 of 4000');
+  // Nothing typed: both problems show under their fields, focus goes to the first and nothing is sent.
+  click(dialog.querySelector('[data-action="create-agent"]'));
+  assert.deepEqual(dialog.querySelectorAll('[data-role-error]').map(node => node.getAttribute('data-role-error')), ['roleName', 'roleDescription']);
+  assert.equal(document.activeElement, name());
+  assert.equal(name().getAttribute('aria-invalid'), 'true');
+  assert.equal(sent.length, 0); assert.equal(app.startDialog?.dialog, dialog);
+  // Editing a field clears only its own message.
+  typeInput(name(), 'n'.repeat(60), 60, 60);
+  assert.equal(dialog.querySelector('[data-role-error="roleName"]').textContent, '');
+  assert.notEqual(dialog.querySelector('[data-role-error="roleDescription"]').textContent, '');
+  typeInput(area(), description, 5, 5);
+  assert.equal(dialog.querySelector('[data-role-error="roleDescription"]').textContent, '');
+  assert.equal(dialog.querySelector('[data-role-count]').textContent, `${description.length} of 4000`);
+  // The values survive switching to a preset and back.
+  click(dialog.querySelector('[data-action="choose-qa"]'));
+  assert.equal(dialog.querySelector('[data-custom-role]'), null);
+  click(dialog.querySelector('[data-action="choose-custom"]'));
+  assert.equal(name().value, 'n'.repeat(60)); assert.equal(area().value, description);
+  // A name over the limit cannot be typed in a browser, but a pasted value is still checked before it is sent.
+  typeInput(name(), 'n'.repeat(61), 61, 61);
+  click(dialog.querySelector('[data-action="create-agent"]'));
+  assert.equal(dialog.querySelector('[data-role-error="roleName"]').textContent, 'The name can have up to 60 characters.');
+  assert.equal(sent.length, 0);
+  typeInput(name(), '  Release captain ', 18, 18);
+  await clickAndWait(dialog.querySelector('[data-action="create-agent"]'));
+  await waitFor(() => !app.startDialog && sent.length === 1 && app.unitList.catalog.some(unit => unit.role === 'custom'), 'The custom agent was not created.');
+  assert.deepEqual({ ...sent[0], runsIn: undefined, expectedRevision: undefined, machine: undefined },
+    { role: 'custom', roleName: 'Release captain', roleDescription: description, useAsDefault: false, runsIn: undefined, expectedRevision: undefined, machine: undefined });
+  assert.ok(sent[0].runsIn && sent[0].expectedRevision && sent[0].machine);
+  const made = app.unitList.catalog.find(unit => unit.role === 'custom');
+  assert.equal(made.roleName, 'Release captain'); assert.equal(made.roleDescription, description);
+  await waitFor(() => app.store.indexes.groups.get(group.id).members.includes(made.id), 'The cluster did not take its new agent.');
+  await waitFor(() => root.querySelector(`[data-unit-id="${made.id}"]`), 'The new agent did not reach the Map.');
+  const node = root.querySelector(`[data-unit-id="${made.id}"]`);
+  assert.equal(node.getAttribute('data-role'), 'custom');
+  assert.equal(node.getAttribute('title'), 'Release captain');
+  assert.ok(node.querySelector(`[data-role-icon="${hierarchyIcon(made)}"]`));
+  assert.ok(root.querySelectorAll('p').some(node => node.textContent === 'Role: Release captain'));
+});
+
+test('the Hierarchy names a custom or preset role under the unit and a role the app does not know stays a plain agent', async (t) => {
+  const fixture = await createGuiFixture({ seed: async ({ tree }) => {
+    const state = (unit, role, extra = []) => [`unit: ${unit}`, `unit-id: root:${unit}`, `role: ${role}`, ...extra, 'state: in', 'machine: DESKTOP',
+      `runs-in: ${JSON.stringify({ client: 'cursor', model: 'fixture-model', effort: 'high', mode: null })}`, 'date: 2026-10-10 09:00', '', 'Ready.', ''].join('\n');
+    await mkdir(join(tree.user, 'state'), { recursive: true });
+    await writeFile(join(tree.user, 'state', 'captain.md'), state('captain', 'custom', ['role-name: Release captain', `role-description: ${JSON.stringify('Cuts the release.\nChecks the notes.')}`]));
+    await writeFile(join(tree.user, 'state', 'tester.md'), state('tester', 'qa'));
+    await writeFile(join(tree.user, 'state', 'plain.md'), state('plain', 'executor'));
+  } });
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.unitList?.catalog?.some(unit => unit.id === 'root:captain'), 'The seeded units did not load.');
+  const captain = desktop.app.unitList.catalog.find(unit => unit.id === 'root:captain');
+  assert.equal(captain.role, 'custom'); assert.equal(captain.roleName, 'Release captain'); assert.equal(captain.roleDescription, 'Cuts the release.\nChecks the notes.');
+  assert.equal(desktop.app.unitList.catalog.find(unit => unit.id === 'root:tester').roleName, null);
+  await waitFor(() => desktop.root.querySelector('[data-unit-role="custom"]'), 'The Hierarchy did not name the custom role.');
+  assert.equal(desktop.root.querySelector('[data-unit-role="custom"]').textContent, 'Release captain');
+  assert.equal(desktop.root.querySelector('[data-unit-role="qa"]').textContent, 'QA');
+  assert.equal(desktop.root.querySelector('[data-unit-role="executor"]'), null);
+  const rows = desktop.app.activeRows.filter(row => row.kind === 'unit');
+  assert.ok(rows.find(row => row.unit.id === 'root:captain').text.startsWith('captain (Release captain) '));
+  assert.ok(rows.find(row => row.unit.id === 'root:plain').text.startsWith('plain '));
+  // The Spanish names come from the same table.
+  desktop.app.language = 'es'; renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector('[data-unit-role="qa"]').textContent, 'QA');
+  assert.equal(desktop.root.querySelector('[data-unit-role="custom"]').textContent, 'Release captain');
+  // The inspector says it in the Role line, and a role the app does not know is a plain agent, never its id.
+  const english = (key, values) => text('en', key, values);
+  const line = unit => renderUnit(desktop.document, unit, english, 'en').querySelectorAll('p').find(node => node.textContent.startsWith('Role')).textContent;
+  assert.equal(line(captain), 'Role: Release captain');
+  assert.equal(line({ unit: 'a', role: 'custom', roleName: null }), 'Role: Custom');
+  assert.equal(line({ unit: 'a', role: 'product-manager' }), 'Role: Product manager');
+  assert.equal(line({ unit: 'a', role: 'wizard' }), 'Role: Agent');
+  assert.equal(line({ unit: 'a', role: 'constructor' }), 'Role: Agent');
+  assert.equal(line({ unit: 'a', role: 'agent' }), 'Role: Agent');
+  assert.equal(line({ unit: 'a' }), 'Role: Unknown');
+  assert.equal(renderUnit(desktop.document, { unit: 'a', role: 'wizard' }, (key, values) => text('es', key, values), 'es').querySelectorAll('p').find(node => node.textContent.startsWith('Rol')).textContent, 'Rol: Agente');
 });

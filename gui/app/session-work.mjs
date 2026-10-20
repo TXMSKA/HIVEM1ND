@@ -1,7 +1,7 @@
 import { createOperation, request } from './api.mjs';
 import { element, icon, progressMark } from './components.mjs';
 import { formatClock } from './i18n.mjs';
-import { startText } from './start-copy.mjs';
+import { roleLabel, startText } from './start-copy.mjs';
 
 export function createSessionView(session) {
   return { session, tab: 'chat', work: [], nextCursor: null, workLoaded: false, scrollTop: 0,
@@ -65,13 +65,14 @@ export function renderSessionTabs(document, view, language, onChange) {
   return root;
 }
 
-export function renderStartedWith(document, descriptor, language, { open = false, onToggle, cluster = '', task = '' } = {}) {
+export function renderStartedWith(document, descriptor, language, { open = false, onToggle, cluster = '', task = '', roleName = null } = {}) {
   if (!descriptor) return null;
   const t = (key, values) => startText(language, key, values);
   const root = element(document, 'details', { class: 'started-with', 'data-started-with': 'true', ...(open ? { open: '' } : {}),
     ontoggle: () => onToggle?.(root.open) });
-  const role = descriptor.role ?? '';
-  const clusterName = cluster || (role === 'overseer' ? t('everyCluster') : '');
+  // The role reads as a name: a custom role by the name its person gave it, a role the app does not know as an agent.
+  const role = roleLabel(language, descriptor.role, roleName ?? descriptor.roleName);
+  const clusterName = cluster || (descriptor.role === 'overseer' ? t('everyCluster') : '');
   const taskName = task || '';
   const summary = clusterName && taskName ? t('startedSummary', { role, cluster: clusterName, task: taskName })
     : clusterName ? t('startedNoTask', { role, cluster: clusterName })

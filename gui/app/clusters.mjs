@@ -1,6 +1,6 @@
 import { element, icon, labelDialog, progressMark } from './components.mjs';
 import { pathFolder } from './hierarchy.mjs';
-import { startText } from './start-copy.mjs';
+import { AGENT_ROLES, ROLE_DESCRIPTION_MAX, ROLE_NAME_MAX, roleHint, roleLabel, startText } from './start-copy.mjs';
 
 export function connectedChoices(clients = []) {
   return clients.filter(client => client.connected === true);
@@ -114,6 +114,17 @@ function options(document, items, selected, onChoose) {
   ).map((node, index) => { node.setAttribute('aria-pressed', String(items[index].id === selected)); return node; }));
 }
 
+// The two fields of a custom role, checked the way the service checks them. Each problem is the copy key of its message.
+export function customRoleProblems(name, description) {
+  const label = String(name ?? '').trim(), text = String(description ?? '').trim(), problems = {};
+  if (!label) problems.roleName = 'roleNameRequired';
+  else if (/[\u0000-\u001f\u007f]/.test(label)) problems.roleName = 'roleNameLine';
+  else if (label.length > ROLE_NAME_MAX) problems.roleName = 'roleNameLong';
+  if (!text) problems.roleDescription = 'roleDescriptionRequired';
+  else if (text.length > ROLE_DESCRIPTION_MAX) problems.roleDescription = 'roleDescriptionLong';
+  return problems;
+}
+
 export function renderRepositoryOffer(document, model, actions) {
   const t = (key, values) => startText(model.language, key, values);
   const count = repositorySelection(model.offer).size;
@@ -202,6 +213,39 @@ export function renderRunsInPicker(document, model, actions) {
   return root;
 }
 
+// Every role a person can pick for a new agent, each with a line saying what it does.
+function roleOptions(document, model, actions) {
+  return element(document, 'div', { class: 'start-roles', role: 'group', 'aria-label': startText(model.language, 'role') }, AGENT_ROLES.map(id => {
+    const node = button(document, '', `choose-${id}`, () => actions.onRole(id));
+    node.className = 'role-option'; node.setAttribute('aria-pressed', String(id === model.role));
+    // DOM append writes a null child as the text "null", so only real children are passed.
+    node.append(...[element(document, 'span', {}, element(document, 'strong', { text: roleLabel(model.language, id) }), element(document, 'small', { text: roleHint(model.language, id) })),
+      id === model.role ? element(document, 'span', { 'aria-hidden': 'true', text: '✓' }) : null].filter(Boolean));
+    return node;
+  }));
+}
+
+// Custom asks for a name and a description. A problem found on Create shows under its field and clears when the field is edited.
+function customRoleFields(document, model, actions, t) {
+  const problems = model.roleProblems ?? {};
+  const note = field => problems[field] ? element(document, 'p', { class: 'field-error', id: `${field}-error`, role: 'alert', 'data-role-error': field,
+    text: t(problems[field], { max: field === 'roleName' ? ROLE_NAME_MAX : ROLE_DESCRIPTION_MAX }) }) : null;
+  const marked = (control, error) => { if (error) { control.setAttribute('aria-invalid', 'true'); control.setAttribute('aria-describedby', error.getAttribute('id')); } return control; };
+  const clear = (control, error) => { if (error) { error.textContent = ''; control.setAttribute('aria-invalid', 'false'); } };
+  const nameError = note('roleName'), descriptionError = note('roleDescription');
+  const name = marked(element(document, 'input', { name: 'roleName', 'data-start-field': 'roleName', maxlength: ROLE_NAME_MAX, autocomplete: 'off',
+    oninput: () => { actions.onRoleName(name.value); clear(name, nameError); } }), nameError);
+  name.value = model.roleName ?? '';
+  const area = marked(element(document, 'textarea', { name: 'roleDescription', 'data-start-field': 'roleDescription', maxlength: ROLE_DESCRIPTION_MAX, rows: 5,
+    oninput: () => { actions.onRoleDescription(area.value); count.textContent = t('roleCount', { count: area.value.length, max: ROLE_DESCRIPTION_MAX }); clear(area, descriptionError); } }), descriptionError);
+  area.value = model.roleDescription ?? '';
+  const count = element(document, 'small', { class: 'field-count', 'data-role-count': 'true', text: t('roleCount', { count: area.value.length, max: ROLE_DESCRIPTION_MAX }) });
+  return element(document, 'div', { class: 'start-custom-role', 'data-custom-role': 'true' },
+    element(document, 'label', { class: 'field' }, element(document, 'span', { class: 'field-label', text: t('roleName') }), name), nameError,
+    element(document, 'label', { class: 'field' }, element(document, 'span', { class: 'field-label', text: t('roleDescription') }), area),
+    element(document, 'div', { class: 'field-meta' }, element(document, 'span', { class: 'field-hint', text: t('roleDescriptionHint') }), count), descriptionError);
+}
+
 export function renderAgentForm(document, model, actions) {
   const t = (key, values) => startText(model.language, key, values);
   const overseer = model.kind === 'overseer';
@@ -215,7 +259,10 @@ export function renderAgentForm(document, model, actions) {
         node.append(icon(document, kind === 'local' ? 'genesis' : 'executor'), element(document, 'strong', { text: t(kind) }), element(document, 'small', { text: t(`${kind}Hint`) }));
         return node;
       })));
-  } else root.append(options(document, ['executor', 'overlord'].map(id => ({ id, label: t(id) })), model.role, actions.onRole));
+  } else {
+    root.append(roleOptions(document, model, actions));
+    if (model.role === 'custom') root.append(customRoleFields(document, model, actions, t));
+  }
   // With no agent connected the picker has nothing to offer, so the field says so and leads to Settings, Agents.
   const none = !(model.clients ?? []).length;
   const runs = button(document, none ? t('noConnectedAgent') : runsInLabel(model.choice, model.clients, model.language) || t('unavailable'), 'open-runs-picker', actions.onPicker);
@@ -255,7 +302,13 @@ export function renderClusterForm(document, model, actions) {
 export function startDialog(document, { view, render, language, anchor = null, onCancel = null, onClose = null }) {
   const invoker = document.activeElement;
   const dialog = element(document, 'dialog', { class: `start-dialog start-${view}`, 'data-start-dialog': view });
-  let busy = false, uncertain = false;
+  let busy = false, uncertain = false, placed = false;
+  // The form grows when Custom opens its fields. An anchored dialog moves up to stay on screen and never moves back down.
+  const keepInView = () => {
+    const viewport = document.defaultView, box = dialog.getBoundingClientRect?.(), top = Number.parseFloat(dialog.style.top);
+    if (!viewport || !Number.isFinite(box?.height) || !Number.isFinite(top)) return;
+    dialog.style.top = `${Math.max(16, Math.min(top, viewport.innerHeight - box.height - 16))}px`;
+  };
   const paint = () => {
     const active = document.activeElement;
     const field = active?.getAttribute?.('data-start-field');
@@ -267,12 +320,13 @@ export function startDialog(document, { view, render, language, anchor = null, o
     const replacement = field ? dialog.querySelector(`[data-start-field="${field}"]`) : action ? dialog.querySelector(`[data-action="${action}"]`) : null;
     replacement?.focus?.();
     if (field && selection.every(Number.isInteger)) replacement?.setSelectionRange?.(...selection);
+    if (placed) keepInView();
   };
   const run = async (action, work) => {
     if (busy) return;
     busy = true;
     dialog.querySelector('[data-start-error]')?.remove();
-    const controls = [...dialog.querySelectorAll('button, input, select')];
+    const controls = [...dialog.querySelectorAll('button, input, select, textarea')];
     const enabled = controls.filter(node => !node.disabled);
     for (const node of enabled) node.disabled = true;
     const control = dialog.querySelector(`[data-action="${action}"]`);
@@ -284,7 +338,7 @@ export function startDialog(document, { view, render, language, anchor = null, o
       paint();
       uncertain = Boolean(error.operation && (!error.status || error.status >= 500));
       if (uncertain) {
-        for (const node of dialog.querySelectorAll('button, input, select')) if (node.getAttribute('data-action') !== action) node.disabled = true;
+        for (const node of dialog.querySelectorAll('button, input, select, textarea')) if (node.getAttribute('data-action') !== action) node.disabled = true;
       }
       dialog.append(element(document, 'p', { role: 'alert', 'data-start-error': error.code ?? 'request_failed', text: error.message || startText(language, 'unavailable') }));
       dialog.querySelector(`[data-action="${action}"]`)?.focus?.();
@@ -321,12 +375,13 @@ export function startDialog(document, { view, render, language, anchor = null, o
     if (rect && viewport) {
       dialog.style.margin = '0';
       // The picker opens under its field, edge to edge with it; other anchored dialogs end at their button's right edge.
-      const width = view === 'picker' ? Math.max(480, Math.min(rect.width, viewport.innerWidth - 32)) : 320;
+      const width = view === 'picker' ? Math.max(480, Math.min(rect.width, viewport.innerWidth - 32)) : view === 'agent' ? 400 : 320;
       if (view === 'picker') dialog.style.width = `${width}px`;
       // Without room to the right of the field the picker ends at the field's right edge instead.
       const start = view === 'picker' && rect.left + width <= viewport.innerWidth - 16 ? rect.left : rect.right - width;
       dialog.style.left = `${Math.max(16, Math.min(viewport.innerWidth - width - 16, start))}px`;
       dialog.style.top = `${Math.max(16, Math.min(viewport.innerHeight - dialog.getBoundingClientRect().height - 16, rect.bottom + 8))}px`;
+      placed = true;
     }
   }
   dialog.querySelector('input, button')?.focus?.();

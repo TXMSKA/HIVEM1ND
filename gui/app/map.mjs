@@ -1,6 +1,6 @@
 import { createOperation, request as apiRequest, retryOperation } from "./api.mjs";
 import { clusterGlyph, icon } from "./components.mjs";
-import { unitDisplayName } from "./hierarchy.mjs";
+import { PRESET_ICON, unitDisplayName } from "./hierarchy.mjs";
 import {
   edgeEndpoints,
   clusterFrames,
@@ -181,6 +181,9 @@ export function renderMap(document, host, map, labels = {}) {
     button.className = ["map-node", node.person ? "is-person" : "", node.overseer ? "is-overseer" : "", node.lead ? "is-lead" : "", selected ? "is-selected" : ""].filter(Boolean).join(" ");
     button.setAttribute("aria-pressed", String(selected));
     button.setAttribute("data-role", node.role);
+    // A role the icon does not tell apart is named in the tooltip.
+    const roleText = labels.roleName?.(node);
+    if (roleText) button.setAttribute("title", roleText);
     button.setAttribute("data-ring", node.overseer ? "overseer" : node.lead ? "lead" : node.person ? "person" : "unit");
     if (selected) button.setAttribute("data-selected", "true");
     const mark = icon(document, roleIcon(node.role));
@@ -695,6 +698,7 @@ function visibleNodes(map) {
       alias: unit.alias,
       leadId: unit.leadId ?? null,
       role: unit.role ?? "",
+      roleName: unit.roleName ?? null,
       status: unit.status ?? "unknown",
       lead: unit.role !== "overseer" && leads.has(unit.id),
       overseer: unit.role === "overseer",
@@ -710,6 +714,8 @@ function roleIcon(role) {
   if (role === "adjutant") return "adjutant";
   if (role === "executive") return "executive";
   if (role === "genesis" || role === "incubator") return "genesis";
+  // A role the Map does not know keeps the plain agent mark.
+  if (typeof role === "string" && Object.hasOwn(PRESET_ICON, role)) return PRESET_ICON[role];
   return "executor";
 }
 

@@ -36,3 +36,16 @@ test('retry retains the approved plan revision and original operation identity',
   assert.equal(calls[0].key,calls[1].key);assert.deepEqual(calls[0].body,calls[1].body);
   assert.equal(calls[1].body.expectedRevision,'approved-revision');
 });
+test('a cluster agent sends its role name and description only for a custom role, and a retry keeps them',async()=>{
+  const{api,calls}=fixture([200,503,201]);
+  const base={machine:'DESKTOP',runsIn:choice,useAsDefault:false,expectedRevision:'r'};
+  await ops.createClusterAgent(api,id,{...base,role:'qa',roleName:'Ignored',roleDescription:'Ignored'});
+  assert.deepEqual(calls[0].body,{machine:'DESKTOP',role:'qa',runsIn:choice,useAsDefault:false,expectedRevision:'r'});
+  assert.equal(calls[0].path,'/api/v1/clusters/'+id+'/agents');
+  let retained;
+  try{await ops.createClusterAgent(api,id,{...base,role:'custom',roleName:'Release captain',roleDescription:'Cuts the release.\nChecks the notes.'});}catch(error){retained=error.operation;}
+  assert.ok(retained);
+  assert.deepEqual(calls[1].body,{machine:'DESKTOP',role:'custom',runsIn:choice,useAsDefault:false,expectedRevision:'r',roleName:'Release captain',roleDescription:'Cuts the release.\nChecks the notes.'});
+  await ops.createClusterAgent(api,id,{...base,role:'custom',roleName:'Changed',roleDescription:'Changed'},retained);
+  assert.equal(calls[1].key,calls[2].key);assert.deepEqual(calls[1].body,calls[2].body);
+});

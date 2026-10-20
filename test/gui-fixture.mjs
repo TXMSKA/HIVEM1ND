@@ -29,7 +29,10 @@ const HOME_ADDRESSES = ["192.168.1.23", "192.168.1.24"];
 const HOME_CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 const DAY_MS = 86400000;
 const HOME_MS = 12 * 3600_000;
-const ROLES = new Set(["overseer", "adjutant", "executive", "overlord", "executor", "incubator", "genesis", "master"]);
+// The presets a person can pick for a cluster agent, and `custom`, which carries a name and a description of its own.
+const PRESET_ROLES = ["ux-designer", "ui-designer", "writer", "game-designer", "security-consultant", "qa", "code-reviewer", "product-manager"];
+const CLUSTER_ROLES = new Set(["executor", "overlord", ...PRESET_ROLES, "custom"]);
+const ROLES = new Set(["overseer", "adjutant", "executive", "overlord", "executor", "incubator", "genesis", "master", ...PRESET_ROLES, "custom"]);
 const DESKTOP_CAPS = ["read", "chat.post", "chat.manage", "mailbox.read", "approval.answer", "grant.revoke", "task.status", "task.undo", "unit.create", "unit.connect", "session.start", "session.stop", "layout.write", "settings.write", "home.manage", "editor.read", "editor.write", "comment.write", "proposal.answer", "asset.write", "watch", "viewer.write"];
 const PHONE_CAPS = ["read", "chat.post", "master.read", "approval.answer", "task.accept", "task.send-back"];
 const APP_FILES = ["index.html", "favicon.svg", "main.mjs", "api.mjs", "stream.mjs", "state.mjs", "i18n.mjs", "styles.css", "components.mjs", "lists.mjs", "map-geometry.mjs", "map.mjs", "hierarchy.mjs", "chats.mjs", "inspector.mjs", "actions.mjs", "settings.mjs", "qr.mjs", "qr-render.mjs", "phone.mjs", "embed.mjs", "editors.mjs", "blueprint.mjs", "void.mjs", "markup.mjs", "find-worker.mjs", "start-api.mjs", "start-copy.mjs", "cluster-geometry.mjs", "clusters.mjs", "plan-view.mjs", "session-work.mjs", "plan-controller.mjs"];
@@ -230,6 +233,14 @@ function quotaOf(session, now) {
   return session.quota;
 }
 
+// A custom role keeps its name and its description in the state file; the description is one JSON string.
+function storedCustomRole(fields) {
+  const name = field(fields, "role-name");
+  let description = null;
+  try { description = JSON.parse(field(fields, "role-description") ?? ""); } catch { /* A malformed description is no role. */ }
+  return name && typeof description === "string" && description ? { name, description } : null;
+}
+
 async function buildProjection(fx) {
   const user = fx.tree.user;
   const issues = [];
@@ -258,7 +269,8 @@ async function buildProjection(fx) {
       const id = field(parsed.fields, "unit-id");
       const role = field(parsed.fields, "role");
       const state = field(parsed.fields, "state");
-      const malformed = parsed.broken || !id || !ROLES.has(role) || (state !== "in" && state !== "out");
+      const custom = role === "custom" ? storedCustomRole(parsed.fields) : null;
+      const malformed = parsed.broken || !id || !ROLES.has(role) || (role === "custom" && !custom) || (state !== "in" && state !== "out");
       if (!id) {
         issues.push({ path: relMind(fx.tree.mind, file), code: "malformed_record", message: "The state record could not be read." });
         continue;
@@ -274,6 +286,8 @@ async function buildProjection(fx) {
         alias: field(parsed.fields, "alias")?.trim() || null,
         removed: field(parsed.fields, "removed") === "true",
         role: ROLES.has(role) ? role : role,
+        roleName: custom?.name ?? null,
+        roleDescription: custom?.description ?? null,
         scope: scope.kind === "root" ? { kind: "root", name: null } : { kind: scope.kind, name: scope.name },
         leadId: field(parsed.fields, "lead-id"),
         job: field(parsed.fields, "job"),
@@ -349,6 +363,8 @@ function publicUnit(unit) {
     alias: unit.alias ?? null,
     removed: unit.removed === true,
     role: unit.role,
+    roleName: unit.roleName ?? null,
+    roleDescription: unit.roleDescription ?? null,
     scope: unit.scope,
     leadId: unit.leadId,
     job: unit.job,
@@ -1987,6 +2003,7 @@ async function prepareFixtureAddition(fx, pattern, params, body, principal) {
 function routeTable() {
   return [
     { pattern: '/clusters', GET: { query: ['q', 'limit', 'cursor', 'machine'] }, POST: { capability: 'unit.create', validate: body => { requireObject(body, ['title', 'parentId', 'link', 'machine', 'confirmed']); groupTitle(body.title); if (body.confirmed !== true || body.machine !== LOCAL_MACHINE || body.link?.kind !== 'none') throw new HttpError(422, 'invalid_cluster', 'The cluster is not valid.'); } } },
+    { pattern: '/clusters/:clusterId/agents', POST: { capability: 'unit.create', validate: validateClusterAgent } },
     { pattern: '/clusters/:clusterId', GET: { query: ['machine'] }, DELETE: { capability: 'chat.manage', validate: body => { requireObject(body, ['machine', 'confirmed', 'expectedRevision']); if (body.confirmed !== true) throw new HttpError(422, 'confirmation_required', 'Confirm removal.'); } } },
     { pattern: '/additions', GET: { capability: 'settings.write', query: ['machine'] }, POST: { capability: 'settings.write', validate: fixtureAdditionValidator('apply') } },
     { pattern: '/additions/uploads', POST: { capability: 'settings.write', validate: fixtureAdditionValidator('upload'), runtime: true } },
@@ -3019,11 +3036,25 @@ function bearer(request) {
   return header.slice(7);
 }
 
+// The same rule as the service: a custom role takes a one-line name of 1 to 60 characters and a description of 1 to 4000; no other role takes either.
+function customRole(role, roleName, roleDescription) {
+  if (role !== "custom") {
+    if (roleName != null || roleDescription != null) throw new HttpError(422, "invalid_body", "Only a custom role takes a name and a description.");
+    return null;
+  }
+  const name = typeof roleName === "string" ? roleName.trim() : "";
+  if (!name || name.length > 60 || /[\u0000-\u001f\u007f]/.test(name)) throw new HttpError(422, "invalid_body", "A custom role needs a one-line name of up to 60 characters.");
+  const description = typeof roleDescription === "string" ? roleDescription.replace(/\r\n?/g, "\n").trim() : "";
+  if (!description || description.length > 4000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(description)) throw new HttpError(422, "invalid_body", "A custom role needs a description of up to 4000 characters.");
+  return { name, description };
+}
+
 function validateUnit(body) {
-  requireObject(body, ["unit", "role", "scope", "machine", "leadId", "job", "model", "position"]);
+  requireObject(body, ["unit", "role", "roleName", "roleDescription", "scope", "machine", "leadId", "job", "model", "position"]);
   requireKeys(body, ["unit", "role", "scope", "machine"]);
   if (typeof body.unit !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(body.unit)) throw new HttpError(422, "invalid_body", "The unit name is not valid.");
   if (!ROLES.has(body.role)) throw new HttpError(422, "invalid_body", "The role is not valid.");
+  customRole(body.role, body.roleName, body.roleDescription);
   if (!body.scope || typeof body.scope !== "object" || !["root", "environment", "project"].includes(body.scope.kind)) {
     throw new HttpError(422, "invalid_body", "The scope is not valid.");
   }
@@ -3032,6 +3063,16 @@ function validateUnit(body) {
   }
   if (typeof body.machine !== "string" || !body.machine) throw new HttpError(422, "invalid_body", "The machine is not valid.");
   if (body.position) coordinate(body.position, "unit");
+}
+
+function validateClusterAgent(body) {
+  requireObject(body, ["machine", "role", "roleName", "roleDescription", "runsIn", "useAsDefault", "expectedRevision"]);
+  requireKeys(body, ["machine", "role", "runsIn", "useAsDefault", "expectedRevision"]);
+  if (typeof body.machine !== "string" || !body.machine) throw new HttpError(422, "invalid_body", "The machine is not valid.");
+  if (!CLUSTER_ROLES.has(body.role)) throw new HttpError(422, "invalid_role", "A cluster agent has a preset role or a custom one.");
+  customRole(body.role, body.roleName, body.roleDescription);
+  if (!body.runsIn || typeof body.runsIn !== "object" || typeof body.useAsDefault !== "boolean") throw new HttpError(422, "invalid_body", "The request body is not valid.");
+  revisionField(body.expectedRevision);
 }
 
 function validateLead(body) {
@@ -3139,10 +3180,12 @@ function unitFile(user, body, id) {
 }
 
 function unitRecord(body, id) {
+  const custom = customRole(body.role, body.roleName, body.roleDescription);
   const lines = [
     `unit: ${body.unit}`,
     `unit-id: ${id}`,
     `role: ${body.role}`,
+    ...(custom ? [`role-name: ${custom.name}`, `role-description: ${JSON.stringify(custom.description)}`] : []),
     "state: in",
     `machine: ${body.machine}`,
   ];
@@ -3152,7 +3195,7 @@ function unitRecord(body, id) {
   }
   if (body.job) lines.push(`job: ${body.job}`);
   if (body.model) lines.push(`model: ${body.model}`);
-  lines.push(`runs-in: ${JSON.stringify({ client: 'cursor', model: 'fixture-model', effort: 'high', mode: null })}`);
+  lines.push(`runs-in: ${JSON.stringify(body.runsIn ?? { client: 'cursor', model: 'fixture-model', effort: 'high', mode: null })}`);
   lines.push("date: 2026-10-10 09:00");
   return `${lines.join("\n")}\n\n`;
 }
@@ -3203,10 +3246,14 @@ async function prepareUnit(fx, body) {
     events.push({ name: "layout.changed", global: true, data: { layout: next, revision: afterRevision } });
     position = body.position;
   }
+  const custom = customRole(body.role, body.roleName, body.roleDescription);
   const unit = {
     id,
     unit: body.unit,
     role: body.role,
+    roleName: custom?.name ?? null,
+    roleDescription: custom?.description ?? null,
+    ...(body.runsIn ? { runsIn: body.runsIn } : {}),
     scope: body.scope.kind === "root" ? { kind: "root", name: null } : { kind: body.scope.kind, name: body.scope.name },
     leadId: body.leadId ?? null,
     job: body.job ?? null,
@@ -3224,6 +3271,22 @@ async function prepareUnit(fx, body) {
   };
   events.push({ name: "unit.changed", unitId: id, data: { unit } });
   return { status: 201, data: unit, writes, events };
+}
+
+// A new agent of a cluster: its unit file, and the cluster takes it as a member.
+async function prepareClusterAgent(fx, clusterId, body) {
+  const snap = await projection(fx);
+  const cluster = snap.groups.find((group) => group.id === clusterId && !group.deleted);
+  if (!cluster) throw new HttpError(404, "cluster_not_found", "The cluster does not exist.");
+  if (cluster.revision !== body.expectedRevision) throw new HttpError(409, "cluster_changed", "The selected cluster changed before agent creation.");
+  const custom = customRole(body.role, body.roleName, body.roleDescription);
+  const slug = custom ? custom.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/, "") || "agent" : body.role;
+  const base = `${slug}-${cluster.id.slice(0, 8)}`;
+  let name = base, index = 2;
+  while (snap.units.some((unit) => unit.id === `root:${name}`)) name = `${base}-${index++}`;
+  const created = await prepareUnit(fx, { unit: name, role: body.role, roleName: body.roleName, roleDescription: body.roleDescription, scope: { kind: "root" }, machine: body.machine, runsIn: body.runsIn });
+  const joined = await prepareGroup(fx, clusterId, { members: [...cluster.members, created.data.id], expectedRevision: cluster.revision }, [created.data.id]);
+  return { status: 201, data: created.data, writes: [...created.writes, ...joined.writes], events: [...created.events, ...joined.events] };
 }
 
 async function prepareLead(fx, unitId, body) {
@@ -3465,13 +3528,13 @@ function fixtureWrite(file, before, after) {
     afterBytesBase64: after?.toString("base64") ?? null, ...(after === null ? { operation: "delete" } : {}) };
 }
 
-async function prepareGroup(fx, groupId, body) {
+async function prepareGroup(fx, groupId, body, pending = []) {
   const snap = await projection(fx);
   const existing = groupId ? snap.groups.find((group) => group.id === groupId && !group.deleted) : null;
   if (groupId && !existing) throw new HttpError(404, "group_not_found", "The group does not exist.");
   if (existing && existing.revision !== body.expectedRevision) throw new HttpError(409, "revision_conflict", "The group changed.");
   const members = [...(body.members ?? existing?.members ?? [])].sort();
-  if (members.some((id) => !snap.units.some((unit) => unit.id === id && !unit.removed && unit.role !== "master" && unit.revision))) throw new HttpError(422, "invalid_members", "A group member does not exist.");
+  if (members.some((id) => !pending.includes(id) && !snap.units.some((unit) => unit.id === id && !unit.removed && unit.role !== "master" && unit.revision))) throw new HttpError(422, "invalid_members", "A group member does not exist.");
   const title = "title" in body ? groupTitle(body.title) : existing.title;
   const id = groupId ?? uuid();
   const file = join(fx.tree.user, "gui", "groups", `${id}.json`);
@@ -5226,6 +5289,7 @@ async function prepareMutation(fx, pattern, params, body, principal, operationId
   if (pattern === "/editors/:resourceId") return prepareFixtureEditorLibrary(fx, "delete", params.resourceId, body);
   if (pattern === "/units/:unitId") return prepareUnitRemoval(fx, params.unitId, body);
   if (pattern === '/clusters') return prepareGroup(fx, null, { title: body.title, parentId: body.parentId, link: body.link, members: [] });
+  if (pattern === '/clusters/:clusterId/agents') return prepareClusterAgent(fx, params.clusterId, body);
   if (pattern === '/clusters/:clusterId') return prepareGroup(fx, params.clusterId, body);
   if (pattern === "/groups") return prepareGroup(fx, null, body);
   if (pattern === "/groups/:groupId") return prepareGroup(fx, params.groupId, body);

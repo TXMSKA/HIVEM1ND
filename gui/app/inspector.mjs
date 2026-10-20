@@ -3,7 +3,7 @@ import { clientLabel, clusterLead } from './clusters.mjs';
 import { element, icon, labeledField, pathIcon, progressMark } from "./components.mjs";
 import { formatWhen } from "./i18n.mjs";
 import { readableIdentity, unitDisplayName } from './hierarchy.mjs';
-import { startText } from './start-copy.mjs';
+import { roleLabel, startText } from './start-copy.mjs';
 import { addText } from './add-view.mjs';
 
 export function renderAgentHeader(document, unit, session, language, onMore) {
@@ -63,7 +63,8 @@ export function renderClusterChanges(document, changes) {
 export function renderUnit(document, unit, t, language = "en") {
   const card = element(document, "section", { class: "unit-card" });
   card.append(element(document, "h3", { text: unit ? unitDisplayName(unit) : t("unknown") }));
-  card.append(element(document, "p", { text: `${t("role")}: ${unit?.role === 'agent' ? startText(language, 'agent') : unit?.role ?? t("unknown")}` }));
+  // A custom role shows the name its person gave it; a role the app does not know shows as an agent, never as its id.
+  card.append(element(document, "p", { text: `${t("role")}: ${unit?.role ? roleLabel(language, unit.role, unit.roleName) : t("unknown")}` }));
   card.append(element(document, "p", { text: `${t("job")}: ${unit?.job ?? t("unknown")}` }));
   const lines = [
     ["scope", unit?.scope?.name ?? unit?.scope?.kind],

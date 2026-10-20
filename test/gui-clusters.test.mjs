@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { acceptedRepositoryCluster, clusterLead, connectedChoices, filterRepositories, initialRunsIn, launchable, renderAgentForm, renderRepositoryOffer, renderRunsInPicker, repositorySelection, runsInLabel, supervisedClient, validRunsIn } from '../gui/app/clusters.mjs';
+import { acceptedRepositoryCluster, clusterLead, connectedChoices, customRoleProblems, filterRepositories, initialRunsIn, launchable, renderAgentForm, renderRepositoryOffer, renderRunsInPicker, repositorySelection, runsInLabel, startDialog, supervisedClient, validRunsIn } from '../gui/app/clusters.mjs';
 import { renderApproval } from '../gui/app/inspector.mjs';
 import { renderSessionWork } from '../gui/app/session-work.mjs';
-import { startText } from '../gui/app/start-copy.mjs';
+import { AGENT_ROLES, roleLabel, startText } from '../gui/app/start-copy.mjs';
 import { clusterFrames, placeUnits } from '../gui/app/map-geometry.mjs';
-import { buildHierarchy, collapseNewClusters, flattenVisibleHierarchy, hierarchyDisclosure, listedWorktrees, pathFolder, readableIdentity, revealGroup } from '../gui/app/hierarchy.mjs';
+import { buildHierarchy, collapseNewClusters, flattenVisibleHierarchy, hierarchyDisclosure, hierarchyIcon, listedWorktrees, pathFolder, readableIdentity, revealGroup, unitRoleName } from '../gui/app/hierarchy.mjs';
 import { createMap, fitMap, flyToCluster, graphBounds, paintNodes, pointerDown, pointerMove, pointerUp, wheelZoom } from '../gui/app/map.mjs';
 import { renderCluster } from '../gui/app/inspector.mjs';
 import { planCardModel } from '../gui/app/plan-controller.mjs';
@@ -93,7 +93,7 @@ test('Overseer and New agent forms contain only their choices, fresh is checked 
     const model = { language, kind: 'agent', cluster: cluster('Ideas'), clients, role: 'executor', choice: initialRunsIn(clients), fresh: true };
     const view = renderAgentForm(document, model, { onCreate: () => created++ });
     assert.doesNotMatch(copy(view), /Builder|lead-id|machine/);
-    assert.equal(nodes(view).filter(node => node.attributes?.['data-action']?.startsWith('choose-')).length, 2);
+    assert.equal(nodes(view).filter(node => node.attributes?.['data-action']?.startsWith('choose-')).length, AGENT_ROLES.length);
     const overseer = renderAgentForm(document, { ...model, kind: 'overseer', agentKind: 'external' }, {});
     assert.equal(nodes(overseer).find(node => node.attributes?.['data-start-fresh']).checked, true);
   }
@@ -319,4 +319,154 @@ test('the Runs in picker shows readable names for catalog ids and never prints n
   assert.equal(/null/.test(text), false, text);
   assert.match(text, /Codex/); assert.match(text, /Observed/); assert.match(text, /Alternate/);
   assert.doesNotMatch(text, /observed/);
+});
+
+// The roles of the New agent picker: id, English label, Spanish label.
+const PICKER = [['executor', 'Executor', 'Executor'], ['overlord', 'Overlord', 'Overlord'], ['ux-designer', 'UX designer', 'Diseñador UX'],
+  ['ui-designer', 'UI designer', 'Diseñador UI'], ['writer', 'Writer', 'Redactor'], ['game-designer', 'Game designer', 'Game designer'],
+  ['security-consultant', 'Security consultant', 'Consultor de ciberseguridad'], ['qa', 'QA', 'QA'], ['code-reviewer', 'Code reviewer', 'Revisor de código'],
+  ['product-manager', 'Product manager', 'Product manager'], ['custom', 'Custom', 'Personalizado']];
+const agentModel = (extra = {}) => ({ language: 'en', kind: 'agent', cluster: cluster('Ideas'), clients, role: 'executor', choice: initialRunsIn(clients), fresh: true,
+  roleName: '', roleDescription: '', roleProblems: {}, ...extra });
+const startField = (view, name) => nodes(view).find(node => node.attributes?.['data-start-field'] === name);
+const roleButtons = view => nodes(view).filter(node => node.attributes?.['data-action']?.startsWith('choose-'));
+
+test('the New agent picker offers every preset and Custom, each with a line under its name, in both languages', () => {
+  assert.deepEqual(AGENT_ROLES, PICKER.map(row => row[0]));
+  for (const language of ['en', 'es']) {
+    const picks = [];
+    const view = renderAgentForm(document, agentModel({ language, role: 'qa' }), { onRole: id => picks.push(id) });
+    const options = roleButtons(view);
+    assert.deepEqual(options.map(node => node.getAttribute('data-action').slice('choose-'.length)), PICKER.map(row => row[0]));
+    PICKER.forEach(([id, en, es], index) => {
+      const label = nodes(options[index]).find(node => node.tagName === 'STRONG'), hint = nodes(options[index]).find(node => node.tagName === 'SMALL');
+      assert.equal(label.textContent, language === 'es' ? es : en, id);
+      assert.ok(hint.textContent.length > 12 && hint.textContent !== label.textContent, id);
+    });
+    assert.deepEqual(options.filter(node => node.getAttribute('aria-pressed') === 'true').map(node => node.getAttribute('data-action')), ['choose-qa']);
+    options.at(-1).listeners.click();
+    assert.deepEqual(picks, ['custom']);
+    // A preset needs nothing more: the name and description fields belong to Custom alone.
+    assert.equal(nodes(view).some(node => node.attributes?.['data-custom-role']), false);
+    assert.equal(startField(view, 'roleName'), undefined);
+  }
+});
+
+test('Custom shows a role name and a description with a character count that follows the typing', () => {
+  const typed = {};
+  const view = renderAgentForm(document, agentModel({ role: 'custom' }), { onRoleName: value => { typed.name = value; }, onRoleDescription: value => { typed.description = value; } });
+  const name = startField(view, 'roleName'), area = startField(view, 'roleDescription');
+  assert.equal(name.tagName, 'INPUT'); assert.equal(name.getAttribute('maxlength'), '60');
+  assert.equal(area.tagName, 'TEXTAREA'); assert.equal(area.getAttribute('maxlength'), '4000');
+  assert.deepEqual(roleButtons(view).filter(node => node.getAttribute('aria-pressed') === 'true').map(node => node.getAttribute('data-action')), ['choose-custom']);
+  const count = nodes(view).find(node => node.attributes?.['data-role-count']);
+  assert.equal(count.textContent, '0 of 4000');
+  area.value = 'Reviews the release notes\nbefore each tag.'; area.listeners.input();
+  assert.equal(typed.description, area.value); assert.equal(count.textContent, `${area.value.length} of 4000`);
+  name.value = 'Release captain'; name.listeners.input();
+  assert.equal(typed.name, 'Release captain');
+  assert.equal(nodes(view).some(node => node.attributes?.['data-role-error']), false);
+  // What was typed comes back when the form is drawn again, and the Spanish form says the same in Spanish.
+  const again = renderAgentForm(document, agentModel({ language: 'es', role: 'custom', roleName: name.value, roleDescription: area.value }), {});
+  assert.equal(startField(again, 'roleName').value, 'Release captain'); assert.equal(startField(again, 'roleDescription').value, area.value);
+  assert.match(copy(again), /Nombre del rol/); assert.match(copy(again), /Descripción/);
+  assert.equal(nodes(again).find(node => node.attributes?.['data-role-count']).textContent, `${area.value.length} de 4000`);
+});
+
+test('a custom role is checked as the service checks it and each problem shows under its field until the field is edited', () => {
+  const both = { roleName: 'roleNameRequired', roleDescription: 'roleDescriptionRequired' };
+  assert.deepEqual(customRoleProblems('', ''), both);
+  assert.deepEqual(customRoleProblems('   ', ' \n '), both);
+  assert.deepEqual(customRoleProblems(undefined, null), both);
+  assert.deepEqual(customRoleProblems('a'.repeat(61), 'x'), { roleName: 'roleNameLong' });
+  assert.deepEqual(customRoleProblems('two\nlines', 'x'), { roleName: 'roleNameLine' });
+  assert.deepEqual(customRoleProblems('QA', 'x'.repeat(4001)), { roleDescription: 'roleDescriptionLong' });
+  assert.deepEqual(customRoleProblems(`  ${'a'.repeat(60)}  `, `${'x'.repeat(4000)}  `), {});
+  assert.deepEqual(customRoleProblems('Release captain', 'First line\n\nSecond line'), {});
+  for (const language of ['en', 'es']) {
+    const view = renderAgentForm(document, agentModel({ language, role: 'custom', roleProblems: customRoleProblems('', '') }), { onRoleName() {}, onRoleDescription() {} });
+    const errors = nodes(view).filter(node => node.attributes?.['data-role-error']);
+    assert.deepEqual(errors.map(node => node.getAttribute('data-role-error')), ['roleName', 'roleDescription']);
+    assert.deepEqual(errors.map(node => node.textContent), [startText(language, 'roleNameRequired'), startText(language, 'roleDescriptionRequired')]);
+    assert.ok(errors.every(node => node.getAttribute('role') === 'alert'));
+    const name = startField(view, 'roleName');
+    assert.equal(name.getAttribute('aria-invalid'), 'true'); assert.equal(name.getAttribute('aria-describedby'), errors[0].getAttribute('id'));
+    name.value = 'QA'; name.listeners.input();
+    assert.equal(errors[0].textContent, ''); assert.equal(name.getAttribute('aria-invalid'), 'false'); assert.notEqual(errors[1].textContent, '');
+    const area = startField(view, 'roleDescription');
+    area.value = 'Tests the work.'; area.listeners.input();
+    assert.equal(errors[1].textContent, '');
+  }
+  assert.match(startText('en', 'roleNameLong', { max: 60 }), /60 characters/);
+  assert.match(startText('es', 'roleDescriptionLong', { max: 4000 }), /4000 caracteres/);
+});
+
+test('the picker and the Custom fields have rules that keep them inside a narrow dialog', async () => {
+  const css = await readFile('gui/app/styles.css', 'utf8');
+  assert.match(css, /\.role-option\s*\{[^}]*width:\s*100%/);
+  assert.match(css, /\.role-option > span:first-child\s*\{[^}]*min-width:\s*0[^}]*overflow-wrap:\s*anywhere/);
+  assert.match(css, /\.start-custom-role input, \.start-custom-role textarea\s*\{[^}]*width:\s*100%[^}]*max-width:\s*100%/);
+  assert.match(css, /\.start-dialog\s*\{[^}]*max-height:\s*calc\(100dvh - 32px\)[^}]*overflow:\s*auto/);
+});
+
+test('every role has an icon, a custom unit is named by its roleName, and an unknown role is an agent that never throws', () => {
+  const icons = new Map(AGENT_ROLES.map(id => [id, hierarchyIcon({ role: id })]));
+  assert.ok([...icons.values()].every(name => typeof name === 'string' && name));
+  // The eight new presets and Custom each have an icon of their own, apart from the plain agent mark.
+  const added = AGENT_ROLES.filter(id => !['executor', 'overlord'].includes(id));
+  assert.equal(new Set(added.map(id => icons.get(id))).size, added.length);
+  assert.ok(added.every(id => icons.get(id) !== 'executor'));
+  const custom = { ...unit('c', 'custom', 'shop'), role: 'custom', roleName: 'Release captain', roleDescription: 'Cuts the release.' };
+  assert.equal(unitRoleName(custom, 'en'), 'Release captain'); assert.equal(unitRoleName({ ...custom, roleName: null }, 'es'), 'Personalizado');
+  assert.equal(unitRoleName({ role: 'qa' }, 'es'), 'QA'); assert.equal(unitRoleName({ role: 'code-reviewer' }, 'en'), 'Code reviewer');
+  // Executor and Overlord are told apart by their icon alone.
+  assert.equal(unitRoleName({ role: 'executor' }, 'en'), ''); assert.equal(unitRoleName({ role: 'overlord' }, 'en'), '');
+  for (const role of ['something-new', 'constructor', '__proto__', 'toString', '', null, undefined, 7, {}]) {
+    assert.equal(hierarchyIcon({ role }), 'executor', String(role));
+    assert.equal(unitRoleName({ role }, 'en'), '', String(role));
+    assert.equal(roleLabel('en', role), 'Agent', String(role)); assert.equal(roleLabel('es', role), 'Agente', String(role));
+  }
+  assert.equal(roleLabel('en'), 'Agent');
+  assert.equal(roleLabel('en', 'custom', '  Release captain  '), 'Release captain'); assert.equal(roleLabel('es', 'custom', '   '), 'Personalizado');
+  assert.equal(roleLabel('en', 'ux-designer', 'ignored'), 'UX designer');
+  const rows = flattenVisibleHierarchy(buildHierarchy([custom, { ...unit('u', 'odd', 'shop'), role: 'constructor' }], [], [{ id: 'shop', title: 'Shop', members: ['c', 'u'], link: { kind: 'none' } }]),
+    { shown: new Map(), collapsed: new Set() });
+  assert.deepEqual(rows.filter(row => row.kind === 'unit').map(row => row.unit.id).sort(), ['c', 'u']);
+});
+
+test('map geometry places the new roles and an unknown role like any other member', () => {
+  const units = ['ux-designer', 'ui-designer', 'writer', 'game-designer', 'security-consultant', 'qa', 'code-reviewer', 'product-manager', 'custom', 'constructor', 'invented']
+    .map((role, index) => ({ ...unit(`m${index}`, `m${index}`, 'shop'), role, scope: { kind: 'root', name: null } }));
+  const groups = [{ id: 'shop', title: 'Shop', members: units.map(item => item.id), link: { kind: 'none' } }];
+  const placed = placeUnits(units, { nodes: {}, groups: {} }, groups);
+  for (const item of units) {
+    assert.ok(Number.isFinite(placed.positions[item.id]?.x) && Number.isFinite(placed.positions[item.id]?.y), item.role);
+  }
+  const taken = units.map(item => placed.positions[item.id]);
+  assert.equal(new Set(taken.map(point => `${point.x},${point.y}`)).size, units.length);
+});
+
+test('an anchored New agent dialog that grows moves up to stay on screen and does not move back down', () => {
+  const size = { height: 400 };
+  const dom = { ...document, body: { append() {} }, defaultView: { innerWidth: 1200, innerHeight: 700 }, activeElement: null,
+    createElement(name) {
+      const node = document.createElement(name);
+      Object.assign(node, { style: {}, querySelector: () => null, querySelectorAll: () => [], showModal() {}, close() {} });
+      if (name === 'dialog') node.getBoundingClientRect = () => ({ left: 0, top: 0, width: 400, height: size.height });
+      return node;
+    } };
+  const anchor = { getBoundingClientRect: () => ({ left: 700, right: 1000, top: 270, bottom: 300, width: 300, height: 30 }) };
+  const flow = startDialog(dom, { view: 'agent', language: 'en', anchor, render: () => dom.createElement('section') });
+  const top = () => Number.parseFloat(flow.dialog.style.top);
+  assert.equal(top(), 284); assert.equal(flow.dialog.style.left, '600px');
+  size.height = 600; flow.paint();
+  assert.equal(top(), 84);
+  size.height = 300; flow.paint();
+  assert.equal(top(), 84);
+  size.height = 800; flow.paint();
+  assert.equal(top(), 16);
+  // A dialog without an anchor is centered by the browser and keeps no position of its own.
+  const centered = startDialog(dom, { view: 'overseer', language: 'en', render: () => dom.createElement('section') });
+  size.height = 900; centered.paint();
+  assert.equal(centered.dialog.style.top, undefined);
 });
