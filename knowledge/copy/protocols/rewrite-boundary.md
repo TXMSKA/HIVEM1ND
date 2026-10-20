@@ -1,8 +1,8 @@
 name: rewrite-boundary
 purpose: Mark what a rewrite may change, what it may only trim and what it may not touch, before any word changes.
-scope: any text about to be rewritten, and first in every run of humanize; for a first draft, only step 3 runs, to fence identifiers, placeholders and facts supplied verbatim in the brief
-trigger: manual, before any rewrite pass
-repeat: once per target
+scope: any text about to be rewritten or shortened, first in every run of humanize and before surface-copy changes a string; for a first draft, only step 3 runs, to fence identifiers, placeholders and facts supplied verbatim in the brief
+trigger: manual, before any rewrite pass and before surface-copy shortens a string
+repeat: once
 inputs: the target text, the lists in boundaries.md
 stop: every section is marked untouchable, in which case the run ends after step 2 and the target is reported as out of scope; a step with nothing to act on in the text at hand ends as not applicable with its reason, and evidence the tools at hand cannot produce is recorded as not verifiable while the run continues
 report: the sections with their mark, the count of identifiers and quotations fenced, and the policy pages a claim must agree with

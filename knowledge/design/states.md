@@ -13,15 +13,7 @@ A good one has four parts, in this order:
 - **One or two sentences** that say why it is empty and what the first step is.
 - **One primary action** that resolves it: create, import, retry, or adjust the filters.
 
-The copy and the action change with the cause, and the kinds never share one component blindly:
-
-| Kind | Cause | Action |
-| --- | --- | --- |
-| First use | Nothing created yet | Create, or start from a template or an example. This is onboarding and carries the most weight |
-| Cleared | The person emptied it | A light touch and an easy way to create again |
-| No results | A search or a filter excluded everything | Clear or widen the filter, with the query still visible |
-| No permission | Access is missing | Say why and how to get access, never imply the person has not started |
-| Failed to load | Something broke | Say what failed and offer a retry |
+The words and the action change with the cause, and the kinds never share one component blindly. The kinds are one list shared with the copy module, each with its cause, its action and its words: [microcopy.md, Empty states](../copy/microcopy.md#empty-states). When the copy module is not installed, the kinds are first use, cleared, no results, no permission and failed to load, each a component of its own.
 
 When auditing, the first-use states come first, then empty search and filter results, including a filtered menu that matches nothing, then internal screens with little traffic.
 
@@ -39,11 +31,11 @@ When auditing, the first-use states come first, then empty search and filter res
 
 ## Error
 
-- **What failed, why when it is known, and how to recover**, in the interface's own voice, never vague and never blaming the person. Internal codes do not lead.
-- **Raw text never reaches the screen.** An exception message, a stack frame, a status line, a response body, `undefined` or `[object Object]` is not shown: the failure maps through a table of causes to a written message, an unknown cause falls back to a written sentence, and the request identifier from the server's answer may show as a small reference for support.
-- **Each cause gets its own treatment**: invalid input shows at the field, an expired session returns to sign-in and back, a missing permission explains itself, a missing page offers a way out, a rate limit says when to try again, a server failure gives a plain message and a retry.
-- **Network failures** explain, offer a retry, and keep what the person entered.
-- **Errors in a form sit at the field**, not in a toast; the rules are in [forms-and-controls.md](forms-and-controls.md).
+- **The message comes from the table of causes** in [microcopy.md, Table of causes](../copy/microcopy.md#table-of-causes), which gives each cause its place on the screen, its words and its next step. When the copy module is not installed, each cause still gets a written sentence naming what failed and how to recover, and an unknown cause a written fallback.
+- **Raw text never reaches the screen.** An exception message, a stack frame, a status line, a response body, `undefined` or `[object Object]` is not shown; the request identifier from the server's answer may show as a small reference for support.
+- **The failed part fails alone.** The error takes the place of the component that failed, with a retry, and the rest of the screen keeps working; a full page only when nothing on it can work, with a way out.
+- **What the person entered is kept** through a network failure and a failed request.
+- **Errors in a form sit at the field**, not in a toast; the rules are in [forms-and-controls.md](forms-and-controls.md#validation-and-submission).
 
 ## Success
 
@@ -54,15 +46,15 @@ When auditing, the first-use states come first, then empty search and filter res
 
 ## Disabled
 
-A disabled control says inline what is missing and what unlocks it, and the unblocking action is one step away. The reason is a structural word, written by the design pass and flagged for the copy pass. A disabled primary action is valid when that reason is present. Disabled content keeps enough contrast to be read, and never carries a saturated accent.
+A disabled primary action is allowed only with a visible reason next to it; otherwise it stays enabled and validates on submit. The reason says what is missing and what unlocks it, tied by `aria-describedby`, and the unblocking action is one step away. It is a structural word, written by the design pass and flagged for the copy pass. Disabled content keeps enough contrast to be read, and never carries a saturated accent.
 
 ## Announcements
 
-Every state that appears without the person moving focus, such as a loading change, a success or an error, is announced through a polite live region.
+A message that appears without the person moving focus is announced from a region that is in the markup before the message arrives: success, progress and loading changes through `role="status"`, errors through `role="alert"`.
 
 ## Onboarding
 
 - **The job is the first real success, fast.** Teach the few things that give most of the value and leave the rest to discovery in context.
 - **Show rather than tell**, inside the real product rather than a separate tutorial mode, one thing at a time, with a visible skip.
-- **Tours are short**, three to seven steps, built around a workflow, skippable and replayable.
+- **Tours are short**: three or four steps on the first opening of a section, the rest behind a More control that continues the tour, skippable and replayable.
 - **What was seen is remembered.** A dismissed tip never returns, and a returning person is never onboarded again.

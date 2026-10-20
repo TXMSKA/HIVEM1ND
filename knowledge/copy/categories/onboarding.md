@@ -6,9 +6,9 @@ The first minutes with a product, when there is no content to carry the interfac
 
 Applies when: a welcome screen, a splash, an intro modal, "write the onboarding", a first screen after sign-up.
 
-Options: one sentence of outcome and one action, or no screen at all. A paragraph that teaches nothing is removed rather than rewritten.
-
 Build: decide first whether the screen is needed at all. If it is: a title that is the outcome, one sentence, one button that starts the first real task: *Send your first invoice today* / *Add a client, then the invoice.* / *Add client*.
+
+Options: one sentence of outcome and one action, or no screen at all. A paragraph that teaches nothing is removed rather than rewritten.
 
 Open: [microcopy.md, Onboarding steps](../microcopy.md#onboarding-steps).
 
@@ -16,9 +16,9 @@ Open: [microcopy.md, Onboarding steps](../microcopy.md#onboarding-steps).
 
 Applies when: a multi-step setup, a wizard, an account or workspace creation flow, an invitation acceptance, a checklist of first tasks.
 
-Options: outcome then action per step, one action per step, skippable steps saying so, visible progress through the steps.
-
 Build: per step, a title that is the outcome, at most one sentence, one primary button performing the action, *Skip this step*, and *Step {current} of {total}*.
+
+Options: Warm tone, second person, a short block per step.
 
 Open: [microcopy.md, Onboarding steps](../microcopy.md#onboarding-steps), [microcopy.md, Labels](../microcopy.md#labels) and [microcopy.md, Helper text](../microcopy.md#helper-text) for the fields inside each step.
 
@@ -26,9 +26,9 @@ Open: [microcopy.md, Onboarding steps](../microcopy.md#onboarding-steps), [micro
 
 Applies when: a product, game, section or app inside a product opens for the first time, or a menu offers several actions.
 
-Options: three or four key things on first opening, a More control for the remaining tour, skippable and replayable steps; one-line descriptions beside menu option labels.
-
 Build: open with one line on what the section does. Give each of the three or four key things a title that is the outcome and at most one sentence. Keep the section usable while the tour is open. Put the remaining steps behind a control labelled *More*, or *Continue the tour* where *More* alone does not say what it does, and show them only when it is pressed. Give every menu option its label and one line on what it does, such as *Import files* / *Add existing files to the library.* Never show the tour of a whole product at once.
+
+Options: a short tour on first opening; one-line descriptions beside the menu labels alone when the section explains itself.
 
 Open: [microcopy.md, Onboarding steps](../microcopy.md#onboarding-steps) and [microcopy.md, Labels](../microcopy.md#labels).
 
@@ -36,8 +36,8 @@ Open: [microcopy.md, Onboarding steps](../microcopy.md#onboarding-steps) and [mi
 
 Applies when: a list, board or library shown before anything was created in it.
 
-Options: the object named in the title, why it is empty and what the first step is, one create or import action.
-
 Build: Warm title naming the object, why it is empty, one create or import action: *Your invoices will show up here* / *Create the first one to start tracking payments.* / *Create invoice*.
+
+Options: Warm tone; a template or an example as the action when starting from nothing is hard.
 
 Open: [microcopy.md, Empty states](../microcopy.md#empty-states).

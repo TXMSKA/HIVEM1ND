@@ -2,17 +2,17 @@ name: surface-copy
 purpose: Hold every string to the rules of its own subcategory, instead of one house style for all of them.
 scope: any diff that adds or changes a user-facing string, a page section, a message, a document entry or agent text
 trigger: manual, on any diff that adds or changes such text
-repeat: once per diff
-inputs: the text in the diff, the category files, the topic sections they name, the voice specification of the project when one exists
+repeat: once
+inputs: the text in the diff, the marks from rewrite-boundary, the category files, the topic sections they name, the voice specification of the project when one exists
 stop: the diff contains no text a person or an agent reads, in which case the run ends after step 1; a step with nothing to act on in the text at hand ends as not applicable with its reason, and evidence the tools at hand cannot produce is recorded as not verifiable while the run continues
 report: strings per subcategory, rule items failed and fixed per subcategory, the option values applied, the word ratio per subcategory, and the count of errors and empty states without a next action
 
 ## Steps
 
 1. Inventory by subcategory.
-   Task: list every string or passage the diff adds or changes, match each against the Applies when lines of the category files listed in [INDEX.md](../INDEX.md), and assign it to exactly one subcategory. A string that fits two goes to the one whose rule ties it to other strings, as [microcopy.md](../microcopy.md) sets out.
+   Task: take the marks from [rewrite-boundary](rewrite-boundary.md), or run it first when none exist, so that legal, consent, safety, reference, quoted and identifier text is never shortened: filler-only strings lose filler words alone, as [boundaries.md](../boundaries.md#filler-only) allows, and skip steps 4 and 5; untouchable strings and fenced spans receive nothing. Then list every other string or passage the diff adds or changes, match each against the Applies when lines of the category files listed in [INDEX.md](../INDEX.md#categories), and assign it to exactly one subcategory. A string that fits two goes to the one whose rule ties it to other strings, as [microcopy.md](../microcopy.md) sets out.
    Time: 10 minutes.
-   Result: a list where every string has one subcategory and no string has two. The count per subcategory is recorded.
+   Result: the marks recorded, and a list where every open string has one subcategory and no string has two. The count per subcategory is recorded.
 
 2. Fix the option values.
    Task: for each subcategory present, take the option values from the voice file of the project, or from the defaults its category file names and the table in [essentials.md](../essentials.md#defaults): tone, person, length, line shape, dash policy, casing, register and formats.
@@ -30,7 +30,7 @@ report: strings per subcategory, rule items failed and fixed per subcategory, th
    Result: the search `\b(you can|there (is|are|was|were))\b` returns zero hits outside quoted material, or each survivor is listed with its reason, and the count of strings rewritten after the read-aloud is recorded.
 
 5. Shorten.
-   Task: rewrite each string toward half its length, then restore only what was lost. Concise text measured higher usability than the promotional version it replaced (https://www.nngroup.com/articles/concise-scannable-and-objective-how-to-write-for-the-web/). A first draft has nothing to divide by: each string is held to the length option of its subcategory instead.
+   Task: rewrite each open string toward half its length, then restore only what was lost; no filler-only or untouchable string is shortened. Concise text measured higher usability than the promotional version it replaced (https://www.nngroup.com/articles/concise-scannable-and-objective-how-to-write-for-the-web/). A first draft has nothing to divide by: each string is held to the length option of its subcategory instead.
    Time: 20 minutes.
    Result: for a rewrite, words after divided by words before is recorded per subcategory and is below 1.0, and every string that grew carries a written reason; for a first draft, the count of strings over their length option is zero, or each carries a reason.
 

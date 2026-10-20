@@ -6,9 +6,9 @@ Text that tells people what changed: changelogs, release notes, breaking change 
 
 Applies when: a CHANGELOG file, a version section, "write the changelog", patch notes, a list of changes between two tags.
 
-Options: title-only entries by default, one self-describing title per line; a one-line note only where the reader must act. The fixed categories and ISO dates are not optional.
-
 Build: `## [version] - YYYY-MM-DD`, then only the Keep a Changelog categories that have entries, one self-describing title per line: *Added* / *Send payment reminders by email*. Unknown dates are the missing-fact marker.
+
+Options: title-only entries by default; a one-line note only where the reader must act.
 
 Open: [documents.md, Changelogs](../documents.md#changelogs).
 
@@ -16,9 +16,9 @@ Open: [documents.md, Changelogs](../documents.md#changelogs).
 
 Applies when: notes for a published release, a "what's new" dialog, an update summary sent to users.
 
-Options: second person or impersonal, grouped by what the reader does, one line per change with a second only when action is needed. First person plural when a team signs them.
-
 Build: group by what the reader does; per item, the change in the reader's words, then a second line only when the reader must act: *Reminders now go out at 9:00 AM in the client's time zone.*
+
+Options: second person or impersonal; first person plural when a team signs them.
 
 Open: [documents.md, Release notes](../documents.md#release-notes), and [claim-check](../protocols/claim-check.md) when the notes claim improvements.
 
@@ -26,9 +26,9 @@ Open: [documents.md, Release notes](../documents.md#release-notes), and [claim-c
 
 Applies when: a removed or renamed option, endpoint, command or setting, a migration guide, a deprecation warning printed at runtime.
 
-Options: the first line says breaking or deprecated, with the version and the date; the replacement is spelled out. Never softened.
-
 Build: *Breaking in {version} ({date}): {what} is removed. Use {replacement} instead*, followed by the exact replacement command, option or code.
+
+Options: impersonal, never softened.
 
 Open: [documents.md, Breaking changes and deprecations](../documents.md#breaking-changes-and-deprecations).
 
@@ -36,8 +36,8 @@ Open: [documents.md, Breaking changes and deprecations](../documents.md#breaking
 
 Applies when: writing or reviewing a commit subject or body, squashing commits, "write the commit message".
 
-Options: English, imperative, one idea per commit, subject under the length the project sets. Tool trailers follow the repository's own setting.
-
 Build: *{Imperative verb} {what changes}* under the project's subject length, one idea; a body only for why.
+
+Options: English, imperative; tool trailers as the repository's own setting decides.
 
 Open: [documents.md, Commit messages](../documents.md#commit-messages).

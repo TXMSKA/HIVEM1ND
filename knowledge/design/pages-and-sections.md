@@ -40,6 +40,6 @@ Map the material to a visual variable before choosing components: magnitude and 
 ## Widths
 
 - Page content is contained at a comfortable maximum width and centred; reading prose takes about six or seven columns of a twelve-column desktop grid, evidence may take the full width.
-- Breakpoints sit where the content breaks, commonly near 640, 768, 1024 and 1280 CSS pixels. A component that appears in several contexts responds to its container rather than to the viewport.
+- Breakpoints sit where the content breaks, commonly near 40, 48, 64 and 80 rem (640, 768, 1024 and 1280 CSS pixels). A component that appears in several contexts responds to its container rather than to the viewport.
 - Responsive change is structural: reorder, collapse, reflow, reveal. Core functions are never hidden on small screens, and a tablet restructures into two columns rather than stretching the phone layout.
-- Every multi-column section states its single-column arrangement below the tablet width in the same component.
+- Every multi-column section states its single-column arrangement below 40rem, and its two-column one from 40rem, in the same component.

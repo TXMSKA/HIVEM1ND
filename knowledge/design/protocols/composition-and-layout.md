@@ -1,8 +1,8 @@
 name: composition-and-layout
 purpose: Give each reading moment one dominant object, on a shared grid, with space that means something.
 scope: page structure, grids, sections, spacing, cards and containers
-trigger: manual, on any change to page structure, grid, sections, spacing, cards or containers
-repeat: once per surface, and again after any section is added or removed
+trigger: manual, on any change to page structure, grid, sections, spacing, cards or containers, and again after a section is added or removed
+repeat: once
 inputs: the surface under work, the grid definition, the rendered page at every breakpoint
 stop: the change is confined to one component that owns no layout of its own
 report: the dominant object per section, the column counts, the count of card levels, and the horizontal overflow measurement per breakpoint
@@ -20,7 +20,7 @@ report: the dominant object per section, the column counts, the count of card le
    Result: one line per section naming the variable and the reason, and a chart only where a relationship is faster to see than to read. Values alone never earn a chart.
 
 3. Put everything on the grid.
-   Task: place every object on the shared grid, normally twelve columns on desktop, six on tablet and four on mobile, with reading prose in six or seven desktop columns and evidence free to take the full width. Align each object to a shared edge, baseline or grid line. A surface built as one contained column records the column width and the edges its objects share instead.
+   Task: place every object on the shared grid, normally twelve columns on desktop, six on tablet and four on mobile, where content in one column below 40rem spans all four, with reading prose in six or seven desktop columns and evidence free to take the full width. Align each object to a shared edge, baseline or grid line. A surface built as one contained column records the column width and the edges its objects share instead.
    Time: 30 minutes at most.
    Result: the objects off the grid or off a shared edge are listed, with the count of those on it, and no wrapped heading or phrase reads across a gutter into the next column.
 

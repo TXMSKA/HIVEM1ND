@@ -23,7 +23,7 @@ Words are the whitespace-separated tokens that contain a letter or a digit. A se
 
 Any rewrite reports four figures before and after, side by side: tell density, dash density, sentence length standard deviation, and word count. The word ratio, words after divided by words before, is derived from the two word counts and is reported whenever a previous draft exists. A first draft reports the four figures once, with the word ratio as not applicable. The four are cheap to compute on any text and hard to game without improving it. The other measures below are run when a protocol step asks for them.
 
-Sentence statistics are computed on prose only: the body text of long form, of documentation other than reference, of email, and of announcements and release notes. A readme, a how-to guide or any other document whose body is mostly commands, numbered steps and short entries is not prose, even outside reference: its sentences are reported with the microcopy below. Buttons, labels, headings, navigation, errors, empty states, toasts, onboarding steps, page slots, changelog entries and every other interface string are microcopy, where fragments and single sentences are what the rules ask for, so they are left out (Convention). When the prose holds fewer than five sentences, the statistics are reported as not applicable.
+Sentence statistics are computed on prose only: the body text of long form, of documentation other than reference, of email, and of announcements and release notes. A readme, a how-to guide or any other document whose body is mostly commands, numbered steps and short entries is not prose, even outside reference: its sentences are reported with the microcopy below. Buttons, labels, headings, navigation, errors, empty states, toasts, onboarding steps, page slots, changelog entries and every other interface string are microcopy, where fragments and single sentences are what the rules ask for, so they are left out (Convention). Text with no prose reports the statistics as not applicable; prose of fewer than fifteen sentences reports them without a verdict, as the threshold below sets out.
 
 ## Tell density
 
@@ -33,7 +33,7 @@ How: run the combined pattern over the corpus with one of the commands in [tells
 
 Mark: the flag list is Measured (319 excess style words in 2024 across more than 15 million abstracts, https://arxiv.org/abs/2406.07016). No source fixes a threshold, so there is none. The number is used as a regression: the density after a pass is compared with the density before it, and the pass fails when it did not fall.
 
-Does not prove: authorship. See the note in [INDEX.md](INDEX.md).
+Does not prove: authorship. See [tells.md](tells.md#what-the-counts-are-not).
 
 ## Dash density
 
@@ -57,7 +57,7 @@ Why the standard deviation and not the mean alone: model prose is denser and mor
 
 The consequence for editing: the fix for dense prose is variance, not shortness. A draft rewritten into uniformly short sentences scores worse on this measure, not better. The measure is about prose; a label cut to a fragment follows its own rule and is outside it.
 
-Mark: Convention for the threshold. The module uses a standard deviation of at least five words, alongside a mean under twenty-five. Both are chosen values. A project may set its own and check against those. The standard deviation threshold applies from fifteen sentences of prose; below that, the figure is reported before and after without a pass or fail, because a few short, correct sentences cannot vary much. A draft is never padded to reach it.
+Mark: Convention for the threshold. Prose passes with a mean under 25 words and a standard deviation of at least 5, judged from fifteen sentences; below fifteen, both figures are reported before and after without a pass or fail, because a few short, correct sentences cannot vary much. Both values are chosen, and a project may set its own and check against those. A draft is never padded to reach them, and no sentence is split only to bring the mean down.
 
 ## Readability grade
 

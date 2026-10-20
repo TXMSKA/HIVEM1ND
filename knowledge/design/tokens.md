@@ -46,11 +46,11 @@ Type is a short list of named roles, not a range of sizes: display for the singl
 
 ## Spacing bands
 
-Three bands, not one universal stack gap:
+The spacing scale is 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4 and 6 rem (pack), used in three bands, not one universal stack gap:
 
-- Within a group, the smallest steps of the scale. A heading sits closer to its first paragraph than to what precedes it; a label, its value and its detail are identical across peers.
-- Between groups, the middle steps.
-- At a section turn, the large steps. The largest step of all is a chapter break between two substantial sections, never the default gap.
+- Within a group, 0.25 to 0.75rem. A heading sits closer to its first paragraph than to what precedes it; a label, its value and its detail are identical across peers.
+- Between groups, 1 to 1.5rem.
+- At a section turn, 2 to 4rem. The largest step, 6rem, is a chapter break between two substantial sections, never the default gap.
 
 Every visible gap has exactly one owner. The container sets it, and its children do not add competing margins.
 
@@ -65,7 +65,9 @@ Vertical rhythm defaults tight. Large empty bands read as an unfinished page, no
 
 ## Shape
 
-One radius system per product, written down: all sharp, all soft, or a stated mix such as fully rounded buttons, medium cards and small inputs, applied everywhere. Nested radii stay concentric, with the inner radius equal to the outer radius minus the padding between them. When that is zero or less, the inner surface takes the smallest radius step, or is dropped when it only repeats the outer one.
+One radius system per product, written down: all sharp, all soft, or a stated mix such as fully rounded buttons, medium cards and small inputs, applied everywhere. Nested radii stay concentric, with the inner radius equal to the outer radius minus the padding between them. When that is zero or less, the inner surface takes the smallest radius step, or is dropped when it only repeats the outer one. The default mix is 0.375rem for controls, 0.75rem for containers and full round for switches and avatars (pack).
+
+Elevation is one decision per layer: one shadow token, which may stack two layers, a tight one for the edge and a wide faint one for depth, or one 1 pixel border, never both on the same layer. In a dark theme a higher layer is a lighter surface instead, as in Dark mode below.
 
 ## Themes
 

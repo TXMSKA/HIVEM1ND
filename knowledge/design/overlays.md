@@ -45,8 +45,7 @@ A modal for a task that needs neither interruption nor protected focus is a defa
 - It confirms, it does not ask. Anything that needs a decision is not a toast.
 - It appears in one consistent corner, stacks without covering the primary action, and is announced through a live region with the status role that is already in the page before the toast arrives.
 - It is a layer, not a section, so it may take an inverse surface, dark on a light page and light on a dark one, as its own semantic pair measured in each theme.
-- Its timer pauses while the tab is hidden and while the pointer or focus rests on it, and it can be dismissed by hand.
-- A toast that carries an undo stays long enough to use it.
+- It stays 6 seconds, and at least 10 when it carries an undo (pack values). Its timer pauses while the tab is hidden and while the pointer or focus rests on it, and it can be dismissed by hand.
 - Errors in a form are shown inline at the field, not as a toast.
 
 ## Tooltip

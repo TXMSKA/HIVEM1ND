@@ -45,7 +45,7 @@ Pure black on pure white, 21:1, is never the goal: it is the inversion artefact 
 ## Text
 
 - Primary text is a dark neutral at the neutral hue, chroma 0.01 to 0.03, at the L the contrast character set. It is never `#000`.
-- Secondary text sits around L 0.45 to 0.50 and still meets 4.5:1 on the chrome step, not only on the ground: on a cool ground near L 0.975, secondary text at L 0.52 drops to about 4.75:1 on chrome at L 0.95 and fails a step lower.
+- Secondary text sits around L 0.45 to 0.50 and still meets 4.5:1 on the chrome step, not only on the ground. Secondary text at L 0.52 shows why the range stops at 0.50: it reaches only about 4.75:1 on chrome at L 0.95, a thin margin, and falls below 4.5:1 on chrome at L 0.93.
 - Text on a tinted accent surface uses the accent's own dark shade, not grey: grey on colour looks dirty.
 - A weight that read well as light text on dark may look heavy as dark text on light. Weights are checked again on the light theme, and a body weight one step lighter is allowed when the face supports it.
 
@@ -78,9 +78,9 @@ When the source pairs a cool ground with a warm accent, navy with orange for ins
 
 ## Elevation and shadows
 
-- Raised layers use one soft shadow, two layers at most: a tight one for the edge and a wide, faint one for depth, for example a 1 to 2 pixel offset with 2 to 4 pixels of blur at 4 to 8 percent, plus a 4 to 12 pixel offset with 12 to 32 pixels of blur at 6 to 12 percent.
+- Raised layers use one shadow token of two layers at most: a tight one for the edge and a wide, faint one for depth, for example a 1 to 2 pixel offset with 2 to 4 pixels of blur at 4 to 8 percent, plus a 4 to 12 pixel offset with 12 to 32 pixels of blur at 6 to 12 percent.
 - The shadow colour is the neutral hue at low lightness with alpha, never pure black, and never the accent.
-- A layer is separated by a shadow or by a border, not both, as in [tokens.md](tokens.md), Shape.
+- A layer is separated by a shadow or by a border, not both, as in [tokens.md](tokens.md#shape).
 - Glows, outer halos and neon edges from the dark theme do not carry over. On a light field they read as smudges.
 
 ## States

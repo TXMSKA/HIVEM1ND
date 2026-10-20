@@ -2,7 +2,7 @@ name: theme-direction
 purpose: Apply a stated aesthetic through the primitive layer, without hardcoding it into components and without losing contrast.
 scope: a stated aesthetic, a restyle, a brand change or a change of look
 trigger: manual, on a stated aesthetic, a restyle, a brand change or a request to change the look
-repeat: once per direction
+repeat: once
 inputs: the direction in the requester's own words, the token file, the component tree, the rendered page in each theme that ships
 stop: the direction cannot be reached without dropping a pair below its contrast target, in which case the direction is adjusted and the requester is told which part changed and why
 report: the direction in one sentence, the primitive set before and after, the files the diff touched, and the contrast tables recomputed in each theme that ships

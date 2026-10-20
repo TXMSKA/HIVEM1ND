@@ -65,16 +65,22 @@ Pulse, float, shimmer, marquee and typewriter loops run only where motion carrie
 
 ## Numbers
 
+The one duration table of the module; every other file points here.
+
 | Motion | Duration |
 | --- | --- |
 | Press feedback, toggle, checkbox | 100 to 160 ms |
+| Hover and colour change | about 150 ms |
 | Tooltip, small popover | 125 to 200 ms |
-| Dropdown, select, menu | 150 to 250 ms |
+| Dropdown, select, menu, accordion | 150 to 250 ms |
+| Crossfade between states | about 180 ms |
 | Modal | 200 to 300 ms |
+| Entrance below the first viewport | 200 to 300 ms |
 | Drawer, sheet, toast travelling its own size | up to 500 ms |
+| Stagger, per item | 30 to 80 ms |
 | Marketing reveal, explanatory sequence | may run longer, never delaying readable content |
 
-- **Interface motion stays at or under 300 milliseconds.** A select that opens in 180 feels faster than one that opens in 400. Exits run shorter than entrances: slow where the person decides, fast where the system answers.
+- **Interface motion stays at or under 300 milliseconds, except overlays that travel their own size**, a drawer, a sheet or a toast, at up to 500. A select that opens in 180 feels faster than one that opens in 400. Exits run shorter than entrances: slow where the person decides, fast where the system answers.
 - **Easing by direction.** Entering and exiting use a decelerating curve. Moving or morphing on screen uses a symmetric in-and-out curve. Hover and colour changes use the plain ease. Constant motion such as a spinner, a marquee or a progress fill uses linear. An accelerating curve is never used on interface motion, because it delays the first movement exactly when the eye is watching.
 - **Curves are explicit.** The built-in keywords are weak. Working values: a strong decelerate `cubic-bezier(0.23, 1, 0.32, 1)`, a strong in-and-out `cubic-bezier(0.77, 0, 0.175, 1)`, and a sheet curve `cubic-bezier(0.32, 0.72, 0, 1)`. New curves extend the project's motion tokens instead of starting a parallel set.
 - **Springs for anything a hand drives.** A spring starts from the current value and can be grabbed and reversed mid-flight. Default interface spring: no bounce, settling in about 0.3 to 0.4 seconds. Bounce, kept between 0.1 and 0.3, is added only after a gesture that carried momentum, such as a flick or a drag release.
@@ -91,7 +97,7 @@ Pulse, float, shimmer, marquee and typewriter loops run only where motion carrie
 - **Modal.** Centred; about 250 milliseconds from scale 0.96 and zero opacity, with the backdrop fading over the same time so both read as one surface.
 - **Drawer or sheet.** Closed is offset by its full size; it travels on the sheet curve in up to 500 milliseconds, and turns into a spring once it can be dragged.
 - **Toast.** Enters from its edge by its full height with a fade, leaves through the same edge, and uses transitions rather than keyframes because toasts stack and retrigger. Its timer pauses while the tab is hidden and while the pointer rests on it.
-- **Accordion.** Height and opacity at about 200 milliseconds, with the height measured rather than animated to automatic. Height is tolerated here only.
+- **Accordion.** The panel is revealed by opacity and a clip-path inset at about 200 milliseconds, and the content below takes its new place at once; height is never animated.
 - **Tabs.** A duplicate of the tab row styled as active, clipped to the active tab, with the clip animated on change, so text and background switch in one motion.
 - **Hold to confirm.** For a destructive action a single click could fire by accident: a fill grows across the button over about 2 seconds, linear because it is progress, and snaps back in about 200 milliseconds on release.
 - **Number change.** Tabular numerals, with the digits rolling or morphing in place rather than the text re-rendering.
@@ -103,9 +109,9 @@ The cheapest mechanism that works: a CSS transition for a state toggle, the star
 
 ## Constraints
 
-- **Honour reduced motion.** Under the reduced motion preference, travel, springs, parallax and loops go; opacity and colour feedback stay, so every confirmation still happens. The fallback ships with the animation, not after it.
+- **Honour reduced motion.** Under the reduced motion preference, travel, scale, springs, parallax and loops go; opacity and colour feedback stay, so every confirmation still happens. One `@media (prefers-reduced-motion: reduce)` block beside the motion tokens carries it, and the fallback ships with the animation, not after it.
 - **Never delay critical content.** A reveal or a stagger on the first meaningful paint makes the reader wait for text that was already loaded. Entrance motion applies below the fold, or after the content is readable.
 - **Hover never moves layout.** Motion on hover stays inside the element's box.
-- **Animate transform and opacity.** Clip path is the sanctioned third property. Width, height, padding, margin, top and left are never animated, because each forces layout on every frame.
+- **Animate transform, opacity and clip-path**, and nothing else. Width, height, padding, margin, top and left are never animated, because each forces layout on every frame.
 - **Check contrast through the whole animation.** A mid-transition opacity can drop text below its contrast floor on a dark surface even though the start and end states pass.
 - **Keep it interruptible.** Input is never locked while a transition runs, and an interrupted animation retargets from where it is on screen, not from where it was going.

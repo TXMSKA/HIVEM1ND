@@ -1,8 +1,8 @@
 name: voice-specification
 purpose: Turn a voice from a set of adjectives into values and lists a reviewer can check a string against.
 scope: a new product or section, a rewrite that spans categories, or a disagreement about how the text should sound
-trigger: manual, before writing copy for a new product or section, and on any rewrite that spans surfaces
-repeat: once per product, and again when the product changes what it is
+trigger: manual, before writing copy for a new product or section, on any rewrite that spans surfaces, and again when the product changes what it is
+repeat: once
 inputs: the brief, the existing copy or, for a new product, the first strings drafted, three strings to calibrate against
 stop: a voice specification already exists and the brief does not contradict it, in which case the run ends after step 1; a step with nothing to act on in the text at hand ends as not applicable with its reason, and evidence the tools at hand cannot produce is recorded as not verifiable while the run continues
 report: the four dimension values, the size of the word table, the sentence rules chosen, and the three calibrated samples with their scores

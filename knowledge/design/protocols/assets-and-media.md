@@ -2,7 +2,7 @@ name: assets-and-media
 purpose: Keep icons from one published set, images and video light and stable, and the real fonts loaded.
 scope: icons, images, video, fonts, logos and brand marks on any rendered surface
 trigger: manual, on any icon, image, video, font or brand mark added or changed, and on a request to add icons or imagery
-repeat: once per surface, and again whenever an asset is added
+repeat: once
 inputs: the component tree, the asset folder, the rendered page on a cold load, the network panel
 stop: a brand mark or face is needed and the brand's own assets cannot be found, in which case the gap is reported rather than invented
 report: the icon set and the count of icons fetched, the image table with format, rendered size and weight, the largest paint element and its time, and the loaded font sources

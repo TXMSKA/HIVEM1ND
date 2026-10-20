@@ -17,12 +17,12 @@ A form is a task with a cost in taps and seconds, and a menu is a decision made 
 
 | Situation | Control |
 | --- | --- |
-| Two to four stable options, one choice | Radios or a segmented control, never a dropdown: one tap, nothing hidden, the current value always visible |
-| Two to four options, several choices | Checkboxes |
+| Up to five stable options, one choice | A radio group, or a segmented control when the labels are short, never a dropdown: one tap, nothing hidden, the current value always visible |
+| A few options, several choices | Checkboxes |
 | One setting that takes effect at once | A toggle switch |
 | One agreement or one option inside a form that is saved later | A checkbox |
-| Five to about ten options | A select or a menu |
-| About ten options or more | A menu with a filter field on top |
+| Six to ten options | A select or a menu |
+| More than ten options | A menu with a filter field on top |
 | Picking many items from a long list | A multi-select that stays open, with checkboxes |
 | Choosing between content types | A set of cards with an icon, a name and one line each, never a select |
 | A date that is known, such as a birthday | A typed field that parses the local format, with a picker as a helper |
@@ -32,7 +32,7 @@ A form is a task with a cost in taps and seconds, and a menu is a decision made 
 
 ## Menus and selects
 
-- **Type to filter above ten rows.** Any list of about ten items or more gets a search field on top, focused when the menu opens. The list narrows as the person types, and an empty result shows a no results state instead of a blank panel, as in [states.md](states.md). Applies to country, person, tag, product and permission selects.
+- **Type to filter above ten rows.** Any list of more than ten items gets a search field on top, focused when the menu opens. The list narrows as the person types, and an empty result shows a no results state instead of a blank panel, as in [states.md](states.md#empty). Applies to country, person, tag, product and permission selects.
 - **A multi-select stays open on pick.** Checkboxes, a live count of the selected items and an explicit Done button that closes it. Picking five items never means opening the menu five times.
 - **Render in a portal and flip.** The panel mounts outside any ancestor that clips its overflow and opens upward when there is no room below, so it stays usable near the bottom edge and on a small viewport.
 - **The panel stays anchored to its trigger.** It opens next to the control that opened it, grows from that control, and repositions on scroll and resize instead of floating loose.
@@ -51,7 +51,7 @@ A form is a task with a cost in taps and seconds, and a menu is a decision made 
 
 ## Disabled controls
 
-**Reasons, not grey.** A disabled control says inline what is missing and what unlocks it, and the unblocking action is one step away: a disabled Save reads "Complete the email to continue" and moves focus to that field. A disabled primary action is valid when that inline reason is present. It applies to every critical control, not only submit.
+**Reasons, not grey.** A disabled primary action is allowed only with a visible reason next to it; otherwise it stays enabled and validates on submit. The reason says what is missing and what unlocks it, and the unblocking action is one step away: a disabled Save reads "Complete the email to continue" and moves focus to that field. The same holds for every critical control, not only submit, as in [states.md](states.md#disabled).
 
 ## Validation and submission
 
@@ -61,7 +61,7 @@ A form is a task with a cost in taps and seconds, and a menu is a decision made 
 - **Submit shows it is working.** The button keeps its label, gains a spinner and refuses a second submission while the request runs.
 - **Success is a state, not a reset.** The form confirms what happened and what comes next.
 - **Unsaved changes are protected.** Navigating away from a changed form asks first, and Back, Forward and a reload bring the typed values back: a long form keeps a draft in session storage until the submission succeeds, and a failed request never rebuilds the form empty.
-- **A form is only as long as it needs to be.** Every field removed is a reason to abandon removed.
+- **A form is only as long as it needs to be.** Each field removed takes away one reason to abandon the form.
 
 ## Layout and flow
 
@@ -80,6 +80,32 @@ A form is a task with a cost in taps and seconds, and a menu is a decision made 
 - **Leaving is as easy as joining.** Cancel, unsubscribe and delete account sit where the person looks, in no more presses than sign-up took, and a refused prompt does not return in the same session.
 - **The price is the price.** Fees, taxes, shipping and the renewal price show before the last press, and the amount charged equals the amount shown.
 
+## File upload
+
+- **A native file input is the way in.** A visible label and a button that opens the file picker; a drop zone is an enhancement around it, never the only route, because dragging is unavailable on touch and from the keyboard.
+- **The limits are part of the label**, such as "Invoice, PDF or PNG, up to 10 MB", and `accept` matches them.
+- **The drop zone answers.** On drag over it shows a stronger border and a word; a file dropped beside it is ignored rather than opened by the browser.
+- **Each file is a row**: its name, its size, a determinate progress bar and a remove control. A failed file keeps its row with the cause and a retry, and the other files carry on.
+- **The form stays usable while files upload**, and submit waits for them or names what it waits for.
+- **The server decides.** Type and size checks in the page are hints: the server decides the type by content and caps the size, as steps 1 and 5 of the security module's file-upload protocol prove. When that module is not installed, this line is the rule.
+
+## Saving and settings
+
+- **One saving model per screen.** A toggle or a single choice applies on change; long text and editors save on their own after a pause in typing and on blur; fields validated together, or a change that costs money, wait for one Save button at the end of their section.
+- **Saving on its own shows its state** in one line near the title, in a status region: saving, saved, or not saved with the cause and a retry. Nothing else moves.
+- **A failed save keeps the value** in the field and on the device, and never reverts silently.
+- **Settings are grouped** under short headings, the most used first, each setting its label and its control. Destructive settings, such as deleting the account, sit last in a section of their own behind a confirmation.
+
+## Rich-text editor
+
+- **The lightest editor that does the job.** A text area when formatting adds nothing, Markdown with a preview for technical readers, a rich editor only when people format.
+- **A maintained editor library, not a hand-rolled editable region**, which loses undo, selection and paste handling.
+- **The editable region has a name**: a visible label tied to it, and `role="textbox"` with `aria-multiline="true"` when it is not a native text area.
+- **The toolbar is one keyboard stop**: `role="toolbar"` with a label, arrow keys between its buttons, each button named with its state in `aria-pressed`, and the shortcuts for bold, italic and link shown in the tooltips.
+- **Paste is cleaned** to the formats the editor supports, so pasted fonts and colours do not arrive.
+- **It saves like any long text**, as in Saving and settings.
+- **Stored HTML is sanitized on the server** against an allow-list of tags and attributes before it is stored and before it is rendered, as step 4 of the security module's injection-and-output protocol proves. When that module is not installed, this line is the rule.
+
 ## Never
 
 - A date picker that only offers previous and next month.
@@ -87,10 +113,10 @@ A form is a task with a cost in taps and seconds, and a menu is a decision made 
 - A list of more than ten rows without a live filter.
 - A multi-select that closes on the first click.
 - A dropdown clipped by a parent's overflow or cut off by the viewport edge.
-- A dropdown for two to four options.
+- A dropdown for five options or fewer.
 - A helper sentence under every field.
 - A box ticked for the person, or a decline smaller than its accept.
 
 ## Audit order
 
-On an existing form, fix in cost order. First the typeable date with a year jump, the filter on long selects and the disabled controls without a reason. Then the multi-selects that close on pick and the clipped dropdowns. Last, the dropdowns under five options.
+On an existing form, fix in cost order. First the typeable date with a year jump, the filter on long selects and the disabled controls without a reason. Then the multi-selects that close on pick and the clipped dropdowns. Last, the dropdowns of five options or fewer.

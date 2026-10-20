@@ -5,7 +5,7 @@ The anatomy of an admin, an editor or a management panel. Every value in it come
 ## Rail
 
 - **Fixed rail on the start side, content beside it.** About 15rem wide. The top holds the product mark with a short label next to it, the middle holds the navigation, and the foot holds the identity block pinned to the bottom.
-- **Collapse, do not hide.** Below about 900 CSS pixels the rail narrows to about 4rem and keeps only the icons. Every icon then carries an accessible name, and a tooltip names it on hover and on focus.
+- **Collapse, do not hide.** Below about 900 CSS pixels the rail narrows to about 4rem and keeps only the icons. Every icon then carries an accessible name, and a tooltip names it on hover and on focus. Without an icon set the rail keeps its labels, and below that width it becomes a drawer opened from a top bar instead of collapsing.
 - **Identity at the foot.** A round avatar, the person's name, their role in a small secondary style, and the sign-out action, all in one block that never scrolls away.
 
 ## Navigation link

@@ -2,7 +2,7 @@ name: design-specificity
 purpose: Separate the choices made for this brief from the treatments that would appear on any brief.
 scope: new surfaces and passes that set or change the visual direction
 trigger: manual, before building a new surface and before any pass that changes the visual direction
-repeat: once per surface
+repeat: once
 inputs: the brief or request, the surface under work, the token file, the rendered page
 stop: the brief pins the visual direction in its own words, in which case the brief wins and the run ends after step 1
 report: the subject, audience and primary job in one line each, the count of defaults found, and the replacement chosen for each

@@ -1,8 +1,8 @@
 name: bilingual-copy
 purpose: Write both languages together, in the chosen register, and size every container for the longer one, so that nothing has to be translated twice.
 scope: any string set that ships in more than one language, any fixed container that holds text, and any code that stores or displays translated text
-trigger: manual, on any string set that ships in more than one language
-repeat: once per string set, and again whenever a string is added to it
+trigger: manual, on any string set that ships in more than one language, and again whenever a string is added to it
+repeat: once
 inputs: the string set, the code that assembles and displays it, the containers that hold it, the product's voice file, the figures and conventions in bilingual.md
 stop: the product ships in one language and has no plan to ship in another, in which case the run ends after step 1; a step with nothing to act on in the text at hand ends as not applicable with its reason, and evidence the tools at hand cannot produce is recorded as not verifiable while the run continues
 report: languages, base and register, keys per language and missing keys, concatenated strings, translated text found in stored data, labels clipped at the narrowest width, and the widths set from the longer language
@@ -22,7 +22,7 @@ report: languages, base and register, keys per language and missing keys, concat
 3. Replace concatenation, and store keys.
    Task: rewrite every message assembled from fragments as one string per language with named placeholders, including one string per plural form the language needs, and change the call site that joined the fragments so that it passes the values to the template. The call site is part of the copy pass, not a separate code change (see [boundaries.md](../boundaries.md#code-around-the-strings)). Find every place translated text is written to storage and store the key instead. Concatenation is found by searching the copy layer for a quoted string next to a plus sign, the pattern `["'] *\+|\+ *["']` saved to a pattern file and run as in [tells.md](../tells.md#running-the-searches), and for template literals that hold both words and `${`.
    Time: 20 minutes.
-   Result: a search for string concatenation in the copy layer returns zero hits, every template is a single sentence with named placeholders, and zero translated strings are written to stored data.
+   Result: a search for string concatenation in the copy layer, its folders recorded, returns zero hits after the same search found a planted concatenation, every template is a single sentence with named placeholders, and zero translated strings are written to stored data.
 
 4. Apply the per-language conventions and re-read the register.
    Task: take every string through the conventions in [bilingual.md](../bilingual.md): gerund titles as infinitives, sentence case, opening question and exclamation marks, verbs added to bare fragments, identifiers left in English. Then re-read every string in the second language for the register declared in step 1.

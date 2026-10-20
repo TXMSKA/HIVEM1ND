@@ -21,6 +21,8 @@ Measured. Text translated from English into European languages grows, and the sh
 | 51 to 70 | 151 to 170 percent |
 | over 70 | 130 percent |
 
+The 51 to 70 row is printed as the source prints it, although it breaks the falling trend; until the source corrects it, a container for a string of 31 to 70 characters is sized for 170 percent (Convention).
+
 The consequence is the opposite of the intuition: the short labels squeezed into tabs, buttons and table headers are the ones that break, and long paragraphs are comparatively safe.
 
 Two working rules follow. For anything inside a fixed container, write the longer language first and size the container to it. Where a container cannot be made flexible, the label is chosen so that the longest translation fits, even when a shorter English word was available.
@@ -35,7 +37,7 @@ The practical form is a table or a resource file with one row per key and one co
 
 - Identifiers: routes, ids, permission keys, design tokens, CSS classes, file names. They are English whatever the content language, and one identifier in another language is the worst outcome, because it cannot be found by the name every other identifier follows.
 - Brand and product names.
-- Strings kept in one language on purpose, such as a role line or a brand description that reads the same in every market. Each one is listed in the voice file, so it is not reported as a missing translation.
+- Strings kept in one language on purpose, such as a role line or a brand description that reads the same in every market. Each one is listed on the one-language list of the voice file, so it is not reported as a missing translation.
 
 ## Documents in two languages
 
@@ -52,7 +54,7 @@ The result of a translation call is never persisted. A column name saved as tran
 
 ## Register
 
-Spanish, and any language with more than one form of address, needs its register chosen once per product (see the Spanish register option in [options.md](options.md)). The conversation in which the copy is written is not the product: a writer who speaks one regional form will slip into it while writing fast, so every Spanish string is re-read for register before it is called done (Practice).
+Spanish, and any language with more than one form of address, takes the register chosen once per product from the values in [options.md](options.md#spanish-register). The conversation in which the copy is written is not the product: a writer who speaks one regional form slips into it while writing fast, so every Spanish string is re-read for register before it is called done (Practice).
 
 ## Spanish conventions
 
@@ -63,7 +65,7 @@ Spanish, and any language with more than one form of address, needs its register
 - A person whose gender the product does not know is addressed in forms that do not agree with it: *Hola de nuevo*, not *Bienvenido de nuevo* (Practice).
 - A letter or email greeting ends in a colon, never a comma: *Hola, {first_name}:* (RAE, Diccionario panhispánico de dudas, dos puntos 2.9, https://www.rae.es/dpd/).
 - Quotation marks: « » first, then “ ”, then ‘ ’ (RAE, Diccionario panhispánico de dudas, comillas).
-- Neutral vocabulary across regions: prefer the term the Diccionario panhispánico de dudas gives without a regional mark, and avoid a word it records as split by region. *Correo electrónico*, not *email* or *mail*, which it calls unnecessary; *hacer clic*, never *click*; neither *computadora* (most of America) nor *ordenador* (Spain) when *dispositivo* or *equipo* says it (Convention for the choice, the regional facts from the dictionary).
+- Neutral vocabulary across regions: the term the Diccionario panhispánico de dudas gives without a regional mark, never a word it records as split by region. *Correo electrónico*, not *email* or *mail*, which it calls unnecessary; *hacer clic*, never *click*; and *dispositivo* or *equipo* in place of *computadora* (most of America) or *ordenador* (Spain) wherever either word says it (Convention for the choice, the regional facts from the dictionary).
 
 ## Templates, never concatenation
 
@@ -83,6 +85,16 @@ A bare English noun or fragment gives Spanish nothing to agree with, so the tran
 A label that is a fragment in English becomes a whole action in both columns. *Filters* becomes *Filtrar*, and the English column becomes *Filter* to match. This costs one word in English and removes a whole class of wrong translations.
 
 The rule is for controls that act: filters, toggles, menu commands. Navigation items, statuses and column headers name places, states and values, and stay nouns or adjectives agreeing with the noun they describe (*Pagada* for an invoice), with the noun written in the key's note for the translator.
+
+## Right-to-left languages
+
+Arabic, Hebrew, Persian and Urdu run right to left, and a string in them often carries a left-to-right part: a placeholder, a brand name, a number, a code (W3C, Inline markup and bidirectional text in HTML, https://www.w3.org/International/articles/inline-bidi-markup/).
+
+- Every placeholder and every embedded part whose direction may differ is isolated, so punctuation and numbers land where the reader expects: a `bdi` element in markup, and the isolate characters U+2068 and U+2069 around it only where markup cannot go, such as an attribute value or a page title.
+- Punctuation follows the language: the Arabic comma and question mark, never the Latin ones.
+- A string is never reversed by hand to look right in a left-to-right editor; it is stored in reading order and the direction is set on the element.
+- The key's note names the direction and any part that must stay left to right, so the translator does not guess.
+- Layout mirroring belongs to the design module, [foundations](../design/categories/foundations.md#writing-direction).
 
 ## Verification
 

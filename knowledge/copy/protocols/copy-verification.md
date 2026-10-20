@@ -2,7 +2,7 @@ name: copy-verification
 purpose: Produce the numbers that show a first draft is clean, or that a draft improved on the one before it, and name the ones that prove nothing.
 scope: any copy change before it ships, and the end of every rewrite pass
 trigger: manual, after any rewrite pass and before any copy change ships
-repeat: once per draft
+repeat: once
 inputs: the draft, the draft before it when one exists, the definitions in measures.md, the dash policy in options.md, a style linter configured for the project when one exists
 stop: none besides a failed step; with no previous draft the run is a first-draft run, where every comparison below is replaced by its absolute target; a step with nothing to act on in the text at hand ends as not applicable with its reason, and evidence the tools at hand cannot produce is recorded as not verifiable while the run continues
 report: the four signals, before and after or once for a first draft, the hits remaining per pattern class with their justifications, the linter errors or its absence, the word ratio or not applicable, the missing-fact markers with their locations, and every check recorded as not verifiable
@@ -17,12 +17,12 @@ report: the four signals, before and after or once for a first draft, the hits r
 2. Run the pattern pass.
    Task: run the copula-avoidance, trailing-participial, negative-parallelism, vague-attribution and collaborative-residue searches from [tells.md](../tells.md) over the new draft.
    Time: 5 minutes.
-   Result: every search returns zero hits, or each survivor is listed with the file, the line and the sentence that earns it. An unexamined hit count is not a result.
+   Result: every search returns zero hits after the positive control in [tells.md](../tells.md#running-the-searches), or each survivor is listed with the file, the line and the sentence that earns it. An unexamined hit count is not a result.
 
 3. Measure the shape.
    Task: compute the mean and the standard deviation of sentence length on the prose of each draft, as [measures.md](../measures.md#the-four-signals) defines prose, and a readability grade when the text is long form and a previous draft exists. The signal is the variance, since the failure being corrected is uniform density rather than length (https://arxiv.org/abs/2410.16107).
    Time: 10 minutes.
-   Result: mean and standard deviation recorded for each draft, or recorded as not applicable when the prose holds fewer than five sentences. Where applicable, the standard deviation is at or above the threshold in [measures.md](../measures.md#sentence-length-mean-and-standard-deviation), and any grade is reported as the change against the previous draft.
+   Result: mean and standard deviation recorded for each draft, or as not applicable when the text has no prose. From fifteen sentences of prose, the mean is under 25 words and the standard deviation at or above 5, as [measures.md](../measures.md#sentence-length-mean-and-standard-deviation) sets; below fifteen, both are reported without a verdict. Any grade is reported as the change against the previous draft.
 
 4. Run the linter.
    Task: run vale, proselint or the linter the project already uses, with the project configuration, over each draft. When the project has none or the tool is not installed, record the linter check as not verifiable with the tools at hand and go on.

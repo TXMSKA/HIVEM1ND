@@ -57,7 +57,7 @@ Page copy handed over as a file is a copy deck: one slot per line, the slot name
 ## Articles
 
 - The first paragraph states the point. The reader who stops there has the whole argument.
-- Headings state claims or questions a reader has, in sentence case, and none sits over less than five lines of body (Convention).
+- Headings state claims or questions a reader has, in sentence case, and each sits over five lines of body or more (Convention).
 - No closing paragraph that restates what was already said. The last sentence of the argument is the ending.
 - Articles carry a last updated date where the age of the content changes how it should be read.
 - Sentence length varies. A draft cut into uniformly short sentences scores worse, not better (see [measures.md](measures.md)).

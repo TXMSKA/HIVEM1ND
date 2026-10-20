@@ -2,7 +2,7 @@ name: tell-removal
 purpose: Remove the patterns that make a draft read as machine-written, keeping every word that is doing work.
 scope: any prose or string set written or rewritten with a model, or that reads as generated, in any category
 trigger: manual, on any draft written or rewritten with a model
-repeat: once per draft, and again after any rewrite of it
+repeat: until the tell density is lower than the baseline or zero, three runs at most
 inputs: the draft, the marks from rewrite-boundary, the catalogue in tells.md, the definitions in measures.md, the dash policy in options.md
 stop: every section is marked untouchable by rewrite-boundary, in which case the run ends after step 1; a step with nothing to act on in the text at hand ends as not applicable with its reason, and evidence the tools at hand cannot produce is recorded as not verifiable while the run continues
 report: the four signals before and after, hits per pattern class before and after, the count of flagged words kept with a reason, and the word ratio
@@ -47,4 +47,4 @@ report: the four signals before and after, hits per pattern class before and aft
 8. Recount and compare.
    Task: repeat step 1 on the rewritten draft and put the two tables side by side.
    Time: 5 minutes.
-   Result: tell density is lower than the baseline or already zero, dash density is within the policy, and the word ratio is recorded. A density that did not fall means the pass failed and is run again rather than reported.
+   Result: tell density is lower than the baseline or already zero, dash density is within the policy, and the word ratio is recorded. A density that did not fall means the pass failed and is run again rather than reported; after three runs without a fall, the run stops and reports the figures as a fail.

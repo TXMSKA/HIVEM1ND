@@ -22,7 +22,7 @@ These carry no information and appear whatever the subject.
 - Emoji or stray Unicode glyphs standing in for an icon set.
 - A sparkle glyph marking anything as smart or generated, and a check mark as the bullet of every list.
 - A decorative terminal window or code block on a page that sells nothing technical.
-- A badge, pill or capsule around ordinary metadata. A status that changes what the person does next, such as paid or overdue, is state rather than metadata: it is shown as its word in the status colour, with a second cue from [data-display](categories/data-display.md), Live and changing values.
+- A badge, pill or capsule around ordinary metadata. A status that changes what the person does next, such as paid or overdue, is state rather than metadata: it is shown as its word in the status colour, with a second cue from [data-display](categories/data-display.md#live-and-changing-values).
 - Version or build labels, scroll cues, rotated vertical text and decorative crosshair lines on a page that is not about any of them.
 
 ## Page scaffolds
@@ -64,22 +64,20 @@ Generated interfaces cluster. Landing on one of these by accident means the axis
 
 ## Searches
 
-Run these over the stylesheets, markup and scripts of the components, with the token file excluded, in the forms given in [evidence.md](evidence.md), Portable commands. Each should return no hits, or each hit should carry a line reference and the sentence in the brief that earns it. The colour search runs over stylesheets and `style` attributes only, because an anchor such as `href="#tasks"` or an id selector matches a hex pattern. When the tokens live in a `:root` block at the top of the only stylesheet, that block is the token file: the searches run from the line after it, and the start line is recorded with the result. The `theme-color` meta in the document head is the one place a colour value may sit outside the token file, one per scheme, equal to the page surface token.
+Run these over the stylesheets, markup and scripts of the components, with the token file excluded, in the forms given in [evidence.md](evidence.md#portable-commands), and record the folders and globs searched. Each should return no hits, or each hit should carry a line reference and the sentence in the brief that earns it; a zero counts only after the same command found a hit in a planted line, as [evidence.md](evidence.md#search-that-returns-no-hits) sets out. The colour search runs over stylesheets and `style` attributes only, because an anchor such as `href="#tasks"` or an id selector matches a hex pattern. When the tokens live in a `:root` block at the top of the only stylesheet, that block is the token file: the searches run from the line after it, and the start line is recorded with the result. The `theme-color` meta in the document head is the one place a colour value may sit outside the token file, one per scheme, equal to the page surface token.
 
-| Search | Finds |
-| --- | --- |
-| `text-transform:\s*uppercase` | All-caps labels and eyebrows |
-| `letter-spacing:\s*0\.0[6-9]|letter-spacing:\s*0\.[1-9]` | Tracked-out small text |
-| `>\s*0[0-9]\s*<` | Decorative section numbers |
-| `→|·` | Appended arrows and middle-dot metadata |
-| `font-family:[^;]*mono` | Monospace outside code and measurement |
-| `linear-gradient|radial-gradient|repeating-linear-gradient` | Decorative gradients, stripes and gradient text |
-| `feTurbulence` | Fake grain and paper texture |
-| `#[0-9a-fA-F]{3,8}|rgba?\(|hsla?\(|oklch\(` in stylesheets | Colour written outside the token file |
-| `border-radius:\s*[0-9]` | Radius written as a literal instead of a shape token |
-| `font-size:\s*[0-9]` | Font size written as a literal instead of a type role |
-| `box-shadow:[^;]*0 0 ` | Zero offset halos |
-| `min-height:\s*100s?d?vh` | Content bands stretched to the viewport |
-| `transition:\s*all` | Unlisted transition properties |
-| `scale\(0\)` | Scale entrances from nothing |
-| `outline:\s*none` | Focus rings removed |
+- `text-transform:\s*uppercase`: all-caps labels and eyebrows.
+- `letter-spacing:\s*0?\.(0[6-9]|[1-9])`: tracked-out small text.
+- `>\s*0[0-9]\s*<`: decorative section numbers.
+- `→|·`: appended arrows and middle-dot metadata.
+- `font-family:[^;]*mono`: monospace outside code and measurement.
+- `(repeating-)?(linear|radial|conic)-gradient`: decorative gradients, stripes and gradient text.
+- `feTurbulence`: fake grain and paper texture.
+- `#[0-9a-fA-F]{3,8}|rgba?\(|hsla?\(|hwb\(|(ok)?(lab|lch)\(|color\(`, in stylesheets: colour written outside the token file.
+- `border-radius:\s*[0-9.]`: radius written as a literal instead of a shape token.
+- `font-size:\s*[0-9.]`: font size written as a literal instead of a type role, `.875rem` included.
+- `box-shadow:([^;]*[ ,])?0(px)?\s+0(px)?\s+[1-9]`: zero offset halos; a focus ring drawn as a spread, `0 0 0 3px`, is an expected survivor.
+- `min-height:\s*100[sdl]?vh`: content bands stretched to the viewport.
+- `transition(-property)?:\s*all`: unlisted transition properties.
+- `scale\(\s*0\s*[,)]|scale:\s*0\s*[;}]`: scale entrances from nothing.
+- `outline(-style)?:\s*(none|0)\s*([;}!]|$)`: focus rings removed.

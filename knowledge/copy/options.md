@@ -54,7 +54,7 @@ Yes or no, decided once per project. *Can't* reads warmer than *cannot*, and a m
 ## Emoji
 
 - **None.** The default everywhere, including headings and bullets, where emoji as formatting is a catalogued tell (https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing). An emoji inside a label, a heading or a sentence is text and goes. A brand mark and an icon slot are not text: they belong to the design of the surface and are left to it.
-- **Mirror.** In a message to a person, only after that person has used one.
+- **Mirror.** In a message to a person, an emoji only after that person used one first; never in interface text, pages or documents.
 - **Content.** Where the emoji is the thing being described, such as a reaction picker.
 
 ## Opening and closing
@@ -64,7 +64,7 @@ Yes or no, decided once per project. *Can't* reads warmer than *cannot*, and a m
 
 ## Spanish register
 
-For any Spanish column. Register is decided once per product, written in its voice file (see [voice-specification](protocols/voice-specification.md)), and re-read before strings are called done, because a writer slips into their own dialect when writing fast (Practice).
+For any Spanish column. Register is decided once per product and written in its voice file (see [voice-specification](protocols/voice-specification.md)); the re-read that keeps it is in [bilingual.md](bilingual.md#register).
 
 - **Neutral impersonal.** Sentences use *se* or the third person (*Se guarda al instante*, *El informe muestra cada cambio*); actions are infinitives (*Guardar*, *Volver a intentarlo*); no form of address at all, so no *tú*, *vos* or *usted* and no regional words. The default for every product (Practice: voseo and tuteo were both rejected as unprofessional in public products).
 - **Usted.** Pick only when a product must address the reader directly and its audience expects formality, such as legal, financial, health or institutional products.
@@ -74,11 +74,25 @@ For any Spanish column. Register is decided once per product, written in its voi
 
 ## Numbers, dates, currency and quotation marks
 
-The format of each, per language, is fixed in the defaults table of [essentials.md](essentials.md#defaults) with its source in CLDR or the Real Academia Española. Three rules hold whatever the format (Convention):
+Three rules hold whatever the format (Convention):
 
 - A value the interface shows is a named placeholder filled by the locale formatter of the platform, never separators or symbols typed into the template: `Total: {amount}`, not `Total: ${amount}.00`.
-- A date in running text carries the month in words, because the all-digit forms read differently in English and Spanish.
+- A date in running text carries the month in words, because the all-digit forms read differently in English and Spanish (`M/d/yy` against `d/M/yy`).
 - The locale tag is part of the voice file (`es-ES`, `es-419`, `en-US`), because Spanish number and currency formats differ between Spain and Latin America.
+
+The format of each, per language. Sources: CLDR 48 locale data (https://github.com/unicode-org/cldr-json), the RAE Diccionario panhispánico de dudas (https://www.rae.es/dpd/) and Keep a Changelog 1.1.0 (https://keepachangelog.com/en/1.1.0/).
+
+| Item | Format | Source |
+| --- | --- | --- |
+| Number | `en` `1,234.5`; `es` (Spain) `1234,5` and `12.345,6`; `es-419` and `es-MX` `1,234.5`; `es-AR` `1.234,5`; hand-written Spanish prose takes no separator up to four digits | CLDR 48; RAE DPD, números |
+| Currency | `en` symbol first, no space: `$1,234.56`, the ISO code when the symbol is shared; `es` after, with a space: `1234,56 €`; `es-419` before, no space; `es-AR` before, with a space; an alphabetic code always spaced: `25 USD` | CLDR 48; RAE DPD, símbolo 5.5 |
+| Percent | `en` `25%`; `es` `25 %`; `es-419` `25%` | CLDR 48; RAE DPD, símbolo 5.4 |
+| Date in text | English `September 18, 2026`; Spanish `18 de septiembre de 2026` | CLDR 48 long format; RAE DPD, fecha |
+| Date in a changelog | ISO 8601, `2026-09-18` | Keep a Changelog 1.1.0 |
+| Time | `en` `3:30 PM`; `es` `15:30`; `es-419` `3:30 p.m.` | CLDR 48 short time |
+| Relative time | From `Intl.RelativeTimeFormat` with `numeric: "auto"`: *now*, *5 minutes ago*, *yesterday*, in Spanish *ahora*, *hace 5 minutos*, *ayer*; the date from seven days on; the absolute date and time on focus or hover | CLDR 48 relative-time fields; Convention for the seven-day cut |
+| Quotation marks | English “ ” then ‘ ’; Spanish « » then “ ” then ‘ ’ | CLDR 48 `en`; RAE DPD, comillas |
+| Spanish greeting | `Hola, {first_name}:` with a colon, never a comma | RAE DPD, dos puntos 2.9 |
 
 ## Claim level
 

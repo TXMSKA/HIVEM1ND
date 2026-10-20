@@ -2,9 +2,9 @@ name: visual-critique
 purpose: Judge the rendered surface as a person will see it, because passing numbers do not make a page good. It is a gate: floors and automated checks passing are not a verdict on the design.
 scope: any rendered page, view or component after a design or polish pass, before it is reported as done
 trigger: task close, at the end of every design or polish pass, and before any interface work is reported as done
-repeat: once per pass, and again after the fixes it asked for
+repeat: until the fresh-eyes verdict is ship, or a round resolves nothing
 inputs: the rendered surface at the narrow, the middle and the wide width, the approved board or mockup when one exists, the design plan, the state inventory
-stop: the evidence cannot be captured, in which case the pass is reported as not verified rather than as done
+stop: the evidence cannot be captured, in which case the pass is reported as not verifiable rather than as done
 report: the named screenshots, the board comparison, the proportion check, the critique with ranked findings and a fix each, the heuristic score when a full review was asked for, and the fresh-eyes verdict
 
 ## Steps
@@ -25,7 +25,7 @@ report: the named screenshots, the board comparison, the proportion check, the c
    Result: per screen, each misalignment, uneven gap or broken component with its element and measured offset, or the line "proportion holds".
 
 4. Write the judgment before any number.
-   Task: answer the questions in [critique.md](../critique.md) against the captures only: specificity, hierarchy, the one move, alignment and anchoring, rhythm, consistency, states and the edges. Check the surface against the template look in [defaults.md](../defaults.md), Template chrome.
+   Task: answer the questions in [critique.md](../critique.md#questions) against the captures only: specificity, hierarchy, the one move, alignment and anchoring, rhythm, consistency, states and the edges. Check the surface against the template look in [defaults.md, Template chrome](../defaults.md#template-chrome).
    Time: 20 minutes.
    Result: one line per question naming the element it concerns, written before any detector, search or score was read.
 
@@ -45,6 +45,6 @@ report: the named screenshots, the board comparison, the proportion check, the c
    Result: the ranked list with a fix against each, and a new capture of every P0 and P1 fix showing it resolved.
 
 8. Get fresh eyes.
-   Task: hand the captures and the plan, without the build reasoning, to a reviewer who did not build the surface, by the rule in [critique.md](../critique.md), Fresh eyes.
+   Task: hand the captures and the plan, without the build reasoning, to a reviewer who did not build the surface, by the rule in [critique.md, Fresh eyes](../critique.md#fresh-eyes).
    Time: 20 minutes.
-   Result: the verdict that rule defines. Without it the surface is not reported as done; when no reviewer is available, it is reported as not verified and left to a person.
+   Result: the verdict that rule defines. Without it the surface is not reported as done; when no reviewer is available, it is reported as not verifiable and left to a person.

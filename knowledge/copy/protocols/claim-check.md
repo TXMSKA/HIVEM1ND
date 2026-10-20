@@ -2,7 +2,7 @@ name: claim-check
 purpose: Keep every claim of quality, scale or importance tied to something that exists, and nothing invented to fill a gap.
 scope: marketing and product pages, announcements, articles, release notes, and any text that asserts quality, scale or importance
 trigger: manual, on any diff that adds or changes such a claim
-repeat: once per draft
+repeat: once
 inputs: the draft, the product brief or rules file, the legal and policy pages of the same site
 stop: the draft asserts nothing about quality, scale or importance, in which case the run ends after step 1; a step with nothing to act on ends as not applicable, and a referent the tools at hand cannot trace is recorded as not verifiable
 report: claims with a referent against claims without, the invented items removed, the existing quotes and names flagged for the owner, the missing-fact markers placed, the claims that contradicted a policy page, and the positioning check

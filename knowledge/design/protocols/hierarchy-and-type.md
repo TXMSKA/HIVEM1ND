@@ -1,8 +1,8 @@
 name: hierarchy-and-type
 purpose: Make one reading order obvious and keep every size, weight and measure on a named role.
 scope: headings, body copy, type scale, weights, measure and numerals
-trigger: manual, on any change to headings, body copy, type scale, weights, measure or numerals
-repeat: once per surface, and again whenever a role is added
+trigger: manual, on any change to headings, body copy, type scale, weights, measure or numerals, and again whenever a role is added
+repeat: once
 inputs: the type roles in the token file, the stylesheet, the rendered page at every breakpoint
 stop: the surface has no text of its own and only composes typed components
 report: the role table, the measure per breakpoint, the largest computed font size, the lowest letter spacing, and the count of sizes written outside the roles
@@ -15,14 +15,14 @@ report: the role table, the measure per breakpoint, the largest computed font si
    Result: a table of text blocks against roles with no empty cells, and the count of distinct font sizes rendered on visible text no higher than the count of roles. Two roles may share a size and differ by weight or colour; a visually hidden heading is left out of the count.
 
 2. Remove the free sizes.
-   Task: search the component stylesheets for `font-(size|weight):\s*[0-9]|line-height:\s*[0-9]` outside the role definitions, and move each hit onto a role.
+   Task: search the component stylesheets for `font-(size|weight):\s*[0-9.]|line-height:\s*[0-9.]` outside the role definitions, so `.875rem` is caught too, and move each hit onto a role.
    Time: 15 minutes.
-   Result: the search returns zero hits.
+   Result: the search returns zero hits after a positive control, as in [evidence.md](../evidence.md#search-that-returns-no-hits).
 
 3. Measure the measure.
    Task: compute the characters per line of every body block at each breakpoint, by the method in [evidence.md](../evidence.md).
    Time: 15 minutes; when a block cannot be narrowed without breaking the grid, record the number and raise it as a finding.
-   Result: every body block computes between 65 and 75 characters, and none exceeds 80. Serif body text may sit at the top of the range and carries more line height than the sans equivalent.
+   Result: every body block computes between 65 and 75 characters, which a proportional sans usually reaches at 55 to 60ch, and none exceeds 80. Serif body text may sit at the top of the range and carries more line height than the sans equivalent.
 
 4. Cap the display and the tracking.
    Task: read the computed font size of the largest text and the computed letter spacing of every element. On a Persuade section, also read the computed face, weight and letter spacing of the display role against the body role.

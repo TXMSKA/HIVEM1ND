@@ -1,8 +1,8 @@
 name: colour-and-theming
 purpose: Keep colour on semantic tokens, carrying meaning, with every pair above its contrast target in each theme that ships.
 scope: colour, tokens, surfaces, borders, shadows and light or dark themes
-trigger: manual, on any change to colour, tokens, surfaces, borders, shadows, or a light or dark theme
-repeat: once per surface, and again whenever a token is added or re-pointed
+trigger: manual, on any change to colour, tokens, surfaces, borders, shadows, or a light or dark theme, and again whenever a token is added or re-pointed
+repeat: once
 inputs: the token file, the component tree, the rendered page in each theme that ships
 stop: a measured pair falls below its target and cannot be raised without leaving the palette, in which case the palette changes before the pass continues
 report: the contrast table for each theme that ships, the count of colour literals outside the token file, and the count of colour-only cues
@@ -40,6 +40,6 @@ report: the contrast table for each theme that ships, the count of colour litera
    Result: the count of colour-only cues is zero, and a screenshot in greyscale still distinguishes every state and every chart series.
 
 7. Keep the surfaces honest.
-   Task: check the edges. Shadows carry an offset and a soft blur; a zero offset halo is decoration. Elevation is declared once, as a border or as a shadow, not both. Coloured borders stay at or below 1 pixel, except the selection indicator of a navigation item. Borders and shadows tint toward the background hue. Decoration never borrows the action colour, so the eye can still find the action. Nested radii stay concentric, with the child radius never larger than the parent; when the parent radius minus the padding is zero or less, the child takes the smallest radius step.
+   Task: check the edges. Shadows carry an offset and a soft blur; a zero offset halo is decoration. Elevation is declared once, as a border or as one shadow token, not both, as in [tokens.md](../tokens.md#shape). Coloured borders stay at or below 1 pixel, except the selection indicator of a navigation item. Borders and shadows tint toward the background hue. Decoration never borrows the action colour, so the eye can still find the action. Nested radii stay concentric, with the child radius never larger than the parent; when the parent radius minus the padding is zero or less, the child takes the smallest radius step.
    Time: 15 minutes.
-   Result: the search `box-shadow:[^;]*0 0 ` returns zero hits, the computed width of every coloured border outside navigation selection is at or below 1 pixel, on a restrained palette the accent appears only on actions, selection and state, and no decorative gradient, glow or glass surface remains that the brief did not ask for.
+   Result: the search `box-shadow:([^;]*[ ,])?0(px)?\s+0(px)?\s+[1-9]` returns zero hits, or only focus rings drawn as a spread, the computed width of every coloured border outside navigation selection is at or below 1 pixel, on a restrained palette the accent appears only on actions, selection and state, and no decorative gradient, glow or glass surface remains that the brief did not ask for.

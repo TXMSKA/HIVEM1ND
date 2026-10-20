@@ -34,7 +34,7 @@ The copy pass owns the code that decides which words appear, because the text ca
 
 - Part of the pass: replacing concatenated fragments with one template per sentence and per plural form at the call site, splitting a key shared by call sites that need different words, adding a key and its row in every language, extending the lookup that applies the strings so it also fills translated attributes such as placeholders and accessible names, and giving an icon-only control its accessible name.
 - A key that the pass's own split or template leaves with no call site is removed from every language in the same pass, and the report lists each removed key by name. A key that was already unused before the pass is left in place and listed for the owner, since something outside the target may still read it.
-- Not part of the pass unless the request includes code: new visible elements such as a label that replaces a placeholder, new controls, new files, and any change of behaviour. Each is listed as an open item with the rule that asks for it.
+- Not part of the pass unless the request includes code: new visible elements, new controls, new files, and any change of behaviour. Each is listed as an open item with the rule that asks for it. A visible label that replaces a placeholder is written by the design pass, and this pass reviews its words; when no design pass runs, it is listed as an open item too.
 
 ## The voice file
 

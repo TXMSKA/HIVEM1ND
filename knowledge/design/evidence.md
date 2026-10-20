@@ -21,7 +21,9 @@ A capture is valid only when entrance animations had settled, it starts from the
 
 ## Search that returns no hits
 
-The negative checks in [defaults.md](defaults.md) and in the protocols are run as searches over the component tree, and the finished result is zero hits. When hits remain, each one carries a file and line reference and the sentence in the brief that earns it. A search nobody ran is not a clean search.
+The negative checks in [defaults.md](defaults.md#searches) and in the protocols are run as searches over the component tree, and the finished result is zero hits. When hits remain, each one carries a file and line reference and the sentence in the brief that earns it. A search nobody ran is not a clean search.
+
+A zero counts only with its scope recorded, the folders and globs searched, and a positive control: the same command, run the same way, first finds a known hit, such as a line planted in a scratch file inside the scope and removed afterwards. A zero from a command that errored, or from a pattern the shell rewrote, proves nothing.
 
 ## Keyboard walk transcript
 
@@ -57,27 +59,27 @@ Some evidence cannot be produced by the tool at hand. The check is then recorded
 | Reduced motion | the tool emulates colour scheme only | the `prefers-reduced-motion` block read in the stylesheet, listing what it removes | the state change with the system setting on |
 | Live region announcement | no screen reader in the tool | the role or `aria-live` read from the accessibility tree before the message arrives | the announcement with a screen reader |
 | Real touch, real ultra-wide display | emulation only | the emulated width, marked emulated | the surface on the device |
-| A second reviewer for fresh eyes | a single agent with no second session | the critique written from captures before any number | the verdict in [critique.md](critique.md), Fresh eyes |
+| A second reviewer for fresh eyes | a single agent with no second session | the critique written from captures before any number | the verdict in [critique.md](critique.md#fresh-eyes) |
 | A live change of the system theme | the emulated change fires no media event | a reload under each scheme | switching the system theme with the page open |
 | States behind a sign-in | the pass may not or cannot authenticate | the states forced through the DOM or a mocked response, marked forced | each signed-in state in a real session |
 | A capture confirmed by eye | the pane scales a wide capture below legibility and offers no zoomed crop | captures at the narrow and the middle width, confirmed; the wide one recorded with its computed numbers | the wide capture at full size |
 
 ## Portable commands
 
-Every search in this module is written as a regular expression that `rg` runs unchanged in PowerShell and in a Unix shell. Whether `rg` is available is checked with `rg --version`, not `which`, since some shells provide it as a function that `which` does not report. Scope each search to the files it concerns rather than the whole tree.
+Every search in this module is written as a regular expression that `rg` runs unchanged in PowerShell and in a Unix shell. Whether `rg` is available is checked with `rg --version`, not `which`, since some shells provide it as a function that `which` does not report. Scope each search to the files it concerns rather than the whole tree, and quote the pattern in single quotes so neither shell rewrites `$` or `\`.
 
-| Shell | Form |
-| --- | --- |
-| Any, with `rg` | `rg -n "<pattern>" -g "*.css" <folder>` |
-| PowerShell without `rg` | `Get-ChildItem <folder> -Recurse -Include *.css \| Select-String -Pattern '<pattern>'` |
-| Unix shell without `rg` | `grep -rnE --include='*.css' '<pattern>' <folder>`; where `\s` is not understood, write `[[:space:]]` |
+- Any shell with `rg`: `rg -n '<pattern>' -g '*.css' <folder>`.
+- PowerShell without `rg`: `Get-ChildItem <folder> -Recurse -Include *.css | Select-String -CaseSensitive -Pattern '<pattern>'`.
+- Unix shell without `rg`: `grep -rnE --include='*.css' '<pattern>' <folder>`; where `\s` is not understood, write `[[:space:]]`.
 
 Measurements in the running page are read with a script in the browser console or the browser tool, which is the same on every system: `getComputedStyle(el)` for colours, sizes and durations, `el.getBoundingClientRect()` for targets and shift, and `document.documentElement.scrollWidth` against `clientWidth` for overflow.
 
 ## Proportion
 
-A pass scales to the surface. The Time on each step is a ceiling. A step whose subject the surface does not have, such as dates on a form with none or a grid on a single column, ends as not applicable with its reason in one line. On a surface of one or two screens, a step that asks for a table of every object records the objects that fail and the count of those that pass.
+A pass scales to the surface. The Time on each step is a ceiling, not a target. A step whose search or inventory finds nothing to act on, or whose subject the surface does not have, such as dates on a form with none or a grid on a single column, ends as not applicable with its reason in one line, and the run continues. On a surface of one or two screens, a step that asks for a table of every object records the objects that fail and the count of those that pass.
 
 ## Recording
+
+Every check ends with one verdict: pass, fail, not applicable, not run or not verifiable. A fail stops the step and is reported against what was expected; not run and not verifiable carry their reason and never count as pass.
 
 The evidence belongs to the pass that produced it, so it goes where that pass is reported: in the task report when a task is open, otherwise in the reply that closes the pass. The numbers go inline and the captures are named after the state. Nothing is reported as verified without the artifact that verified it, and a check that could not be run is reported as not run, or as not verifiable with the tool at hand, rather than left out.

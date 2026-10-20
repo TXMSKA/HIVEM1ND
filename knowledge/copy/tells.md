@@ -1,6 +1,10 @@
 # Tells
 
-A tell is a pattern that survives in a draft because it was cheap to produce, not because it carries meaning. The catalogue below is a flag list. It is never a ban list, and it is never evidence of who wrote a text (see the note in [INDEX.md](INDEX.md)).
+A tell is a pattern that survives in a draft because it was cheap to produce, not because it carries meaning. The catalogue below is a flag list. It is never a ban list, and it is never evidence of who wrote a text.
+
+## What the counts are not
+
+The tell list is a writing-quality checklist, never evidence of authorship. One study tested fourteen detection systems and found them neither accurate nor reliable, with a bias toward calling text human-written (https://arxiv.org/abs/2306.15666). A high count says the text is worth another pass, and nothing else. A rule that would only be worth following to defeat a detector does not belong here.
 
 ## The deletion test
 
@@ -97,10 +101,12 @@ Save the pattern to a file and the corpus to another, both UTF-8. The same count
 
 - ripgrep, any shell: `rg -i --count-matches -f pattern.txt corpus.txt`.
 - PowerShell 5.1 or 7, no ripgrep: `(Select-String -Path corpus.txt -Pattern (Get-Content pattern.txt -Raw).Trim() -AllMatches -Encoding utf8).Matches.Count`. Select-String is case-insensitive by default.
-- Unix shell, no ripgrep: `LC_ALL=C.UTF-8 grep -o -i -P -f pattern.txt corpus.txt | wc -l`.
+- Unix shell, no ripgrep: first `sed 's/\\u2014/\\x{2014}/g' pattern.txt > pattern-grep.txt`, then `LC_ALL=C.UTF-8 grep -o -i -P -f pattern-grep.txt corpus.txt | wc -l`, with another UTF-8 locale such as `en_US.UTF-8` where `C.UTF-8` does not exist.
 - Any shell with Node.js: the pattern as `new RegExp(pattern, 'gi')` over the corpus text, counting the matches.
 
-One character differs by engine. The em dash is written `\u2014` for ripgrep, PowerShell and JavaScript, and `\x{2014}` for grep with Perl syntax, which rejects `\u`. The dash search is therefore `\u2014|\s--\s`, or `\x{2014}|\s--\s` under grep. The trailing participial search and the combined pattern carry the same `\u2014`, written `\x{2014}` under grep.
+One character differs by engine. The em dash is written `\u2014` for ripgrep, PowerShell and JavaScript, and `\x{2014}` for grep with Perl syntax, which rejects `\u` with an error and then counts nothing, so the pipe still prints 0. The dash search is therefore `\u2014|\s--\s`, or `\x{2014}|\s--\s` under grep, and the sed line above converts the combined pattern.
+
+A count counts only with its corpus named and a positive control: the same command, run on a copy of the corpus with one planted line such as `I hope this helps`, finds that hit first. A command that printed an error has produced no count, whatever number follows it.
 
 ## Structural tells
 

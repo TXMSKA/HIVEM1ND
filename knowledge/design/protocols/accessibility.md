@@ -1,8 +1,8 @@
 name: accessibility
 purpose: Meet WCAG 2.2 level AA and keep the keyboard path whole.
 scope: any rendered page, component or view, before it ships
-trigger: manual, on any change that reaches the rendered page, and always before a surface ships
-repeat: once per surface, and again after any change to markup, focus or colour
+trigger: manual, on any change that reaches the rendered page, again after any change to markup, focus or colour, and always before a surface ships
+repeat: once
 inputs: the rendered page, the markup, the token file, a keyboard
 stop: the keyboard path is broken at any stop, in which case the pass stops and the break is fixed before anything else
 report: the keyboard walk transcript, the contrast table, the undersized targets with their measurements, and the reflow measurement
@@ -27,7 +27,7 @@ report: the keyboard walk transcript, the contrast table, the undersized targets
 4. Measure the targets.
    Task: read the bounding box of every pointer target in CSS pixels, including padding and any pseudo-element hit area.
    Time: 20 minutes.
-   Result: every target measures at least 24 by 24 CSS pixels, or falls under an exception: an equivalent control elsewhere on the page that meets the size, a target inline in a sentence whose size the line height constrains, a target sized by the browser and not by the page, a target whose exact presentation is essential, or an undersized target spaced so that a 24 pixel circle centred on it intersects no other target. On touch, 44 by 44 is the working size, and a visual smaller than the target gets its hit area expanded rather than its box.
+   Result: every target measures at least 24 by 24 CSS pixels, or falls under an exception: an equivalent control elsewhere on the page that meets the size, a target inline in a sentence whose size the line height constrains, a target sized by the browser and not by the page, a target whose exact presentation is essential, or an undersized target spaced so that a 24 pixel circle centred on it intersects no other target. On touch, 44 by 44 is the working size, a visual smaller than the target gets its hit area expanded rather than its box, and the touch measurement is recorded in [responsive-behaviour](responsive-behaviour.md), step 5.
 
 5. Meet the contrast numbers.
    Task: take the contrast tables from [colour-and-theming](colour-and-theming.md), or compute them here when that protocol did not run. A pair an approved design misses is met by its soft option in [essentials.md](../essentials.md#applying-a-floor-to-a-design), and a fix that changes anything visible is shown beside the board before it ships.
