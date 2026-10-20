@@ -5787,7 +5787,7 @@ function renderSignedOut(app) {
       feedback.append(element(document, 'p', { class: 'phone-code-error', text: t(app.phoneError) }));
       if (Number.isInteger(app.phoneTriesLeft)) feedback.append(element(document, 'p', { 'data-tries-left': String(app.phoneTriesLeft), text: t('phoneTriesLeft', { count: app.phoneTriesLeft }) }));
     } else feedback.append(element(document, 'p', { class: 'field-hint', text: t('phoneScanQr') }));
-    content.append(renderCodeEntry(document, t, code => submitCode(app, code), { busy: Boolean(app.phoneBusy), invalid: Boolean(app.phoneError), feedback }));
+    content.append(renderCodeEntry(document, t, code => submitCode(app, code), { busy: Boolean(app.phoneBusy), invalid: app.phoneError === 'phoneCodeMismatch', feedback }));
   }
   gate.append(content);
   app.root.replaceChildren(gate);
@@ -5802,7 +5802,9 @@ function renderPhoneError(app, error) {
   app.phoneLockDeadline = app.phoneLockedUntil ? app.api.now() + (error.retryAfter ?? Math.max(0, Date.parse(app.phoneLockedUntil) - app.api.now())) : null;
   if (error?.code === "home_expired") { app.phoneError = null; endPhoneAccess(app); }
   else if (error?.code === "auth_rate_limited") app.phoneError = "rateLimited";
-  else app.phoneError = "phoneCodeMismatch";
+  // Only a refused code says the code is wrong; a network, timeout or service failure says the phone could not connect.
+  else if (error?.code === "invalid_home_key" || error?.code === "pairing_locked") app.phoneError = "phoneCodeMismatch";
+  else app.phoneError = "phoneConnectionFailed";
   renderSignedOut(app);
   app.root.querySelector("[data-home-code]")?.focus();
 }

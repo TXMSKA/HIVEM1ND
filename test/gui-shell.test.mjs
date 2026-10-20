@@ -7539,3 +7539,14 @@ test("a task changed elsewhere updates the inspector's copy of it", async (t) =>
   await request(desktop.app.api, "POST", path, { operation: createOperation({ method: "POST", path, body: { status: "review", expectedRevision: open.revision } }) });
   await waitFor(() => desktop.app.inspectorData.tasks.find((task) => task.id === open.id)?.status === "review", "The inspector kept the old task.");
 });
+
+test("pairing that cannot reach the computer says so instead of calling the code wrong", async t => {
+  const fixture = await createGuiFixture(); t.after(() => fixture.close());
+  const phone = await bootApp(new URL(fixture.phoneUrl).origin, 390, []); t.after(() => dispose(phone.app));
+  phone.app.api.fetch = async () => { throw new TypeError("fetch failed"); };
+  typeInput(phone.root.querySelector("[data-home-code]"), "K7P4QX", 6, 6);
+  for (const handler of phone.root.querySelector("[data-code-entry]").listeners.get("submit") ?? []) handler({ preventDefault() {} });
+  await waitFor(() => phone.root.querySelector(".phone-code-error"), "Pairing did not report the failure.");
+  assert.equal(phone.root.querySelector(".phone-code-error").textContent, "The phone could not reach this computer. Check the connection and try again.");
+  assert.notEqual(phone.root.querySelector("[data-phone-state]").getAttribute("data-phone-state"), "error");
+});

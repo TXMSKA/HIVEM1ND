@@ -7,6 +7,7 @@ const COPY = {
   phoneScanQr: ["Or scan the QR code with the camera.", "También se puede escanear el código QR con la cámara."],
   phoneOpening: ["Opening", "Abriendo"],
   phoneCodeMismatch: ["That code does not match.", "El código no coincide."],
+  phoneConnectionFailed: ["The phone could not reach this computer. Check the connection and try again.", "El teléfono no pudo conectarse con esta computadora. Revisar la conexión y volver a intentarlo."],
   phoneTriesLeft: ["Check it on the computer and try again; {count} tries left.", "Comprobar el código en el equipo y reintentar; quedan {count} intentos."],
   phoneTryAgain: ["Try again", "Reintentar"],
   phonePairingLocked: ["Pairing locked", "Vinculación bloqueada"],
