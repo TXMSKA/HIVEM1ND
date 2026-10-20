@@ -29,6 +29,8 @@ export function noteProjectionChange(store, target = null) {
 
 function createLockTable() {
   const tails = new Map();
+  // HIVEM1ND_DEBUG_LOCKS=1 records who holds and who waits for each lock, readable as globalThis.__hivemindLocks.
+  const debug = process.env.HIVEM1ND_DEBUG_LOCKS === '1' ? (globalThis.__hivemindLocks ??= { held: new Map(), waiting: new Map(), next: 0 }) : null;
   return {
     async acquire(key) {
       let release;
@@ -41,8 +43,14 @@ function createLockTable() {
       next.then(() => {
         if (tails.get(key) === next) tails.delete(key);
       });
+      const ticket = debug ? ++debug.next : 0;
+      if (debug) debug.waiting.set(ticket, { key, since: Date.now(), stack: new Error().stack });
       await previous;
-      return release;
+      if (!debug) return release;
+      const entry = debug.waiting.get(ticket);
+      debug.waiting.delete(ticket);
+      debug.held.set(ticket, { ...entry, at: Date.now() });
+      return () => { debug.held.delete(ticket); release(); };
     },
   };
 }
