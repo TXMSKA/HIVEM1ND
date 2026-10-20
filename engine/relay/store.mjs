@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID, createHash, randomBytes } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import { mkdir, open, lstat, readdir, readFile, rename, realpath, unlink, link as linkFile } from 'node:fs/promises';
@@ -214,6 +215,11 @@ function metadata(message) {
   return safe;
 }
 
+// The id a message file is named after, when it is a uuid, which is what a message is given; null for any other name.
+function idInFileName(name) {
+  return /-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.md$/.exec(name)?.[1] ?? null;
+}
+
 function candidateMessageFilename(name) {
   return SAFE_FILE_PATTERN.test(name) || /^\d{8}-\d{4}-[a-zA-Z0-9._@-]+\.md$/i.test(name);
 }
@@ -376,7 +382,7 @@ async function readRegularFileSafe(root, filePath, { settle = false } = {}) {
     // $Deleted area. Treat that as a vanished candidate only after confirming
     // the containing directory is still safe and the original name is gone.
     if (error?.code === 'UNSAFE_PATH') {
-      await safePath(root, path.dirname(filePath), { missing: false });
+      await walkAgain(root, path.dirname(filePath));
       if (!await lstatOrNull(filePath)) return null;
     }
     throw error;
@@ -393,7 +399,7 @@ async function readRegularFileSafe(root, filePath, { settle = false } = {}) {
     if (error?.code === 'ELOOP') throw relayError('UNSAFE_SYMLINK', 'Relay refuses symbolic links in message storage.', error);
     if (error?.code === 'EPERM') {
       // NTFS may deny opening a name another reader just unlinked into its archive.
-      await safePath(root, path.dirname(filePath), { missing: false });
+      await walkAgain(root, path.dirname(filePath));
       if (!await lstatOrNull(filePath)) return null;
     }
     throw error;
@@ -488,16 +494,33 @@ async function assertRoot(mindPath) {
   }
 }
 
+// What one call to the relay has walked so far: a storage root with its real path, and the directories below it that were checked.
+// The next file of a directory that was checked costs a look at the file alone; each call starts over, so nothing is trusted for longer.
+const callScope = new AsyncLocalStorage();
+
 async function safePath(root, target, { missing = true } = {}) {
   assertWithin(root, target);
+  const scope = callScope.getStore();
   let cursor = path.resolve(root);
-  const rootState = await lstatOrNull(cursor);
-  if (!rootState || !rootState.isDirectory() || rootState.isSymbolicLink()) {
-    throw relayError('UNSAFE_PATH', 'A Relay storage root is missing or unsafe.');
+  let walked = scope?.roots.get(cursor);
+  if (!walked) {
+    const rootState = await lstatOrNull(cursor);
+    if (!rootState || !rootState.isDirectory() || rootState.isSymbolicLink()) {
+      throw relayError('UNSAFE_PATH', 'A Relay storage root is missing or unsafe.');
+    }
+    walked = { canonical: await realpath(cursor), directories: new Set() };
+    scope?.roots.set(cursor, walked);
   }
-  const canonicalRoot = await realpath(cursor);
+  const canonicalRoot = walked.canonical;
   const segments = path.relative(root, target).split(path.sep).filter(Boolean);
+  // A directory that was checked already vouches for the path above it, so the walk resumes below the deepest one.
+  let from = 0;
+  for (let depth = segments.length; scope && depth > 0; depth -= 1) {
+    const directory = path.join(cursor, ...segments.slice(0, depth));
+    if (walked.directories.has(directory)) { cursor = directory; from = depth; break; }
+  }
   for (const [index, segment] of segments.entries()) {
+    if (index < from) continue;
     cursor = path.join(cursor, segment);
     const state = await lstatOrNull(cursor);
     if (!state) {
@@ -512,7 +535,7 @@ async function safePath(root, target, { missing = true } = {}) {
     catch (error) {
       if (targetFile && state.isFile() && ['EBADF', 'EPERM'].includes(error?.code)) {
         // NTFS can lose a regular leaf between lstat and realpath while its owner releases it.
-        await safePath(root, path.dirname(cursor), { missing: false });
+        await walkAgain(root, path.dirname(cursor));
         if (!await lstatOrNull(cursor)) {
           if (missing) return path.resolve(target);
           throw relayError('NOT_FOUND', 'The requested Relay file does not exist.');
@@ -523,7 +546,7 @@ async function safePath(root, target, { missing = true } = {}) {
     try { assertWithin(canonicalRoot, canonical); } catch (cause) {
       if (targetFile && state.isFile() && isDeletedArea(canonical)) {
         // NTFS answers with its internal deleted area for a leaf that another caller is deleting at this moment.
-        await safePath(root, path.dirname(cursor), { missing: false });
+        await walkAgain(root, path.dirname(cursor));
         if (!await lstatOrNull(cursor)) {
           if (missing) return path.resolve(target);
           throw relayError('NOT_FOUND', 'The requested Relay file does not exist.');
@@ -531,8 +554,14 @@ async function safePath(root, target, { missing = true } = {}) {
       }
       throw relayError('UNSAFE_PATH', 'A Relay storage path escapes its root.', cause);
     }
+    if (state.isDirectory()) walked.directories.add(cursor);
   }
   return path.resolve(target);
+}
+
+// The directory of a file that went missing mid-check is walked from the root again, whatever this call had checked before.
+function walkAgain(root, directory) {
+  return callScope.exit(() => safePath(root, directory, { missing: false }));
 }
 
 function isDeletedArea(canonical) {
@@ -576,7 +605,7 @@ async function publishExclusive(root, destination, bytes) {
 async function vanishedArchiveSource(root, source, error) {
   if (error?.code === 'ENOENT') return true;
   if (error?.code !== 'EPERM') return false;
-  await safePath(root, path.dirname(source), { missing: false });
+  await walkAgain(root, path.dirname(source));
   return !await lstatOrNull(source);
 }
 
@@ -694,23 +723,46 @@ async function listDirectoryNames(root, directory, predicate) {
   return (await readdir(directory)).filter(predicate);
 }
 
+// Opening a file waits on the disk and on whatever scans it, not on the processor, so a scan works on up to eight files at once.
+// What comes back is one outcome per item, in the order of the items, so the caller handles the files as it would one by one.
+async function inParallel(items, work, width = 8) {
+  const outcomes = new Array(items.length);
+  let next = 0;
+  async function lane() {
+    while (next < items.length) {
+      const index = next++;
+      try { outcomes[index] = { value: await work(items[index]) }; } catch (error) { outcomes[index] = { error }; }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(width, items.length) }, lane));
+  return outcomes;
+}
+
+function settled(outcome) {
+  if ('error' in outcome) throw outcome.error;
+  return outcome.value;
+}
+
 async function listRegularFiles(root, directory, predicate) {
-  const files = [];
-  for (const name of await listDirectoryNames(root, directory, predicate)) {
+  return checkRegularFiles(root, directory, await listDirectoryNames(root, directory, predicate));
+}
+
+async function checkRegularFiles(root, directory, names) {
+  const checked = await inParallel(names, async (name) => {
     const filePath = path.join(directory, name);
     // The Dirent type of a freshly synced OneDrive file can read as a symbolic
     // link for a few seconds while lstat already reports a regular file.
     const entryState = await lstatOrNull(filePath);
-    if (!entryState || entryState.isSymbolicLink() || !entryState.isFile()) continue;
+    if (!entryState || entryState.isSymbolicLink() || !entryState.isFile()) return null;
     try { await safePath(root, filePath, { missing: false }); }
     catch (error) {
       if (!isMissingPath(error)) throw error;
-      if (!await lstatOrNull(filePath)) continue;
+      if (!await lstatOrNull(filePath)) return null;
       await safePath(root, filePath, { missing: false });
     }
-    files.push(filePath);
-  }
-  return files.sort((a, b) => a.localeCompare(b));
+    return filePath;
+  });
+  return checked.map(settled).filter(Boolean).sort((a, b) => a.localeCompare(b));
 }
 
 function parseLimit(value, fallback = 100) {
@@ -787,16 +839,29 @@ export async function createRelay(options = {}) {
     return { routes, scopes: splitScopes(mindPath, routes) };
   }
 
+  // Every registration is read once for a call and shared by whatever else in it asks. A call writes at most its own new
+  // registration and then retires older ones, and nothing in it reads the list again after that.
   async function registrations() {
+    const scope = callScope.getStore();
+    if (!scope) return readRegistrations();
+    scope.registrations ??= readRegistrations().catch((error) => { scope.registrations = undefined; throw error; });
+    return scope.registrations;
+  }
+
+  async function readRegistrations() {
     const files = await listRegularFiles(mindPath, sessionsPath, (name) => /^[a-f0-9-]{36}\.json$/i.test(name));
     const result = [];
-    for (const file of files) {
-      let record;
-      try { record = await readJsonSafe(mindPath, file); }
-      catch (error) { if (isSkippableRecordError(error)) continue; throw error; }
+    const outcomes = await inParallel(files, (file) => readJsonSafe(mindPath, file));
+    files.forEach((file, index) => {
+      const outcome = outcomes[index];
+      if ('error' in outcome) {
+        if (isSkippableRecordError(outcome.error)) return;
+        throw outcome.error;
+      }
+      const record = outcome.value;
       if (record?.kind === 'registration' && typeof record.registrationId === 'string'
         && record.registrationId.toLowerCase() === path.basename(file, '.json').toLowerCase()) result.push(record);
-    }
+    });
     return result;
   }
 
@@ -839,7 +904,8 @@ export async function createRelay(options = {}) {
     try { record = await readJsonSafe(mindPath, file); }
     catch (error) { if (isSkippableRecordError(error)) return undefined; throw error; }
     if (record === null) return undefined;
-    return record?.kind === 'registration' && typeof record.registrationId === 'string' ? record : null;
+    return record?.kind === 'registration' && typeof record.registrationId === 'string'
+      && record.registrationId.toLowerCase() === path.basename(name, '.json').toLowerCase() ? record : null;
   }
 
   function indexRegistration(index, record) {
@@ -860,16 +926,17 @@ export async function createRelay(options = {}) {
     let changed = false;
     if (index.names.some((name) => !present.has(name))) { index = emptyRegistrationIndex(); changed = true; }
     const known = new Set(index.names);
-    for (const name of names) {
-      if (known.has(name)) continue;
-      const record = await readRegistration(name);
-      if (record === undefined) continue;
+    const added = names.filter((name) => !known.has(name));
+    const read = await inParallel(added, readRegistration);
+    added.forEach((name, position) => {
+      const record = settled(read[position]);
+      if (record === undefined) return;
       index.names.push(name);
       changed = true;
-      if (record === null) continue;
+      if (record === null) return;
       verifiedRegistrations.add(record.registrationId);
       indexRegistration(index, record);
-    }
+    });
     if (changed) {
       // Without the index the next call reads the records again, which is only slower.
       try { await writeWakeRecord('index', registrationIndexKey, index); } catch { /* a cache that could not be written */ }
@@ -1003,7 +1070,7 @@ export async function createRelay(options = {}) {
         const windowsShareRace = error?.code === 'EPERM';
         const replacedLock = bucket === 'locks' && error?.code === 'UNSAFE_PATH' && error.message === 'A Relay storage path escapes its root.';
         if ((!atomicReadRace && !windowsShareRace && !replacedLock) || attempt === 3) throw error;
-        await safePath(root, path.dirname(filePath), { missing: false });
+        await walkAgain(root, path.dirname(filePath));
         await new Promise((resolve) => setTimeout(resolve, 10 * (attempt + 1)));
       }
     }
@@ -1068,7 +1135,7 @@ export async function createRelay(options = {}) {
           break;
         } catch (error) {
           if (!['EPERM', 'EBUSY', 'ENOTEMPTY'].includes(error?.code) || attempt === 4) throw error;
-          await safePath(root, path.dirname(destination), { missing: false });
+          await walkAgain(root, path.dirname(destination));
           await new Promise((resolve) => setTimeout(resolve, 10 * (attempt + 1)));
         }
       }
@@ -1368,47 +1435,53 @@ export async function createRelay(options = {}) {
     return uniqueMessageEntries(candidates)[0]?.parsed ?? null;
   }
 
-  async function allMessages({ unit, includeArchived = true } = {}) {
+  // Every message of the mind, or of one unit. `named` narrows the files that are looked at by their names, for a caller that
+  // knows from the names alone which messages it needs.
+  async function allMessages({ unit, includeArchived = true, named = () => true } = {}) {
     const { scopes } = await routesAndScopes();
     const selectedScopes = unit ? [(await resolveUnit(unit)).scope] : scopes;
     const output = [];
+    const wanted = (name) => candidateMessageFilename(name) && named(name);
+    // The files of one folder are read together; a file that is malformed is left out, anything else fails the call.
+    const collect = async (files, load) => {
+      for (const outcome of await inParallel(files, load)) {
+        if ('error' in outcome) skipMalformed(outcome.error);
+        else if (outcome.value) output.push(outcome.value);
+      }
+    };
     for (const scope of selectedScopes) {
       const recipients = unit ? [unit] : [
         ...await directoryNames(mindPath, path.join(scope.path, 'inbox')),
       ];
       for (const recipient of recipients) {
         if (!UNIT_PATTERN.test(recipient)) continue;
-        const active = await listRegularFiles(mindPath, path.join(scope.path, 'inbox', recipient), candidateMessageFilename);
-        for (const file of active) {
-          try {
-            let actualPath = file;
-            let archived = false;
-            let raw = await readRegularFileSafe(mindPath, file);
-            if (!raw) {
-              actualPath = path.join(archivePath, recipient, path.basename(file));
-              archived = true;
-              raw = await readRegularFileSafe(mindPath, actualPath);
-            }
-            if (!raw) continue;
-            const message = parseMessage(raw, actualPath, archived);
-            if (validMessageFilename(path.basename(actualPath), message)) output.push({ parsed: message, raw });
-          } catch (error) { skipMalformed(error); }
-        }
+        const active = await listRegularFiles(mindPath, path.join(scope.path, 'inbox', recipient), wanted);
+        await collect(active, async (file) => {
+          let actualPath = file;
+          let archived = false;
+          let raw = await readRegularFileSafe(mindPath, file);
+          if (!raw) {
+            actualPath = path.join(archivePath, recipient, path.basename(file));
+            archived = true;
+            raw = await readRegularFileSafe(mindPath, actualPath);
+          }
+          if (!raw) return null;
+          const message = parseMessage(raw, actualPath, archived);
+          return validMessageFilename(path.basename(actualPath), message) ? { parsed: message, raw } : null;
+        });
       }
     }
     if (includeArchived) {
+      const readArchived = async (file) => {
+        const raw = await readRegularFileSafe(mindPath, file);
+        if (!raw) return null;
+        const message = parseMessage(raw, file, true);
+        return validMessageFilename(path.basename(file), message) ? { parsed: message, raw } : null;
+      };
       const recipients = unit ? [unit] : await directoryNames(mindPath, archivePath);
       for (const recipient of recipients) {
         if (!UNIT_PATTERN.test(recipient)) continue;
-        const files = await listRegularFiles(mindPath, path.join(archivePath, recipient), candidateMessageFilename);
-        for (const file of files) {
-          try {
-            const raw = await readRegularFileSafe(mindPath, file);
-            if (!raw) continue;
-            const message = parseMessage(raw, file, true);
-            if (validMessageFilename(path.basename(file), message)) output.push({ parsed: message, raw });
-          } catch (error) { skipMalformed(error); }
-        }
+        await collect(await listRegularFiles(mindPath, path.join(archivePath, recipient), wanted), readArchived);
       }
       const scopedRoot = path.join(archivePath, 'by-unit');
       let scopedNames = [];
@@ -1418,15 +1491,7 @@ export async function createRelay(options = {}) {
         scopedNames = [Buffer.from(resolved.unitId ?? canonicalUnitId(unit, scopeId), 'utf8').toString('base64url')];
       } else scopedNames = await directoryNames(mindPath, scopedRoot);
       for (const name of scopedNames) {
-        const files = await listRegularFiles(mindPath, path.join(scopedRoot, name), candidateMessageFilename);
-        for (const file of files) {
-          try {
-            const raw = await readRegularFileSafe(mindPath, file);
-            if (!raw) continue;
-            const message = parseMessage(raw, file, true);
-            if (validMessageFilename(path.basename(file), message)) output.push({ parsed: message, raw });
-          } catch (error) { skipMalformed(error); }
-        }
+        await collect(await listRegularFiles(mindPath, path.join(scopedRoot, name), wanted), readArchived);
       }
     }
     return uniqueMessageEntries(output).map((entry) => entry.parsed)
@@ -1438,22 +1503,26 @@ export async function createRelay(options = {}) {
     const files = await listRegularFiles(mindPath, directory, candidateMessageFilename);
     const messages = [];
     const malformed = [];
-    for (const file of files) {
-      try {
-        const raw = await readRegularFileSafe(mindPath, file, { settle: true });
-        if (!raw) continue;
-        const parsed = parseMessage(raw, file, false);
-        if (!validMessageFilename(path.basename(file), parsed)) continue;
-        if (await isReadCopy(unit, file, raw)) continue;
-        if (parsed.to.toLowerCase() === unit.toLowerCase()) messages.push(metadata(parsed));
-      } catch (error) {
-        // A message that another machine wrote arrives by sync, and OneDrive can hold or replace the file while it lands. That
-        // file is left for the next read instead of failing the whole inbox, so the other messages still count and wake.
-        if (isSyncRace(error)) continue;
-        skipMalformed(error);
-        malformed.push(path.basename(file));
+    const outcomes = await inParallel(files, async (file) => {
+      const raw = await readRegularFileSafe(mindPath, file, { settle: true });
+      if (!raw) return null;
+      const parsed = parseMessage(raw, file, false);
+      if (!validMessageFilename(path.basename(file), parsed)) return null;
+      if (await isReadCopy(unit, file, raw)) return null;
+      return parsed.to.toLowerCase() === unit.toLowerCase() ? metadata(parsed) : null;
+    });
+    files.forEach((file, index) => {
+      const outcome = outcomes[index];
+      if (!('error' in outcome)) {
+        if (outcome.value) messages.push(outcome.value);
+        return;
       }
-    }
+      // A message that another machine wrote arrives by sync, and OneDrive can hold or replace the file while it lands. That
+      // file is left for the next read instead of failing the whole inbox, so the other messages still count and wake.
+      if (isSyncRace(outcome.error)) return;
+      skipMalformed(outcome.error);
+      malformed.push(path.basename(file));
+    });
     messages.sort(sortByTimestamp);
     return { messages: messages.slice(0, limit), unit, unread: messages.length, malformed };
   }
@@ -1475,8 +1544,11 @@ export async function createRelay(options = {}) {
       // A chat registers again whenever its client starts a new MCP process. When it is still registered as the same unit, that
       // record stays, so the consent that names the chat is not outdated and the registrations do not pile up.
       if (activity === null && quota === null) {
-        const latest = (await registrations()).filter((item) => item.nativeSessionId === nativeSessionId && item.client === client && item.machine === hostname)
-          .sort((a, b) => String(b.registeredAt).localeCompare(String(a.registeredAt)) || String(b.registrationId).localeCompare(String(a.registrationId)))[0];
+        // The index holds the newest registration of each native session, which is the one that decides; it is keyed by client,
+        // so a chat without one has every registration read.
+        const latest = client !== null ? (await newestRegistration(hostname, client, nativeSessionId))?.latest
+          : (await registrations()).filter((item) => item.nativeSessionId === nativeSessionId && item.client === client && item.machine === hostname)
+            .sort((a, b) => String(b.registeredAt).localeCompare(String(a.registeredAt)) || String(b.registrationId).localeCompare(String(a.registrationId)))[0];
         if (latest && latest.unit.toLowerCase() === unit.toLowerCase() && latest.scopeId === identity.scope.id
           && (hostSessionId === null || latest.hostSessionId === hostSessionId)
           && (client === null || (await latestUnitRegistration({ unit, unitId: latest.unitId, client, machine: hostname }))?.nativeSessionId === nativeSessionId)) {
@@ -1741,25 +1813,38 @@ export async function createRelay(options = {}) {
         const [current] = verdicts.sort((a, b) => Number(b.policy.enabled === true) - Number(a.policy.enabled === true) || stamp(b).localeCompare(stamp(a)));
         return { live: false, reason: current.block };
       }
-      let everything = null;
       let mailbox = null;
-      // The event is the cheap source; a message whose event never got written is found by scanning, which only an unknown id pays for.
-      async function sentRecord(id) {
+      // The event is the cheap source. A message whose event never got written is found by its file, which is named after its id,
+      // so only an unknown id costs a look at the folders, and then at the files that carry its id or no id at all.
+      const sent = new Map();
+      for (const id of new Set(args.ids)) {
         let event = null;
         try { event = await readJsonSafe(mindPath, path.join(eventsPath, `${id}.json`)); }
         catch (error) { if (!isSkippableRecordError(error)) throw error; }
-        if (event?.kind === 'message' && event.id === id && validName(event.from) && validName(event.to)) return event;
-        everything ??= await allMessages({ includeArchived: true });
-        const message = everything.find((candidate) => candidate.id === id);
-        return message ? metadata(message) : null;
+        if (event?.kind === 'message' && event.id === id && validName(event.from) && validName(event.to)) sent.set(id, event);
+      }
+      const eventless = [...new Set(args.ids)].filter((id) => !sent.has(id));
+      if (eventless.length) {
+        const found = await allMessages({ includeArchived: true, named: (name) => !SAFE_FILE_PATTERN.test(name) || eventless.some((id) => name.endsWith(`-${id}.md`)) });
+        for (const id of eventless) {
+          const message = found.find((candidate) => candidate.id === id);
+          if (message) sent.set(id, metadata(message));
+        }
+      }
+      // The archive of a recipient is listed once, however many of the ids went to it.
+      const archivedNames = new Map();
+      async function archivedFiles(to, id) {
+        const directory = path.join(archivePath, to);
+        if (!archivedNames.has(to)) archivedNames.set(to, listDirectoryNames(mindPath, directory, candidateMessageFilename));
+        return checkRegularFiles(mindPath, directory, (await archivedNames.get(to)).filter((name) => name.endsWith(`-${id}.md`)));
       }
       const deliveries = [];
       const unknown = [];
       for (const id of new Set(args.ids)) {
-        const record = await sentRecord(id);
+        const record = sent.get(id);
         // A message of another unit is reported as unknown, the same as a missing one, so this view never confirms what the unit did not send.
         if (!record || record.from.toLowerCase() !== sender.unit.toLowerCase()) { unknown.push(id); continue; }
-        const read = (await listRegularFiles(mindPath, path.join(archivePath, record.to), (name) => name.endsWith(`-${id}.md`) && candidateMessageFilename(name))).length > 0;
+        const read = (await archivedFiles(record.to, id)).length > 0;
         const woken = [];
         for (const policy of policies) {
           const entry = Object.hasOwn(policy.deliveries, id) ? policy.deliveries[id] : null;
@@ -1895,21 +1980,24 @@ export async function createRelay(options = {}) {
       const registration = scopeLock ? await requireRegistration() : null;
       const limit = parseLimit(args.limit, 200);
       const bound = registration?.unit.toLowerCase() ?? null;
-      const messages = (await allMessages({ includeArchived: true })).filter((message) => !bound || message.from.toLowerCase() === bound || message.to.toLowerCase() === bound);
       const existing = await listRegularFiles(mindPath, eventsPath, (name) => /^[a-f0-9-]{36}\.json$/i.test(name));
       const byId = new Map();
       const issues = [];
-      for (const file of existing) {
-        let event;
-        try { event = await readBriefly(() => readJsonSafe(mindPath, file)); }
-        catch (error) {
+      const outcomes = await inParallel(existing, (file) => readBriefly(() => readJsonSafe(mindPath, file)));
+      existing.forEach((file, index) => {
+        const outcome = outcomes[index];
+        if ('error' in outcome) {
           // An event that is cut short or held by the sync client is left out and built again from its message.
-          if (!isSkippableRecordError(error)) throw error;
-          issues.push({ path: path.relative(userPath, file).split(path.sep).join('/'), code: error.code });
-          continue;
+          if (!isSkippableRecordError(outcome.error)) throw outcome.error;
+          issues.push({ path: path.relative(userPath, file).split(path.sep).join('/'), code: outcome.error.code });
+          return;
         }
+        const event = outcome.value;
         if (event?.kind === 'message' && typeof event.id === 'string') byId.set(event.id, event);
-      }
+      });
+      // Only a message without an event is of use here, and a file named after the id of an event that is there is not one, so it is not read.
+      const messages = (await allMessages({ includeArchived: true, named: (name) => !byId.has(idInFileName(name)) }))
+        .filter((message) => !bound || message.from.toLowerCase() === bound || message.to.toLowerCase() === bound);
       for (const message of messages) {
         if (!byId.has(message.id)) {
           const event = { kind: 'message', ...metadata(message) };
@@ -1996,6 +2084,11 @@ export async function createRelay(options = {}) {
       return { unit, unread: inbox.unread, from, text, registered: true };
     },
   };
+
+  // Every call checks a directory once, however many files it reads from it; a call made inside another one shares its checks.
+  for (const [name, method] of Object.entries(relay)) {
+    if (typeof method === 'function') relay[name] = (...args) => callScope.getStore() ? method(...args) : callScope.run({ roots: new Map() }, () => method(...args));
+  }
 
   let currentRegistration = scopeLock && options.pinnedRegistration ? options.pinnedRegistration : null;
 
