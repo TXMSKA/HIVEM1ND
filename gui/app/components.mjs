@@ -2,7 +2,9 @@ const LAMP = "M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9V16h7v-2.1A6 6 0 0 0 12 3z"
 
 const ICONS = {
   map: "M9 4 3 6v14l6-2 6 2 6-2V4l-6 2zM9 4v14M15 6v14",
-  hierarchy: "M12 5a2.5 2.5 0 1 0 0 .1M5 19a2.5 2.5 0 1 0 0 .1M19 19a2.5 2.5 0 1 0 0 .1M12 7.5V11M12 11.5 6 17M12 11.5l6 5.5",
+  // An organization chart: one box above, two below, joined by one branch.
+  hierarchy: [{ tag: "rect", x: "8.5", y: "3", width: "7", height: "5.5", rx: "1.6" }, { tag: "rect", x: "2.5", y: "15.5", width: "7", height: "5.5", rx: "1.6" },
+    { tag: "rect", x: "14.5", y: "15.5", width: "7", height: "5.5", rx: "1.6" }, { tag: "path", d: "M12 8.5V12M6 15.5V14a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1.5" }],
   chats: "M5 6h14v9H8l-3 3z",
   inspector: "M4 5h16v14H4zM14 5v14",
   waiting: "M8 13V5.5a1.5 1.5 0 0 1 3 0V12M11 11V4a1.5 1.5 0 0 1 3 0v8M14 12V6.5a1.5 1.5 0 0 1 3 0V15c0 4-2.5 6-6 6",
