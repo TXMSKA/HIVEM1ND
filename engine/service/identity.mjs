@@ -11,7 +11,13 @@ const NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const TASK_DIGITS = /^[0-9]+$/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
-export const ROLES = Object.freeze(['overseer', 'adjutant', 'executive', 'overlord', 'executor', 'incubator', 'genesis', 'master']);
+// Roles a person picks for an agent of a cluster: the kit's presets, each one file under roles/, and `custom`, whose name and
+// description the person writes into the agent itself.
+export const PRESET_ROLES = Object.freeze(['ux-designer', 'ui-designer', 'writer', 'game-designer', 'security-consultant', 'qa', 'code-reviewer', 'product-manager']);
+export const CLUSTER_ROLES = Object.freeze(['executor', 'overlord', ...PRESET_ROLES, 'custom']);
+export const ROLES = Object.freeze(['overseer', 'adjutant', 'executive', 'overlord', 'executor', 'incubator', 'genesis', 'master', ...PRESET_ROLES, 'custom']);
+const ROLE_NAME_MAX = 60;
+const ROLE_DESCRIPTION_MAX = 4000;
 export const CLIENTS = Object.freeze(['claude', 'codex', 'cursor', 'lyra']);
 
 const ROLE_SET = new Set(ROLES);
@@ -102,6 +108,23 @@ export function validateRole(value) {
     throw new CoreError(422, 'invalid_role', 'The role is not one of the known roles.');
   }
   return value;
+}
+
+// A custom role takes a one-line name and a description; every other role takes neither.
+export function validateCustomRole(role, roleName, roleDescription) {
+  if (role !== 'custom') {
+    if (roleName != null || roleDescription != null) throw new CoreError(422, 'invalid_body', 'Only a custom role takes a name and a description.');
+    return null;
+  }
+  const name = typeof roleName === 'string' ? roleName.trim() : '';
+  if (!name || name.length > ROLE_NAME_MAX || /[\u0000-\u001f\u007f]/.test(name)) {
+    throw new CoreError(422, 'invalid_body', 'A custom role needs a one-line name of up to 60 characters.');
+  }
+  const description = typeof roleDescription === 'string' ? roleDescription.replace(/\r\n?/g, '\n').trim() : '';
+  if (!description || description.length > ROLE_DESCRIPTION_MAX || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(description)) {
+    throw new CoreError(422, 'invalid_body', 'A custom role needs a description of up to 4000 characters.');
+  }
+  return { name, description };
 }
 
 export function canonicalScope(scope) {

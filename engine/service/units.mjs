@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { CoreError, canonicalJson, hashBytes, parseUnitId, replaceHeader, unitStatePath, uuidV8, validateName, validateRole, canonicalScope } from './identity.mjs';
+import { CLUSTER_ROLES, CoreError, canonicalJson, hashBytes, parseUnitId, replaceHeader, unitStatePath, uuidV8, validateCustomRole, validateName, validateRole, canonicalScope } from './identity.mjs';
 import { answersFor, readProjection, viewBatch } from './projection.mjs';
 import { readUnitState as readState, readUnitStates } from './state.mjs';
 import { checkRevision, commitChange, commitTransaction, prepareChangeUndo, readBytes, revisionOf, withLocalChanges, withLocks, withReceipt } from './store.mjs';
@@ -254,6 +254,7 @@ async function prepareCreate(context, input) {
   if (runsIn && !launchBoundary(capabilities.find(client => client.id === runsIn.client))) throw new CoreError(409, 'scope_unavailable', 'The selected runtime has no verified native boundary.');
   const unit = validateName(input?.unit, { label: 'unit', max: 80 });
   const role = validateRole(input?.role);
+  const custom = validateCustomRole(role, input?.roleName, input?.roleDescription);
   const scope = canonicalScope(input?.scope);
   const machine = validateName(input?.machine, { label: 'machine', max: 48 });
   const id = parseUnitId(unitIdFor(unit, scope));
@@ -277,13 +278,13 @@ async function prepareCreate(context, input) {
     }
   }
   const position = input.position ? { x: coordinate(input.position.x), y: coordinate(input.position.y) } : { x: 0, y: 0 };
-  const state = Buffer.from(renderState({ unit, id: id.id, role, scope, machine, leadId, job: input.job ?? null, model: input.model ?? null, clusterId: input.clusterId ?? null, runsIn, fresh: role === 'overseer' ? input.fresh ?? true : null }));
+  const state = Buffer.from(renderState({ unit, id: id.id, role, custom, scope, machine, leadId, job: input.job ?? null, model: input.model ?? null, clusterId: input.clusterId ?? null, runsIn, fresh: role === 'overseer' ? input.fresh ?? true : null }));
   const layoutFile = await readJson(context, 'user/gui/layout.json');
   const layout = layoutFile.value ?? { format: 'hivem1nd-layout-v1', nodes: {}, groups: {} };
   layout.nodes = { ...(layout.nodes ?? {}), [id.id]: position };
   const layoutBytes = Buffer.from(`${canonicalJson({ ...layout, format: 'hivem1nd-layout-v1' })}\n`);
   const events = [
-    { name: 'unit.changed', data: { unit: { id: id.id, unit, role, machine, leadId } } },
+    { name: 'unit.changed', data: { unit: { id: id.id, unit, role, roleName: custom?.name ?? null, machine, leadId } } },
     { name: 'layout.changed', data: { layout: JSON.parse(layoutBytes.toString('utf8')), revision: hashBytes(layoutBytes) } },
     { name: 'view.changed', data: { revision: hashBytes(state), collections: ['units', 'leads', 'squads'] } },
   ];
@@ -360,6 +361,7 @@ function renderState(fields) {
     `unit: ${fields.unit}`,
     `unit-id: ${fields.id}`,
     `role: ${fields.role}`,
+    ...(fields.custom ? [`role-name: ${fields.custom.name}`, `role-description: ${JSON.stringify(fields.custom.description)}`] : []),
     `state: in`,
     `machine: ${fields.machine}`,
   ];
@@ -370,6 +372,12 @@ function renderState(fields) {
   if (fields.runsIn) lines.push(`runs-in: ${canonicalJson(fields.runsIn)}`);
   if (fields.fresh !== null) lines.push(`fresh: ${fields.fresh}`);
   return `${lines.join('\n')}\n\nReady.\n`;
+}
+
+// The unit name of a custom role comes from its name: plain letters and digits joined by hyphens.
+function roleSlug(name) {
+  const slug = name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/, '');
+  return slug || 'agent';
 }
 
 function unitIdFor(unit, scope) {
@@ -387,11 +395,12 @@ export async function resolveUnitCluster(context, unitId) {
 async function deriveClusterUnit(context, input) {
   const cluster = await readCluster(context, input.clusterId, { machine: input.machine ?? context.paths.machine });
   if (input.expectedRevision !== undefined && input.expectedRevision !== cluster.revision) throw new CoreError(409, 'cluster_changed', 'The selected cluster changed before agent creation.');
-  if (!['executor', 'overlord'].includes(input.role)) throw new CoreError(422, 'invalid_role', 'A cluster agent is an Executor or Overlord.');
+  if (!CLUSTER_ROLES.includes(input.role)) throw new CoreError(422, 'invalid_role', 'A cluster agent has a preset role or a custom one.');
+  const custom = validateCustomRole(input.role, input.roleName, input.roleDescription);
   const mapping = cluster.link.kind === 'none' ? null : await resolveClusterLink(context, cluster.link, context.paths.machine);
   const scope = cluster.link.kind === 'repository' ? { kind: 'project', name: mapping.projectId } : { kind: 'root' };
   const records = (await readUnitStates(context)).sort((left, right) => left.id.localeCompare(right.id)), clusters = await rawClusters(context);
-  const base = `${input.role}-${scope.name ?? cluster.id.slice(0, 8)}`.slice(0, 70);
+  const base = `${custom ? roleSlug(custom.name) : input.role}-${scope.name ?? cluster.id.slice(0, 8)}`.slice(0, 70);
   let unit = base, index = 2;
   while (records.some(record => record.id === unitIdFor(unit, scope))) unit = `${base}-${index++}`;
   let current = cluster, leadId = null;

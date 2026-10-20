@@ -17,6 +17,7 @@ import { lyraToolDefinitions, validateLyraInput } from './lyra.mjs';
 import { paginate, readCollection, readDetail, readProjection, viewBatch } from './projection.mjs';
 import { postMailbox, readMailbox } from './chats.mjs';
 import { loadTask } from './tasks.mjs';
+import { customRoleText } from './state.mjs';
 import { additionsForUnit, readScopedAdditions } from './additions.mjs';
 import { assertNoLinks } from './paths.mjs';
 import { assertPlanActor, callPlanTool, planToolSchemas, planBindingForSession, planFileTool, assertOrdinaryRunSend, readPlanInbox } from './runs.mjs';
@@ -188,6 +189,10 @@ async function readLocalResource(context, registration, args) {
   if (args.resourceId === 'rules' || args.resourceId === 'role') {
     const unit = await readDetail(context, 'units', registration.unitId);
     if (!ROLES.includes(unit.role)) throw new CoreError(403, 'forbidden', 'The role is unavailable.');
+    if (args.resourceId === 'role' && unit.role === 'custom') {
+      await verifiedSessionScope(context);
+      return { resourceId: args.resourceId, excerpt: customRoleText({ name: unit.roleName, description: unit.roleDescription }).slice(0, 7000) };
+    }
     const file = args.resourceId === 'rules' ? path.join(context.paths.mind, 'rules.md') : path.join(context.paths.mind, 'roles', `${unit.role}.md`);
     await assertNoLinks(file, { root: context.paths.mind });
     const handle = await open(file, 'r');

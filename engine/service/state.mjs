@@ -28,6 +28,20 @@ export function stateHeader(bytes, name) {
   return null;
 }
 
+// A custom role keeps its name and description in the state file; the description is one JSON string, so it stays on one line.
+export function stateCustomRole(bytes) {
+  if (stateHeader(bytes, 'role') !== 'custom') return null;
+  const name = stateHeader(bytes, 'role-name');
+  let description = null;
+  try { description = JSON.parse(stateHeader(bytes, 'role-description') ?? ''); } catch { /* A malformed description is no role. */ }
+  return name && typeof description === 'string' && description ? { name, description } : null;
+}
+
+// What an agent with a custom role reads in place of a role file.
+export function customRoleText(custom) {
+  return `# ${custom.name}\n\nA role the person wrote for this agent. It has no preset behaviour beyond what follows.\n\n${custom.description}\n`;
+}
+
 export function stateRunsIn(bytes) {
   const raw = stateHeader(bytes, 'runs-in');
   if (!raw) return null;

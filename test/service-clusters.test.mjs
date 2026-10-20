@@ -226,3 +226,32 @@ test('HTTP clusters enforce exact bodies, explicit owner and replay without expo
   const launch = await call('POST', '/units/root%3Aone/session', { prompt: 'Fixture task', expectedRevision: unit.revision });
   assert.equal(launch.status, 409); assert.equal(launch.value.error.code, 'scope_unresolved');
 });
+
+test('a cluster agent takes any preset role or a custom one with its own name and description', async t => {
+  const { fixture, context } = await world(t);
+  context.paths = { ...context.paths, origin: path.join(fixture.root, 'origin') };
+  await writeBeat(context, 'running');
+  const team = await createCluster(context, { title: 'Team', parentId: null, link: { kind: 'none' }, machine: fixture.machine, confirmed: true });
+  const create = (input) => createUnit(context, { clusterId: team.id, machine: fixture.machine, ...input });
+  const security = (await create({ role: 'security-consultant' })).unit;
+  assert.match(security.unit, /^security-consultant-/);
+  await assert.rejects(create({ role: 'qa', roleName: 'QA' }), { code: 'invalid_body' });
+  await assert.rejects(create({ role: 'custom' }), { code: 'invalid_body' });
+  await assert.rejects(create({ role: 'custom', roleName: 'Two\nlines', roleDescription: 'Text' }), { code: 'invalid_body' });
+  await assert.rejects(create({ role: 'custom', roleName: 'Long', roleDescription: 'x'.repeat(4001) }), { code: 'invalid_body' });
+  await assert.rejects(create({ role: 'overseer' }), { code: 'invalid_role' });
+  const description = 'Helps the person decide.\nLists the options and recommends one.';
+  const consultant = (await create({ role: 'custom', roleName: 'Consultor de decisiones', roleDescription: description })).unit;
+  assert.match(consultant.unit, /^consultor-de-decisiones-/);
+  const units = (await readProjection(context)).units;
+  const projected = units.find(unit => unit.id === consultant.id);
+  assert.equal(projected.role, 'custom');
+  assert.equal(projected.roleName, 'Consultor de decisiones');
+  assert.equal(projected.roleDescription, description);
+  assert.equal(projected.malformed, false);
+  const preset = units.find(unit => unit.id === security.id);
+  assert.equal(preset.role, 'security-consultant');
+  assert.equal(preset.roleName, null);
+  const state = await readFile(path.join(context.paths.mind, 'user', 'state', `${consultant.unit}.md`), 'utf8');
+  assert.ok(state.split('\n').includes(`role-description: ${JSON.stringify(description)}`), 'the description stays on one header line');
+});

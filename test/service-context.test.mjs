@@ -277,3 +277,18 @@ test('the session start of the longest role the kit ships fits its budget', asyn
   assert.equal(bootstrap.role, 'genesis');
   assert.ok(bootstrap.records[1].text.length > 12000, 'the role text alone is longer than the old budget');
 });
+
+test('a custom role starts with the text the person wrote and the brief of its project, and no role file', async t => {
+  const fixture = await makeCoreFixture(); t.after(() => dispose(fixture));
+  const state = path.join(fixture.paths.mind, 'user', 'projects', 'shop', 'state');
+  await mkdir(state, { recursive: true });
+  await writeFile(path.join(fixture.paths.mind, 'rules.md'), '# Rules\n');
+  await writeFile(path.join(fixture.paths.mind, 'user', 'projects', 'shop', 'brief.md'), '# Shop\n\nA small online shop.\n');
+  const description = 'Helps the person decide.\nLists the options and recommends one.';
+  await writeFile(path.join(state, 'consultant-shop.md'), `unit: consultant-shop\nunit-id: project:shop:consultant-shop\nrole: custom\nrole-name: Consultant\nrole-description: ${JSON.stringify(description)}\nstate: in\nmachine: ${fixture.machine}\n\nReady.\n`);
+  const bootstrap = JSON.parse(await contextBootstrap({ ...fixture, now: () => fixture.clock.now }, 'project:shop:consultant-shop'));
+  assert.deepEqual(bootstrap.records.map(record => record.resource), ['rules.md', 'role', 'user/projects/shop/state/consultant-shop.md', 'user/projects/shop/brief.md']);
+  assert.match(bootstrap.records[1].text, /^# Consultant\n/);
+  assert.ok(bootstrap.records[1].text.includes(description));
+  assert.match(bootstrap.records[3].text, /A small online shop/);
+});

@@ -1,9 +1,9 @@
 import { mkdir, readdir, readFile, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { CoreError, canonicalJson, hashBytes, inboxDirectory, parseUnitId, uuidV8 } from './identity.mjs';
+import { CoreError, ROLES, canonicalJson, hashBytes, inboxDirectory, parseUnitId, uuidV8 } from './identity.mjs';
 import { publishDomainEvents } from './events.mjs';
-import { readUnitState } from './state.mjs';
+import { customRoleText, readUnitState, stateCustomRole } from './state.mjs';
 import { admitMessage } from '../sync/limits.mjs';
 import { commitTransaction, readBytes, revisionOf, withLocalChanges } from './store.mjs';
 import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
@@ -751,10 +751,23 @@ export async function contextBootstrap(context, unitId) {
   const state = await readUnitState(context, parseUnitId(unitId));
   if (!state) throw new CoreError(404, 'unit_not_found', 'The unit does not exist.');
   const role = headerMap(state.bytes).get('role');
-  const records = [];
-  for (const relative of ['rules.md', `roles/${role}.md`, state.relative]) {
+  const custom = role === 'custom' ? stateCustomRole(state.bytes) : null;
+  const read = async (relative) => {
     const bytes = await readBytes(context.store, absolute(context, relative));
-    records.push({ resource: relative, revision: revisionOf(bytes), text: bytes?.toString('utf8') ?? '' });
+    return { resource: relative, revision: revisionOf(bytes), text: bytes?.toString('utf8') ?? '' };
+  };
+  const records = [await read('rules.md')];
+  // A custom role is the text the person wrote into the agent; a role that is not a known one names no file.
+  if (custom) {
+    const text = customRoleText(custom);
+    records.push({ resource: 'role', revision: revisionOf(Buffer.from(text)), text });
+  } else records.push(ROLES.includes(role) ? await read(`roles/${role}.md`) : { resource: `roles/${role}.md`, revision: revisionOf(null), text: '' });
+  records.push(await read(state.relative));
+  const scope = parseUnitId(unitId).scope;
+  // A custom role brings no instructions of its own, so the brief of its project comes with it while it fits the budget.
+  if (custom && scope.kind === 'project') {
+    const brief = await read(`user/projects/${scope.name}/brief.md`);
+    if (brief.text && canonicalJson({ unitId, role, resources: ['inbox', 'tasks', 'content'], records: [...records, brief] }).length <= BOOTSTRAP_MAX) records.push(brief);
   }
   const result = canonicalJson({ unitId, role, resources: ['inbox', 'tasks', 'content'], records });
   // The kit's longest role, Genesis, needs about 16,400 characters with the rules and a state file; Lyra keeps its own smaller bound.

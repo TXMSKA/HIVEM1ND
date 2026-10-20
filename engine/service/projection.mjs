@@ -2,7 +2,7 @@ import { lstat, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { CLIENTS, CoreError, ROLES, canonicalJson, canonicalTaskId, hashBytes, hashText, isUuid, parseTaskId, parseUnitId, resolvePerson, resolveUnit, uuidV8, validateRole } from './identity.mjs';
 import { leadApproved } from './tasks.mjs';
-import { isMachineCopy, machineNames, stateRunsIn, stateUnitId } from './state.mjs';
+import { isMachineCopy, machineNames, stateCustomRole, stateRunsIn, stateUnitId } from './state.mjs';
 import { projectGroup } from './groups.mjs';
 import { readBytes, withLocalChanges } from './store.mjs';
 import { MESSAGE_BYTES_MAX, MESSAGE_MAX, MESSAGE_WINDOW_MS, SYNC_BYTES_MAX, SYNC_WINDOW_MS } from '../sync/limits.mjs';
@@ -399,7 +399,7 @@ async function loadMind(context) {
     for (const session of sessions.filter(session => resultIds.has(session.id) && session.unitId === request.unitId)) {
       const unit = units.find(unit => unit.id === request.unitId);
       session.startedWith = { role: unit?.role ?? null, unitId: request.unitId, taskId: request.taskId ?? null,
-        references: ['rules.md', ...(unit?.role ? [`roles/${unit.role}.md`] : []), ...(unit?.path ? [unit.path] : [])] };
+        references: ['rules.md', ...(unit?.role && unit.role !== 'custom' ? [`roles/${unit.role}.md`] : []), ...(unit?.path ? [unit.path] : [])] };
     }
   }
   const chatsById = new Map(), chatOrder = new Map(), directByMember = new Map();
@@ -785,12 +785,12 @@ function idleLimits() {
 // A 2.x state file names no role; its unit name starts with it, as executor-shop or overseer.
 function legacyRole(unit) {
   const name = String(unit ?? '');
-  return ROLES.find(role => role !== 'master' && (name === role || name.startsWith(`${role}-`))) ?? null;
+  return ROLES.find(role => role !== 'master' && role !== 'custom' && (name === role || name.startsWith(`${role}-`))) ?? null;
 }
 
 function readUnit(bytes, relative, issues) {
   const blank = {
-    id: null, unit: path.basename(relative, '.md'), alias: null, removed: false, role: null, scope: null, leadId: null, job: null, model: null, clusterId: null,
+    id: null, unit: path.basename(relative, '.md'), alias: null, removed: false, role: null, roleName: null, roleDescription: null, scope: null, leadId: null, job: null, model: null, clusterId: null,
     machine: null, runsIn: null, fresh: null, state: 'in', status: 'unknown', context: '', date: null, branch: null, revision: null,
     sessionIds: [], approvalGrants: [], position: null, malformed: true, path: relative,
   };
@@ -804,6 +804,8 @@ function readUnit(bytes, relative, issues) {
     // A 2.x seat whose name carries no 3.0 role, such as a builder or a test seat, is shown as an agent.
     const written = headers.get('role');
     const role = written ? validateRole(written) : legacyRole(headers.get('unit') || id.unit) ?? 'agent';
+    const custom = role === 'custom' ? stateCustomRole(bytes) : null;
+    if (role === 'custom' && !custom) throw new CoreError(422, 'corrupt_resource', 'The custom role has no name or description.');
     const state = headers.get('state');
     if (state !== 'in' && state !== 'out') throw new CoreError(422, 'corrupt_resource', 'The state is not valid.');
     return {
@@ -813,6 +815,8 @@ function readUnit(bytes, relative, issues) {
       alias: headers.get('alias')?.trim() || null,
       removed: headers.get('removed') === 'true',
       role,
+      roleName: custom?.name ?? null,
+      roleDescription: custom?.description ?? null,
       scope: id.scope,
       leadId: headers.get('lead-id') || null,
       job: headers.get('job') || null,
