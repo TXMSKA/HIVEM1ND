@@ -638,6 +638,17 @@ export function keyDown(map, event) {
     cancelGesture(map);
     return;
   }
+  // The context menu key and Shift+F10 open the menu of the control that has the focus.
+  if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+    const unitId = focusedUnitId(event), titleId = event.target?.closest?.("[data-group-id]")?.getAttribute?.("data-group-id");
+    const chosen = titleId ? { kind: "cluster", id: titleId } : unitId ? { kind: "unit", id: unitId } : map.focusId ? { kind: "unit", id: map.focusId } : null;
+    if (chosen && map.onContextMenu) {
+      event.preventDefault?.();
+      const box = event.target?.getBoundingClientRect?.();
+      map.onContextMenu({ ...chosen, x: box ? box.left + box.width / 2 : 0, y: box ? box.top + box.height / 2 : 0, keyboard: true });
+      return;
+    }
+  }
   const id = map.focusId ?? [...map.selection][0] ?? null;
   if (event.key === "F2" && id) {
     event.preventDefault?.();
@@ -999,6 +1010,18 @@ function bindMap(host, map) {
   host.addEventListener("pointermove", (event) => { pointerMove(map, event); if (map.gesture?.dragging || map.gesture?.kind === "connect") refresh(map); });
   host.addEventListener("pointerup", (event) => pointerUp(map, event));
   host.addEventListener("pointercancel", () => cancelGesture(map));
+  host.addEventListener("contextmenu", (event) => {
+    if (!map.onContextMenu) return;
+    const unitId = focusedUnitId(event), titleId = event.target?.closest?.("[data-group-id]")?.getAttribute?.("data-group-id");
+    const target = unitId ? { kind: "unit", id: unitId } : titleId ? { kind: "cluster", id: titleId } : null;
+    const group = target ? null : hitPersonalGroup(map, toWorld({ x: event.clientX, y: event.clientY }, hostRect(host), map.view));
+    const chosen = target ?? (group ? { kind: "cluster", id: group.id } : null);
+    if (!chosen) return;
+    event.preventDefault?.();
+    // From the keyboard the event has no position, so the menu opens at the control itself.
+    const box = !event.clientX && !event.clientY ? event.target?.getBoundingClientRect?.() : null;
+    map.onContextMenu({ ...chosen, x: box ? box.left + box.width / 2 : event.clientX, y: box ? box.top + box.height / 2 : event.clientY });
+  });
   host.addEventListener("dblclick", (event) => {
     const id = focusedUnitId(event);
     if (id) { centerUnit(map, id, hostRect(host)); map.onSelect?.(id); refresh(map); }

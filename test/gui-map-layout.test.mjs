@@ -5,6 +5,7 @@ import {
   canConnect, createMap, flushLayout, hitClusterHeader, isCollapsed, keyDown, paintNodes, personalZones, pointerDown, pointerMove, pointerUp,
   queueLayoutPatch, renderMap, retrySavedLayout, toggleCollapsed,
 } from '../gui/app/map.mjs';
+import { openContextMenu } from '../gui/app/hierarchy.mjs';
 import { toScreen } from '../gui/app/map-geometry.mjs';
 
 const unit = (id, name, role = 'executor', clusterId = null, leadId = null) => ({ id, unit: name, role, scope: { kind: 'root' }, clusterId, leadId, status: 'idle' });
@@ -365,3 +366,98 @@ test('dragging from one unit to another connects them, with a line, a marked dro
   assert.equal(hitNode({ x: 40, y: 0 }, [{ id: 'n', x: 0, y: 0, radius: 21 }], 1, 20)?.id, 'n');
 });
 
+test('the context menu key and Shift+F10 open the menu of the focused unit or title, the right button never starts a gesture', () => {
+  const units = [unit('a', 'alpha', 'executor', 'c')], groups = [cluster('c', 'crew', null, ['a'])];
+  const map = createMap({ units, groups, saved: { nodes: {}, groups: {} } }), surface = host(), seen = [];
+  map.onContextMenu = target => seen.push(target);
+  renderMap(surface.ownerDocument, surface, map, {});
+  const send = (type, event) => surface.listeners.get(type)[0](event);
+  const prevented = [];
+  const unitNode = nodeButtons(surface)[0];
+  send('contextmenu', { clientX: 90, clientY: 70, target: targetOf(unitNode, { 'data-unit-id': 'a' }), preventDefault: () => prevented.push(true) });
+  assert.deepEqual(seen.at(-1), { kind: 'unit', id: 'a', x: 90, y: 70 });
+  send('contextmenu', { clientX: 12, clientY: 14, target: targetOf(titleOf(surface, 'c'), { 'data-group-id': 'c' }), preventDefault: () => prevented.push(true) });
+  assert.deepEqual(seen.at(-1), { kind: 'cluster', id: 'c', x: 12, y: 14 });
+  const frame = personalZones(map)[0], inside = toScreen({ x: frame.bounds.x + 5, y: frame.bounds.y + frame.bounds.h - 5 }, rect, map.view);
+  send('contextmenu', { clientX: inside.x, clientY: inside.y, target: targetOf(null), preventDefault: () => prevented.push(true) });
+  assert.equal(seen.at(-1).kind, 'cluster');
+  const count = seen.length;
+  send('contextmenu', { clientX: 5000, clientY: 5000, target: targetOf(null), preventDefault: () => prevented.push(true) });
+  assert.equal(seen.length, count, 'empty space has no menu');
+  assert.equal(prevented.length, 3);
+  keyDown(map, { key: 'ContextMenu', target: targetOf(unitNode, { 'data-unit-id': 'a' }), preventDefault: () => prevented.push(true) });
+  assert.deepEqual(seen.at(-1), { kind: 'unit', id: 'a', x: 120, y: 120, keyboard: true });
+  keyDown(map, { key: 'F10', shiftKey: true, target: targetOf(titleOf(surface, 'c'), { 'data-group-id': 'c' }), preventDefault: () => prevented.push(true) });
+  assert.deepEqual(seen.at(-1), { kind: 'cluster', id: 'c', x: 120, y: 120, keyboard: true });
+  pointerDown(map, pointer(50, 50, { button: 2, target: targetOf(unitNode, { 'data-unit-id': 'a' }) }));
+  assert.equal(map.gesture, null, 'the right button starts no drag and selects nothing');
+});
+
+function menuDocument() {
+  const listeners = new Map(), document = { activeElement: null, listeners };
+  function Node(tag) { this.tagName = tag; this.children = []; this.attributes = new Map(); this.style = {}; this.className = ''; this.textContent = ''; this.parent = null; this.handlers = new Map(); }
+  Node.prototype.setAttribute = function setAttribute(name, value) { this.attributes.set(name, String(value)); };
+  Node.prototype.getAttribute = function getAttribute(name) { return this.attributes.get(name) ?? null; };
+  Node.prototype.addEventListener = function addEventListener(type, fn) { this.handlers.set(type, fn); };
+  Node.prototype.append = function append(...nodes) { for (const node of nodes) { node.parent = this; this.children.push(node); } };
+  Node.prototype.remove = function remove() { if (this.parent) this.parent.children = this.parent.children.filter(child => child !== this); this.parent = null; };
+  Node.prototype.contains = function contains(node) { return node === this || this.children.some(child => child.contains(node)); };
+  Node.prototype.focus = function focus() { document.activeElement = this; };
+  Node.prototype.getBoundingClientRect = function getBoundingClientRect() { return { width: 200, height: 150, left: 0, top: 0 }; };
+  Object.defineProperty(Node.prototype, 'disabled', { get() { return this.attributes.has('disabled'); } });
+  document.createElement = tag => new Node(tag);
+  document.body = new Node('body');
+  document.live = new Map();
+  document.querySelector = selector => selector.includes('data-context-menu') ? document.body.children.find(child => child.getAttribute('data-context-menu')) ?? null : document.live.get(selector) ?? null;
+  document.addEventListener = (type, fn) => listeners.set(type, fn);
+  document.removeEventListener = type => listeners.delete(type);
+  document.defaultView = { innerWidth: 400, innerHeight: 300 };
+  return document;
+}
+
+test('the context menu opens at the pointer inside the window, moves with the arrows, runs a choice and closes on Escape or a click elsewhere', () => {
+  const document = menuDocument(), ran = [], invoker = document.createElement('button');
+  invoker.focus();
+  const { menu } = openContextMenu(document, { x: 390, y: 290, label: 'Actions for alpha', items: [
+    { id: 'open', label: 'Open', primary: true, run: () => ran.push('open') }, { id: 'rename', label: 'Rename', run: () => ran.push('rename') },
+    { id: 'gone', label: 'Gone', disabled: true }, { id: 'delete', label: 'Delete', danger: true, run: () => ran.push('delete') }] });
+  assert.equal(menu.getAttribute('role'), 'menu');
+  assert.equal(menu.getAttribute('aria-label'), 'Actions for alpha');
+  assert.equal(menu.style.left, '192px');
+  assert.equal(menu.style.top, '142px');
+  const [open, rename, gone, remove] = menu.children;
+  assert.equal(document.activeElement, open, 'the first action has the focus');
+  assert.ok(open.className.includes('is-primary') && !rename.className.includes('is-primary') && remove.className.includes('is-danger'), 'the first action is the accent fill and delete is marked');
+  const press = key => document.listeners.get('keydown')({ key, preventDefault() {} });
+  press('ArrowDown'); assert.equal(document.activeElement, rename);
+  press('ArrowDown'); assert.equal(document.activeElement, remove, 'a disabled entry is skipped');
+  press('ArrowDown'); assert.equal(document.activeElement, open);
+  press('End'); assert.equal(document.activeElement, remove);
+  press('Home'); assert.equal(document.activeElement, open);
+  press('Escape');
+  assert.equal(document.body.children.length, 0);
+  assert.equal(document.activeElement, invoker, 'Escape gives the focus back');
+  assert.equal(document.listeners.size, 0, 'nothing is left listening');
+
+  // The Map draws itself again while the menu is open, so the focus goes back to the control that now stands where the old one did.
+  const old = document.createElement('button'), fresh = document.createElement('button');
+  old.setAttribute('data-unit-id', 'a:b'); old.isConnected = false; fresh.setAttribute('data-unit-id', 'a:b');
+  document.live.set('[data-unit-id="a:b"]', fresh);
+  old.focus();
+  openContextMenu(document, { x: 1, y: 1, label: 'r', items: [{ id: 'open', label: 'Open', run: () => {} }] });
+  document.listeners.get('keydown')({ key: 'Escape', preventDefault() {} });
+  assert.equal(document.activeElement, fresh);
+  invoker.focus();
+  const second = openContextMenu(document, { x: 1, y: 1, label: 'x', items: [{ id: 'rename', label: 'Rename', run: () => ran.push('rename') }] });
+  openContextMenu(document, { x: 1, y: 1, label: 'y', items: [{ id: 'open', label: 'Open', run: () => ran.push('open') }] });
+  assert.equal(document.body.children.length, 1, 'one menu at a time');
+  assert.equal(second.menu.parent, null);
+  document.body.children[0].children[0].handlers.get('click')();
+  assert.deepEqual(ran, ['open']);
+  assert.equal(document.body.children.length, 0, 'a choice closes the menu');
+  const third = openContextMenu(document, { x: 1, y: 1, label: 'z', items: [{ id: 'open', label: 'Open', run: () => ran.push('again') }] });
+  document.listeners.get('pointerdown')({ target: document.body });
+  assert.equal(document.body.children.length, 0, 'a click elsewhere closes it');
+  void third;
+  assert.deepEqual(ran, ['open']);
+});

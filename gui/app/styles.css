@@ -1024,6 +1024,19 @@ html[data-mode="focus"] body { background: #000000; color: #d8d4cc; }
 .map-menu summary { cursor: pointer; min-height: 32px; display: flex; align-items: center; padding: 4px 8px; }
 .map-menu[open] { background: var(--card2); border-radius: 10px; padding: 4px; }
 .map-menu .btn { display: flex; width: 100%; min-height: 32px; }
+.context-menu { position: fixed; z-index: 40; min-width: 180px; max-width: min(320px, calc(100vw - 16px)); padding: 6px; display: grid; gap: 2px; background: var(--panel); border: 1px solid var(--line2); border-radius: 12px; box-shadow: 0 12px 32px rgba(0, 0, 0, .45); }
+.context-item { display: flex; align-items: center; width: 100%; min-height: 34px; padding: 6px 12px; border: 0; border-radius: 8px; background: transparent; color: var(--text); font-size: 13.5px; text-align: left; cursor: pointer; }
+.context-item:hover:not(:disabled), .context-item:focus-visible { background: var(--card2); }
+.context-item.is-primary { background: var(--accent); color: var(--accent-ink); font-weight: 700; }
+.context-item.is-primary:hover:not(:disabled), .context-item.is-primary:focus-visible { background: var(--accent-hover, color-mix(in srgb, var(--accent) 82%, #fff)); }
+.context-item.is-primary:active:not(:disabled) { background: var(--accent-press, color-mix(in srgb, var(--accent) 76%, #000)); }
+.context-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.context-item.is-primary:focus-visible { outline-color: var(--text); }
+.context-item:active:not(:disabled) { background: var(--card); }
+/* The dialogs the Map opens: the action is the accent fill, Cancel is plain text. */
+.dialog[data-form="cluster-rename"] .dialog-actions .btn:not(.primary), .dialog[data-form="move-agent"] .dialog-actions .btn:not(.primary), .dialog[data-form="selection-lead"] .dialog-actions .btn:not(.primary), .dialog[data-form="detach-agent"] .dialog-actions .btn:not(.primary), .dialog.connection-dialog .dialog-actions .btn:not(.primary) { background: transparent; border-color: transparent; color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.context-item.is-danger { color: var(--error); }
+.context-item:disabled { color: var(--mute); cursor: default; }
 .map-toast { position: fixed; z-index: 30; left: 50%; bottom: 46px; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; max-width: min(560px, calc(100vw - 32px)); background: var(--text); color: var(--bg); padding: 11px 16px; border-radius: 14px; font-size: 13px; font-weight: 700; box-shadow: 0 8px 28px rgba(0, 0, 0, .35); }
 .map-toast .icon { width: 15px; height: 15px; flex: none; order: -1; }
 .map-toast .btn { background: transparent; border: 0; color: inherit; text-decoration: underline; text-underline-offset: 3px; padding: 0 0 0 6px; min-height: 0; }
@@ -1528,6 +1541,18 @@ button.plan-assignment { min-height: 32px; padding: 0; border: 0; background: tr
 .work-step small, .work-actions small { font-size: 11.5px; color: var(--mute); }
 .work-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 14px; }
 .session-context { padding: 12px 16px; display: grid; gap: 6px; border-bottom: 1px solid var(--line); }
+.context-label { display: flex; justify-content: space-between; gap: 8px; color: var(--mute); font-size: 12px; }
+.context-bar { width: 100%; height: 6px; border-radius: 999px; background: var(--card2); overflow: hidden; }
+.context-fill { display: block; height: 100%; background: var(--accent); border-radius: inherit; }
+.context-bar.is-full .context-fill { background: var(--waiting); }
+.context-notice { padding: 12px 14px; display: grid; gap: 8px; border: 1px solid var(--waiting); border-radius: 14px; background: var(--waiting-soft); }
+.context-notice header { display: flex; gap: 8px; align-items: center; }
+.context-notice header > .icon { width: 15px; height: 15px; color: var(--waiting); }
+.context-notice strong { flex: 1; font-size: 13.5px; font-weight: 700; }
+.context-notice p { margin: 0; font-size: 12.5px; color: var(--body); }
+.context-notice .action-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.context-notice .action-row .btn { min-width: 0; flex: 1 1 96px; }
+.context-notice [data-action="context-dismiss"] { min-width: 36px; min-height: 36px; }
 .session-start-step { display: flex; align-items: center; gap: 8px; margin: 4px 0; color: var(--mute); font-size: 12.5px; }
 .session-start-step.is-done { color: var(--body); }
 .session-start-step.is-working { color: var(--text); }
