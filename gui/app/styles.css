@@ -1141,7 +1141,9 @@ html[data-mode="focus"] body { background: #000000; color: #d8d4cc; }
 .settings-avatar { display: grid; place-items: center; width: 34px; height: 34px; flex: 0 0 34px; border-radius: 10px; background: var(--card2); }
 .settings-agent-identity { display: grid; gap: 2px; width: 200px; flex: 0 0 200px; font-size: 14px; }
 .settings-agent-cli { display: flex; align-items: center; gap: 10px; flex: 1; font-size: 12.5px; }
-.settings-agent-mode { width: 196px; flex: 0 0 196px; padding: 4px; }
+/* The two modes size to their words: a fixed width made "Automático" and "Bajo demanda" overlap in Spanish. */
+.settings-agent-mode { width: auto; flex: 0 0 auto; padding: 4px; }
+.settings-agent-mode .btn { flex: 0 0 auto; }
 .settings-agent-mode .btn { padding: 8px 12px; }
 .settings-agent-app { width: 190px; flex: 0 0 190px; font-size: 12.5px; }
 .settings-connected::before { content: "●"; color: var(--working); margin-right: 6px; }
@@ -1158,7 +1160,14 @@ html[data-mode="focus"] body { background: #000000; color: #d8d4cc; }
 .settings-panel textarea { min-height: 96px; resize: vertical; font: inherit; }
 .settings-offline { padding: 10px 14px; border-radius: 12px; background: var(--waiting-soft); }
 .settings-review, .settings-phone-dialog { width: 600px; max-width: calc(100vw - 32px); padding: 24px; border-radius: 22px; border: 1px solid var(--line2); background: var(--panel); }
-.settings-review { display: grid; gap: 18px; }
+.settings-review { display: flex; flex-direction: column; gap: 14px; max-height: min(86vh, 760px); overflow: hidden; }
+.settings-review[open] { display: flex; }
+.settings-review > * { flex: 0 0 auto; }
+.settings-review > .settings-review-list { flex: 1 1 auto; display: grid; gap: 8px; align-content: start; min-height: 0; overflow: auto; padding-right: 4px; }
+.settings-change-files { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; max-height: 220px; overflow: auto; }
+.settings-change-files label { min-height: 26px; align-items: center; gap: 10px; }
+.settings-change-files input[type="checkbox"] { width: 15px; height: 15px; }
+.settings-change-files input[type="checkbox"]:checked::after { width: 6px; height: 3px; margin: 3px; }
 .settings-review:not([open]) { display: none; }
 .settings-review h2, .settings-review h3 { margin: 0; }
 .settings-review h3 { font-size: 12px; color: var(--mute); }
@@ -1697,6 +1706,9 @@ button:disabled { cursor: not-allowed; }
 }
 .btn.quiet { background: transparent; border-color: transparent; box-shadow: none; }
 .btn.ghost { background: transparent; box-shadow: none; }
+.btn.danger { background: transparent; border-color: var(--control-border); color: var(--danger, #e07a7a); box-shadow: none; font-weight: 600; }
+.btn.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--danger, #e07a7a) 14%, transparent); border-color: var(--danger, #e07a7a); color: var(--danger, #e07a7a); }
+.btn.danger:active:not(:disabled) { background: color-mix(in srgb, var(--danger, #e07a7a) 22%, transparent); }
 .btn:is(.ghost, .quiet, .panel-toggle, [aria-pressed], [data-action$="cancel"], [data-action^="cancel"], [data-action="pin"], [data-action="unlist"], [data-action="reopen"], [data-action="add-back"], [data-action="older"], [data-action="more-comments"], [data-action="stop-watch"], [data-action="clear-selection"], [data-action="keep-local"], [data-action="dismiss-discovery"], [data-action="waiting-back"], [data-action="close-home"], [data-action="undo"], [data-action="map-undo"], [data-action="library-undo"], [data-action="older-work"], [data-action="stop-step"]):hover:not(:disabled) {
   background: var(--control-bg-hover); border-color: var(--control-border-hover); color: var(--control-text);
 }

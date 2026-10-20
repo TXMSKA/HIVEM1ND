@@ -411,6 +411,8 @@ function renderProjects(document, model, t, actions) {
   const links = model.projects?.clusterLinks ?? [];
   for (const link of links) {
     const remove = settingsButton(document, 'settings-remove-link', startText(model.language, 'removeLink'), () => actions.onRemoveLink?.(link), !model.canWrite || model.readOnly);
+    // Removing a link repeats on every row and undoes work, so it is a quiet bordered button, not the accent of a primary action.
+    remove.setAttribute('class', 'btn danger');
     remove.setAttribute('aria-label', startText(model.language, 'removeLink') + ': ' + link.title);
     section.append(element(document, 'div', { class: 'settings-link', 'data-cluster-link': link.clusterId },
       element(document, 'strong', { text: link.title }), element(document, 'span', { class: 'cluster-link-kind', text: startText(model.language, link.kind === 'none' ? 'noLink' : link.kind) }),
@@ -479,6 +481,15 @@ function renderContent(document, model, t, actions) {
     preferences);
 }
 
+// The longest folder every path shares, ending at a separator, or an empty string when they share none.
+function commonFolder(paths) {
+  if (!paths.length) return "";
+  let prefix = paths[0];
+  for (const item of paths.slice(1)) while (prefix && !item.startsWith(prefix)) prefix = prefix.slice(0, -1);
+  const cut = Math.max(prefix.lastIndexOf("\\"), prefix.lastIndexOf("/"));
+  return cut > 0 ? prefix.slice(0, cut) : "";
+}
+
 export function renderClientReview(document, review, t, actions) {
   const dialog = element(document, "dialog", { class: "dialog settings-review", "data-settings-review": review.agent.id });
   const heading = element(document, "h2", { text: t("settingsConnectTitle", { client: review.target === "app" ? review.agent.app.name : `${review.agent.name} CLI` }) });
@@ -487,22 +498,54 @@ export function renderClientReview(document, review, t, actions) {
   const selected = review.selected;
   const apply = settingsButton(document, "settings-apply", "", () => actions.onApply?.([...selected]));
   const update = () => { apply.textContent = t("settingsApply", { count: selected.size }); apply.disabled = !selected.size; };
+  const descriptions = { "Load the M1ND rules in every session": "settingsLoadRules", "Stop loading the M1ND rules automatically": "settingsStopRules",
+    "Remove owned Content no longer included": "settingsRemoveContent", "Make included M1ND Content available on demand": "settingsIncludeContent" };
+  const describe = (change) => change.id === "mcp" ? t("settingsRelayChange") : change.id === "hooks" ? t("settingsHooksChange") : change.optional ? t("settingsGitChange")
+    : descriptions[change.description] ? t(descriptions[change.description]) : change.description;
+  // Changes of one kind are one row with a count and their folder; the files open on demand, so 53 changes read as a few lines.
+  const list = element(document, "div", { class: "settings-review-list" });
   for (const optional of [false, true]) {
     const changes = review.preview.changes.filter(change => change.optional === optional);
-    if (optional && changes.length) dialog.append(element(document, "h3", { text: t("settingsOptional") }));
+    if (optional && changes.length) list.append(element(document, "h3", { text: t("settingsOptional") }));
+    const groups = new Map();
     for (const change of changes) {
-      const input = element(document, "input", { type: "checkbox", "data-review-change": change.id });
-      input.checked = selected.has(change.id);
-      input.addEventListener("change", () => { if (input.checked) selected.add(change.id); else selected.delete(change.id); update(); });
-      const details = element(document, "details", {}, element(document, "summary", { text: t("details") }), element(document, "pre", { text: change.afterText }));
-      const descriptions = { "Load the M1ND rules in every session": "settingsLoadRules", "Stop loading the M1ND rules automatically": "settingsStopRules",
-        "Remove owned Content no longer included": "settingsRemoveContent", "Make included M1ND Content available on demand": "settingsIncludeContent" };
-      const description = change.id === "mcp" ? t("settingsRelayChange") : change.id === "hooks" ? t("settingsHooksChange") : change.optional ? t("settingsGitChange")
-        : descriptions[change.description] ? t(descriptions[change.description]) : change.description;
-      dialog.append(element(document, "div", { class: "settings-change" }, element(document, "label", {}, input,
-        element(document, "span", {}, element(document, "strong", { text: description }), element(document, "code", { text: change.path }))), details));
+      const key = describe(change);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(change);
+    }
+    for (const [description, members] of groups) {
+      const inputs = members.map((change) => {
+        const input = element(document, "input", { type: "checkbox", "data-review-change": change.id, "aria-label": change.path });
+        input.checked = selected.has(change.id);
+        return input;
+      });
+      const group = element(document, "input", { type: "checkbox", "data-review-group": description });
+      const sync = () => { const on = inputs.filter(input => input.checked).length; group.checked = on === inputs.length; group.indeterminate = on > 0 && on < inputs.length; };
+      group.addEventListener("change", () => {
+        for (const [index, input] of inputs.entries()) { input.checked = group.checked; if (group.checked) selected.add(members[index].id); else selected.delete(members[index].id); }
+        sync(); update();
+      });
+      for (const [index, input] of inputs.entries()) input.addEventListener("change", () => {
+        if (input.checked) selected.add(members[index].id); else selected.delete(members[index].id);
+        sync(); update();
+      });
+      sync();
+      const folder = commonFolder(members.map(change => change.path));
+      const row = element(document, "div", { class: "settings-change" + (members.length > 1 ? " is-group" : "") });
+      if (members.length === 1) {
+        row.append(element(document, "label", {}, inputs[0], element(document, "span", {}, element(document, "strong", { text: description }), element(document, "code", { text: members[0].path }))),
+          element(document, "details", {}, element(document, "summary", { text: t("details") }), element(document, "pre", { text: members[0].afterText })));
+      } else {
+        const files = element(document, "ul", { class: "settings-change-files" }, members.map((change, index) => element(document, "li", {},
+          element(document, "label", {}, inputs[index], element(document, "code", { text: folder ? change.path.slice(folder.length).replace(/^[\\/]/, "") : change.path })))));
+        row.append(element(document, "label", {}, group, element(document, "span", {},
+          element(document, "strong", { text: `${description} (${members.length})` }), element(document, "code", { text: folder || members[0].path }))),
+          element(document, "details", {}, element(document, "summary", { text: t("details") }), files));
+      }
+      list.append(row);
     }
   }
+  dialog.append(list);
   dialog.append(element(document, "p", { class: "settings-hint", text: t("finalAgentPermissionExplanation") }),
     element(document, "p", { text: t("finalBackupExplanation") }));
   if (review.preview.restartRequired) dialog.append(element(document, "p", { text: t("finalRestartClientExplanation", { client: review.agent.name }) }));
