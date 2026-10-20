@@ -4,6 +4,7 @@ const ICONS = {
   map: "M9 4 3 6v14l6-2 6 2 6-2V4l-6 2zM9 4v14M15 6v14",
   hierarchy: "M12 5a2.5 2.5 0 1 0 0 .1M5 19a2.5 2.5 0 1 0 0 .1M19 19a2.5 2.5 0 1 0 0 .1M12 7.5V11M12 11.5 6 17M12 11.5l6 5.5",
   chats: "M5 6h14v9H8l-3 3z",
+  inspector: "M4 5h16v14H4zM14 5v14",
   waiting: "M8 13V5.5a1.5 1.5 0 0 1 3 0V12M11 11V4a1.5 1.5 0 0 1 3 0v8M14 12V6.5a1.5 1.5 0 0 1 3 0V15c0 4-2.5 6-6 6",
   phone: "M7 3h10a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zM10 17h4",
   bell: "M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4",
@@ -38,6 +39,7 @@ export function element(document, tag, attributes = {}, ...children) {
     if (value == null) continue;
     if (key === "text") node.textContent = String(value);
     else if (key === "class") node.className = tag === "button" && value === "btn" ? "btn secondary" : String(value);
+    else if (key === "onclick" && tag === "button" && typeof value === "function") node.addEventListener("click", withLoader(node, value));
     else if (key.startsWith("on") && typeof value === "function") node.addEventListener(key.slice(2).toLowerCase(), value);
     // The content policy blocks style attributes; a style set through the object model is allowed.
     else if (key === "style" && node.style) node.style.cssText = String(value);
@@ -45,6 +47,56 @@ export function element(document, tag, attributes = {}, ...children) {
   }
   for (const child of children.flat()) appendChild(document, node, child);
   return node;
+}
+
+// A button that starts an action shows a loader while the action runs. The shell draws again many times meanwhile and
+// replaces the button, so what is running is remembered by the button's action and name and shown again on its twin.
+const running = new Map();
+
+function busyKey(node) {
+  return `${node.getAttribute("data-action") ?? ""}|${node.getAttribute("data-id") ?? ""}|${node.textContent ?? ""}`;
+}
+
+function markBusy(node, busy) {
+  if (busy) {
+    if (node.getAttribute("data-busy") === "true") return;
+    node.setAttribute("data-busy", "true");
+    node.setAttribute("data-busy-was", node.disabled ? "disabled" : "enabled");
+    node.setAttribute("aria-busy", "true");
+    node.disabled = true;
+    return;
+  }
+  if (node.getAttribute("data-busy") !== "true") return;
+  node.removeAttribute("data-busy");
+  node.removeAttribute("aria-busy");
+  node.disabled = node.getAttribute("data-busy-was") === "disabled";
+  node.removeAttribute("data-busy-was");
+}
+
+function withLoader(node, handler) {
+  return function guarded(event) {
+    const result = handler.call(this, event);
+    if (!result || typeof result.then !== "function") return result;
+    const key = busyKey(node);
+    const document = node.ownerDocument;
+    markBusy(node, true);
+    running.set(key, (running.get(key) ?? 0) + 1);
+    const done = () => {
+      const left = (running.get(key) ?? 1) - 1;
+      if (left > 0) { running.set(key, left); return; }
+      running.delete(key);
+      markBusy(node, false);
+      for (const twin of document.querySelectorAll?.("button") ?? []) if (twin.getAttribute("data-busy") === "true" && busyKey(twin) === key) markBusy(twin, false);
+    };
+    result.then(done, done);
+    return result;
+  };
+}
+
+// Called after the shell is drawn again: the buttons whose action is still running show their loader.
+export function restoreRunning(root) {
+  if (!running.size) return;
+  for (const node of root.querySelectorAll?.("button") ?? []) if (running.has(busyKey(node))) markBusy(node, true);
 }
 
 // A 24 by 24 glyph drawn by one path, for the drawings that are not in the ICONS table.
@@ -149,7 +201,7 @@ export function showDialog(document, { title, body, confirm, cancel, retry, onCo
   labelDialog(dialog, heading);
   const copy = element(document, "p", { text: body ?? "" });
   const actions = element(document, "div", { class: "dialog-actions" });
-  const cancelButton = element(document, "button", { type: "button", class: "btn", text: cancel });
+  const cancelButton = element(document, "button", { type: "button", class: "btn ghost", text: cancel });
   actions.append(cancelButton);
   if (confirm) {
     const confirmButton = element(document, "button", { type: "button", class: "btn primary", text: confirm });

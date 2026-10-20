@@ -38,7 +38,7 @@ import {
 import { IMAGE_MAX_BYTES, IMAGE_TYPES, galleryState, messageParts, renderActions, renderAttachDialog, renderGallery, renderPendingParts } from "./chat-media.mjs";
 import { addNode, addBoardFrame, appendBoardNode, boardBounds, boardColors, boardCommentAnchor, boardDocument, dragNodeGeometry, editedBoard, hitBoardNode, indexNodes, loadAssets, parentPoint, patchNode, releaseAssets, removeNode, renderBoard, replaceBoard, setBoardDraft, sketchStroke, touchedStrokes, uploadAsset } from "./blueprint.mjs";
 import { ApiError, clearCredentials, createApi, createOperation, dispose as disposeApi, fetchAsset, operationId, perform, request } from "./api.mjs";
-import { clusterGlyph, element, icon, labelDialog, labeledField, pathIcon, progressMark, runAction, setBusy, showDialog, showError } from "./components.mjs";
+import { clusterGlyph, element, icon, labelDialog, labeledField, pathIcon, progressMark, restoreRunning, runAction, setBusy, showDialog, showError } from "./components.mjs";
 import {
   applyWatch,
   createComment,
@@ -198,6 +198,8 @@ const OPENING_COPY = {
   connecting: ["Connecting to the service", "Conectando con el servicio"],
   read: ["Reading", "Leyendo"],
   notRead: ["M1ND not read", "M1ND sin leer"],
+  stoppedTitle: ["The service stopped", "El servicio se detuvo"],
+  stopped: ["HIVEM1ND is not answering on this machine. Reopen HIVEM1ND, or run: {command}", "HIVEM1ND no responde en esta máquina. Volver a abrir HIVEM1ND o ejecutar: {command}"],
 };
 
 function openingText(app, key, variables = {}) {
@@ -346,6 +348,7 @@ async function runBoot(app) {
   if (app.disposed || app.bootRetrying) return app;
   app.bootRetrying = true;
   app.bootFailed = false;
+  app.bootStopped = false;
   app.bootSettled = false;
   app.bootReading = true;
   app.bootError = null;
@@ -363,10 +366,31 @@ async function runBoot(app) {
     if (!app.disposed && !app.bootFailed && app.bootReading && app.layout !== "phone") renderShell(app);
     if (app.disposed || app.bootFailed) return app;
     if (!app.disposed && !app.store.capabilities?.length) armBootDeadline(app, app.readyBudgetMs);
-    await loadPresentation(app);
+    // The first view is enough to draw the shell, the Map and the lists. Settings, the viewer, the lists and the folder
+    // reports then arrive in parallel and each fills its own part; a slow or failed one never takes the screen back.
+    const early = shellLayout(app.store.capabilities, app.store.audience) === "desktop";
+    if (early) {
+      app.layout = "desktop";
+      app.store.audience ??= app.layout;
+      createLists(app);
+      app.bootReading = false;
+      app.bootSettled = true;
+      clearTimeout(app.readyTimer);
+      app.readyTimer = null;
+      publish(app);
+    }
+    const presentation = loadPresentation(app).catch((error) => {
+      if (!early || error?.status === 401) throw error;
+      app.presentationError = error;
+      retryPresentation(app, 1);
+    });
+    if (!early) await presentation;
     if (app.disposed || app.bootFailed) return app;
-    await loadLists(app);
-    if (app.layout === 'desktop') { await loadStartReports(app); maybeStartDiscovery(app); }
+    const lists = early ? loadListData(app) : loadLists(app);
+    const reports = app.layout === 'desktop' ? loadStartReports(app) : Promise.resolve();
+    await Promise.all([presentation, lists, reports]);
+    if (app.disposed || app.bootFailed) return app;
+    if (app.layout === 'desktop') maybeStartDiscovery(app);
     startOwnEmbed(app);
   } catch (error) {
     if (!app.disposed) {
@@ -518,7 +542,10 @@ function paintShell(app) {
   else if (app.store.stream?.state === 'error') shell.append(element(document, 'button', { type: 'button', class: 'btn phone-retry', 'data-action': 'retry-stream', text: t('retry'), onclick: () => startServiceStream(app) }));
   if (app.layout === "phone") shell.append(renderPhoneNav(app, t));
   clearPhoneDialog(app);
+  const scrolled = captureScrolls(app.root);
   app.root.replaceChildren(shell);
+  restoreScrolls(app.root, scrolled);
+  restoreRunning(app.root);
   const conversation = app.root.querySelector('.transcript');
   if (conversation && app.thread) conversation.scrollTop = app.thread.nearBottom ? conversation.scrollHeight ?? 0 : app.thread.scrollTop ?? 0;
   const work = app.root.querySelector('[data-session-work]');
@@ -545,6 +572,26 @@ function paintShell(app) {
       phoneDialog.querySelector("[data-action='phone-done']")?.focus();
       homeState(app).phoneDialogFocused = true;
     }
+  }
+}
+
+// Every drawing replaces the whole shell. The panels that scroll keep where they were, so reading a long panel is not
+// interrupted by a retry, a refresh or a message arriving.
+const SCROLLING = ['.panel.side', '.panel.stage', '.panel.inspector', '.inspector-body', '.agent-controls', '.chat-panel', '.settings-panel', '.transcript', '.session-work'];
+
+function captureScrolls(root) {
+  const saved = [];
+  for (const selector of SCROLLING) {
+    const node = root.querySelector?.(selector);
+    if (node && node.scrollTop > 0) saved.push([selector, node.scrollTop]);
+  }
+  return saved;
+}
+
+function restoreScrolls(root, saved) {
+  for (const [selector, top] of saved) {
+    const node = root.querySelector?.(selector);
+    if (node) node.scrollTop = top;
   }
 }
 
@@ -1102,7 +1149,7 @@ export function renderBar(app, t, counts) {
       app.inspectorOpen = !app.inspectorOpen;
       renderShell(app);
     },
-  }, icon(document, "hierarchy"));
+  }, icon(document, "inspector"));
   const phone = element(document, "button", {
     type: "button", class: "icon-button", "data-action": "open-phone",
     "aria-label": t("settingsOpenPhone"), onclick: () => openPhoneSettings(app),
@@ -1230,7 +1277,7 @@ function renderWorkspace(app, t, view, counts) {
   const group = app.store.indexes.groups.get(app.store.selected.groupId);
   const selection = [...(app.mapState?.selection ?? [])].map((id) => unitById(app, id)).filter((unit) => unit && unit.role !== "master");
   const inspectorBody = element(document, "div", { class: "inspector-body" });
-  if (outcomeVisible(app) && app.actionScope !== "editor") {
+  if (outcomeVisible(app) && app.actionScope !== "editor" && !noticeSaysNote(app)) {
     inspectorBody.append(element(document, "p", {
       class: "action-note",
       "data-action-note": "true",
@@ -1305,14 +1352,49 @@ function renderWorkspace(app, t, view, counts) {
     }
   }
   if (app.mapToast) inspectorBody.append(mapToast(app, t));
-  if (app.startError) inspectorBody.append(element(document, 'p', { role: 'alert', text: startText(app.language, 'unavailable') }),
-    mapButton(app, 'retry-start-reports', startText(app.language, 'retry'), async () => { await loadStartReports(app); maybeStartDiscovery(app); }));
+  if (app.startError && !failedCauses(app).has(String(app.startError.code ?? 'unknown'))) inspectorBody.append(element(document, 'div', { class: 'notice notice-error', role: 'alert', 'data-start-error': 'true' },
+    element(document, 'p', { text: startErrorText(app) }),
+    mapButton(app, 'retry-start-reports', startText(app.language, 'retry'), async () => { await loadStartReports(app); maybeStartDiscovery(app); })));
+  dropRepeatedNotices(inspectorBody);
   const inspector = element(document, "aside", {
     class: `panel inspector${app.inspectorOpen ? " is-open" : ""}`,
   }, inspectorBody);
   const phoneHierarchy = app.layout === "phone" && app.mode !== "waiting" && app.tab !== "chats";
   const showSide = app.layout !== "phone" || app.mode !== "waiting";
   return element(document, "div", { class: "workspace" }, showSide ? side : null, phoneHierarchy ? null : stage, inspector);
+}
+
+// The failed requests this panel shows as notices, by cause.
+function failedCauses(app) {
+  const here = noteScope(app);
+  const causes = new Set();
+  for (const record of app.activity?.values() ?? []) if (record.phase === "error" && (record.scope ?? here) === here) causes.add(String(record.error?.code ?? "unknown"));
+  return causes;
+}
+
+// The note of the last failure is not said again when the notice of that same request is already on screen.
+function noticeSaysNote(app) {
+  if (app.actionTone !== "error" || !app.actionKey) return false;
+  const record = app.activity?.get(app.actionKey);
+  return record?.phase === "error" && (record.scope ?? noteScope(app)) === noteScope(app);
+}
+
+// The cause the person can act on: a slow service says so; any other failure keeps the connection sentence.
+function startErrorText(app) {
+  const code = app.startError?.code;
+  return code && Object.hasOwn(ACTION_COPY, code) && code !== 'service_unavailable' ? actionText(app.language, code) : startText(app.language, 'unavailable');
+}
+
+// The same sentence is never said twice in one panel: the later note with the same words goes.
+function dropRepeatedNotices(container) {
+  const seen = new Set();
+  for (const node of [...(container.children ?? [])]) {
+    const mark = String(node.className ?? '');
+    if (!/(?:action-note|notice)/.test(mark) && node.getAttribute?.('role') !== 'alert') continue;
+    const words = String(node.querySelector?.('p')?.textContent ?? node.textContent ?? '').trim();
+    if (!words) continue;
+    if (seen.has(words)) node.remove(); else seen.add(words);
+  }
 }
 
 function skeletonPanel(document, name, sizes) {
@@ -1361,9 +1443,12 @@ function openingWorkspace(app, t) {
   const content = element(document, "div", { class: `opening-content${failed ? " opening-failure" : ""}` });
   if (failed) {
     content.append(element(document, "div", { class: "opening-error-icon" }, icon(document, "alert")));
-    content.append(element(document, "h2", { text: openingText(app, "failure") }));
     const path = app.selectedFolder || "M1ND";
-    const cause = app.bootError?.code === "timeout" ? openingText(app, "timeout", { path }) : `${path}: ${safeOpeningCause(app)}`;
+    // A stopped service is said to be stopped, with how to open it again; only a service that is up but slow reads as a slow drive.
+    content.append(element(document, "h2", { text: openingText(app, app.bootStopped ? "stoppedTitle" : "failure") }));
+    const command = `hivem1nd service install${app.selectedFolder ? ` --mind-path "${String(app.selectedFolder).replace(/[\p{Cc}"]/gu, "")}"` : ""}`;
+    const cause = app.bootStopped ? openingText(app, "stopped", { command })
+      : app.bootError?.code === "timeout" ? openingText(app, "timeout", { path }) : `${path}: ${safeOpeningCause(app)}`;
     content.append(element(document, "p", { "data-opening-cause": "true", text: cause }));
     const actions = element(document, "div", { class: "opening-actions" },
       element(document, "button", { type: "button", class: "btn primary", "data-action": "retry-boot", text: t("retry"), onclick: () => resumeBoot(app) }),
@@ -1432,7 +1517,19 @@ function emptyMind(app) {
   return units.length === 1 && units[0].id === "root:master";
 }
 
-async function loadLists(app) {
+// Settings and the viewer are not needed to show the shell; when they are slow or fail they are asked again a few times.
+function retryPresentation(app, attempt) {
+  if (attempt > 4) return;
+  const timer = setTimeout(() => {
+    if (app.disposed || !app.presentationError) return;
+    loadPresentation(app, { keepShell: true }).then(() => { app.presentationError = null; }, (error) => {
+      if (error?.status !== 401) retryPresentation(app, attempt + 1);
+    });
+  }, 3000 * attempt);
+  timer.unref?.();
+}
+
+function createLists(app) {
   app.unitList = createPagedList({ api: app.api, store: app.store, name: "units", route: "/units" });
   app.chatList = createPagedList({ api: app.api, store: app.store, name: "chats", route: "/chats", filters: { listed: "true" } });
   app.waitingList = createPagedList({ api: app.api, store: app.store, name: "waiting", route: "/waiting" });
@@ -1443,13 +1540,24 @@ async function loadLists(app) {
   app.unitList.onUpdate = () => { refresh(); app.attachRepaint?.(); };
   app.chatList.onUpdate = refresh;
   app.waitingList.onUpdate = refresh;
-  try {
-    const layout = await request(app.api, "GET", "/layout");
-    if (!app.disposed) app.store.layout = layout.data;
-  } catch {
+}
+
+// Each list fills as its pages arrive; the three load side by side and a failed one only marks itself.
+async function loadListData(app) {
+  const unitList = app.unitList, chatList = app.chatList, waitingList = app.waitingList;
+  const placement = request(app.api, "GET", "/layout").then((layout) => {
+    if (app.disposed) return;
+    app.store.layout = layout.data;
+    if (app.layout !== "unknown") renderShell(app);
+  }, () => {
     // Placement still runs when the layout route is unavailable.
-  }
-  await Promise.all([loadAll(app.unitList), loadAll(app.chatList), loadAll(app.waitingList)]);
+  });
+  await Promise.all([placement, loadAll(unitList), loadAll(chatList), loadAll(waitingList)]);
+}
+
+async function loadLists(app) {
+  createLists(app);
+  await loadListData(app);
 }
 
 function openWaiting(app) {
@@ -2831,11 +2939,11 @@ function renderEditorSurfaces(app, t) {
   const watchText = !watch || watch.state === "off" ? t("watchOff") : watch.state === "watching" ? t("watching", { unit: watch.unitId }) : t("watchWaiting", { unit: watch.unitId });
   const watchStatus = watch?.state === "waiting"
     ? progressMark(document, watchText, { "data-watch": "waiting" })
-    : element(document, "p", { "data-watch": watch?.state ?? "off", text: watchText });
+    : element(document, "p", { class: "watch-status", "data-watch": watch?.state ?? "off", text: watchText });
   const catalog = renderLibrary(document, { kind, project: current?.authoritative?.project, data: editors, t, actions: libraryActions(app, kind) });
   if (app.catalogOpen) catalog.className += " is-open";
   const resource = element(document, "section", { class: "panel editor-resource", "data-editor-column": "resource" },
-    element(document, "h2", { "data-editor-title": title, "data-editor-kind": kind, text: `${t(app.mode)} ${title}` }),
+    element(document, "h2", { "data-editor-title": title, "data-editor-kind": kind, text: current ? `${t(app.mode)} ${title}` : title }),
   );
   if (app.syncConflict) {
     resource.append(element(document, "p", {
@@ -2845,12 +2953,14 @@ function renderEditorSurfaces(app, t) {
     }));
   }
   if (outcomeVisible(app) && app.actionScope === "editor") {
-    resource.append(element(document, "p", {
-      class: "action-note",
-      "data-action-note": "true",
-      "data-code": app.actionCode ?? "",
-      text: app.actionNote,
-    }));
+    // A result is a marked row: red for a failure, plain for anything else.
+    resource.append(element(document, "div", { class: `notice ${app.actionTone === "error" ? "notice-error" : "notice-info"}`, role: app.actionTone === "error" ? "alert" : "status" },
+      element(document, "p", {
+        class: "action-note",
+        "data-action-note": "true",
+        "data-code": app.actionCode ?? "",
+        text: app.actionNote,
+      })));
   }
   const commentsColumn = element(document, "aside", { class: `panel editor-comments-column${app.commentsOpen ? " is-open" : ""}`, "data-editor-column": "comments" },
     element(document, "h2", { text: t(current?.historyOpen ? "history" : "comments") }),
@@ -2896,9 +3006,12 @@ function renderEditorSurfaces(app, t) {
       }, t("copyJson")));
     }
   }
-  if (editors.error?.code === "corrupt_resource") resource.append(element(document, "p", { text: t("corruptResource") }));
+  if (editors.error?.code === "corrupt_resource") resource.append(element(document, "div", { class: "notice notice-error", role: "alert" }, element(document, "p", { text: t("corruptResource") })));
   const forms = resourceForms(app, document, t);
-  if (forms) catalog.append(forms);
+  // Register sits on the footer line with Refresh; without a footer it keeps its own row.
+  const footer = catalog.querySelector?.(".library-footer");
+  if (forms && footer) footer.append(...forms.children);
+  else if (forms) catalog.append(forms);
   const surfaces = { catalog, resource, comments: commentsColumn };
   if (!current) return surfaces;
   if (!current.authoritative.readOnly) {
@@ -3830,7 +3943,13 @@ function openRunsPicker(app, model, onChange, anchor = null) {
 
 async function openStartAgent(app, cluster, overseer = false) {
   if (app.startDialog || app.layout === 'phone') return;
-  if (!app.startAgents) await loadStartReports(app);
+  // The form needs only the connected agents. They are read on their own, so a folder report that is slow or failed
+  // never keeps a new agent from being created; the rest of the reports load beside it.
+  if (!app.startAgents) {
+    try { app.startAgents = (await request(app.api, 'GET', '/settings/agents', { query: { machine: startMachine(app) } })).data; }
+    catch (error) { noteAction(app, error, 'start-agents'); return; }
+    loadStartReports(app);
+  }
   if (app.disposed || app.startDialog) return;
   const clients = app.startAgents?.connectedClients ?? [], preferred = app.startAgents?.defaultRunsIn;
   const model = { language: app.language, kind: overseer ? 'overseer' : 'agent', agentKind: preferred?.client === 'lyra' ? 'local' : 'external',
@@ -4006,6 +4125,7 @@ function clusterInspector(app, cluster) {
   const facts = app.clusterFacts?.id === cluster.id ? app.clusterFacts : {};
   return renderCluster(app.root.ownerDocument, { language: app.language, cluster, git: facts.git, error: facts.error?.message,
     units: app.unitList?.catalog ?? [], link: app.startProjects?.clusterLinks?.find(item => item.clusterId === cluster.id),
+    loading: !app.startProjects && !app.startError, unreadable: Boolean(app.startError),
     addition: app.store.additions.report?.items.find(item => item.kind === 'repository' && item.projectId === cluster.link?.projectId) }, {
     onUpdate: item => openSharedAdd(app, item),
     onNewAgent: () => openStartAgent(app, cluster), onLink: () => openClusterLink(app, cluster),
@@ -4145,8 +4265,15 @@ function stopWorkStep(app, view) {
 function openAgentMore(app, unit) {
   const document = app.root.ownerDocument, session = sessionForUnit(app, unit.id);
   const dialog = showDialog(document, { title: startText(app.language, 'moreMenu'), cancel: startText(app.language, 'close') });
-  if (session) dialog.append(mapButton(app, 'full-transcript', startText(app.language, 'transcript'), () => { dialog.close(); openSessionTranscript(app, session); }));
-  if (app.store.capabilities.includes('unit.create')) dialog.append(mapButton(app, 'agent-rename', text(app.language, 'rename'), () => { dialog.close(); beginAlias(app, unit.id); }));
+  const menu = element(document, 'div', { class: 'dialog-menu', 'data-agent-menu': unit.id });
+  if (session) menu.append(mapButton(app, 'full-transcript', startText(app.language, 'transcript'), () => { dialog.close(); openSessionTranscript(app, session); }));
+  if (app.store.capabilities.includes('unit.create')) menu.append(mapButton(app, 'agent-rename', text(app.language, 'rename'), () => { dialog.close(); beginAlias(app, unit.id); }));
+  // Removing an agent starts here, in the inspector, without first opening Details.
+  if (app.store.capabilities.includes('unit.create') && typeof unit.id === 'string' && unit.id !== 'root:master' && unit.role !== 'master') {
+    menu.append(mapButton(app, 'agent-remove', removalText(app, 'confirm'), () => { dialog.close(); removeSelectedUnit(app, unit); }, { class: 'btn is-danger' }));
+  }
+  const actions = dialog.querySelector('.dialog-actions');
+  if (typeof dialog.insertBefore === 'function' && actions) dialog.insertBefore(menu, actions); else dialog.append(menu);
 }
 
 function openSessionTranscript(app, session) {
@@ -4575,11 +4702,19 @@ function loadVisibleClusterGit(app, host) {
     && app.clusterGit.get(row.groupId)?.revision !== row.group.revision && !app.clusterGitPending.has(row.groupId));
   if (!work.length) return;
   for (const row of work) app.clusterGitPending.add(row.groupId);
-  Promise.allSettled(work.map(async row => {
-    let git = null;
-    try { git = (await startApi.getClusterGit(app.api, row.groupId, startMachine(app))).data; }
-    finally { app.clusterGit.set(row.groupId, { revision: row.group.revision, git }); app.clusterGitPending.delete(row.groupId); }
-  })).then(() => { if (!app.disposed) renderShell(app); });
+  // Three repositories are read at a time, so the readings of a long list never crowd out what the person is doing.
+  const queue = [...work];
+  const reader = async () => {
+    while (queue.length && !app.disposed) {
+      const row = queue.shift();
+      let git = null;
+      try { git = (await startApi.getClusterGit(app.api, row.groupId, startMachine(app))).data; }
+      catch { /* The row shows no branch until the next reading. */ }
+      finally { app.clusterGit.set(row.groupId, { revision: row.group.revision, git }); app.clusterGitPending.delete(row.groupId); }
+      if (!app.disposed) renderShell(app);
+    }
+  };
+  Promise.allSettled([reader(), reader(), reader()]);
 }
 
 function collectionRows(app, t, list) {
@@ -5675,11 +5810,16 @@ function renderLibraryToast(app, t) {
   return node;
 }
 
-function activityMessage(app, record) {
-  const action = record?.action || record?.label || text(app.language, "actionFailed");
+// The label of an action reads as a sentence of its own ("Loading the conversation."), so its stop is dropped before the verdict.
+function activityMessage(app, records) {
+  const list = Array.isArray(records) ? records : [records];
+  const record = list[0];
   const code = record?.error?.code;
   const known = Boolean(code && Object.hasOwn(ACTION_COPY, code));
   const cause = known ? `${actionText(app.language, code, { machine: record.error?.details?.machine ?? "" })} ` : "";
+  if (list.length > 1) return text(app.language, "activityFailedMany", { count: list.length, cause });
+  const action = String(record?.action || record?.label || "").replace(/[.\s]+$/, "");
+  if (!action) return `${cause}${text(app.language, "actionFailed")}`.trim();
   return text(app.language, "activityFailed", { action, cause });
 }
 
@@ -5753,25 +5893,35 @@ function paintActivity(app, shell) {
   const document = app.root.ownerDocument;
   const region = element(document, "div", { class: "activity", "data-activity-region": "true" });
   if (pending.length) shell.setAttribute("aria-busy", "true");
-  for (const record of pending) {
+  // Several slow requests are one notice: it counts from the one waiting longest and Cancel stops them all.
+  if (pending.length) {
+    const lead = pending.reduce((first, record) => ((Number(record.elapsed) || 0) > (Number(first.elapsed) || 0) ? record : first), pending[0]);
     const copy = element(document, "div", {}, element(document, "strong", { text: sendText(app, "takingLonger") }));
-    if ((Number(record.elapsed) || 0) >= 1) copy.append(element(document, "p", { text: sendText(app, "waiting", { seconds: record.elapsed }) }));
-    const notice = element(document, "div", { class: "slow-notice", "data-activity": record.key });
+    if ((Number(lead.elapsed) || 0) >= 1) copy.append(element(document, "p", { text: sendText(app, "waiting", { seconds: lead.elapsed }) }));
+    const notice = element(document, "div", { class: "slow-notice", "data-activity": pending[0].key, "data-pending-count": String(pending.length) });
     notice.append(element(document, "span", { class: "spinner", "aria-hidden": "true" }), copy, element(document, "button", {
-      type: "button", class: "btn ghost", "data-action": "cancel-activity", "data-activity": record.key, text: text(app.language, "cancel"), onclick: () => record.cancel?.(),
+      type: "button", class: "btn ghost", "data-action": "cancel-activity", "data-activity": pending[0].key, text: text(app.language, "cancel"), onclick: () => { for (const record of pending) record.cancel?.(); },
     }));
     region.append(notice);
   }
+  // One failure is one notice per cause with one Retry, however many requests failed the same way.
+  const causes = new Map();
   for (const record of failed) {
-    region.append(element(document, "p", { "data-activity": record.key, text: activityMessage(app, record) }));
-    region.append(element(document, "button", {
+    const cause = String(record.error?.code ?? "unknown");
+    causes.set(cause, [...(causes.get(cause) ?? []), record]);
+  }
+  for (const group of causes.values()) {
+    const notice = element(document, "div", { class: "notice notice-error", role: "alert", "data-activity-count": String(group.length) },
+      element(document, "p", { "data-activity": group[0].key, text: activityMessage(app, group) }));
+    notice.append(element(document, "button", {
       type: "button",
       class: "btn",
       "data-action": "retry-activity",
-      "data-activity": record.key,
+      "data-activity": group[0].key,
       text: text(app.language, "retry"),
-      onclick: () => record.retry?.(),
+      onclick: () => Promise.all([...group.map((record) => record.retry?.()), ...(app.startError && String(app.startError.code ?? "unknown") === String(group[0].error?.code ?? "unknown") ? [loadStartReports(app)] : [])]),
     }));
+    region.append(notice);
   }
   const field = here === "unit" ? composerField(shell) : null;
   if (field && placeBefore(field, region)) return;
@@ -5990,6 +6140,18 @@ async function submitCode(app, code) {
   }
 }
 
+// Nothing listening answers at once with a refused connection; a service that is up answers anything, slowly or not.
+async function probeServiceStopped(app, error) {
+  if (error instanceof ApiError && error.code !== "timeout") return false;
+  if (!(error instanceof ApiError)) return true;
+  try {
+    await app.api.fetch(`${app.api.location.origin}/`, { method: "HEAD", cache: "no-store", redirect: "manual", signal: AbortSignal.timeout(3000) });
+    return false;
+  } catch (probe) {
+    return probe?.name !== "AbortError" && probe?.name !== "TimeoutError";
+  }
+}
+
 function renderFailure(app, error) {
   if (app.layout === 'desktop' && app.store.snapshotReady && app.recovery) {
     app.recoveryError = error;
@@ -6000,6 +6162,10 @@ function renderFailure(app, error) {
   if (app.layout !== "phone" && app.api.token) {
     app.bootFailed = true;
     app.bootError = error;
+    app.bootStopped = false;
+    probeServiceStopped(app, error).then((stopped) => {
+      if (stopped && !app.disposed && app.bootFailed && app.bootError === error) { app.bootStopped = true; renderShell(app); }
+    });
     renderShell(app);
     releaseBootstrapAnnouncement(app, openingText(app, "failure"));
     return;
@@ -6269,7 +6435,10 @@ function actionControls(app, t, selected) {
   const row = element(document, "div", { class: "action-row" });
   const caps = app.store.capabilities ?? [];
   if (caps.includes('unit.create') && !overseerExists(app)) row.append(mapButton(app, 'create-overseer', startText(app.language, 'createOverseer'), () => createOverseer(app), { class: 'btn primary' }));
-  if (selected && caps.includes('unit.create')) row.append(mapButton(app, 'change-runs-in', startText(app.language, 'runsIn'), () => openUnitRunsIn(app, selected)));
+  // Where it runs is a choice that shows its current value; Start beside it is the action, so the two never read alike.
+  if (selected && caps.includes('unit.create')) row.append(mapButton(app, 'change-runs-in',
+    `${startText(app.language, 'runsIn')}: ${runsInLabel(selected.runsIn, app.startAgents?.connectedClients, app.language) || startText(app.language, 'runsInNone')}`,
+    () => openUnitRunsIn(app, selected), { class: 'btn ghost runs-in-choice', title: startText(app.language, 'runsIn') }));
   // Claude Code and Cursor are not confined: say whether this agent asks first or works automatically. Confined clients show nothing.
   if (selected && caps.includes('unit.create') && ['claude', 'cursor'].includes(selected.runsIn?.client) && (!app.startPermissions || app.startPermissionsStale) && !(Date.now() - (app.permissionsFailedAt ?? 0) < 30000)) refreshPermissions(app);
   if (selected && app.startPermissions && ['claude', 'cursor'].includes(selected.runsIn?.client)) {
@@ -6542,7 +6711,12 @@ function removeSelectedUnit(app, unit) {
           focusUnitRow(app, unit.id);
         }, app.api.now() + Math.max(0, Date.parse(result.data.undoUntil) - Date.parse(result.meta.readAt)));
         renderShell(app);
-      } catch (error) { operation = error.operation ?? operation; throw error; }
+      } catch (error) {
+        operation = error.operation ?? operation;
+        // The dialog shows the failure in the person's language, not the service's wording.
+        if (error?.code && Object.hasOwn(ACTION_COPY, error.code)) error.message = actionText(app.language, error.code);
+        throw error;
+      }
     },
   });
   dialog.setAttribute("data-remove-unit", unit.id);
@@ -6551,7 +6725,6 @@ function removeSelectedUnit(app, unit) {
   Object.assign(dialog.querySelector("p").style, { fontSize: "13.5px", color: "var(--mute)", margin: "0 0 18px" });
   const buttons = dialog.querySelectorAll("button");
   for (const button of buttons) Object.assign(button.style, { minWidth: "32px", minHeight: "32px" });
-  Object.assign(buttons[0].style, { background: "transparent", border: "0" });
   Object.assign(buttons[1].style, { background: "var(--error)", color: "var(--error-ink)" });
 }
 
@@ -6777,16 +6950,25 @@ function createOverseer(app) { return openStartAgent(app, null, true); }
 
 function openSessionForm(app, unit) {
   openChoiceForm(app, 'session', text(app.language, 'startSession'), (form, confirm) => {
-    form.append(element(form.ownerDocument, 'p', { class: 'start-hint', text: startText(app.language, 'runsIn') + ': ' + runsInLabel(unit.runsIn, app.startAgents?.connectedClients, app.language) }));
-    if (!unit.runsIn) { confirm.disabled = true; form.append(element(form.ownerDocument, 'p', { text: startText(app.language, 'unavailable') })); }
-    const segment = element(form.ownerDocument, 'fieldset', { class: 'start-segment' }, element(form.ownerDocument, 'legend', { text: text(app.language, 'runsAs') }));
-    for (const [value, key] of [['task', 'runTask'], ['chat', 'runChat']]) {
-      const input = element(form.ownerDocument, 'input', { type: 'radio', name: 'runMode', value });
-      input.value = value; input.checked = value === (unit.role === 'executor' ? 'task' : 'chat');
-      segment.append(element(form.ownerDocument, 'label', { class: 'segment' }, input, text(app.language, key)));
+    const document = form.ownerDocument, label = runsInLabel(unit.runsIn, app.startAgents?.connectedClients, app.language);
+    // Where it runs is a row of its own: the choice made so far, or the plain fact that none is made, with the way to make it.
+    const where = element(document, 'div', { class: 'start-where', 'data-start-where': label ? 'chosen' : 'none' },
+      element(document, 'span', { class: 'start-where-label', text: startText(app.language, 'runsIn') }),
+      element(document, 'strong', { class: 'start-where-value', text: label || startText(app.language, 'runsInNone') }));
+    form.append(where);
+    if (!unit.runsIn) {
+      const reason = element(document, 'p', { id: 'reason-start-runs-in', class: 'field-hint', 'data-disabled-reason': 'runs-in', text: startText(app.language, 'startNeedsRunsIn') });
+      where.append(reason, mapButton(app, 'choose-runs-in', startText(app.language, 'chooseRunsIn'), () => { form.closest('dialog')?.close(); return openUnitRunsIn(app, unit); }));
+      confirm.disabled = true; confirm.setAttribute('aria-describedby', 'reason-start-runs-in'); confirm.title = startText(app.language, 'startNeedsRunsIn');
     }
-    form.append(segment);
-    appendInput(form.ownerDocument, form, 'prompt', text(app.language, 'taskOrMessage'), '');
+    const modes = element(document, 'fieldset', { class: 'start-modes' }, element(document, 'legend', { text: text(app.language, 'runsAs') }));
+    for (const [value, key] of [['task', 'runTask'], ['chat', 'runChat']]) {
+      const input = element(document, 'input', { type: 'radio', name: 'runMode', value });
+      input.value = value; input.checked = value === (unit.role === 'executor' ? 'task' : 'chat');
+      modes.append(element(document, 'label', { class: 'start-mode' }, input, element(document, 'span', { text: text(app.language, key) })));
+    }
+    form.append(modes);
+    appendInput(document, form, 'prompt', text(app.language, 'taskOrMessage'), '');
     form.problems = () => fieldValue(form, 'runMode') === 'task' && !fieldValue(form, 'prompt').trim() ? [{ name: 'prompt', message: text(app.language, 'taskRequired') }] : [];
   }, async form => {
     const prompt = fieldValue(form, 'prompt').trim() || null, mode = { runMode: fieldValue(form, 'runMode'), taskId: null };
@@ -7089,8 +7271,14 @@ function chatPanel(app, t) {
   const cards = planCards(app, thread.chat); let plansMounted = false;
   if (cards.length) panel.className += ' has-plans';
   if (!windowed.items.length) {
-    const canPost = (app.store.capabilities ?? []).includes("chat.post");
-    transcript.append(element(document, "p", { "data-empty": "chat", text: t(canPost ? "emptyChat" : "emptyChatRead") }));
+    // An empty list is only "no messages" once the messages were read; while they load, or when reading failed, it says so.
+    const reading = app.activity?.get(`chat-load:${thread.chat.id}`);
+    if (reading?.phase === "pending") transcript.append(progressMark(document, t("loadingConversation"), { "data-loading": "chat" }));
+    else if (reading?.phase === "error") transcript.append(element(document, "p", { "data-empty": "unread", text: t("chatNotRead") }));
+    else {
+      const canPost = (app.store.capabilities ?? []).includes("chat.post");
+      transcript.append(element(document, "p", { "data-empty": "chat", text: t(canPost ? "emptyChat" : "emptyChatRead") }));
+    }
   }
   for (const message of windowed.items) {
     const own = message.fromId === "root:master" || unitById(app, message.fromId)?.role === "master";
@@ -7135,7 +7323,7 @@ function chatPanel(app, t) {
         "data-action": "retry-message",
         "data-operation": message.operationId,
         title: sendText(app, "retryHint"),
-        style: "font-size:12px;font-weight:700;color:var(--accent);min-height:32px",
+        style: "font-size:12px;font-weight:700;min-height:32px",
         text: t("retry"),
         onclick: () => {
           const task = retryMessage(app.api, thread, message.operationId);

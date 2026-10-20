@@ -235,14 +235,6 @@ button, input { font: inherit; color: inherit; }
   gap: 7px;
   font-weight: 600;
 }
-/* One step above the card, so a secondary button stays visible on a card as well as on a panel. */
-.btn, .btn.secondary { background: var(--card2); border-color: var(--line); }
-.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
-.btn.ghost { background: transparent; border-color: var(--line); }
-.btn.quiet { background: transparent; border-color: transparent; color: var(--body); }
-/* A disabled control keeps opacity 1 for its contrast floor; it reads as unavailable through the quiet surface and muted text. */
-.btn:disabled:not([aria-busy="true"]), .btn.primary:disabled:not([aria-busy="true"]) { background: var(--card2); border-color: var(--line); color: var(--mute); cursor: default; }
-
 .mode[aria-pressed="true"], .tab[aria-pressed="true"] {
   background: var(--card2);
   color: var(--text);
@@ -308,8 +300,6 @@ button, input { font: inherit; color: inherit; }
 .status-dot[data-status="waiting"] { background: transparent; box-shadow: inset 0 0 0 2px var(--waiting); }
 
 .icon-button { width: 36px; height: 36px; justify-content: center; padding: 0; background: var(--panel); }
-
-.btn.primary { background: var(--accent); color: var(--accent-ink); }
 
 .dialog {
   background: var(--panel);
@@ -1666,3 +1656,188 @@ html { scrollbar-color: var(--line2) var(--panel); scrollbar-width: thin; }
 .shell[data-layout="phone"] .gallery-cell { width: 64px; height: 64px; }
 .shell[data-layout="phone"] .chat-action, .shell[data-layout="phone"] .composer-attach { min-height: var(--target); }
 .shell[data-layout="phone"] .composer-attach { width: var(--target); }
+
+/* Shared control states. Every control reads its hover, active, focus and disabled looks from these tokens. */
+:root {
+  --control-bg: var(--card2, var(--card));
+  --control-bg-hover: color-mix(in srgb, var(--control-bg) 72%, var(--text));
+  --control-bg-active: color-mix(in srgb, var(--control-bg) 55%, var(--text));
+  --control-border: var(--line2, var(--line));
+  --control-border-hover: color-mix(in srgb, var(--control-border) 40%, var(--text));
+  --control-text: var(--text);
+  --control-shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
+  --control-primary-hover: color-mix(in srgb, var(--accent) 86%, #ffffff);
+  --control-primary-active: color-mix(in srgb, var(--accent) 80%, #000000);
+  --control-disabled-text: var(--mute);
+  --control-radius: 8px;
+}
+button:not(:disabled), summary, [role="button"], select { cursor: pointer; }
+button:disabled { cursor: not-allowed; }
+
+/* A button that performs an action is drawn with the accent: a filled rectangle with dark text. A true secondary beside it
+   (Cancel, Pin, a toggle) is quieter but keeps its border. A chip or a tag is a flat pill with no border and no pointer. */
+.btn {
+  justify-content: center;
+  min-height: 32px;
+  padding: 7px 16px;
+  border: 1px solid var(--accent);
+  border-radius: var(--control-radius);
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 700;
+  box-shadow: var(--control-shadow);
+  transition: background-color 0.12s, border-color 0.12s, transform 0.06s;
+}
+.btn:hover:not(:disabled) { background: var(--control-primary-hover); border-color: var(--control-primary-hover); color: var(--accent-ink); }
+.btn:active:not(:disabled) { background: var(--control-primary-active); border-color: var(--control-primary-active); transform: translateY(1px); box-shadow: none; }
+.btn:is(.ghost, .quiet, .panel-toggle, [aria-pressed], [data-action$="cancel"], [data-action^="cancel"], [data-action="pin"], [data-action="unlist"], [data-action="reopen"], [data-action="add-back"], [data-action="older"], [data-action="more-comments"], [data-action="stop-watch"], [data-action="clear-selection"], [data-action="keep-local"], [data-action="dismiss-discovery"], [data-action="waiting-back"], [data-action="close-home"], [data-action="undo"], [data-action="map-undo"], [data-action="library-undo"], [data-action="older-work"], [data-action="stop-step"]) {
+  background: var(--control-bg);
+  border-color: var(--control-border);
+  color: var(--control-text);
+}
+.btn.quiet { background: transparent; border-color: transparent; box-shadow: none; }
+.btn.ghost { background: transparent; box-shadow: none; }
+.btn:is(.ghost, .quiet, .panel-toggle, [aria-pressed], [data-action$="cancel"], [data-action^="cancel"], [data-action="pin"], [data-action="unlist"], [data-action="reopen"], [data-action="add-back"], [data-action="older"], [data-action="more-comments"], [data-action="stop-watch"], [data-action="clear-selection"], [data-action="keep-local"], [data-action="dismiss-discovery"], [data-action="waiting-back"], [data-action="close-home"], [data-action="undo"], [data-action="map-undo"], [data-action="library-undo"], [data-action="older-work"], [data-action="stop-step"]):hover:not(:disabled) {
+  background: var(--control-bg-hover); border-color: var(--control-border-hover); color: var(--control-text);
+}
+.btn:is(.ghost, .quiet, .panel-toggle, [aria-pressed], [data-action$="cancel"], [data-action^="cancel"], [data-action="pin"], [data-action="unlist"], [data-action="reopen"], [data-action="add-back"], [data-action="older"], [data-action="more-comments"], [data-action="stop-watch"], [data-action="clear-selection"], [data-action="keep-local"], [data-action="dismiss-discovery"], [data-action="waiting-back"], [data-action="close-home"], [data-action="undo"], [data-action="map-undo"], [data-action="library-undo"], [data-action="older-work"], [data-action="stop-step"]):active:not(:disabled) {
+  background: var(--control-bg-active);
+}
+.btn[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft, var(--control-bg-hover)); }
+.icon-button:hover:not(:disabled), .composer-attach:hover:not(:disabled) {
+  background: var(--control-bg-hover); border-color: var(--control-border-hover); color: var(--control-text);
+}
+.composer-send:hover:not(:disabled) { background: var(--control-primary-hover); }
+.icon-button:active:not(:disabled) { background: var(--control-bg-active); transform: translateY(1px); }
+.composer-send:active:not(:disabled) { background: var(--control-primary-active); transform: translateY(1px); }
+.btn:disabled:not([data-busy]):not([aria-busy="true"]), .icon-button:disabled:not([data-busy]):not([aria-busy="true"]) {
+  background: transparent; border-style: dashed; border-color: var(--line2, var(--line)); color: var(--control-disabled-text); box-shadow: none; opacity: 1;
+}
+.mode:hover:not(:disabled):not([aria-pressed="true"]), .tab:hover:not(:disabled):not([aria-pressed="true"]), .pill:hover:not(:disabled) {
+  background: var(--control-bg-hover); color: var(--text);
+}
+.mode:active:not(:disabled), .tab:active:not(:disabled), .pill:active:not(:disabled) { background: var(--control-bg-active); }
+summary:hover { color: var(--text); }
+.icon-button { border: 1px solid var(--control-border); }
+
+/* A button whose action is running shows a loader and cannot be pressed again. */
+button[data-busy="true"] { cursor: progress; }
+button[data-busy="true"]::before {
+  content: "";
+  flex: none;
+  width: 0.9em;
+  height: 0.9em;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+}
+@media (prefers-reduced-motion: no-preference) {
+  button[data-busy="true"]::before { animation: spin 0.8s linear infinite; }
+}
+.btn:is([data-busy="true"], [aria-busy="true"]):disabled { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn:is(.ghost, .quiet, [aria-pressed])[data-busy="true"]:disabled { background: var(--control-bg-hover); border-color: var(--control-border); color: var(--control-text); }
+
+/* A marked row for a notice, so a failure never reads as bare text. */
+.notice { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 9px 12px; border-radius: var(--radius-control); border-left: 3px solid var(--waiting); background: var(--waiting-soft); color: var(--body); font-size: 13px; line-height: 1.45; }
+.notice > p { flex: 1 1 14rem; margin: 0; overflow-wrap: anywhere; }
+.notice > .btn { flex: 0 0 auto; }
+.notice-error { border-left-color: var(--error); background: var(--error-soft); }
+.notice-info { border-left-color: var(--ring); background: var(--ring-soft); }
+.activity { display: grid; gap: 8px; }
+.inspector-body > .btn, .inspector-body > .notice > .btn { justify-self: start; }
+.inspector-body > .notice { margin: 0; }
+
+/* The facts of a unit never push the panel sideways. */
+.unit-facts, .agent-facts { grid-template-columns: minmax(0, 1fr); overflow-wrap: anywhere; overflow-x: hidden; }
+.unit-facts p { margin: 0; }
+.agent-controls, .unit-card, .inspector-details, .unit-metadata { overflow-x: hidden; min-width: 0; }
+.agent-controls code, .unit-facts code { white-space: normal; overflow-wrap: anywhere; }
+.transcript, .session-work, .action-cards { overflow-x: hidden; }
+.transcript:empty, .action-cards:empty { display: none; }
+
+/* Where the unit runs and how it starts read as a fact and a choice, not as two equal buttons. */
+.start-where { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 4px 10px; padding: 10px 12px; border-radius: var(--radius-control); background: var(--card); }
+.start-where-label { color: var(--mute); font-size: 12.5px; }
+.start-where-value { color: var(--text); font-size: 13.5px; font-weight: 700; }
+.start-where > .field-hint, .start-where > .btn { grid-column: 1 / -1; }
+.start-where > .btn { justify-self: start; }
+.start-modes { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; }
+.start-modes legend { margin-bottom: 8px; padding: 0; color: var(--text); font-size: 13px; font-weight: 700; }
+.start-mode { display: flex; align-items: center; gap: 10px; margin: 0; padding: 10px 12px; border: 1px solid var(--control-border); border-radius: var(--radius-control); background: var(--card); color: var(--body); font-size: 13.5px; cursor: pointer; }
+.start-mode:hover { background: var(--control-bg-hover); }
+.start-mode:has(input:checked) { border-color: var(--accent); color: var(--text); }
+.start-mode input { flex: none; width: 18px; height: 18px; min-height: 18px; margin: 0; accent-color: var(--accent); }
+.start-mode > span { flex: 1; }
+
+/* The run line and the start line of an agent: one fact, one action. */
+.agent-controls > .action-row { align-items: center; }
+.agent-controls .native-mode { flex: 1 1 100%; margin: 0; }
+
+/* The library: issues are marked rows, and the footer line holds Refresh, Register and the loading mark together. */
+.library-issues { display: grid; gap: 6px; padding: 4px 10px; }
+.library-issue { padding: 7px 10px; font-size: 12px; color: var(--body); }
+.library-issue .icon { flex: none; width: 14px; height: 14px; color: var(--waiting); }
+.library-issue > p { flex: 1 1 0; }
+.notice-warning { border-left-color: var(--waiting); background: var(--waiting-soft); }
+.library-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px 10px; border-top: 1px solid var(--line); }
+.library-footer > .btn, .library-refresh { margin: 0; align-self: auto; font-size: 12.5px; }
+.library-footer > .progress { flex: 1 1 100%; font-size: 12px; color: var(--mute); }
+.shared-library > .editor-actions { padding: 0 10px 10px; }
+
+/* Choosers, menus, tool rows and toasts hold buttons that pick or toggle rather than act: the quiet bordered look. */
+:is(.settings-machine-menu, .settings-machine-picker, .map-menu, .void-format-bar, .void-find-scopes, .board-toolbar, .start-runs-field, .start-segment, .settings-segment, .void-page-dots, .library-toast, .map-toast) .btn {
+  background: var(--control-bg); border-color: var(--control-border); color: var(--control-text); box-shadow: none;
+}
+:is(.settings-machine-menu, .settings-machine-picker, .map-menu, .void-format-bar, .void-find-scopes, .board-toolbar, .start-runs-field, .start-segment, .settings-segment, .void-page-dots, .library-toast, .map-toast) .btn:hover:not(:disabled) {
+  background: var(--control-bg-hover); border-color: var(--control-border-hover); color: var(--control-text);
+}
+:is(.settings-machine-menu, .settings-machine-picker, .map-menu, .void-format-bar, .void-find-scopes, .board-toolbar, .start-runs-field, .start-segment, .settings-segment, .void-page-dots, .library-toast, .map-toast) .btn:active:not(:disabled) {
+  background: var(--control-bg-active);
+}
+:is(.start-segment, .settings-segment, .void-find-scopes, .void-page-dots) .btn[aria-pressed="true"] { border-color: var(--accent); }
+.settings-panel .btn, .settings-review .btn, .settings-phone-dialog .btn { border: 1px solid var(--accent); }
+.settings-panel .btn:is(.ghost, [aria-pressed], .quiet), .settings-segment .btn { border-color: var(--control-border); }
+.void-save-error .btn { background: var(--error); border-color: var(--error); color: var(--error-ink); }
+
+/* Rows, tabs, summaries and links: a visible hover and a pointer on everything that can be pressed. */
+.row:hover, .library-item:hover, .library-folder:hover, .library-control:hover:not(:disabled), .session-tab:hover, .gallery-row:hover { background: var(--control-bg-hover); }
+.library-control:active:not(:disabled), .session-tab:active { background: var(--control-bg-active); }
+.session-tab:hover:not([aria-selected="true"]) { color: var(--text); }
+.row, .library-item, .library-folder, .session-tab, a[href], label:has(input[type="checkbox"]), label:has(input[type="radio"]) { cursor: pointer; }
+a[href]:hover { text-decoration: underline; }
+input:not([type="checkbox"]):not([type="radio"]):hover:not(:disabled), textarea:hover:not(:disabled), select:hover:not(:disabled) { border-color: var(--control-border-hover); }
+input:disabled, textarea:disabled, select:disabled { cursor: not-allowed; opacity: 0.7; }
+summary:focus-visible, .row:focus-visible, .library-item:focus-visible { outline: var(--focus); outline-offset: -2px; }
+
+/* A removal is drawn in the error color, still a filled button with a pressed and hover shade. */
+.btn.is-danger { background: var(--error); border-color: var(--error); color: var(--error-ink, #1d0b08); }
+.btn.is-danger:hover:not(:disabled) { background: color-mix(in srgb, var(--error) 86%, #ffffff); border-color: transparent; color: var(--error-ink, #1d0b08); }
+.btn.is-danger:active:not(:disabled) { background: color-mix(in srgb, var(--error) 80%, #000000); }
+.runs-in-choice { max-width: 100%; justify-content: flex-start; text-align: left; white-space: normal; overflow-wrap: anywhere; font-weight: 600; }
+.runs-in-choice::after { content: "\25BE"; margin-left: auto; padding-left: 8px; opacity: 0.7; }
+.watch-status { display: inline-flex; align-items: center; gap: 8px; margin: 0; padding: 4px 10px; border: 1px solid var(--line2, var(--line)); border-radius: var(--radius-control); color: var(--mute); font-size: 12.5px; }
+.watch-status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--idle); }
+.watch-status[data-watch="watching"]::before { background: var(--working); box-shadow: none; }
+.editor-resource > .notice { margin: 0 0 8px; }
+.notice > .action-note { margin: 0; }
+.library-loading { padding: 6px 14px; font-size: 12px; color: var(--mute); }
+.library-issues { max-height: 132px; overflow-y: auto; }
+.editor-resource > .btn { align-self: flex-start; }
+/* A floating notice sits at the lower right on a solid ground, never as a band across the panels below it. */
+.notice-area { left: auto; right: 16px; width: min(520px, calc(100% - 32px)); }
+.notice-area .notice, .notice-area .slow-notice { background: color-mix(in srgb, var(--error) 14%, var(--panel)); box-shadow: var(--panel-shadow); border-radius: var(--radius-control); }
+.notice-area .slow-notice { background: color-mix(in srgb, var(--waiting) 14%, var(--panel)); }
+/* A long recorded context reads in a bounded box of its own and never stretches the panel. */
+.unit-context { grid-column: 1 / -1; max-height: 7.5em; overflow-y: auto; padding: 8px 10px; border-radius: var(--radius-control); background: var(--card); color: var(--body); font-size: 12.5px; line-height: 1.5; }
+.dialog-menu { display: flex; flex-wrap: wrap; gap: 8px; margin-top: var(--gap); }
+.dialog-actions { gap: 8px; }
+
+/* Tabs, look previews and role tabs: hover, press and a visible choice for each. */
+[role="tab"]:hover:not(:disabled):not([aria-selected="true"]) { background: var(--control-bg-hover); color: var(--text); }
+[role="tab"]:active:not(:disabled) { background: var(--control-bg-active); }
+[role="tab"] { cursor: pointer; }
+.look-choice:hover .look-preview { outline: 2px solid var(--control-border-hover); outline-offset: -2px; }
+.look-choice:active .look-preview { outline-color: var(--accent); }
+.look-choice[aria-pressed="true"]:hover .look-preview { outline-color: var(--accent); }
+.look-choice:hover .look-preview-name { color: var(--text); }
+.settings-segment .btn.is-selected, .settings-segment .btn[aria-pressed="true"] { border-color: var(--accent); }

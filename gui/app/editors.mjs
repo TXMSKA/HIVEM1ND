@@ -2,7 +2,7 @@ import { createOperation, perform, request } from "./api.mjs";
 import { boardDocument, loadAssets, releaseAssets } from "./blueprint.mjs";
 import { collectPages } from "./lists.mjs";
 import { loadProposals } from "./void.mjs";
-import { element, icon, pathIcon } from "./components.mjs";
+import { element, icon, pathIcon, progressMark } from "./components.mjs";
 
 export function createEditors() {
   return {
@@ -166,9 +166,19 @@ export function renderLibrary(document, { kind, project = null, data, actions, t
   }
   if (!items.length && !data.catalogLoading) list.append(element(document, "p", { "data-empty": filtered ? "search" : kind, text: t(filtered ? "emptySearch" : kind === "blueprint" ? actions.create ? "emptyBoards" : "emptyBoardsRead" : actions.create ? "emptyTexts" : "emptyTextsRead") }));
   panel.append(list);
-  for (const issue of data.catalogIssues ?? []) panel.append(element(document, "p", { class: "library-issue", "data-library-issue": issue.project, role: "status", text: t("libraryUnavailable", { project: issue.project }) }));
-  if (data.catalogLoading) panel.append(element(document, "p", { role: "status", "data-catalog-progress": "true", text: t("loadingList") }));
-  panel.append(button("refresh-catalog", t("refreshList"), actions.refresh, { class: "btn library-refresh" }));
+  // A project that cannot be read is a marked row of its own, one per project, never a line of red text inside the list.
+  const issues = data.catalogIssues ?? [];
+  if (issues.length) {
+    const rows = element(document, "div", { class: "library-issues", "data-library-issues": String(issues.length) });
+    for (const issue of issues) rows.append(element(document, "div", { class: "notice notice-warning library-issue", "data-library-issue": issue.project, role: "status" },
+      icon(document, "alert"), element(document, "p", { text: t("libraryUnavailable", { project: issue.project }) })));
+    panel.append(rows);
+  }
+  // Refresh, Register and the loading mark share one line below the list.
+  if (data.catalogLoading) panel.append(progressMark(document, t("loadingList"), { "data-catalog-progress": "true", class: "progress library-loading" }));
+  const footer = element(document, "div", { class: "library-footer", "data-library-footer": kind });
+  footer.append(button("refresh-catalog", t("refreshList"), actions.refresh, { class: "btn library-refresh" }));
+  panel.append(footer);
   if (state.menu) {
     const menu = element(document, "div", { class: `library-menu${state.menu.type === "filters" ? " library-filter-menu" : ""}`, role: "menu", "data-library-menu": state.menu.type });
     if (menu.style) { menu.style.left = `${state.menu.x}px`; menu.style.top = `${state.menu.y}px`; }

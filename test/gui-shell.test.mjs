@@ -6,22 +6,22 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import test from "node:test";
 import { createApi, createOperation, dispose as disposeApi, request, retryOperation } from "../gui/app/api.mjs";
-import { answerApproval, changeTaskStatus, createGroup, createUnit, setUnitAlias, startSession, undoTask } from "../gui/app/actions.mjs";
+import { answerApproval, changeTaskStatus, createGroup, createUnit, removeUnit, setUnitAlias, startSession, undoTask } from "../gui/app/actions.mjs";
 import { documentSaver, findTextMatches, textDraft } from "../gui/app/void.mjs";
-import { markMailboxRead } from "../gui/app/chats.mjs";
+import { createThread, markMailboxRead, openDirectChat, postMessage } from "../gui/app/chats.mjs";
 import { dispose as disposeEmbed, handleParentMessage, publishDirty, publishReady, startEmbedChannel } from "../gui/app/embed.mjs";
 import { DICTIONARIES, cardinal, dictionaryKeys, formatClock, formatShortTime, formatWhen, limitsUsage, text } from "../gui/app/i18n.mjs";
 import { encodeHomeQr } from "../gui/app/qr.mjs";
 import { canPerform, exchangeCode, exchangeHomeFragment, logout, renderCodeEntry, renderPhone } from "../gui/app/phone.mjs";
 import { applyIssueChange, applyServiceBeat, applySettingsRead, applySyncSnapshot, armExpiry, clearGrant, closeHome, limitsLabel, noteHomeChange, openHome, renderSettings, saveSettings, takeGrant, updateExpiry } from "../gui/app/settings.mjs";
 import { activateUnit, buildHierarchy, flattenVisibleHierarchy, revealGroup, toggleGroup } from "../gui/app/hierarchy.mjs";
-import { collectPages, createPagedList, loadAll, moveFocus, renderWindow, setQuery } from "../gui/app/lists.mjs";
+import { collectPages, createPagedList, loadAll, moveFocus, reloadList, renderWindow, setQuery } from "../gui/app/lists.mjs";
 import { flushLayout, queueLayoutPatch } from "../gui/app/map.mjs";
 import { setAttachments, startWatch, libraryState, createResource } from "../gui/app/editors.mjs";
 import { composeCore } from "../engine/service/service.mjs";
 import { stopService } from "../engine/service/service.mjs";
 import { close as closeStream } from '../gui/app/stream.mjs';
-import { checkoutFacts, renderApproval, renderSession, renderUnit } from "../gui/app/inspector.mjs";
+import { checkoutFacts, renderApproval, renderSession, renderUnit, startsFresh } from "../gui/app/inspector.mjs";
 import { dispose, knownLanguage, mapButton, maybeStartDiscovery, mount, navigate, presentation, renderBar, renderShell, shellLayout } from "../gui/app/main.mjs";
 import { applyReset, createStore, loadSnapshot, startCollection, writeCollection } from "../gui/app/state.mjs";
 import { ApiError } from "../gui/app/api.mjs";
@@ -44,8 +44,8 @@ import { createChat, postChat } from '../engine/service/chats.mjs';
 import { createContext, readContext } from '../engine/service/context.mjs';
 import { registerNative } from '../engine/service/adapters.mjs';
 import { refreshPlan } from '../gui/app/plan-controller.mjs';
-import { element } from '../gui/app/components.mjs';
-import { runsInLabel } from '../gui/app/clusters.mjs';
+import { element, restoreRunning } from '../gui/app/components.mjs';
+import { initialRunsIn, runsInLabel } from '../gui/app/clusters.mjs';
 import { AGENT_ROLES } from '../gui/app/start-copy.mjs';
 import { hierarchyIcon } from '../gui/app/hierarchy.mjs';
 import { renderContext } from '../gui/app/session-work.mjs';
@@ -3744,12 +3744,11 @@ test("settings do not replace the opening language before the viewer can be read
   t.after(() => dispose(app));
 });
 
-test("the opening frame shows a stored view and renders again when the read arrives", async (t) => {
+test("the opening frame shows a stored view, and the shell opens when the view arrives without waiting for settings", async (t) => {
   const fixture = await createGuiFixture();
   t.after(() => fixture.close());
   const live = (await request(apiFrom(fixture.desktopUrl), "GET", "/view")).data;
   const liveBoards = (live.editors ?? []).filter((editor) => editor.kind === "blueprint").length;
-  const liveText = `${live.counts.units} units, ${live.groups?.length ?? 0} groups, ${live.counts.chats} chats, ${liveBoards} boards`;
   const storage = new Map([["hivem1nd:opening-view", JSON.stringify({ counts: { units: 424242, chats: 2 }, groupCount: 1, boardCount: 3 })]]);
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
@@ -3767,7 +3766,9 @@ test("the opening frame shows a stored view and renders again when the read arri
   });
   assert.equal(root.querySelector(".opening-counts").textContent, "424242 units, 1 groups, 2 chats, 3 boards");
   assert.equal(root.querySelector("[data-boot]").getAttribute("data-boot"), "reading");
-  await waitFor(() => root.querySelector("[data-boot]")?.getAttribute("data-boot") === "reading" && root.querySelector(".opening-counts")?.textContent === liveText, "The opening frame did not show the view that arrived.");
+  // Settings and the viewer are still held back: the shell and its lists are already drawn.
+  await waitFor(() => root.querySelector("[data-boot]")?.getAttribute("data-boot") === "ready" && root.querySelector(".side"), "The shell did not open when the view arrived.");
+  assert.equal(root.querySelector(".opening-counts"), null);
   release();
   const app = await pending;
   t.after(() => dispose(app));
@@ -4741,6 +4742,7 @@ test("failure causes and empty lists name the resource and its next step", async
   const chat = desktop.app.chatList.catalog[0];
   desktop.app.activeHandlers.onActivate({ id: chat.id, kind: "chat" }, "double");
   await waitFor(() => desktop.root.querySelector("[data-composer]"), "The composer did not open.");
+  await waitFor(() => desktop.app.activity.get(`chat-load:${chat.id}`)?.phase === "success", "The conversation did not finish loading.");
   desktop.app.thread.messages = [];
   desktop.app.thread.total = 0;
   renderShell(desktop.app);
@@ -7895,4 +7897,177 @@ test('the Hierarchy list says it is loading only while it has nothing to show, a
   assert.equal(root.querySelectorAll('[data-list-progress]').length, 1);
   assert.equal(total.className.includes('visually-hidden'), false);
   assert.equal(root.querySelector('[data-collection]').getAttribute('aria-busy'), 'true');
+
+test('a button that starts an action shows a loader while it runs, again after a redraw, and is released when it ends', async () => {
+  const { document, root } = createTestDocument(1440);
+  let finish;
+  const work = new Promise(resolve => { finish = resolve; });
+  const button = element(document, 'button', { type: 'button', class: 'btn', 'data-action': 'load-demo', text: 'Load', onclick: () => work });
+  root.append(button);
+  click(button);
+  assert.equal(button.getAttribute('data-busy'), 'true');
+  assert.equal(button.getAttribute('aria-busy'), 'true');
+  assert.equal(button.disabled, true);
+  // The shell draws again: the new button for the same action shows the same loader.
+  const twin = element(document, 'button', { type: 'button', class: 'btn', 'data-action': 'load-demo', text: 'Load', onclick: () => work });
+  root.replaceChildren(twin);
+  restoreRunning(root);
+  assert.equal(twin.getAttribute('data-busy'), 'true');
+  assert.equal(twin.disabled, true);
+  finish();
+  await delay(0);
+  assert.equal(button.getAttribute('data-busy'), null);
+  assert.equal(button.disabled, false);
+  // A button that was disabled before stays disabled afterwards.
+  const off = element(document, 'button', { type: 'button', class: 'btn', 'data-action': 'off-demo', text: 'Off', onclick: () => Promise.resolve() });
+  off.disabled = true;
+  click(off);
+  await delay(0);
+  assert.equal(off.disabled, true);
+});
+
+test('the same failure is one notice with one Retry, the sentence reads whole and slow requests are one notice', async t => {
+  const desktop = await openedBoardDesktop(t);
+  desktop.app.mode = 'map';
+  desktop.app.editors.current = null;
+  desktop.app.language = 'es';
+  const timeout = new ApiError(0, 'timeout', 'The request timed out.');
+  desktop.app.activity = new Map([
+    ['chat-load:a', { key: 'chat-load:a', phase: 'error', scope: 'unit', action: 'Cargando la conversación.', label: 'Cargando la conversación.', error: timeout, retry: () => Promise.resolve() }],
+    ['inspector:b', { key: 'inspector:b', phase: 'error', scope: 'unit', action: 'Cargando overseer.', label: 'Cargando overseer.', error: timeout, retry: () => Promise.resolve() }],
+    ['older:c', { key: 'older:c', phase: 'pending', scope: 'unit', label: 'Mensajes anteriores', elapsed: 3 }],
+    ['older:d', { key: 'older:d', phase: 'pending', scope: 'unit', label: 'Mensajes anteriores', elapsed: 5 }],
+  ]);
+  renderShell(desktop.app);
+  const region = desktop.root.querySelector('[data-activity-region]');
+  assert.equal(region.querySelectorAll('[data-action="retry-activity"]').length, 1);
+  assert.equal(region.querySelectorAll('.notice-error').length, 1);
+  assert.equal(region.querySelectorAll('.slow-notice').length, 1);
+  assert.equal(region.querySelectorAll('[data-action="cancel-activity"]').length, 1);
+  assert.match(region.querySelector('[data-activity-count]').children[0].textContent, /^2 solicitudes fallaron\. La solicitud agotó el tiempo\./);
+  desktop.app.activity.delete('inspector:b');
+  renderShell(desktop.app);
+  const single = desktop.root.querySelector('[data-activity-count]').children[0].textContent;
+  assert.equal(single.includes('. falló'), false);
+  assert.match(single, /^Cargando la conversación falló\. /);
+});
+
+test('an Overseer that holds state does not say it starts fresh', () => {
+  assert.equal(startsFresh({ role: 'overseer', fresh: true }), true);
+  assert.equal(startsFresh({ role: 'overseer', fresh: true, unread: 363 }), false);
+  assert.equal(startsFresh({ role: 'overseer', fresh: true, sessionIds: ['s1'] }), false);
+  assert.equal(startsFresh({ role: 'overseer', fresh: false }), false);
+  assert.equal(startsFresh({ role: 'executor', fresh: true }), false);
+});
+
+test('an unread conversation says it could not be read instead of saying it has no messages', async t => {
+  const desktop = await openedBoardDesktop(t);
+  desktop.app.mode = 'map';
+  desktop.app.editors.current = null;
+  const chat = desktop.app.chatList.catalog[0];
+  desktop.app.thread = createThread(chat);
+  desktop.app.store.selected.chatId = chat.id;
+  desktop.app.activity = new Map([[`chat-load:${chat.id}`, { key: `chat-load:${chat.id}`, phase: 'error', scope: 'unit', label: 'Loading', error: new ApiError(0, 'timeout', 'x'), retry() {} }]]);
+  renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector('[data-empty="chat"]'), null);
+  assert.ok(desktop.root.querySelector('[data-empty="unread"]'));
+  desktop.app.activity.set(`chat-load:${chat.id}`, { key: `chat-load:${chat.id}`, phase: 'pending', scope: 'unit', label: 'Loading', elapsed: 0 });
+  renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector('[data-empty="chat"]'), null);
+  assert.ok(desktop.root.querySelector('[data-loading="chat"]'));
+});
+
+test('the inspector keeps its scroll position when the shell draws again', async t => {
+  const desktop = await openedBoardDesktop(t);
+  desktop.app.mode = 'map';
+  desktop.app.editors.current = null;
+  renderShell(desktop.app);
+  desktop.root.querySelector('.panel.inspector').scrollTop = 180;
+  renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector('.panel.inspector').scrollTop, 180);
+});
+
+test('the Overseer, a project executor and a conversation with each are created through the calls the interface makes', async t => {
+  const desktop = await startCoreDesktop(t), { app } = desktop;
+  app.startDialog?.dialog.close();
+  const machine = app.store.settings?.service?.machine ?? app.store.view?.mind?.machine;
+  const agents = (await request(app.api, 'GET', '/settings/agents', { query: { machine } })).data;
+  const runsIn = initialRunsIn(agents.connectedClients, agents.defaultRunsIn, null);
+  assert.ok(runsIn, 'a connected client offers a runtime');
+  // The Overseer and its first message.
+  const overseer = await startApi.createOverseer(app.api, { machine, runsIn, fresh: true, expectedRevision: null });
+  assert.equal(overseer.data.id, 'root:overseer');
+  const overseerChat = await openDirectChat(app.api, [overseer.data.id]);
+  const overseerThread = createThread(overseerChat.data);
+  await postMessage(app.api, overseerThread, { body: 'Hello Overseer' });
+  assert.ok(overseerThread.messages.some(message => message.body === 'Hello Overseer'));
+  // A cluster, its executor and the first message to it.
+  const cluster = await startApi.createCluster(app.api, { title: 'Shop', parentId: null, link: { kind: 'none' }, machine });
+  const executor = await startApi.createClusterAgent(app.api, cluster.data.id, { machine, role: 'executor', roleName: '', roleDescription: '', runsIn, useAsDefault: false, expectedRevision: cluster.data.revision });
+  assert.equal(executor.data.role, 'executor');
+  const executorChat = await openDirectChat(app.api, [executor.data.id]);
+  const executorThread = createThread(executorChat.data);
+  await postMessage(app.api, executorThread, { body: 'Hello executor' });
+  assert.ok(executorThread.messages.some(message => message.body === 'Hello executor'));
+  // The same chat is found again, not created twice.
+  const again = await openDirectChat(app.api, [executor.data.id]);
+  assert.equal(again.data.id, executorChat.data.id);
+  // Removing the executor takes it out of the list of units without a reload of the page.
+  reloadList(app.unitList);
+  await waitFor(() => app.unitList.status === 'ready' && app.unitList.catalog.some(unit => unit.id === executor.data.id), 'The new executor did not join the list of units.');
+  await removeUnit(app.api, executor.data);
+  reloadList(app.unitList);
+  await waitFor(() => app.unitList.status !== 'loading' && !app.unitList.catalog.some(unit => unit.id === executor.data.id), 'The removed executor stayed in the list of units.');
+});
+
+test('a tab whose service stopped says so and how to open it again instead of a slow drive', async t => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const { root } = createTestDocument(1440);
+  const url = new URL(fixture.desktopUrl);
+  const app = await mount(root, {
+    location: url, history: { replaceState() {} }, mindPath: 'C:\Minds\Shop',
+    fetch: async () => { throw new TypeError('Failed to fetch'); },
+  });
+  t.after(() => dispose(app));
+  await waitFor(() => app.bootStopped === true, 'The stopped service was not recognised.');
+  assert.equal(root.querySelector('.opening-failure').children[1].textContent, 'The service stopped');
+  const cause = root.querySelector('[data-opening-cause]').textContent;
+  assert.match(cause, /hivem1nd service install --mind-path "C:\Minds\Shop"/);
+  assert.equal(cause.includes('30 s'), false);
+});
+
+test('the library marks each unavailable project as a row and keeps Refresh and Register on one line', async t => {
+  const desktop = await openedBoardDesktop(t);
+  navigate(desktop.app, 'blueprint');
+  desktop.app.editors.catalogIssues = [{ project: 'ntk.solutions', code: 'project_unavailable' }, { project: 'Cosmic', code: 'project_unavailable' }];
+  desktop.app.editors.catalogLoading = true;
+  renderShell(desktop.app);
+  const rows = desktop.root.querySelectorAll('[data-library-issue]');
+  assert.deepEqual(rows.map(row => row.getAttribute('data-library-issue')), ['ntk.solutions', 'Cosmic']);
+  for (const row of rows) assert.ok(String(row.className).split(/\s+/).includes('notice'));
+  const footer = desktop.root.querySelector('[data-library-footer="blueprint"]');
+  assert.ok(footer.querySelector('[data-action="refresh-catalog"]'));
+  assert.ok(footer.querySelector('[data-action="open-register"]'));
+  assert.ok(desktop.root.querySelector('[data-catalog-progress]'));
+  // With no board open, the title is one word, never "Blueprint Blueprint".
+  assert.notEqual(desktop.root.querySelector('[data-editor-title]').textContent, 'Blueprint Blueprint');
+});
+
+test('the agent menu offers to remove the agent and asks before removing it', async t => {
+  const desktop = await openedBoardDesktop(t);
+  desktop.app.mode = 'map';
+  desktop.app.editors.current = null;
+  const executor = desktop.app.unitList.catalog.find(unit => unit.id === 'project:shop:executor-shop');
+  desktop.app.mapState.selection = new Set([executor.id]);
+  desktop.app.mapState.onSelection([executor.id]);
+  renderShell(desktop.app);
+  click(desktop.root.querySelector('[data-action="agent-more"]'));
+  const remove = desktop.document.querySelector('[data-action="agent-remove"]');
+  assert.ok(remove, 'the agent menu has a Remove agent button');
+  click(remove);
+  const dialog = desktop.document.querySelector('[data-remove-unit]');
+  assert.ok(dialog, 'removal asks for confirmation');
+  assert.equal(dialog.querySelector('button.primary').textContent, 'Remove agent');
+  click(dialog.querySelector('button'));
 });
