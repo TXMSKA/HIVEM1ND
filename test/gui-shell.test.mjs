@@ -7877,3 +7877,22 @@ test('the right-click menu of an agent and of a cluster lists only what the stat
   assert.deepEqual(actions().slice(0, 2), ['open', 'start']);
   assert.match(menu().style.top, /px$/);
 });
+
+test('the Hierarchy list says it is loading only while it has nothing to show, and says it once', async t => {
+  const { app, root } = await startMenuDesktop(t);
+  app.unitList.status = 'loading';
+  renderShell(app);
+  let total = root.querySelector('.list-total');
+  assert.equal(total.getAttribute('data-list-status'), 'loading');
+  assert.ok(total.className.includes('visually-hidden'), 'rows are drawn, so a reload behind them says nothing');
+  assert.equal(root.querySelectorAll('[data-list-progress]').length, 0);
+  app.unitList.catalog = []; app.unitList.items = [];
+  app.store.indexes.units.clear(); app.store.indexes.groups.clear();
+  renderShell(app);
+  total = root.querySelector('.list-total');
+  assert.equal(total.textContent, '', 'the list total holds no sentence of its own');
+  assert.equal(root.querySelector('[data-list-progress]').getAttribute('aria-label'), 'Loading the list.', 'the one mark carries the sentence');
+  assert.equal(root.querySelectorAll('[data-list-progress]').length, 1);
+  assert.equal(total.className.includes('visually-hidden'), false);
+  assert.equal(root.querySelector('[data-collection]').getAttribute('aria-busy'), 'true');
+});

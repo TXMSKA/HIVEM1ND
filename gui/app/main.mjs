@@ -1639,10 +1639,15 @@ function renderCollection(app, t) {
       setQuery(list, event.target.value);
     },
   });
-  const status = list.status === "error" ? t("listError") : list.status === "loading" ? t("loadingList") : list.status === "empty" ? (list.query ? t("emptySearch") : emptyCollectionText(t, list.name)) : t("listTotal", { count: formatNumber(app.language, list.total ?? 0) });
-  // A ready list says its count only to assistive technology; the board shows the rows, not a count.
-  const total = element(document, "p", { class: `list-total${list.status === "ready" ? " visually-hidden" : ""}`, "data-total": String(list.total ?? ""), "data-list-status": list.status, text: status });
-  if (list.status === "loading") total.append(progressMark(document, t("loadingList"), { "data-list-progress": "true" }));
+  const rows = collectionRows(app, t, list);
+  // The list is only "loading" for the person while it has nothing to show. Rows already drawn stay, and a reload behind them says nothing.
+  const showing = rows.some((row) => row.unit || row.kind === "cluster" || row.kind === "chat");
+  const loading = list.status === "loading" || list.status === "idle", waiting = loading && !showing;
+  const status = list.status === "error" ? t("listError") : waiting ? "" : list.status === "empty" ? (list.query ? t("emptySearch") : emptyCollectionText(t, list.name)) : t("listTotal", { count: formatNumber(app.language, list.total ?? rows.length) });
+  // A list that shows rows says its count only to assistive technology; the board shows the rows, not a count.
+  const total = element(document, "p", { class: `list-total${list.status === "ready" || (loading && showing) ? " visually-hidden" : ""}`, "data-total": String(list.total ?? ""), "data-list-status": list.status, text: status });
+  // One mark carries the loading text, so the sentence is never written twice.
+  if (waiting) total.append(progressMark(document, t("loadingList"), { "data-list-progress": "true" }));
   if (list.status === "error") {
     total.append(element(document, "button", {
       type: "button",
@@ -1652,12 +1657,11 @@ function renderCollection(app, t) {
       onclick: () => reloadList(list),
     }));
   }
-  const host = element(document, "div", { class: "list", role: "listbox", "aria-label": t(app.tab), "data-collection": "true" });
+  const host = element(document, "div", { class: "list", role: "listbox", "aria-label": t(app.tab), "data-collection": "true", "aria-busy": list.status === "loading" ? "true" : null });
   if (app.tab === "hierarchy") {
     host.addEventListener("contextmenu", (event) => hierarchyMenu(app, event));
     host.addEventListener("keydown", (event) => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) hierarchyMenu(app, event); });
   }
-  const rows = collectionRows(app, t, list);
   const handlers = {
     selectedId: app.tab === "chats" ? app.store.selected.chatId : app.store.selected.groupId ? `cluster:${app.store.selected.groupId}` : app.store.selected.unitId,
     onActivate: (row, kind) => {
