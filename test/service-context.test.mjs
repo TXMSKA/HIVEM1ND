@@ -264,3 +264,16 @@ test('new Overseer sessions default fresh, explicit keep reuses native context, 
     assert.equal(text.includes('Current rules.'), false); assert.equal(text.includes('This chat remains open'), false);
   }
 });
+
+test('the session start of the longest role the kit ships fits its budget', async t => {
+  const fixture = await makeCoreFixture(); t.after(() => dispose(fixture));
+  const kit = path.resolve(import.meta.dirname, '..');
+  await mkdir(path.join(fixture.paths.mind, 'roles'), { recursive: true });
+  await mkdir(path.join(fixture.paths.mind, 'user', 'state'), { recursive: true });
+  await writeFile(path.join(fixture.paths.mind, 'rules.md'), await readFile(path.join(kit, 'rules.md')));
+  await writeFile(path.join(fixture.paths.mind, 'roles', 'genesis.md'), await readFile(path.join(kit, 'roles', 'genesis.md')));
+  await writeFile(path.join(fixture.paths.mind, 'user', 'state', 'genesis.md'), `unit: genesis\nunit-id: root:genesis\nrole: genesis\nstate: in\nmachine: ${fixture.machine}\n\nReady.\n`);
+  const bootstrap = JSON.parse(await contextBootstrap({ ...fixture, now: () => fixture.clock.now }, 'root:genesis'));
+  assert.equal(bootstrap.role, 'genesis');
+  assert.ok(bootstrap.records[1].text.length > 12000, 'the role text alone is longer than the old budget');
+});

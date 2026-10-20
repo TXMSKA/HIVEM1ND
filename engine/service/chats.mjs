@@ -745,6 +745,8 @@ export async function ensureChatDir(context, id) {
 }
 
 // Bootstrap is private model input; it is never an authored message or a read receipt.
+const BOOTSTRAP_MAX = 24000;
+
 export async function contextBootstrap(context, unitId) {
   const state = await readUnitState(context, parseUnitId(unitId));
   if (!state) throw new CoreError(404, 'unit_not_found', 'The unit does not exist.');
@@ -755,7 +757,8 @@ export async function contextBootstrap(context, unitId) {
     records.push({ resource: relative, revision: revisionOf(bytes), text: bytes?.toString('utf8') ?? '' });
   }
   const result = canonicalJson({ unitId, role, resources: ['inbox', 'tasks', 'content'], records });
-  if (result.length > 12000) throw new CoreError(409, 'context_unavailable', 'The current M1ND bootstrap exceeds the supported input budget.');
+  // The kit's longest role, Genesis, needs about 16,400 characters with the rules and a state file; Lyra keeps its own smaller bound.
+  if (result.length > BOOTSTRAP_MAX) throw new CoreError(409, 'context_unavailable', 'The current M1ND bootstrap exceeds the supported input budget.');
   return result;
 }
 
