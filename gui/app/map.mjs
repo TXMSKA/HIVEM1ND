@@ -1,6 +1,6 @@
 import { createOperation, request as apiRequest } from "./api.mjs";
 import { clusterGlyph, icon } from "./components.mjs";
-import { PRESET_ICON, unitDisplayName } from "./hierarchy.mjs";
+import { PRESET_ICON, displayName, unitDisplayName } from "./hierarchy.mjs";
 import {
   FRAME_HEAD,
   CELL_W,
@@ -189,12 +189,12 @@ export function renderMap(document, host, map, labels = {}) {
     const folder = icon(document, clusterGlyph(zone.folder ? "folder" : zone.group.link?.kind));
     if (zone.compact || zoom < 0.5) folder.style.display = "none";
     const title = document.createElement("span");
-    title.textContent = zone.group.title + (zone.count ? `, ${zone.count}` : '');
+    title.textContent = displayName(zone.group.title) + (zone.count ? `, ${zone.count}` : '');
     const caption = document.createElement("span");
     caption.className = "map-group-caption";
     caption.append(folder, title);
     label.append(caption);
-    label.setAttribute("aria-label", zone.group.title);
+    label.setAttribute("aria-label", displayName(zone.group.title));
     label.addEventListener('click', () => {
       if (map.dragEndedAt && Date.now() - map.dragEndedAt < 250) return;
       const now = Date.now(), double = map.lastClusterClick?.id === zone.group.id && now - map.lastClusterClick.at < 500;
@@ -356,7 +356,7 @@ export function renderMap(document, host, map, labels = {}) {
   const focused = (map.groups ?? []).find(group => group.id === map.focusedFolder);
   const insideCount = focused ? (map.groups ?? []).filter(group => group.parentId === focused.id).length : 0;
   const hint = document.createElement('p'); hint.className = 'map-hint';
-  hint.textContent = focused && labels.inside ? labels.inside(focused.title, insideCount) : (labels.drag ?? '');
+  hint.textContent = focused && labels.inside ? labels.inside(displayName(focused.title), insideCount) : (labels.drag ?? '');
   // The hint and the save notice each have their own slot in one row, so they can never be drawn over each other.
   const top = document.createElement('div'); top.className = 'map-top';
   top.append(hint);
@@ -892,7 +892,7 @@ export function flyToCluster(map, id, rect = hostRect(map.host)) {
   if ((map.groups ?? []).some(group => group.parentId === id)) map.focusedFolder = id;
   const focused = (map.groups ?? []).find(group => group.id === map.focusedFolder);
   const hint = map.host?.querySelector?.('.map-hint');
-  if (focused && hint && map.labels?.inside) hint.textContent = map.labels.inside(focused.title, (map.groups ?? []).filter(group => group.parentId === focused.id).length);
+  if (focused && hint && map.labels?.inside) hint.textContent = map.labels.inside(displayName(focused.title), (map.groups ?? []).filter(group => group.parentId === focused.id).length);
   const frame = personalZones(map).find(item => item.group.id === id);
   if (!frame) return false;
   const ids = new Set([id]);
@@ -953,7 +953,7 @@ function visibleNodes(map) {
       y: map.positions[unit.id].y + (follows ? drag.dy : 0),
       radius: unit.role === "overseer" ? 30 : unit.role === "overlord" ? 25 : 21,
       label: unitDisplayName(unit),
-      original: unit.unit,
+      original: displayName(unit.unit),
       alias: unit.alias,
       leadId: unit.leadId ?? null,
       role: unit.role ?? "",

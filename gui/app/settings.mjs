@@ -5,6 +5,7 @@ import { encodeHomeQr } from "./qr.mjs";
 import { renderQr } from "./qr-render.mjs";
 import { catalogLabel, clientLabel } from './clusters.mjs';
 import { startText } from './start-copy.mjs';
+import { displayName } from './hierarchy.mjs';
 import { addButton, renderAddedContent } from './add-view.mjs';
 
 export function updateExpiry(home, nowMs) {
@@ -413,9 +414,9 @@ function renderProjects(document, model, t, actions) {
     const remove = settingsButton(document, 'settings-remove-link', startText(model.language, 'removeLink'), () => actions.onRemoveLink?.(link), !model.canWrite || model.readOnly);
     // Removing a link repeats on every row and undoes work, so it is a quiet bordered button, not the accent of a primary action.
     remove.setAttribute('class', 'btn danger');
-    remove.setAttribute('aria-label', startText(model.language, 'removeLink') + ': ' + link.title);
+    remove.setAttribute('aria-label', startText(model.language, 'removeLink') + ': ' + displayName(link.title));
     section.append(element(document, 'div', { class: 'settings-link', 'data-cluster-link': link.clusterId },
-      element(document, 'strong', { text: link.title }), element(document, 'span', { class: 'cluster-link-kind', text: startText(model.language, link.kind === 'none' ? 'noLink' : link.kind) }),
+      element(document, 'strong', { text: displayName(link.title) }), element(document, 'span', { class: 'cluster-link-kind', text: startText(model.language, link.kind === 'none' ? 'noLink' : link.kind) }),
       element(document, 'code', { text: link.localPath ?? (link.available ? '' : startText(model.language, 'unavailable')) }), link.kind === 'none' ? null : remove));
   }
   if (!links.length) section.append(element(document, "p", { text: t("settingsNoLinks") }));

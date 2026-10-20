@@ -71,7 +71,7 @@ import {
   startWatch,
   stopWatch,
 } from "./editors.mjs";
-import { activateUnit, buildHierarchy, collapseNewClusters, flattenVisibleHierarchy, hierarchyDisclosure, hierarchyIcon, listedWorktrees, openContextMenu, pathFolder, readableIdentity, revealGroup, toggleGroup, unitDisplayName, unitRoleName, unitsForTree } from "./hierarchy.mjs";
+import { activateUnit, buildHierarchy, collapseNewClusters, displayName, flattenVisibleHierarchy, hierarchyDisclosure, hierarchyIcon, listedWorktrees, openContextMenu, pathFolder, readableIdentity, revealGroup, toggleGroup, unitDisplayName, unitRoleName, unitsForTree } from "./hierarchy.mjs";
 import { checkoutFacts, openTaskDetail, renderApproval, renderGrants, renderMachine, renderSession, renderTask, renderUnit, renderWaiting } from "./inspector.mjs";
 import { cardinal, formatClock, formatNumber, formatShortTime, text } from "./i18n.mjs";
 import { collectPages, createPagedList, loadAll, loadNext, reloadList, renderWindow, setQuery } from "./lists.mjs";
@@ -3492,7 +3492,7 @@ function openAttachChooser(app) {
   const paint = () => {
     const query = search.value.trim().toLowerCase();
     const units = (app.unitList?.catalog ?? []).map((unit) => ({ id: unit.id, label: unitDisplayName(unit), kind: "unit", search: `${unit.id} ${unit.unit} ${unit.alias ?? ""}` }));
-    const groups = [...app.store.indexes.groups.values()].filter((group) => !group.deleted).map((group) => ({ id: `group:${group.id}`, label: group.title, kind: "group", search: group.title }));
+    const groups = [...app.store.indexes.groups.values()].filter((group) => !group.deleted).map((group) => ({ id: `group:${group.id}`, label: displayName(group.title), kind: "group", search: group.title }));
     const entries = [...units, ...groups].filter((entry) => !query || entry.search.toLowerCase().includes(query));
     list.replaceChildren(...entries.map((unit) => element(document, "button", {
       type: "button",
@@ -4111,7 +4111,7 @@ function removeStartLink(app, link, machine) {
   const cluster = app.store.indexes.groups.get(link.clusterId);
   if (!cluster) return;
   let retained = null;
-  showDialog(app.root.ownerDocument, { title: startText(app.language, 'removeLink') + ': ' + link.title,
+  showDialog(app.root.ownerDocument, { title: startText(app.language, 'removeLink') + ': ' + displayName(link.title),
     body: startText(app.language, 'removeHint'), confirm: startText(app.language, 'removeLink'), cancel: startText(app.language, 'cancel'), retry: startText(app.language, 'retry'),
     onConfirm: async () => {
       try {
@@ -4154,13 +4154,13 @@ function clusterInspector(app, cluster) {
 
 function removeStartCluster(app, cluster) {
   let operation = null;
-  showDialog(app.root.ownerDocument, { title: text(app.language, 'delete') + ': ' + cluster.title,
+  showDialog(app.root.ownerDocument, { title: text(app.language, 'delete') + ': ' + displayName(cluster.title),
     body: startText(app.language, 'removeHint'), confirm: text(app.language, 'delete'), cancel: startText(app.language, 'cancel'),
     onConfirm: async () => {
       operation ??= createOperation({ method: 'DELETE', path: '/clusters/:clusterId', params: { clusterId: cluster.id }, body: { machine: startMachine(app), confirmed: true, expectedRevision: cluster.revision } });
       const result = await request(app.api, 'DELETE', operation.path, { operation });
       await loadStartReports(app); app.store.selected.groupId = null;
-      showMapToast(app, cluster.title, async record => { await undoChange(app.api, result.data.changeId, record.operation); await loadStartReports(app); selectGroup(app, cluster.id); }, result.data.undoUntil);
+      showMapToast(app, displayName(cluster.title), async record => { await undoChange(app.api, result.data.changeId, record.operation); await loadStartReports(app); selectGroup(app, cluster.id); }, result.data.undoUntil);
       renderShell(app);
     } });
 }
@@ -4168,7 +4168,7 @@ function removeStartCluster(app, cluster) {
 function showClusterChanges(app, cluster) {
   settle(app, `changes:${cluster.id}`, startText(app.language, 'changes'), async () => {
     const changes = await collectPages(app.api, `/clusters/${encodeURIComponent(cluster.id)}/changes`, { query: { machine: startMachine(app) }, limit: 100 });
-    const dialog = showDialog(app.root.ownerDocument, { title: startText(app.language, 'changes') + ': ' + cluster.title, cancel: startText(app.language, 'close') });
+    const dialog = showDialog(app.root.ownerDocument, { title: startText(app.language, 'changes') + ': ' + displayName(cluster.title), cancel: startText(app.language, 'close') });
     dialog.append(renderClusterChanges(app.root.ownerDocument, changes.items));
   });
 }
@@ -4178,8 +4178,8 @@ function clusterChatPanel(app, cluster) {
   const panel = chatPanel(app, t);
   const composer = panel.querySelector('[data-composer]');
   if (composer) {
-    composer.setAttribute('aria-label', startText(app.language, 'messageCluster', { name: cluster.title }));
-    composer.setAttribute('placeholder', startText(app.language, 'messageCluster', { name: cluster.title }));
+    composer.setAttribute('aria-label', startText(app.language, 'messageCluster', { name: displayName(cluster.title) }));
+    composer.setAttribute('placeholder', startText(app.language, 'messageCluster', { name: displayName(cluster.title) }));
     const hint = panel.querySelector('.field-hint'); if (hint) hint.textContent = startText(app.language, 'goesToLead');
   }
   return panel;
@@ -4487,7 +4487,7 @@ function openItemMenu(app, target) {
   } else {
     const cluster = app.store.indexes.groups.get(target.id);
     if (!cluster || cluster.deleted) return;
-    name = cluster.title;
+    name = displayName(cluster.title);
     const children = groups.filter(group => group.parentId === cluster.id), link = app.startProjects?.clusterLinks?.find(item => item.clusterId === cluster.id);
     items.push({ id: 'open', label: t('menuOpen'), primary: true, run: () => openClusterFromMenu(app, cluster) });
     if (desktop && caps.includes('unit.create')) items.push({ id: 'new-agent', label: t('menuNewAgent'), run: () => openStartAgent(app, cluster) });
@@ -4609,7 +4609,7 @@ function openMoveAgent(app, unit) {
   const home = unitCluster(app, unit);
   const choices = [...app.store.indexes.groups.values()].filter(group => !group.deleted && group.id !== home?.id);
   openChoiceForm(app, 'move-agent', startText(app.language, 'moveTitle', { name: unitDisplayName(unit) }), form => {
-    appendSelect(form.ownerDocument, form, 'clusterId', startText(app.language, 'moveTo'), choices.map(group => ({ value: group.id, label: group.title })), choices[0]?.id ?? '');
+    appendSelect(form.ownerDocument, form, 'clusterId', startText(app.language, 'moveTo'), choices.map(group => ({ value: group.id, label: displayName(group.title) })), choices[0]?.id ?? '');
   }, async form => {
     const target = app.store.indexes.groups.get(fieldValue(form, 'clusterId'));
     if (!target) return false;
@@ -4626,12 +4626,12 @@ function openMoveAgent(app, unit) {
 function detachAgent(app, unit, cluster) {
   const t = (key, values) => startText(app.language, key, values), name = unitDisplayName(unit);
   const dialog = showDialog(app.root.ownerDocument, {
-    title: t('detachTitle', { name, cluster: cluster.title }), body: t('detachBody'), confirm: t('detachConfirm'), cancel: text(app.language, 'cancel'), retry: text(app.language, 'retry'),
+    title: t('detachTitle', { name, cluster: displayName(cluster.title) }), body: t('detachBody'), confirm: t('detachConfirm'), cancel: text(app.language, 'cancel'), retry: text(app.language, 'retry'),
     onConfirm: async () => {
       const fresh = app.store.indexes.groups.get(cluster.id) ?? cluster;
       await setClusterMembers(app, fresh, fresh.members.filter(id => id !== unit.id));
       await refreshAfterMembership(app);
-      showMapToast(app, t('detached', { name, cluster: cluster.title }), async () => {
+      showMapToast(app, t('detached', { name, cluster: displayName(cluster.title) }), async () => {
         const current = app.store.indexes.groups.get(cluster.id);
         if (current && !current.members.includes(unit.id)) await setClusterMembers(app, current, [...current.members, unit.id]);
         await refreshAfterMembership(app);
@@ -4815,7 +4815,7 @@ function collectionRows(app, t, list) {
           kind: "chat",
           chat,
           depth: 0,
-          text: [chat.title || chat.id, snippet, when, unread].filter(Boolean).join(" · "),
+          text: [displayName(chat.title) || chat.id, snippet, when, unread].filter(Boolean).join(" · "),
           pos: rows.length + 1,
           setsize: list.items.length,
         });
@@ -6557,7 +6557,7 @@ function actionControls(app, t, selected) {
 function unitNameNode(document, unit) {
   const name = element(document, "span", { class: "unit-name" });
   if (unit.alias) name.append(element(document, "strong", { class: "unit-alias", text: unit.alias }));
-  name.append(element(document, "span", { class: "unit-original", text: unit.unit }));
+  name.append(element(document, "span", { class: "unit-original", text: displayName(unit.unit) }));
   return name;
 }
 
@@ -7331,7 +7331,7 @@ function chatPanel(app, t) {
   }
   const members = thread.chat.members ?? [];
   const heading = element(document, "header", { class: "chat-heading" },
-    element(document, "h2", { class: "chat-title", "data-chat-title": thread.chat.id, text: thread.chat.title || thread.chat.id }),
+    element(document, "h2", { class: "chat-title", "data-chat-title": thread.chat.id, text: displayName(thread.chat.title) || thread.chat.id }),
   );
   const group = app.store.indexes.groups.get(thread.chat.id);
   const directUnit = thread.chat.kind === "direct" ? unitById(app, members.find((id) => id !== "root:master")) : null;

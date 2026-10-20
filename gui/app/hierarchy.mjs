@@ -6,6 +6,14 @@ export const PRESET_ICON = Object.freeze({ 'ux-designer': 'blueprint', 'ui-desig
   'security-consultant': 'alert', qa: 'check', 'code-reviewer': 'graph', 'product-manager': 'map', helper: 'adjutant', custom: 'settings' });
 const ROLE_ICON = { overseer: 'crown', overlord: 'executive', executor: 'executor', genesis: 'genesis', incubator: 'genesis', adjutant: 'adjutant', executive: 'executive', ...PRESET_ICON };
 
+// What a person reads for a unit, a cluster or a chat: its name with a capital first letter and spaces for the hyphens and
+// underscores of the id, so "guest-or-ghost" reads "Guest or ghost". The id itself never changes. Each part of a list of
+// names, separated by commas, starts with a capital.
+export function displayName(value) {
+  const text = String(value ?? '').replace(/[-_]+/g, ' ').replace(/[ 	]+/g, ' ').trim();
+  return text.split(/(,\s*)/).map(part => part.charAt(0).toLocaleUpperCase() + part.slice(1)).join('');
+}
+
 export function pathFolder(value) {
   const parts = String(value ?? '').split(/[\\/]/).filter(Boolean);
   return parts.at(-1) ?? '';
@@ -24,7 +32,7 @@ export function listedWorktrees(linkPath, worktrees = []) {
 export function readableIdentity(value, personLabel = 'You') {
   if (value === 'root:master' || value === 'root:person' || value === 'master') return personLabel;
   // The unit's own name, as the Map and Hierarchy show it: only the scope prefix goes.
-  return String(value ?? '').split(':').at(-1);
+  return displayName(String(value ?? '').split(':').at(-1));
 }
 
 export function hierarchyIcon(unit) {
@@ -102,7 +110,7 @@ export function flattenVisibleHierarchy(tree, state, query = '') {
     emitted.add(cluster.id);
     const key = `cluster:${cluster.id}`, children = all.filter(item => item.parentId === cluster.id && contains(item));
     const expanded = !fold.collapsed.has(key) || Boolean(query);
-    rows.push({ id: key, kind: 'cluster', groupId: cluster.id, group: cluster, label: cluster.title, depth, count: children.length || cluster.units.length, expanded });
+    rows.push({ id: key, kind: 'cluster', groupId: cluster.id, group: cluster, label: displayName(cluster.title), depth, count: children.length || cluster.units.length, expanded });
     if (!expanded) return;
     pushUnits(cluster.units.filter(matches), depth + 1);
     for (const worktree of cluster.worktrees ?? []) rows.push({ id: `worktree:${cluster.id}:${worktree.id}`, kind: 'worktree', groupId: cluster.id, worktree, label: pathFolder(worktree.path) || worktree.branch || '', depth: depth + 1 });
@@ -152,7 +160,7 @@ export function unitsForTree(matches, catalog) {
 function unitRow(unit, depth) { return { id: unit.id, kind: 'unit', unit, depth, label: unitDisplayName(unit) }; }
 
 export function unitDisplayName(unit) {
-  const id = String(unit?.unit ?? unit?.id ?? '');
+  const id = displayName(String(unit?.unit ?? unit?.id ?? '').split(':').at(-1));
   const alias = typeof unit?.alias === 'string' ? unit.alias.trim() : '';
   return alias ? alias + ' (' + id + ')' : id;
 }

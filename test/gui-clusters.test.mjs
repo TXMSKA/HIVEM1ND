@@ -69,7 +69,7 @@ test('Runs in labels keep agent, model and effort readable instead of exposing p
   assert.equal(runsInLabel({ client: 'claude', model: 'observed', effort: null, mode: null }, [{ id: 'claude', title: 'claude', models: [{ id: 'observed', title: 'observed', efforts: [] }] }]), 'Claude Code, Observed');
   assert.equal(runsInLabel({ client: 'codex', model: 'observed', effort: 'high' }, clients, 'es'), 'Codex, Observed, Alto');
   assert.equal(readableIdentity('root:master', 'Persona'), 'Persona');
-  assert.equal(readableIdentity('project:shop:executor-shop', 'Persona'), 'executor-shop');
+  assert.equal(readableIdentity('project:shop:executor-shop', 'Persona'), 'Executor shop');
 });
 
 test('R5 plan cards show readable identities and Runs in copy in English and Spanish', () => {
@@ -82,7 +82,7 @@ test('R5 plan cards show readable identities and Runs in copy in English and Spa
     const card = renderPlanCard(document, planCardModel(controller, plan, language, clients), {});
     const visible = nodes(card).map(node => node.textContent).join(' ');
     assert.doesNotMatch(visible, /root:master|project:shop:executor-shop/);
-    assert.match(visible, /executor-shop/);
+    assert.match(visible, /Executor shop/);
     assert.match(visible, /Codex, Observed, (?:High|Alto)/);
   }
 });
@@ -120,7 +120,7 @@ test('canonical nested clusters keep aliases and exact lead links without a root
   const state = { shown: new Map(), collapsed: new Set() }, tree = buildHierarchy(units, [], clusters);
   const rows = flattenVisibleHierarchy(tree, state);
   assert.equal(rows.some(row => row.unit?.role === 'master'), false); assert.equal(rows.filter(row => row.kind === 'cluster').length, 7);
-  assert.equal(rows.find(row => row.unit?.id === 'root:executor').label, 'Cart (executor)');
+  assert.equal(rows.find(row => row.unit?.id === 'root:executor').label, 'Cart (Executor)');
   assert.equal(rows.find(row => row.kind === 'more').count, 13);
   revealGroup(state, 'cluster:Web', 13); assert.equal(flattenVisibleHierarchy(tree, state).filter(row => row.kind === 'cluster').length, 20);
   assert.ok(flattenVisibleHierarchy(tree, { shown: new Map(), collapsed: new Set(['cluster:Web']) }, 'repo-18').some(row => row.groupId === 'repo-18'));

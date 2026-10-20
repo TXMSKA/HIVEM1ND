@@ -309,7 +309,7 @@ test("collapsed scope groups hide their members and rendered nodes keep paint or
   renderMap(host.ownerDocument, host, map);
   assert.equal(host.querySelector("[data-action='connect']").textContent, "Connect");
   const leadHandle = host.querySelectorAll("[data-handle='connect']").find((item) => item.getAttribute("data-unit-id") === "lead");
-  assert.equal(leadHandle.getAttribute("aria-label"), "Connect lead");
+  assert.equal(leadHandle.getAttribute("aria-label"), "Connect Lead");
   const leadNode = host.querySelectorAll("[data-unit-id='lead']").find((item) => item.getAttribute("data-role"));
   assert.equal(leadNode.querySelector("[data-handle='connect']"), null);
   const centered = centerUnit(map, "lead", { width: 200, height: 100, left: 0, top: 0 });
@@ -347,7 +347,7 @@ test("map circles keep role, status, and the name below the icon", async () => {
   assert.equal(boss.className.includes("is-overseer"), true);
   assert.equal(boss.querySelector("[data-role-icon='crown']") != null, true);
   assert.equal(boss.querySelector("[data-status='idle']").getAttribute("aria-label"), "Inactivo");
-  assert.equal(boss.querySelector("[data-map-label='overseer']").textContent, "overseer");
+  assert.equal(boss.querySelector("[data-map-label='Overseer']").textContent, "Overseer");
   const web = host.querySelector("[data-unit-id='lead']");
   assert.equal(web.getAttribute("data-role"), "overlord");
   assert.equal(web.getAttribute("data-ring"), "lead");
@@ -362,7 +362,7 @@ test("map circles keep role, status, and the name below the icon", async () => {
   assert.equal(host.querySelector("[data-unit-id='lead']").className.includes("is-selected"), true);
   assert.equal(host.querySelector("[data-action='pan']") != null, true);
   const overseerHandle = host.querySelectorAll("[data-handle='connect']").find((item) => item.getAttribute("data-unit-id") === "overseer");
-  assert.equal(overseerHandle.getAttribute("aria-label"), "Conectar overseer");
+  assert.equal(overseerHandle.getAttribute("aria-label"), "Conectar Overseer");
   assert.equal(boss.querySelector("[data-handle='connect']"), null);
   const css = await readFile("gui/app/styles.css", "utf8");
   assert.match(css, /\.map-handle\s*\{[^}]*width:\s*44px/);
@@ -390,7 +390,7 @@ test('saved cluster frames remain fixed while agents move and circles take prior
   assert.deepEqual(personalZones(map), before);
   assert.deepEqual(units.map(item => item.leadId), [null, null]);
   renderMap(host.ownerDocument, host, map);
-  assert.equal(host.querySelector("[data-unit-id='b']").getAttribute('aria-label'), 'Blog (executor-b)');
+  assert.equal(host.querySelector("[data-unit-id='b']").getAttribute('aria-label'), 'Blog (Executor b)');
 });
 
 function unit(id, name, role, kind, scopeName = null, leadId = null) {

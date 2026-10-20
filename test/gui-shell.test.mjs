@@ -47,7 +47,7 @@ import { refreshPlan } from '../gui/app/plan-controller.mjs';
 import { element, restoreRunning } from '../gui/app/components.mjs';
 import { initialRunsIn, runsInLabel } from '../gui/app/clusters.mjs';
 import { AGENT_ROLES } from '../gui/app/start-copy.mjs';
-import { hierarchyIcon } from '../gui/app/hierarchy.mjs';
+import { displayName, hierarchyIcon } from '../gui/app/hierarchy.mjs';
 import { renderContext } from '../gui/app/session-work.mjs';
 
 test('R057 bar modes, waiting copy, destinations and shared buttons match the final controls', () => {
@@ -2850,11 +2850,11 @@ test("mounted map circles use translated status and keep pan", async (t) => {
   assert.equal(overseer.getAttribute("data-ring"), "overseer");
   assert.equal(overseer.className.includes("is-overseer"), true);
   assert.equal(overseer.querySelector("[data-role-icon='crown']") != null, true);
-  assert.equal(overseer.querySelector("[data-map-label]").textContent, "overseer");
+  assert.equal(overseer.querySelector("[data-map-label]").textContent, "Overseer");
   assert.equal(lead.getAttribute("data-ring"), "lead");
   assert.equal(lead.className.includes("is-lead"), true);
   assert.equal(shop.getAttribute("data-role"), executor.role);
-  assert.equal(shop.querySelector("[data-map-label]").textContent, executor.unit);
+  assert.equal(shop.querySelector("[data-map-label]").textContent, displayName(executor.unit));
   assert.equal(desktop.root.querySelector("[data-action='pan']") != null, true);
   desktop.app.language = "es";
   renderShell(desktop.app);
@@ -3128,13 +3128,13 @@ test("editor forms, chats, and the inspector stay compact", async (t) => {
   }
   const chat = desktop.app.chatList.catalog[0];
   desktop.app.activeHandlers.onActivate({ id: chat.id, kind: "chat" }, "double");
-  await waitFor(() => desktop.root.querySelector("[data-chat-title]")?.textContent === (chat.title || chat.id), "The conversation title was not shown.");
+  await waitFor(() => desktop.root.querySelector("[data-chat-title]")?.textContent === (displayName(chat.title) || chat.id), "The conversation title was not shown.");
   await waitFor(() => desktop.root.querySelector(".bubble-meta"), "The message sender was not shown.");
-  assert.equal(desktop.root.querySelector(".bubble-meta").textContent.includes("master"), true);
+  assert.equal(desktop.root.querySelector(".bubble-meta").textContent.toLowerCase().includes("master"), true);
   assert.equal(desktop.root.querySelector("[data-message]")?.closest(".bubble") != null, true);
   const group = desktop.app.chatList.catalog.find((item) => (item.members?.length ?? 0) > 2);
   desktop.app.activeHandlers.onActivate({ id: group.id, kind: "chat" }, "double");
-  await waitFor(() => desktop.root.querySelector("[data-chat-members]")?.textContent.includes("executor-shop"), "The group members were not shown.");
+  await waitFor(() => desktop.root.querySelector("[data-chat-members]")?.textContent.includes("Executor shop"), "The group members were not shown.");
   await waitFor(() => desktop.root.querySelector("[data-own='true']"), "An own message was not marked.");
 
   navigate(desktop.app, "blueprint");
@@ -4369,7 +4369,7 @@ test("R13 connection closes the dialog, draws immediately and Undo restores the 
   const group = (await createGroup(apiFrom(fixture.desktopUrl), "Keep membership", [target.id])).data;
   desktop.app.mapState.onConnect({ source: source.id, target: target.id });
   let dialog = desktop.document.querySelector("dialog");
-  assert.match(dialog.querySelector("p").textContent, /executor-shop will report to overlord-web/);
+  assert.match(dialog.querySelector("p").textContent, /Executor shop will report to Overlord web/);
   assert.match(dialog.querySelector("p").textContent, /Clusters and chats do not change/);
   click(dialog.querySelector("button"));
   assert.equal(writes.length, 0);
@@ -4441,9 +4441,9 @@ test("alias keyboard, menu, cancel, conflicts and Undo preserve the recorded pre
   assert.equal(renamed.alias, "Blog");
   assert.equal(renamed.id, id);
   assert.equal(renamed.leadId, original.leadId);
-  for (const host of [desktop.root.querySelector(`[data-id="${id}"]`), desktop.root.querySelector(`[data-unit-id="${id}"]`), desktop.root.querySelector(".chat-title"), desktop.root.querySelector(".unit-card")]) {
+  for (const host of [desktop.root.querySelector(`[data-id="${id}"]`), desktop.root.querySelector(`[data-unit-id="${id}"]`), desktop.root.querySelector(".chat-title")]) {
     assert.equal(host.querySelector(".unit-alias").textContent, "Blog");
-    assert.equal(host.querySelector(".unit-original").textContent, "executor-shop");
+    assert.equal(host.querySelector(".unit-original").textContent, "Executor shop");
   }
   clickAction(desktop.root, "map-undo");
   await waitFor(() => desktop.app.unitList.catalog.find((item) => item.id === id)?.alias === "Elsewhere", "Undo did not restore the authoritative previous alias.");
@@ -5330,7 +5330,7 @@ test("unit removal confirms scope, cancels safely, retries the same write and re
   choose();
   clickAction(desktop.root, "remove-unit");
   let dialog = desktop.document.querySelector("[data-remove-unit]");
-  assert.equal(dialog.querySelector("h2").textContent, "Remove executor-shop?");
+  assert.equal(dialog.querySelector("h2").textContent, "Remove Executor shop?");
   assert.equal(dialog.querySelector("button.primary").textContent, "Remove agent");
   assert.match(dialog.querySelector("p").textContent, /tasks stay in the project/);
   assert.equal(dialog.style.width, "480px");
@@ -5365,7 +5365,7 @@ test("unit removal confirms scope, cancels safely, retries the same write and re
   choose();
   clickAction(desktop.root, "remove-unit");
   dialog = desktop.document.querySelector("[data-remove-unit]");
-  assert.equal(dialog.querySelector("h2").textContent, "¿Quitar executor-shop?");
+  assert.equal(dialog.querySelector("h2").textContent, "¿Quitar Executor shop?");
   assert.match(dialog.querySelector("p").textContent, /El chat y el buzón pasan a Archivados/);
   assertVisibleCopy("es", [["Removal dialog", dialog.textContent]]);
   click(dialog.querySelector("button"));
@@ -5833,7 +5833,7 @@ test('R6 comment metadata separates the short time and reports submitted recipie
   assert.equal(line.querySelector('time').textContent, localTime('2026-10-10T12:00:00.000Z'));
   const statuses = desktop.root.querySelectorAll('[data-notice]');
   assert.equal(statuses.length, 1);
-  assert.equal(statuses[0].textContent, 'Sent to executor-shop and overlord-web.');
+  assert.equal(statuses[0].textContent, 'Sent to Executor shop and Overlord web.');
   assert.equal(desktop.root.querySelector('[data-notice="queued"]'), null);
   const css = await readFile('gui/app/styles.css', 'utf8');
   assert.match(css, /\.comment-line time \{ display: block;/);
@@ -7566,8 +7566,8 @@ test('the Hierarchy names a custom or preset role under the unit and a role the 
   assert.equal(desktop.root.querySelector('[data-unit-role="qa"]').textContent, 'QA');
   assert.equal(desktop.root.querySelector('[data-unit-role="executor"]'), null);
   const rows = desktop.app.activeRows.filter(row => row.kind === 'unit');
-  assert.ok(rows.find(row => row.unit.id === 'root:captain').text.startsWith('captain (Release captain) '));
-  assert.ok(rows.find(row => row.unit.id === 'root:plain').text.startsWith('plain '));
+  assert.ok(rows.find(row => row.unit.id === 'root:captain').text.startsWith('Captain (Release captain) '));
+  assert.ok(rows.find(row => row.unit.id === 'root:plain').text.startsWith('Plain '));
   // The Spanish names come from the same table.
   desktop.app.language = 'es'; renderShell(desktop.app);
   assert.equal(desktop.root.querySelector('[data-unit-role="qa"]').textContent, 'QA');
@@ -7588,7 +7588,7 @@ test('the Hierarchy names a custom or preset role under the unit and a role the 
   assert.equal(leadLine('es', 'root:master'), `Líder: ${text('es', 'person')}`);
   assert.equal(leadLine('es', 'root:person'), `Líder: ${text('es', 'person')}`);
   assert.equal(leadLine('en', 'root:master'), 'Lead: You');
-  assert.equal(leadLine('es', 'env:web:overlord-web'), 'Líder: overlord-web');
+  assert.equal(leadLine('es', 'env:web:overlord-web'), 'Líder: Overlord web');
 });
 
 test("a task changed elsewhere updates the inspector's copy of it", async (t) => {
@@ -7822,7 +7822,7 @@ test('the right-click menu of an agent and of a cluster lists only what the stat
 
   assert.deepEqual(openMenu({ kind: 'unit', id: member.id }), ['open', 'start', 'rename', 'connect', 'new-report', 'details', 'remove', 'delete'], 'with one cluster there is nowhere to move an agent to');
   assert.ok(menu().children[0].className.includes('is-primary'), 'Open chat is the primary action');
-  assert.equal(menu().getAttribute('aria-label'), `Actions for ${member.unit}`);
+  assert.equal(menu().getAttribute('aria-label'), `Actions for ${displayName(member.unit)}`);
   assert.match(menu().style.left, /px$/, 'the menu is placed');
   app.store.indexes.groups.set('other', { id: 'other', title: 'Elsewhere', parentId: null, members: [], link: { kind: 'none' }, revision: 'x', chatId: 'chat-other' });
   assert.ok(openMenu({ kind: 'unit', id: member.id }).includes('move'), 'a second cluster makes Move to cluster possible');

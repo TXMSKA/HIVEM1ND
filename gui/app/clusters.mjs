@@ -1,5 +1,5 @@
 import { element, icon, labelDialog, progressMark } from './components.mjs';
-import { pathFolder } from './hierarchy.mjs';
+import { displayName as shownName, pathFolder } from './hierarchy.mjs';
 import { AGENT_ROLES, ROLE_DESCRIPTION_MAX, ROLE_NAME_MAX, roleHint, roleLabel, startText } from './start-copy.mjs';
 
 export function connectedChoices(clients = []) {
@@ -253,12 +253,12 @@ export function renderAgentForm(document, model, actions) {
   const t = (key, values) => startText(model.language, key, values);
   const overseer = model.kind === 'overseer';
   const root = element(document, 'section', { class: overseer ? 'overseer-view' : 'new-agent-view' },
-    element(document, 'h2', { text: overseer ? t('createOverseer') : model.clusterChoices?.length > 1 ? t('newAgent') : t('newAgentIn', { name: model.cluster.title }) }));
+    element(document, 'h2', { text: overseer ? t('createOverseer') : model.clusterChoices?.length > 1 ? t('newAgent') : t('newAgentIn', { name: shownName(model.cluster.title) }) }));
   // Created from the Map with no cluster under it, the agent's cluster is chosen here; the lead it reports to is named.
   if (!overseer && model.clusterChoices?.length > 1) {
     const select = element(document, 'select', { name: 'clusterId', 'data-start-field': 'clusterId', onchange: () => actions.onCluster?.(select.value) });
     for (const group of model.clusterChoices) {
-      const option = element(document, 'option', { value: group.id, text: group.title });
+      const option = element(document, 'option', { value: group.id, text: shownName(group.title) });
       option.value = group.id;
       select.append(option);
     }
@@ -286,7 +286,7 @@ export function renderAgentForm(document, model, actions) {
   if (none && actions.onConnect) root.append(button(document, t('connectAgent'), 'connect-agent', actions.onConnect));
   if (overseer) root.append(tick(document, t('fresh'), model.fresh, actions.onFresh, { 'data-start-fresh': 'true' }),
     element(document, 'p', { class: 'start-hint', text: t('freshHint') }));
-  else root.append(element(document, 'p', { class: 'start-hint', text: t(model.cluster.link.kind === 'repository' ? 'agentScope' : model.cluster.link.kind === 'folder' ? 'folderScope' : 'unlinkedScope', { name: model.cluster.title }) }));
+  else root.append(element(document, 'p', { class: 'start-hint', text: t(model.cluster.link.kind === 'repository' ? 'agentScope' : model.cluster.link.kind === 'folder' ? 'folderScope' : 'unlinkedScope', { name: shownName(model.cluster.title) }) }));
   const create = button(document, t('create'), 'create-agent', actions.onCreate, true);
   create.disabled = !validRunsIn(model.choice, model.clients);
   root.append(element(document, 'footer', { class: 'dialog-actions' }, button(document, t(overseer ? 'later' : 'cancel'), 'cancel-agent', actions.onCancel), create));

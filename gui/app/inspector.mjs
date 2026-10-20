@@ -2,7 +2,7 @@ import { canAccept, canSendBack } from "./actions.mjs";
 import { clientLabel, clusterLead } from './clusters.mjs';
 import { element, icon, labeledField, pathIcon, progressMark } from "./components.mjs";
 import { formatWhen } from "./i18n.mjs";
-import { readableIdentity, unitDisplayName } from './hierarchy.mjs';
+import { displayName, readableIdentity, unitDisplayName } from './hierarchy.mjs';
 import { roleLabel, startText } from './start-copy.mjs';
 import { addText } from './add-view.mjs';
 
@@ -32,7 +32,7 @@ export function renderCluster(document, model, actions = {}) {
   const add = action('newAgent', 'new-agent', actions.onNewAgent, 'executor'); add.replaceChildren(icon(document, 'plus'));
   const more = action('moreMenu', 'cluster-more', actions.onMore, 'settings'); more.replaceChildren(pathIcon(document, 'M5 12h.1M12 12h.1M19 12h.1'));
   root.append(element(document, 'header', { class: 'cluster-heading' }, element(document, 'span', { class: 'cluster-avatar', 'aria-hidden': 'true' }, icon(document, 'folder')),
-    element(document, 'div', {}, element(document, 'h2', { text: cluster.title }), element(document, 'p', { text: t(kind === 'repository' ? 'repoCluster' : kind === 'folder' ? 'folder' : 'unlinkedCluster') })),
+    element(document, 'div', {}, element(document, 'h2', { text: displayName(cluster.title) }), element(document, 'p', { text: t(kind === 'repository' ? 'repoCluster' : kind === 'folder' ? 'folder' : 'unlinkedCluster') })),
     add, more));
   const facts = element(document, 'section', { class: 'cluster-git', 'data-cluster-git': cluster.id });
   if (model.git) {
