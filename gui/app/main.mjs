@@ -5883,11 +5883,14 @@ function placeBefore(anchor, node) {
   return true;
 }
 
+const SLOW_NOTICE_S = 5;
+
 function paintActivity(app, shell) {
   const here = noteScope(app);
   const scoped = [...(app.activity?.values() ?? [])].filter((record) => (record.scope ?? here) === here);
   const records = activityNotices(scoped);
-  const pending = records.filter((record) => record.phase === "pending" && !quietActivity(record.key, scoped));
+  // A request is only "taking longer than usual" once it really is: before SLOW_NOTICE_S the button's own loader says it is working.
+  const pending = records.filter((record) => record.phase === "pending" && !quietActivity(record.key, scoped) && (Number(record.elapsed) || 0) >= (app.slowNoticeAfterS ?? SLOW_NOTICE_S));
   const failed = records.filter((record) => record.phase === "error");
   if (!pending.length && !failed.length) return;
   const document = app.root.ownerDocument;

@@ -5051,6 +5051,8 @@ async function bootApp(url, width, urls, onFetch) {
       return fetch(input, init);
     },
   });
+  // These tests drive slow requests with mocked timers, so the notice shows at once; its five second wait has its own test.
+  app.slowNoticeAfterS = 0;
   if (parsed.hash) {
     await waitFor(() => app.bootSettled && !app.bootReading, "The application did not finish its initial read.");
   }
@@ -8071,4 +8073,18 @@ test('the agent menu offers to remove the agent and asks before removing it', as
   assert.ok(dialog, 'removal asks for confirmation');
   assert.equal(dialog.querySelector('button.primary').textContent, 'Remove agent');
   click(dialog.querySelector('button'));
+});
+
+test('a request is called slow only after five seconds; before that the button loader is enough', async t => {
+  const desktop = await openedBoardDesktop(t);
+  desktop.app.slowNoticeAfterS = undefined;
+  desktop.app.mode = 'map';
+  desktop.app.editors.current = null;
+  if (!desktop.app.activity) desktop.app.activity = new Map();
+  desktop.app.activity.set('older:shop', { key: 'older:shop', phase: 'pending', scope: 'unit', label: 'Loading earlier messages', elapsed: 4 });
+  renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector('.slow-notice'), null, 'four seconds is not slow');
+  desktop.app.activity.get('older:shop').elapsed = 5;
+  renderShell(desktop.app);
+  assert.ok(desktop.root.querySelector('.slow-notice'), 'five seconds is');
 });
