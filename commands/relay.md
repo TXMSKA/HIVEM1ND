@@ -43,7 +43,7 @@ On a mind whose `user/VERSION` is 3 or later, the Relay tools and the Relay CLI 
 
 Each step stops at its first failure, which the report gives in a Blocked block.
 
-1. Git. The exit itself commits and pushes nothing: ending a session, reporting, compacting or closing gives no Git permission. Only an explicit instruction in force, as steps 1 and 2 of the Exit and Git of rules.md define it, leads to a commit or a push; otherwise the repository files, the index and the branches are left as they are.
+1. Git. The exit itself commits and pushes nothing: `/relay out` alone records the handoff and releases claims, and ending a session, reporting, compacting or closing gives no Git permission. A commit or a push needs a separate explicit instruction in force, as steps 1 and 2 of the Exit and Git of rules.md define it; without one, the repository files, the index and the branches are left as they are.
 2. A `User decisions` note that could not be sent during the session is sent now; one that still fails is named in the report with its text.
 3. Write the state file: `state: out`, the fresh Git values of each repo of the scope, and the continuity context of files.md, with the free text of the argument. A session that cannot write the file puts the context in its report.
 4. Append the log entry.
