@@ -628,21 +628,22 @@ test('an idle hour writes no pack and a beat writes only its own metadata', asyn
   assert.equal(await readHead(origin, fixture.machine), null);
 });
 
-test('publishing many staged changes compresses each object once, not once per change', async (t) => {
+test('publishing many staged changes compresses nothing: a staged object is already in the form a pack carries', async (t) => {
   const { sync, origin, clock, io, pulse } = await pulseWorld(t);
   const ids = [];
   for (let index = 0; index < 150; index += 1) ids.push((await stageNote(sync, `note-${index}.txt`, stamp(clock.now())))[0].id);
   const zlib = (await import('node:zlib')).default;
   const { syncBuiltinESMExports } = await import('node:module');
-  const original = zlib.brotliCompressSync;
+  const original = { sync: zlib.brotliCompressSync, async: zlib.brotliCompress };
   let compressions = 0;
-  zlib.brotliCompressSync = function (...args) { compressions += 1; return original.apply(this, args); };
+  zlib.brotliCompressSync = function (...args) { compressions += 1; return original.sync.apply(this, args); };
+  zlib.brotliCompress = function (...args) { compressions += 1; return original.async.apply(this, args); };
   syncBuiltinESMExports();
-  t.after(() => { zlib.brotliCompressSync = original; syncBuiltinESMExports(); });
+  t.after(() => { zlib.brotliCompressSync = original.sync; zlib.brotliCompress = original.async; syncBuiltinESMExports(); });
   await pulse.changed(ids);
   await clock.advance(2000);
   assert.equal(io.pack, 1);
   assert.equal((await publishedPacks(origin)).length, 1);
-  assert.ok(compressions <= 160, `objects were compressed ${compressions} times for 150 changes`);
+  assert.equal(compressions, 0, `objects were compressed ${compressions} times while publishing 150 changes`);
   assert.equal((await listStaged(sync)).length, 0);
 });

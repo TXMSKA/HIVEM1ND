@@ -230,12 +230,18 @@ export async function stageBaselines(sync, at = timestamp(sync.now())) {
 }
 
 export async function readObject(sync, hash) {
+  return (await readStagedObject(sync, hash)).raw;
+}
+
+// A staged object is kept compressed in the form a pack carries, so a caller that builds a pack takes both the bytes
+// and their compressed form and compresses nothing again.
+export async function readStagedObject(sync, hash) {
   if (!/^[0-9a-f]{64}$/.test(hash ?? '')) throw new CoreError(422, 'invalid_pack', 'The object hash is not valid.');
-  const bytes = await readBytes(sync.store, objectPath(sync, hash));
-  if (!bytes) throw new CoreError(404, 'not_found', 'The staged object does not exist.');
-  const raw = decompressObject(bytes, 16000000);
+  const compressed = await readBytes(sync.store, objectPath(sync, hash));
+  if (!compressed) throw new CoreError(404, 'not_found', 'The staged object does not exist.');
+  const raw = decompressObject(compressed, 16000000);
   if (hashBytes(raw) !== hash) throw new CoreError(422, 'corrupt_resource', 'The staged object does not match its hash.');
-  return raw;
+  return { raw, compressed };
 }
 
 export async function ackPublished(sync, ids) {

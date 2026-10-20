@@ -4,7 +4,12 @@ import { readBytes } from '../service/store.mjs';
 import { chargeMetadata, claimLimitNotice, limitsFor, reservePublication, retryAtFor, SYNC_BYTES_MAX, MESSAGE_MAX } from './limits.mjs';
 import { countLogicalMessages, decodePack, encodePack, MAX_AGGREGATE_BYTES, MAX_INDEX_ITEMS, packFileName, resolveDependencies, validateHead } from './pack.mjs';
 import { listMachineNames, prepareServiceBeat, publishBeat, publishPack, readHead, readOriginPack, writeDurable } from './origin.mjs';
-import { ackPublished, clearSyncFailure, listStaged, readObject, recordSyncFailure } from './store.mjs';
+import { ackPublished, clearSyncFailure, listStaged, readStagedObject, recordSyncFailure } from './store.mjs';
+
+// A pack of a large first publication takes the event loop for a while: after this many milliseconds of work the pulse
+// lets the service answer the requests that are waiting before it goes on.
+const WORK_SLICE_MS = 20;
+const breathe = () => new Promise((resolve) => setImmediate(resolve));
 
 export function nextDue(now, first, last, limits) {
   if (first === null) return null;
@@ -28,6 +33,7 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
   let holdUntil = null;
   let closed = false;
   let scheduleToken = 0;
+  let finishedJournal = null;
   const skipped = new Set();
 
   function clearTimer() {
@@ -73,26 +79,41 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
     holdUntil = null;
     await loadSkipped();
     const recovered = await finishJournal();
-    const batch = pending;
+    const batch = new Set(pending);
     pending = [];
-    const staged = (await listStaged(sync)).filter((change) => batch.includes(change.id) && !skipped.has(change.id));
+    const staged = (await listStaged(sync)).filter((change) => batch.has(change.id) && !skipped.has(change.id));
     staged.sort((left, right) => left.at.localeCompare(right.at) || left.id.localeCompare(right.id));
     if (staged.length === 0) {
       if (pending.length === 0) { first = null; last = null; }
       return { published: recovered.published, packs: recovered.published ? 1 : 0, ids: recovered.ids, issues: [] };
     }
+    // The objects of a group are read when the group is looked at, not all at once: a first publication of a large M1ND
+    // stages hundreds of megabytes, of which one pack takes at most 64 MB. A staged object is already compressed on disk
+    // in the form a pack carries, so it is kept as it is and never compressed again.
     const objects = new Map();
-    for (const change of staged) {
-      if (change.operation === 'put') objects.set(change.hash, await readObject(sync, change.hash));
-    }
+    const compressed = new Map();
+    const wanted = new Set();
+    for (const change of staged) if (change.operation === 'put') wanted.add(change.hash);
+    let sliceStart = performance.now();
+    const load = async (group) => {
+      for (const change of group) {
+        if (change.operation !== 'put' || objects.has(change.hash)) continue;
+        const stored = await readStagedObject(sync, change.hash);
+        objects.set(change.hash, stored.raw);
+        compressed.set(change.hash, stored.compressed);
+      }
+      if (performance.now() - sliceStart >= WORK_SLICE_MS) {
+        await breathe();
+        sliceStart = performance.now();
+      }
+    };
     const limits = await limitsFor(ledger, 'publication');
     const remainingMessages = MESSAGE_MAX - limits.messages.used;
     const remainingBytes = SYNC_BYTES_MAX - limits.syncBytes.used;
     const head = await machineHead();
     const sequence = await nextPreparedSequence(head);
-    const committed = await committedObjects(head, objects);
+    const committed = await committedObjects(head, wanted);
     const groups = groupChanges(staged);
-    const compressed = new Map();
     const chosen = [];
     const issues = [];
     let deferredIndex = groups.length;
@@ -106,6 +127,7 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
     const chosenHashes = new Set();
     for (let index = 0; index < groups.length; index += 1) {
       const group = groups[index];
+      await load(group);
       const count = logical(group, objects);
       let alone;
       try {
@@ -140,7 +162,10 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
     const deferred = groups.slice(deferredIndex).filter((group) => !issues.includes(group));
     if (chosen.length === 0) {
       pending = [...deferred.flat().map((change) => change.id), ...pending];
-      if (deferred.length > 0) holdUntil = await holdFor(deferred[0], objects, sequence, head, committed);
+      if (deferred.length > 0) {
+        await load(deferred[0]);
+        holdUntil = await holdFor(deferred[0], objects, sequence, head, committed, compressed);
+      }
       if (pending.length === 0) { first = null; last = null; }
       else if (first === null) first = now();
       return { published: recovered.published, packs: recovered.published ? 1 : 0, ids: recovered.ids, issues: issues.flat().map((change) => change.id) };
@@ -161,6 +186,7 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
     }
     const ids = chosen.flat().map((change) => change.id);
     await ackPublished(sync, ids);
+    finishedJournal = packed.hash;
     await clearSyncFailure(sync);
     if (deferred.length > 0) pending = [...deferred.flat().map((change) => change.id), ...pending];
     if (pending.length === 0) {
@@ -169,7 +195,8 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
     } else if (deferred.length > 0) {
       if (first === null) first = now();
       last = now();
-      holdUntil = await holdFor(deferred[0], objects, sequence, head, committed);
+      await load(deferred[0]);
+      holdUntil = await holdFor(deferred[0], objects, sequence, head, committed, compressed);
     } else {
       first = now();
       last = now();
@@ -224,6 +251,7 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
     return readHead(origin, origin.machine);
   }
 
+  // `objects` is the set of hashes the staged changes carry; only their names are needed here.
   async function committedObjects(head, objects) {
     const committed = new Map();
     if (objects.size === 0) return committed;
@@ -293,6 +321,9 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
   async function finishJournal() {
     const journal = await readPublication();
     if (!journal?.sequence || !journal.packHash) return { ids: [], published: false };
+    // A committed pack whose changes were acknowledged stays the journal until the next publication: reading and decoding
+    // it again before every flush cost a 50 MB pack each time.
+    if (journal.phase === 'committed' && finishedJournal === journal.packHash) return { ids: [], published: false };
     const packed = await readOriginPack(origin, origin.machine, journal.sequence);
     if (!packed || hashBytes(packed) !== journal.packHash) return { ids: [], published: false };
     let published = false;
@@ -305,15 +336,16 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
     const ids = decoded.changes.map((change) => change.id).filter((id) => live.has(id));
     if (ids.length > 0) await ackPublished(sync, ids);
     pending = pending.filter((id) => !ids.includes(id));
+    if (journal.phase === 'committed' || published) finishedJournal = journal.packHash;
     return { ids, published };
   }
 
-  async function holdFor(group, objects, sequence, head, committed) {
+  async function holdFor(group, objects, sequence, head, committed, compressed) {
     if (!group) return now() + 60000;
     const count = logical(group, objects);
     let bytes = 1;
     try {
-      bytes = packFor([group], sequence, head, objects, committed).bytes;
+      bytes = packFor([group], sequence, head, objects, committed, compressed).bytes;
     } catch {
       bytes = 1;
     }
