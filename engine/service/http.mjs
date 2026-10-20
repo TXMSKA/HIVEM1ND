@@ -455,6 +455,7 @@ export async function createHttpServer(options) {
   const sockets = new Set();
   const requests = new Set();
   let closing = false;
+  let viewServed = false;
   const server = createServer({ maxHeaderSize: 8192 }, (req, res) => acceptRequest(req, res));
   homeState.serve = (req, res) => acceptRequest(req, res);
 
@@ -667,6 +668,11 @@ export async function createHttpServer(options) {
       });
     }
     respond(res, outcome.status ?? 200, successEnvelope(outcome, { requestId, readAt, eventCursor: readCursor }));
+    // What a service puts off until it has answered its first view (the first pass over the files, publishing) starts here.
+    if (route.handler === 'view' && !viewServed) {
+      viewServed = true;
+      setImmediate(() => { try { options.afterFirstView?.(); } catch { /* the deferred work reports its own failures */ } });
+    }
   }
 
   server.on('connection', (socket) => {

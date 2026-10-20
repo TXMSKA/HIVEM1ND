@@ -878,6 +878,9 @@ test('library routes reject exact schema violations and foreign writes then repl
   for (const route of ['/library/folders?kind=void&unknown=true', '/void/texts?unknown=true', '/blueprint/boards?unknown=true']) assert.equal((await call(port, 'GET', `/api/v1${route}`, { token })).status, 400);
   assert.equal((await call(port, 'GET', '/api/v1/void/texts?openComments=yes', { token })).status, 422);
   const key = randomUUID(), body = { confirmed: true, ...revisions };
+  // The crash is the only thing that touches the store until the retry: a pass of the file watcher that read in between would
+  // recover the half-applied deletion first, and the retry would find the editor already gone.
+  await core.runtime.unwatchProject();
   fixture.store.fault = { afterRenames: 2 };
   assert.equal((await call(port, 'DELETE', `/api/v1/editors/${editor.id}`, { token, body, headers: { 'idempotency-key': key } })).status, 500);
   const recovered = await call(port, 'DELETE', `/api/v1/editors/${editor.id}`, { token, body, headers: { 'idempotency-key': key } });
