@@ -213,6 +213,13 @@ function libraryIcon(document, name) {
   return pathIcon(document, paths[name]);
 }
 
+// A resource left with nothing unsaved is dropped, with its images, when another one opens; it loads again when reopened.
+function keepsDraft(editor) {
+  return Boolean(editor.dirty || editor.boardDraft || editor.boardGesture || editor.boardSaving || editor.nodeDraft || editor.commentText
+    || editor.draftText || editor.textDrafts?.size || editor.titleDraft !== undefined || editor.conflict || editor.conflictCopies?.length
+    || editor.historyPending || editor.voidSaver?.dirty || editor.saveState === "saving" || editor.saveState === "not-saved");
+}
+
 export async function openEditor(api, editors, summary) {
   const ticket = editors.openTicket + 1;
   editors.openTicket = ticket;
@@ -261,6 +268,12 @@ export async function openEditor(api, editors, summary) {
   const previousAssets = saved?.assets;
   next.assets = new Map();
   next.assetIssues = [];
+  const previous = editors.current;
+  if (previous && previous !== next && previous.resourceId !== summary.id && !keepsDraft(previous)) {
+    releaseAssets(previous);
+    previous.voidSaver?.dispose();
+    editors.drafts.delete(previous.resourceId);
+  }
   editors.drafts.set(summary.id, next);
   editors.current = next;
   editors.error = null;

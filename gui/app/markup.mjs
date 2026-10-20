@@ -30,6 +30,20 @@ export function tokenizeMarkup(source) {
     if (depth > 32) { literal(start, end); return; }
     let at = start, run = start;
     const flush = () => { literal(run, at); };
+    // Every "[" before the same "]" shares that "]" and the "(href)" after it, so the range is read once,
+    // however many brackets stay open. The result matches /^(!?)\[([^\]\n]*)\]\(([^()\s]+)\)/ at each position.
+    let stop = -1, target = null;
+    const linkAfter = (open) => {
+      if (open <= stop) return target;
+      stop = open; target = null;
+      while (stop < end && text[stop] !== "]" && text[stop] !== "\n") stop += 1;
+      if (stop + 1 < end && text[stop] === "]" && text[stop + 1] === "(") {
+        let finish = stop + 2;
+        while (finish < end && !/[()\s]/.test(text[finish])) finish += 1;
+        if (finish > stop + 2 && finish < end && text[finish] === ")") target = { close: stop, href: text.slice(stop + 2, finish), end: finish + 1 };
+      }
+      return target;
+    };
     while (at < end) {
       const rest = text.slice(at, end);
       if (/^\\[\\`*_~[\]()>#|!]/.test(rest)) {
@@ -40,13 +54,14 @@ export function tokenizeMarkup(source) {
         flush(); const tag = legacy[1]; syntax(at, at + tag.length, tag[1] === "/" ? "close" : "open", tag.includes("b") ? "b" : "i");
         at += tag.length; run = at; continue;
       }
-      const link = /^(!?)\[([^\]\n]*)\]\(([^()\s]+)\)/.exec(rest);
-      if (link && (link[1] ? assetIdentity(link[3]) : validLink(link[3]))) {
-        flush(); const content = at + link[1].length + 1, close = content + link[2].length;
-        syntax(at, content, "open", link[1] ? "span" : "a", link[1] ? { image: link[3], alt: link[2] } : { href: link[3] });
+      const image = text[at] === "!" && at + 1 < end && text[at + 1] === "[";
+      const link = image || text[at] === "[" ? linkAfter(at + (image ? 2 : 1)) : null;
+      if (link && (image ? link.asset ??= Boolean(assetIdentity(link.href)) : link.web ??= validLink(link.href))) {
+        flush(); const content = at + (image ? 2 : 1), close = link.close;
+        syntax(at, content, "open", image ? "span" : "a", image ? { image: link.href, alt: text.slice(content, close) } : { href: link.href });
         inline(content, close, depth + 1);
-        syntax(close, at + link[0].length, "close", link[1] ? "span" : "a");
-        at += link[0].length; run = at; continue;
+        syntax(close, link.end, "close", image ? "span" : "a");
+        at = link.end; run = at; continue;
       }
       const mark = ["**", "__", "~~", "`", "*", "_"].find((item) => rest.startsWith(item));
       if (mark && !(mark.includes("_") && /[\p{L}\p{N}]/u.test(text[at - 1] ?? ""))) {

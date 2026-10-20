@@ -710,6 +710,19 @@ test("Markdown, legacy, code, tables and literal HTML share reversible UTF-16 an
   assert.equal(hasTag(renderMarkup(fakeDocument(), "[site](https://example.test)"), "A"), true);
 });
 
+test("link recognition reads many open brackets in one pass and keeps the links beside them", () => {
+  const adversarial = ["[".repeat(100000), "![".repeat(50000), `${"[".repeat(50000)}](${"x".repeat(50000)}`, `${"[".repeat(50000)}](${"x".repeat(50000)})`, "a [".repeat(33000)];
+  const started = performance.now();
+  for (const source of adversarial) assert.equal(plainText(source), source);
+  const elapsed = performance.now() - started;
+  assert.ok(elapsed < 1000, `Open brackets took ${Math.round(elapsed)} ms.`);
+  const source = "[[ [x](https://a.test) [y](nope) ![i](assets/11111111-1111-4111-8111-111111111111.png)";
+  assert.equal(plainText(source), "[ [x [y](nope) i");
+  const opened = tokenizeMarkup(source).filter((token) => token.action === "open" && token.tag !== "p");
+  assert.deepEqual(opened.map((token) => [token.tag, token.href ?? token.image, token.sourceStart, token.sourceEnd]),
+    [["a", "https://a.test", 0, 1], ["span", "assets/11111111-1111-4111-8111-111111111111.png", 33, 35]]);
+});
+
 test("in-place typing preserves unedited markup, empty strings, newlines and surrogate pairs", () => {
   const source = "# Title\r\n\r\n<b>A😀</b> **bold**\r\n";
   const visible = plainText(source), start = visible.indexOf("😀");
@@ -1107,6 +1120,37 @@ test("reopening a board reloads referenced images and draws clipped styled nodes
   };
   assert.equal(hitBoardNode(board, { x: 12, y: 12 }).nodeId, "caption");
   assert.equal(hitBoardNode(board, { x: 32, y: 32 }).nodeId, "trail");
+});
+
+test("switching resources drops a clean one with its images and keeps an unsaved draft", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const api = apiFrom(fixture.desktopUrl);
+  const revoked = [];
+  let blobs = 0;
+  api.createObjectURL = () => `blob:asset-${++blobs}`;
+  api.revokeObjectURL = (url) => revoked.push(url);
+  const editors = createEditors();
+  const first = await createResource(api, "blueprint", { project: "shop", document: fullBoard() });
+  const second = await createResource(api, "blueprint", { project: "shop", document: { ...fullBoard(), id: "second-board", title: "Second" } });
+  await openEditor(api, editors, { id: first.data.id, kind: "blueprint" });
+  const asset = await uploadAsset(api, editors.current, { type: "image/png", arrayBuffer: async () => Buffer.from(PNG, "base64") });
+  await addNode(api, editors.current, { screenId: "empty", parentId: "root", node: { id: "photo", name: "Photo", t: "image", place: { x: 4, y: 4 }, w: 16, h: 16, src: asset.src } });
+  await openEditor(api, editors, { id: first.data.id, kind: "blueprint" });
+  const clean = editors.current.assets.get(asset.src).url;
+  await openEditor(api, editors, { id: second.data.id, kind: "blueprint" });
+  assert.equal(editors.drafts.has(first.data.id), false);
+  assert.ok(revoked.includes(clean));
+
+  await openEditor(api, editors, { id: first.data.id, kind: "blueprint" });
+  const unsaved = editors.current;
+  const kept = unsaved.assets.get(asset.src).url;
+  unsaved.boardDraft = structuredClone(unsaved.authoritative.document);
+  unsaved.dirty = true;
+  await openEditor(api, editors, { id: second.data.id, kind: "blueprint" });
+  assert.equal(editors.drafts.get(first.data.id), unsaved);
+  assert.equal(revoked.includes(kept), false);
+  assert.equal((await openEditor(api, editors, { id: first.data.id, kind: "blueprint" })).dirty, true);
 });
 
 test("comment creation accepts only a complete anchor for that editor", async (t) => {

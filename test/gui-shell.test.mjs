@@ -2681,10 +2681,12 @@ test("Find controls navigate source matches replace one or all texts and Undo th
   assert.equal(app.editors.current.page, 'Two');
   click(root.querySelector('[data-action="replace-all"]'));
   await waitFor(() => !app.voidFind.pending && !app.voidFind.busy && app.voidFind.matches.length === 0, 'Replace all did not commit.');
-  assert.equal(editor.authoritative.document.pages[0].en, '**dog** dog 😀');
+  // The first text was left clean, so switching dropped its copy; the saved text is read back.
+  const firstText = async () => (await request(app.api, 'GET', '/void/texts/:resourceId', { params: { resourceId: editor.resourceId } })).data.document.pages[0].en;
+  assert.equal(await firstText(), '**dog** dog 😀');
   click(root.querySelector('[data-action="undo-replace"]'));
   await waitFor(() => !app.voidFind.pending && !app.voidFind.busy && app.voidFind.matches.length === 4, 'Undo did not restore the whole replacement batch.');
-  assert.equal(editor.authoritative.document.pages[0].en, '**dog** cat 😀');
+  assert.equal(await firstText(), '**dog** cat 😀');
   click(root.querySelector('[data-action="find-regularExpression"]'));
   typeInput(root.querySelector('[data-find-field="query"]'), '[', 1, 1);
   await waitFor(() => root.querySelector('[data-find-error="invalid_pattern"]'), 'Invalid regex did not show an error.');
