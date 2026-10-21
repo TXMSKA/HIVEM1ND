@@ -3820,13 +3820,25 @@ function confirmRemoveAddition(app, item) {
 
 function unconfirmedStartOperation(error) { return !error.status || error.status >= 500 ? error.operation ?? null : null; }
 
+// The four reports are heavy to build. Calls that arrive while they load are folded into one more load after it, instead of
+// each starting its own set: a deletion and the change it announces used to read everything twice at the same time.
 function loadStartReports(app) {
   if (app.layout === 'phone' || app.disposed) return Promise.resolve();
-  const machine = startMachine(app), ticket = (app.startReportTicket ?? 0) + 1;
-  app.startReportTicket = ticket;
-  const pending = readStartReports(app, machine, ticket);
-  app.startReportPending = pending;
-  return pending;
+  if (app.startReportFlight) { app.startReportFlight.again = true; return app.startReportFlight.promise; }
+  const flight = { again: false, promise: null };
+  flight.promise = (async () => {
+    try {
+      do {
+        flight.again = false;
+        const machine = startMachine(app), ticket = (app.startReportTicket ?? 0) + 1;
+        app.startReportTicket = ticket;
+        await readStartReports(app, machine, ticket);
+      } while (flight.again && !app.disposed);
+    } finally { if (app.startReportFlight === flight) app.startReportFlight = null; }
+  })();
+  app.startReportFlight = flight;
+  app.startReportPending = flight.promise;
+  return flight.promise;
 }
 
 async function readStartReports(app, machine, ticket) {
@@ -3837,8 +3849,7 @@ async function readStartReports(app, machine, ticket) {
       collectPages(app.api, '/clusters', { limit: 200 }),
       app.store.capabilities.includes('settings.write') ? getAdditions(app.api, machine) : Promise.resolve({ data: { items: [] } }),
     ]);
-    if (app.disposed) return;
-    if (ticket !== app.startReportTicket) return app.startReportPending;
+    if (app.disposed || ticket !== app.startReportTicket) return;
     app.startProjects = projects.data; app.startAgents = agents.data; app.startPermissionsStale = true;
     app.store.additions.report = additions.data;
     app.store.indexes.groups = new Map(clusters.items.map(cluster => [cluster.id, cluster]));
@@ -3846,8 +3857,7 @@ async function readStartReports(app, machine, ticket) {
     if (app.store.selected.groupId && !app.store.indexes.groups.has(app.store.selected.groupId)) app.store.selected.groupId = null;
     renderShell(app);
   } catch (error) {
-    if (app.disposed) return;
-    if (ticket !== app.startReportTicket) return app.startReportPending;
+    if (app.disposed || ticket !== app.startReportTicket) return;
     app.startError = error;
   }
 }
@@ -4086,7 +4096,8 @@ function removeStartLink(app, link, machine) {
     onConfirm: async () => {
       try {
         const result = await startApi.removeClusterLink(app.api, cluster.id, { machine, expectedRevision: cluster.revision }, retained);
-        await loadStartReports(app); await loadSettingsSections(app);
+        // The dialog closes once the service confirms; the reports catch up behind it.
+        loadStartReports(app).then(() => loadSettingsSections(app)).catch(() => {});
         showMapToast(app, startText(app.language, 'removeLink'), async record => {
           await undoChange(app.api, result.data.changeId, record.operation); await loadStartReports(app); await loadSettingsSections(app);
         }, result.data.undoUntil); renderShell(app);
@@ -4129,7 +4140,11 @@ function removeStartCluster(app, cluster) {
     onConfirm: async () => {
       operation ??= createOperation({ method: 'DELETE', path: '/clusters/:clusterId', params: { clusterId: cluster.id }, body: { machine: startMachine(app), confirmed: true, expectedRevision: cluster.revision } });
       const result = await request(app.api, 'DELETE', operation.path, { operation });
-      await loadStartReports(app); app.store.selected.groupId = null;
+      // The dialog closes as soon as the service confirms; the cluster leaves the screen now and the reports catch up behind it.
+      const shown = app.store.indexes.groups.get(cluster.id);
+      if (shown) app.store.indexes.groups.set(cluster.id, { ...shown, deleted: true });
+      if (app.store.selected.groupId === cluster.id) app.store.selected.groupId = null;
+      loadStartReports(app);
       showMapToast(app, displayName(cluster.title), async record => { await undoChange(app.api, result.data.changeId, record.operation); await loadStartReports(app); selectGroup(app, cluster.id); }, result.data.undoUntil);
       renderShell(app);
     } });
@@ -6507,6 +6522,7 @@ const ACTION_COPY = {
   unsupported_media_type: "rejectedRequest",
   uri_too_long: "rejectedRequest",
   invalid_session: "sessionInvalid",
+  stop_unavailable: "stopUnavailable",
   invalid_origin: "actionForbidden",
   loopback_only: "actionForbidden",
   peer_not_allowed: "actionForbidden",
@@ -6835,7 +6851,9 @@ function removeSelectedUnit(app, unit) {
         app.mapState?.selection.delete(unit.id);
         app.store.selected.unitId = null;
         if (app.thread?.chat?.kind === "direct" && app.thread.chat.members.includes(unit.id)) app.thread = null;
-        await refresh();
+        // The dialog closes once the service confirms: the agent leaves the screen now and the lists catch up behind it.
+        for (const shown of [app.unitList?.catalog?.find((item) => item.id === unit.id), app.store.indexes.units.get(unit.id)]) if (shown) shown.removed = true;
+        refresh().then(() => { if (!app.disposed) renderShell(app); }).catch(() => {});
         showMapToast(app, `${unitDisplayName(unit)} · ${removalText(app, "archived")}`, async (record) => {
           await undoChange(app.api, result.data.changeId, record.operation);
           await refresh();

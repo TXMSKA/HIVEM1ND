@@ -5351,8 +5351,9 @@ test("unit removal confirms scope, cancels safely, retries the same write and re
   assert.equal(writes.length, 2);
   assert.equal(writes[0].key, writes[1].key);
   assert.equal(writes[0].body, writes[1].body);
-  assert.equal(desktop.app.unitList.catalog.some((unit) => unit.id === id), false);
   assert.match(desktop.root.querySelector("[data-map-toast]").textContent, /Archived/);
+  // The dialog closes once the service confirms; the lists catch up behind it.
+  await waitFor(() => !desktop.app.unitList.catalog.some((unit) => unit.id === id) && desktop.app.store.indexes.groups.get(group.id)?.members.length === 1, "The lists did not catch up with the removal.");
   assert.deepEqual(desktop.app.store.indexes.groups.get(group.id).members, ["project:shop:executor-shop"]);
   assert.equal((await request(api, "GET", "/units", { query: { archived: "true" } })).data.items[0].id, id);
   const undoKey = desktop.app.mapToast.key;
@@ -5393,7 +5394,7 @@ test("a unit remains visible while stop acknowledgment is pending and Undo does 
   assert.equal((await request(api, "GET", "/units/:unitId", { params: { unitId: id } })).data.removed, false);
   release({ acknowledged: true });
   await waitFor(() => desktop.root.querySelector("[data-action='map-undo']"), "Acknowledged removal did not commit.");
-  assert.equal(desktop.app.unitList.catalog.some((unit) => unit.id === id), false);
+  await waitFor(() => !desktop.app.unitList.catalog.some((unit) => unit.id === id), "The list did not catch up with the removal.");
   clickAction(desktop.root, "map-undo");
   await waitFor(() => desktop.app.unitList.catalog.some((unit) => unit.id === id), "Undo did not restore the stopped unit.");
   assert.equal((await request(api, "GET", "/units/:unitId", { params: { unitId: id } })).data.sessionIds.length, 0);

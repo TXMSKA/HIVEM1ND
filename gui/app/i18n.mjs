@@ -114,6 +114,7 @@ const COPY = {
   highContrast: ["Nocturne", "Nocturne"],
   cancel: ["Cancel", "Cancelar"],
   close: ["Close", "Cerrar"],
+  stopUnavailable: ["Its running session could not be stopped safely. Stop it first, then try again.", "No se pudo detener con seguridad la sesión en ejecución. Detenerla primero y volver a intentar."],
   retry: ["Retry", "Reintentar"],
   showMore: ["Show {count} more", "Mostrar {count} más"],
   statusUnknown: ["Unknown", "Desconocido"],
