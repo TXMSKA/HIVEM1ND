@@ -7988,6 +7988,17 @@ test('the Hierarchy list says it is loading only while it has nothing to show, a
   assert.equal(root.querySelector('[data-collection]').getAttribute('aria-busy'), 'true');
 });
 
+test('a redraw waits while the person scrolls, once, and happens when the scrolling stops', async t => {
+  const { app, root } = await startMenuDesktop(t);
+  const before = root.querySelector('[data-collection]');
+  for (const handler of root.listeners.get('wheel')) handler({ type: 'wheel' });
+  renderShell(app); renderShell(app);
+  assert.equal(root.querySelector('[data-collection]'), before, 'the list is not replaced under a scroll');
+  assert.ok(app.scrollRedraw, 'one redraw waits');
+  await waitFor(() => root.querySelector('[data-collection]') !== before, 'The redraw did not happen once the scrolling stopped.');
+  assert.equal(app.scrollRedraw, null);
+});
+
 test('a button that starts an action shows a loader while it runs, again after a redraw, and is released when it ends', async () => {
   const { document, root } = createTestDocument(1440);
   let finish;

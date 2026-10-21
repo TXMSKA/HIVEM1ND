@@ -315,6 +315,13 @@ export async function mount(root, env = globalThis) {
     showTools(app.voidState);
     renderShell(app);
   };
+  // A wheel, a touch drag or a scroll the shell did not cause itself marks the person as scrolling. A redraw sets the
+  // scroll positions back, which fires scroll events of its own just after it.
+  const scrolling = (event) => {
+    if (document.hidden || (event.type === "scroll" && scrollClock() - (app.paintedAt ?? 0) < 150)) return;
+    app.scrollingUntil = scrollClock() + SCROLL_QUIET_MS;
+  };
+  for (const type of ["wheel", "touchmove", "scroll"]) root.addEventListener?.(type, scrolling, { capture: true, passive: true });
   root.addEventListener?.("pointermove", revealFocusTools);
   root.addEventListener?.("pointerup", revealFocusTools);
   root.addEventListener?.("focusin", revealFocusTools);
@@ -511,8 +518,19 @@ export function navigate(app, mode) {
   renderShell(app);
 }
 
+// Drawing the shell replaces the lists and the conversation, which stops a scroll in progress. While the person scrolls,
+// a redraw waits until the scrolling has been still for a moment, and only one waits.
+const SCROLL_QUIET_MS = 250;
+// Time as the screen lives it, which keeps running when the app's clock is held still.
+const scrollClock = () => globalThis.performance?.now?.() ?? Date.now();
+
 export function renderShell(app) {
   if (app.editors?.current?.boardGesture || app.editors?.current?.textComposing) return;
+  const wait = (app.scrollingUntil ?? 0) - scrollClock();
+  if (wait > 0) {
+    if (!app.scrollRedraw) app.scrollRedraw = setTimeout(() => { app.scrollRedraw = null; if (!app.disposed) renderShell(app); }, wait + 10);
+    return;
+  }
   if (app.voidFind?.open && (app.mode !== 'document' || app.editors.current?.kind !== 'void' || app.editors.current.sourceMode)) {
     clearTimeout(app.voidFind.timer); app.voidFind.finder.cancel(); app.voidFind.generation++;
     app.voidFind.open = false; app.voidFind.pending = false;
@@ -522,6 +540,8 @@ export function renderShell(app) {
     paintShell(app);
   } finally {
     app.rendering = false;
+    // A long redraw still counts from its end, so the scroll positions it sets back are not taken for the person's.
+    app.paintedAt = scrollClock();
   }
 }
 
@@ -804,6 +824,7 @@ export function dispose(app) {
   clearTimeout(app.phoneExpiryTimer);
   clearTimeout(app.phoneLockTimer);
   clearTimeout(app.mapToastTimer);
+  clearTimeout(app.scrollRedraw);
   clearTimeout(app.libraryToastTimer);
   clearTimeout(app.voidFind?.timer);
   app.voidFind?.finder.cancel();
