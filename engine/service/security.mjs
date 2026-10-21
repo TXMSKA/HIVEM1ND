@@ -11,6 +11,7 @@ export const DESKTOP = Object.freeze(['read', 'chat.post', 'chat.manage', 'mailb
 const PHONE = new Set(['read', 'chat.post', 'master.read', 'approval.answer', 'task.accept', 'task.send-back']);
 const SYSTEM_SID = 'S-1-5-18';
 const ACL_TIMEOUT_MS = 8000;
+const ACL_FOLDER_TIMEOUT_MS = 120_000;
 
 export function createAclRunner({ spawnSync: run = spawnSync, env = process.env, platform = process.platform } = {}) {
   let userSid = null;
@@ -27,14 +28,16 @@ export function createAclRunner({ spawnSync: run = spawnSync, env = process.env,
     protect(target) {
       assertLocalTarget(target);
       const sid = this.userSid();
-      const rights = statSync(target).isDirectory() ? '(OI)(CI)F' : 'F';
+      const directory = statSync(target).isDirectory();
+      const rights = directory ? '(OI)(CI)F' : 'F';
       const grant = (value) => `*${value}:${rights}`;
+      // A folder passes its permissions to every file inside it, so it gets more time than a single file.
       runTool(run, tool('icacls.exe'), [
         target,
         '/inheritance:r',
         '/grant:r', grant(SYSTEM_SID),
         '/grant:r', grant(sid),
-      ]);
+      ], directory ? ACL_FOLDER_TIMEOUT_MS : ACL_TIMEOUT_MS);
       return { protected: true, sid };
     },
     check(target) {
@@ -119,9 +122,13 @@ export async function protectBootstrapFiles(directory, file, options = {}) {
     return { protected: true };
   }
   const runner = aclRunnerFrom(options);
-  runner.protect(directory);
+  // Protecting the folder rewrites the permissions of everything inside it, which takes long once it holds many files and
+  // the disk is cold after a restart. A folder already limited to its owner is left as it is.
+  let limited = false;
+  try { runner.check(directory); limited = true; } catch { /* Not limited yet: protect it below. */ }
+  if (!limited) runner.protect(directory);
   runner.protect(file);
-  runner.check(directory);
+  if (!limited) runner.check(directory);
   runner.check(file);
   return { protected: true, sid: runner.userSid() };
 }
@@ -582,13 +589,13 @@ function systemTool(name, env, platform) {
   return path.join(root, 'System32', name);
 }
 
-function runTool(run, command, args) {
+function runTool(run, command, args, timeout = ACL_TIMEOUT_MS) {
   let result;
   try {
     result = run(command, args, {
       shell: false,
       windowsHide: true,
-      timeout: ACL_TIMEOUT_MS,
+      timeout,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     });
