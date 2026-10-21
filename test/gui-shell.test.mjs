@@ -61,7 +61,9 @@ test('R057 bar modes, waiting copy, destinations and shared buttons match the fi
   assert.deepEqual(modes.map(button => button.children.at(-1).textContent), ['Map', 'Blueprint', 'Void']);
   assert.equal(action('waiting'), null);
   assert.ok(action('open-phone'));
-  assert.notEqual(action('open-notifications')?.getAttribute('disabled'), null);
+  // The bell opens Activity, the list of background work.
+  assert.equal(action('open-notifications')?.getAttribute('disabled'), null);
+  assert.equal(action('open-notifications').getAttribute('aria-label'), 'Activity');
   assert.notEqual(action('toggle-inspector').children[0].children[0].getAttribute('d'), 'M8 13V5.5a1.5 1.5 0 0 1 3 0V12M11 11V4a1.5 1.5 0 0 1 3 0v8M14 12V6.5a1.5 1.5 0 0 1 3 0V15c0 4-2.5 6-6 6');
   assert.equal(text('en', 'voidMode'), 'Void');
   assert.equal(text('en', 'waitingOnYouOther', { count: 2 }), '2 waiting on you');
@@ -4322,6 +4324,8 @@ test("personal folders, zones and chats select one group and deletion offers onl
   clickAction(desktop.root, "map-undo");
   await waitFor(() => desktop.app.store.indexes.groups.has(group.id), "Undo did not restore the group.");
   await waitFor(() => desktop.app.activity.get(undoKey)?.phase === "success", "Undo did not finish.");
+  // Undo runs in Activity and selects the cluster again when it is back.
+  await waitFor(() => desktop.root.querySelector("[data-action='cluster-more']") && desktop.app.store.selected.groupId === group.id, "Undo did not select the cluster again.");
   clickAction(desktop.root, "cluster-more");
   click(desktop.document.querySelector("dialog").querySelector("button.primary"));
   await waitFor(() => desktop.root.querySelector("[data-action='map-undo']"), "The second deletion did not offer Undo.");
@@ -5345,9 +5349,10 @@ test("unit removal confirms scope, cancels safely, retries the same write and re
   dialog = desktop.document.querySelector("[data-remove-unit]");
   fixture.control.setFault({ method: "DELETE", path: `/api/v1/units/${id}`, dropAfterCommit: true });
   click(dialog.querySelector("button.primary"));
-  await waitFor(() => dialog.querySelector("[data-dialog-error]"), "The unconfirmed removal did not retain its dialog.");
-  click(dialog.querySelector("button.primary"));
-  await waitFor(() => desktop.document.querySelector("[data-remove-unit]") == null && desktop.root.querySelector("[data-action='map-undo']"), "The replayed removal did not offer Undo.");
+  // The dialog closes at once; the unconfirmed removal fails in Activity, and its Retry replays the same write.
+  await waitFor(() => desktop.document.querySelector("[data-remove-unit]") == null && desktop.root.querySelector("[data-queue-state='failed']"), "The unconfirmed removal did not wait in Activity.");
+  click(desktop.root.querySelector("[data-action='queue-retry']"));
+  await waitFor(() => desktop.root.querySelector("[data-action='map-undo']"), "The replayed removal did not offer Undo.");
   assert.equal(writes.length, 2);
   assert.equal(writes[0].key, writes[1].key);
   assert.equal(writes[0].body, writes[1].body);
@@ -7816,6 +7821,23 @@ async function startMenuDesktop(t) {
   desktop.app.startDialog?.dialog.close();
   return { ...desktop, state, calls };
 }
+
+test('a cluster with a cluster inside it is deleted with it, the inner one first', async t => {
+  const { app, document, state, calls } = await startMenuDesktop(t);
+  const parent = state.cluster;
+  const machine = app.store.settings?.service?.machine ?? app.store.view?.mind?.machine;
+  const inner = (await fetch(`${app.api.location.origin}/api/v1/clusters`, { method: 'POST', headers: { authorization: `Bearer ${app.api.token}`, 'content-type': 'application/json', origin: app.api.location.origin, 'idempotency-key': crypto.randomUUID() },
+    body: JSON.stringify({ title: 'Inner', parentId: parent.id, link: { kind: 'none' }, machine, confirmed: true }) }).then(response => response.json())).data;
+  await waitFor(() => app.store.indexes.groups.get(inner.id), 'The inner cluster did not load.');
+  app.mapState.onContextMenu({ kind: 'cluster', id: parent.id, x: 10, y: 10 });
+  [...document.querySelector('[data-context-menu]').children].find(child => child.getAttribute('data-action') === 'context-delete').listeners.get('click')[0]();
+  const dialog = [...document.querySelectorAll('.dialog')].at(-1);
+  assert.match(dialog.querySelector('p').textContent, /also deletes the cluster inside it/);
+  dialog.querySelector('.primary').listeners.get('click')[0]();
+  await waitFor(() => app.queue.items.some(item => item.kind === 'delete' && item.state === 'done'), 'The tree deletion did not finish.');
+  const deletes = calls.filter(call => call.method === 'DELETE' && call.path.startsWith('/api/v1/clusters/')).map(call => call.path.split('/').at(-1));
+  assert.deepEqual(deletes, [inner.id, parent.id]);
+});
 
 test('the right-click menu of an agent and of a cluster lists only what the state allows, from the Map and from the Hierarchy, and every entry opens its action', async t => {
   const { root, app, document, state, calls } = await startMenuDesktop(t);

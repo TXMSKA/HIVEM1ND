@@ -93,6 +93,7 @@ import { PLAN_TASK_LIMIT, controlPlan, createPlanController, loadChatPlans, plan
 import { createAddController, openAdd, disposeAdd } from './add-controller.mjs';
 import { addButton, addText } from './add-view.mjs';
 import { getAdditions, removeAddition } from './add-api.mjs';
+import { createQueue } from './queue.mjs';
 
 const DESKTOP_MODES = ["map", "blueprint", "document", "focus"];
 const BAR_MODES = ["map", "blueprint", "document"];
@@ -286,6 +287,14 @@ export async function mount(root, env = globalThis) {
     startStorage: env.storage ?? viewStorage(document),
     recovery: env.recovery ?? ((env.hivem1nd ?? globalThis.hivem1nd)?.recoverService ? (env.hivem1nd ?? globalThis.hivem1nd) : null),
   };
+  // Slow actions run here in the background, one after another; their notices and the bell's list draw from it.
+  app.queue = createQueue({ now: () => api.now(), onChange: () => {
+    // While deletions run, the lists are read once at the end instead of after every change they announce: each read
+    // rebuilt the whole view and made the next deletion wait for it.
+    store.deferViewRefresh = deletionRunning(app);
+    if (app.disposed || app.layout === 'unknown') return;
+    if (app.rendering) queueMicrotask(() => { if (!app.disposed) renderShell(app); }); else renderShell(app);
+  } });
   const view = root.ownerDocument.defaultView;
   view?.addEventListener?.("keydown", (event) => onFocusKey(app, event));
   root.addEventListener("keydown", (event) => {
@@ -558,6 +567,7 @@ function paintShell(app) {
   }
   syncLiveRegions(app);
   paintActivity(app, shell);
+  paintQueue(app, shell);
   paintServiceBanner(app, shell);
   restoreInputFocus(app);
   app.editors?.current?.restoreSelection?.();
@@ -862,7 +872,7 @@ async function onStream(app, event) {
   if (event?.name === "issue.changed") noteIssue(app, dataOf(event));
   if (event?.name === "machine.settings.changed" && dataOf(event).machine === app.settingsState?.machine
     || event?.name === "settings.content.changed" && app.settingsState) loadSettingsSections(app);
-  if (app.layout === 'desktop' && ['cluster.changed', 'machine.settings.changed', 'additions.changed', 'stream.reset'].includes(event?.name)) {
+  if (app.layout === 'desktop' && ['cluster.changed', 'machine.settings.changed', 'additions.changed', 'stream.reset'].includes(event?.name) && !deletionRunning(app)) {
     await loadStartReports(app);
     if (app.settingsState && event?.name === 'additions.changed') await loadSettingsSections(app);
     const cluster = app.store.indexes.groups.get(app.store.selected.groupId);
@@ -881,9 +891,11 @@ async function onStream(app, event) {
   }
   if (event?.name === "stream.reset") await recheckTracked(app);
   if (event?.name === "unit.changed" || event?.name === "view.changed") {
-    if (app.unitList) await reloadList(app.unitList);
-    if (event?.name === "view.changed" && app.waitingList) await reloadList(app.waitingList);
-    if (event?.name === "view.changed" && app.thread?.chat) await loadMessages(app.api, app.thread);
+    if (!deletionRunning(app)) {
+      if (app.unitList) await reloadList(app.unitList);
+      if (event?.name === "view.changed" && app.waitingList) await reloadList(app.waitingList);
+      if (event?.name === "view.changed" && app.thread?.chat) await loadMessages(app.api, app.thread);
+    }
     if (event?.name === "unit.changed" && dataOf(event).unit?.removed) {
       const id = dataOf(event).unit.id;
       if (app.pendingChat?.unitId === id) app.pendingChat = null;
@@ -893,14 +905,14 @@ async function onStream(app, event) {
     }
   }
   if (event?.name === "chat.changed") {
-    if (app.chatList) await reloadList(app.chatList);
+    if (app.chatList && !deletionRunning(app)) await reloadList(app.chatList);
     const changed = dataOf(event).chat;
     if (changed?.id === app.thread?.chat?.id) app.thread.chat = app.store.indexes.chats.get(changed.id) ?? changed;
   }
   if (event?.name === "group.changed") {
     if (app.mapState) app.mapState.selectedGroupId = app.store.selected.groupId;
     if (dataOf(event).group?.deleted && app.thread?.chat?.id === dataOf(event).group.chatId) app.thread = null;
-    if (app.chatList) await reloadList(app.chatList);
+    if (app.chatList && !deletionRunning(app)) await reloadList(app.chatList);
   }
   if (event?.name === "layout.changed" && app.mapState) applyRemoteLayout(app.mapState, event);
   if (event?.name === "session.request.changed") noteSessionRequest(app, dataOf(event));
@@ -1154,10 +1166,14 @@ export function renderBar(app, t, counts) {
     type: "button", class: "icon-button", "data-action": "open-phone",
     "aria-label": t("settingsOpenPhone"), onclick: () => openPhoneSettings(app),
   }, icon(document, "phone"));
+  // The bell lists the background work: what waits, what runs, what failed and what finished.
+  const openJobs = app.queue?.open.length ?? 0;
   const notifications = element(document, "button", {
-    type: "button", class: "icon-button", "data-action": "open-notifications",
-    "aria-label": t("finalNotifications"), title: t("finalNotificationsUnavailable"), disabled: "",
+    type: "button", class: "icon-button queue-bell", "data-action": "open-notifications", "aria-pressed": String(app.queuePanelOpen === true),
+    "aria-label": openJobs ? t("queueOpen", { count: openJobs }) : t("queueTitle"), title: t("queueTitle"),
+    onclick: () => { app.queuePanelOpen = app.queuePanelOpen !== true; renderShell(app); },
   }, icon(document, "bell"));
+  if (openJobs) notifications.append(element(document, "span", { class: "queue-badge", "aria-hidden": "true", text: String(openJobs) }));
   const catalogToggle = element(document, "button", {
     type: "button",
     class: "btn panel-toggle",
@@ -4093,15 +4109,19 @@ function removeStartLink(app, link, machine) {
   let retained = null;
   showDialog(app.root.ownerDocument, { title: startText(app.language, 'removeLink') + ': ' + displayName(link.title),
     body: startText(app.language, 'removeHint'), confirm: startText(app.language, 'removeLink'), cancel: startText(app.language, 'cancel'), retry: startText(app.language, 'retry'),
-    onConfirm: async () => {
-      try {
-        const result = await startApi.removeClusterLink(app.api, cluster.id, { machine, expectedRevision: cluster.revision }, retained);
-        // The dialog closes once the service confirms; the reports catch up behind it.
-        loadStartReports(app).then(() => loadSettingsSections(app)).catch(() => {});
-        showMapToast(app, startText(app.language, 'removeLink'), async record => {
-          await undoChange(app.api, result.data.changeId, record.operation); await loadStartReports(app); await loadSettingsSections(app);
-        }, result.data.undoUntil); renderShell(app);
-      } catch (error) { retained = error.operation ?? retained; throw error; }
+    // The dialog closes at once; removing the link runs in the background, in Activity.
+    onConfirm: () => {
+      app.queue.add({ label: text(app.language, 'jobRemoveLink', { name: displayName(link.title) }), kind: 'unlink',
+        run: async () => {
+          try { return await startApi.removeClusterLink(app.api, cluster.id, { machine, expectedRevision: cluster.revision }, retained); }
+          catch (error) { retained = error.operation ?? retained; throw error; }
+        },
+        onDone: async (result) => {
+          // Undo is offered as soon as the service confirms; the reports catch up behind it.
+          showMapToast(app, startText(app.language, 'removeLink'), () => { enqueueUndo(app, displayName(link.title), [result.data.changeId], () => loadSettingsSections(app)); });
+          renderShell(app);
+          await loadStartReports(app); await loadSettingsSections(app);
+        } });
     } });
 }
 
@@ -4134,20 +4154,154 @@ function clusterInspector(app, cluster) {
 }
 
 function removeStartCluster(app, cluster) {
-  let operation = null;
+  const tree = clusterSubtree(app, cluster.id), inside = tree.length - 1;
   showDialog(app.root.ownerDocument, { title: text(app.language, 'delete') + ': ' + displayName(cluster.title),
-    body: startText(app.language, 'removeHint'), confirm: text(app.language, 'delete'), cancel: startText(app.language, 'cancel'),
-    onConfirm: async () => {
-      operation ??= createOperation({ method: 'DELETE', path: '/clusters/:clusterId', params: { clusterId: cluster.id }, body: { machine: startMachine(app), confirmed: true, expectedRevision: cluster.revision } });
-      const result = await request(app.api, 'DELETE', operation.path, { operation });
-      // The dialog closes as soon as the service confirms; the cluster leaves the screen now and the reports catch up behind it.
-      const shown = app.store.indexes.groups.get(cluster.id);
-      if (shown) app.store.indexes.groups.set(cluster.id, { ...shown, deleted: true });
-      if (app.store.selected.groupId === cluster.id) app.store.selected.groupId = null;
-      loadStartReports(app);
-      showMapToast(app, displayName(cluster.title), async record => { await undoChange(app.api, result.data.changeId, record.operation); await loadStartReports(app); selectGroup(app, cluster.id); }, result.data.undoUntil);
+    body: inside ? text(app.language, inside === 1 ? 'deleteTreeBodyOne' : 'deleteTreeBody', { count: inside }) : startText(app.language, 'removeHint'),
+    confirm: text(app.language, 'delete'), cancel: startText(app.language, 'cancel'),
+    // The dialog closes at once; the deletion runs in the background, in Activity.
+    onConfirm: () => { enqueueDeletion(app, { units: [], clusters: [cluster.id] }); } });
+}
+
+// A cluster and every cluster inside it, the innermost first, so each one is empty when it is deleted.
+function clusterSubtree(app, id) {
+  const groups = [...app.store.indexes.groups.values()].filter(group => !group.deleted);
+  const order = [], seen = new Set();
+  const visit = (current) => {
+    if (seen.has(current)) return;
+    seen.add(current);
+    for (const child of groups.filter(group => group.parentId === current)) visit(child.id);
+    order.push(current);
+  };
+  visit(id);
+  return order;
+}
+
+// Agents first, then the clusters with the ones inside them, innermost first. Each step keeps its own operation, so a retry
+// replays a write the service may already have applied instead of sending a second one.
+function enqueueDeletion(app, { units = [], clusters = [] }) {
+  const clusterIds = [], seen = new Set();
+  for (const id of clusters) for (const inner of clusterSubtree(app, id)) if (!seen.has(inner)) { seen.add(inner); clusterIds.push(inner); }
+  // An outer cluster waits for every cluster inside it, wherever it was picked.
+  clusterIds.sort((left, right) => clusterDepth(app, right) - clusterDepth(app, left));
+  // An agent goes before its lead, so a lead is never left with reports when its turn comes.
+  const leadDepth = (id) => { let depth = 0, current = unitById(app, id); const seen = new Set(); while (current?.leadId && !seen.has(current.id)) { seen.add(current.id); depth += 1; current = unitById(app, current.leadId); } return depth; };
+  const unitIds = units.filter(id => unitById(app, id) && unitById(app, id).role !== 'master').sort((left, right) => leadDepth(right) - leadDepth(left));
+  const total = unitIds.length + clusterIds.length;
+  if (!total) return null;
+  const names = { units: unitIds.map(id => unitDisplayName(unitById(app, id))), clusters: clusterIds.map(id => displayName(app.store.indexes.groups.get(id)?.title ?? id)) };
+  const label = total === 1 ? (unitIds.length ? text(app.language, 'jobRemoveAgent', { name: names.units[0] }) : text(app.language, 'jobDeleteCluster', { name: names.clusters[0] }))
+    : clusters.length === 1 && !unitIds.length ? text(app.language, 'jobDeleteTree', { name: displayName(app.store.indexes.groups.get(clusters[0])?.title ?? ''), count: clusterIds.length - 1 })
+      : text(app.language, 'jobDeleteMany', { count: total });
+  // What is being deleted leaves the screen now; a failure brings it back from the service.
+  hideDeleted(app, unitIds, clusterIds);
+  const steps = [...unitIds.map(id => ({ kind: 'unit', id })), ...clusterIds.map(id => ({ kind: 'cluster', id }))];
+  const changes = [];
+  return app.queue.add({ label, steps: total > 1 ? total : null, kind: 'delete',
+    run: async (report) => {
+      // One item that cannot be deleted does not stop the others; the job fails at the end with the first reason, and
+      // Retry asks again only for what is left.
+      let failure = null;
+      for (const step of steps) {
+        if (step.done) continue;
+        try {
+          step.result = step.kind === 'unit' ? await deleteUnitStep(app, step) : await deleteClusterStep(app, step);
+          step.done = true;
+          if (step.result?.data?.changeId) changes.push(step.result.data.changeId);
+        } catch (error) { failure ??= error; }
+        report(steps.filter(item => item.done).length, total);
+      }
+      if (failure) {
+        // What could not be deleted comes back on screen as the service has it.
+        afterDeletion(app).catch(() => {});
+        throw failure;
+      }
+      return { changes };
+    },
+    onDone: async () => {
+      // Undo is offered as soon as the service confirms; the lists catch up behind it. Undoing one item selects it again.
+      const undoName = total === 1 ? (names.units[0] ?? names.clusters[0]) : text(app.language, 'deletedMany', { count: total });
+      const reselect = total !== 1 ? null : unitIds.length ? () => { app.store.selected.unitId = unitIds[0]; app.mapState?.onSelection([unitIds[0]]); focusUnitRow(app, unitIds[0]); }
+        : () => selectGroup(app, clusterIds[0]);
+      showMapToast(app, total === 1 && unitIds.length ? `${names.units[0]} · ${removalText(app, 'archived')}` : undoName,
+        () => { enqueueUndo(app, undoName, [...changes].reverse(), reselect); });
       renderShell(app);
+      await afterDeletion(app);
     } });
+}
+
+function clusterDepth(app, id) {
+  let depth = 0, current = app.store.indexes.groups.get(id);
+  const seen = new Set();
+  while (current?.parentId && !seen.has(current.id)) { seen.add(current.id); depth += 1; current = app.store.indexes.groups.get(current.parentId); }
+  return depth;
+}
+
+function hideDeleted(app, unitIds, clusterIds) {
+  for (const id of unitIds) {
+    for (const shown of [app.unitList?.catalog?.find(item => item.id === id), app.store.indexes.units.get(id)]) if (shown) shown.removed = true;
+    app.mapState?.selection.delete(id);
+    if (app.pendingChat?.unitId === id) app.pendingChat = null;
+    if (app.store.selected.unitId === id) app.store.selected.unitId = null;
+    if (app.thread?.chat?.kind === 'direct' && app.thread.chat.members.includes(id)) app.thread = null;
+  }
+  for (const id of clusterIds) {
+    const shown = app.store.indexes.groups.get(id);
+    if (shown) app.store.indexes.groups.set(id, { ...shown, deleted: true, deleting: true });
+    if (app.store.selected.groupId === id) app.store.selected.groupId = null;
+  }
+  app.hierarchySelection?.clear();
+  renderShell(app);
+}
+
+async function deleteUnitStep(app, step) {
+  const unit = unitById(app, step.id) ?? { id: step.id, revision: step.revision };
+  step.revision ??= unit.revision;
+  try { return await removeUnit(app.api, { id: step.id, revision: step.revision }, step.operation); }
+  catch (error) { step.operation = error.operation ?? step.operation; throw error; }
+}
+
+async function deleteClusterStep(app, step) {
+  const machine = startMachine(app);
+  if (!step.operation) {
+    const current = app.store.indexes.groups.get(step.id);
+    step.operation = createOperation({ method: 'DELETE', path: '/clusters/:clusterId', params: { clusterId: step.id }, body: { machine, confirmed: true, expectedRevision: current?.revision ?? null } });
+  }
+  try { return await request(app.api, 'DELETE', step.operation.path, { operation: step.operation }); }
+  catch (error) {
+    // The cluster changed since it was listed (the one inside it was just deleted, for one): read it again and ask once more.
+    if (['cluster_changed', 'revision_conflict'].includes(error?.code) && !step.reread) {
+      step.reread = true;
+      const fresh = (await request(app.api, 'GET', '/clusters/:clusterId', { params: { clusterId: step.id }, query: { machine } })).data;
+      step.operation = createOperation({ method: 'DELETE', path: '/clusters/:clusterId', params: { clusterId: step.id }, body: { machine, confirmed: true, expectedRevision: fresh.revision } });
+      return request(app.api, 'DELETE', step.operation.path, { operation: step.operation });
+    }
+    if (error?.code === 'cluster_not_found') return null;
+    throw error;
+  }
+}
+
+async function afterDeletion(app) {
+  await loadSnapshot(app.store, app.api).catch(() => {});
+  if (app.unitList) await reloadList(app.unitList).catch(() => {});
+  if (app.chatList) await reloadList(app.chatList).catch(() => {});
+  await loadStartReports(app);
+  if (!app.disposed) renderShell(app);
+}
+
+function enqueueUndo(app, name, changeIds, after = null) {
+  if (!changeIds.length) return;
+  const operations = new Map();
+  app.queue.add({ label: text(app.language, 'jobUndo', { name }), steps: changeIds.length > 1 ? changeIds.length : null, kind: 'undo',
+    run: async (report) => {
+      for (const [index, changeId] of changeIds.entries()) {
+        if (operations.get(changeId) === 'done') continue;
+        try { await undoChange(app.api, changeId, operations.get(changeId) ?? null); }
+        catch (error) { if (error.operation) operations.set(changeId, error.operation); throw error; }
+        operations.set(changeId, 'done');
+        report(index + 1, changeIds.length);
+      }
+    },
+    onDone: async () => { await afterDeletion(app); await after?.(); } });
 }
 
 function showClusterChanges(app, cluster) {
@@ -4485,7 +4639,8 @@ function openItemMenu(app, target) {
       } });
     }
     if (desktop && caps.includes('settings.write') && link && cluster.link?.kind !== 'none') items.push({ id: 'remove', label: t('menuRemoveLink'), run: () => removeStartLink(app, link, startMachine(app)) });
-    if (desktop && caps.includes('chat.manage') && !children.length) items.push({ id: 'delete', label: t('menuDelete'), danger: true, run: () => removeStartCluster(app, cluster) });
+    // A cluster with clusters inside it is deleted with them; the dialog says how many.
+    if (desktop && caps.includes('chat.manage')) items.push({ id: 'delete', label: t('menuDelete'), danger: true, run: () => removeStartCluster(app, cluster) });
   }
   openContextMenu(app.root.ownerDocument, { x: target.x, y: target.y, items, label: t('menuLabel', { name }) });
 }
@@ -4671,11 +4826,16 @@ function openMoveAgent(app, unit) {
   }, async form => {
     const target = app.store.indexes.groups.get(fieldValue(form, 'clusterId'));
     if (!target) return false;
-    if (!target.members.includes(unit.id)) await setClusterMembers(app, target, [...target.members, unit.id]);
-    await loadStartReports(app);
-    const old = home && app.store.indexes.groups.get(home.id);
-    if (old?.members.includes(unit.id)) await setClusterMembers(app, old, old.members.filter(id => id !== unit.id));
-    await refreshAfterMembership(app);
+    // The form closes at once; the move runs in the background, in Activity.
+    app.queue.add({ label: text(app.language, 'jobMove', { name: unitDisplayName(unit), cluster: displayName(target.title) }), kind: 'move',
+      run: async () => {
+        const into = app.store.indexes.groups.get(target.id) ?? target;
+        if (!into.members.includes(unit.id)) await setClusterMembers(app, into, [...into.members, unit.id]);
+        await loadStartReports(app);
+        const old = home && app.store.indexes.groups.get(home.id);
+        if (old?.members.includes(unit.id)) await setClusterMembers(app, old, old.members.filter(id => id !== unit.id));
+      },
+      onDone: () => refreshAfterMembership(app) });
     return true;
   }, 'move-agent');
 }
@@ -4685,17 +4845,20 @@ function detachAgent(app, unit, cluster) {
   const t = (key, values) => startText(app.language, key, values), name = unitDisplayName(unit);
   const dialog = showDialog(app.root.ownerDocument, {
     title: t('detachTitle', { name, cluster: displayName(cluster.title) }), body: t('detachBody'), confirm: t('detachConfirm'), cancel: text(app.language, 'cancel'), retry: text(app.language, 'retry'),
-    onConfirm: async () => {
-      const fresh = app.store.indexes.groups.get(cluster.id) ?? cluster;
-      await setClusterMembers(app, fresh, fresh.members.filter(id => id !== unit.id));
-      await refreshAfterMembership(app);
-      showMapToast(app, t('detached', { name, cluster: displayName(cluster.title) }), async () => {
-        const current = app.store.indexes.groups.get(cluster.id);
-        if (current && !current.members.includes(unit.id)) await setClusterMembers(app, current, [...current.members, unit.id]);
+    // The dialog closes at once; the change runs in the background, in Activity.
+    onConfirm: () => { app.queue.add({ label: text(app.language, 'jobDetach', { name, cluster: displayName(cluster.title) }), kind: 'detach',
+      run: async () => {
+        const fresh = app.store.indexes.groups.get(cluster.id) ?? cluster;
+        await setClusterMembers(app, fresh, fresh.members.filter(id => id !== unit.id));
+      },
+      onDone: async () => {
         await refreshAfterMembership(app);
-      });
-      renderShell(app);
-    },
+        showMapToast(app, t('detached', { name, cluster: displayName(cluster.title) }), async () => {
+          const current = app.store.indexes.groups.get(cluster.id);
+          if (current && !current.members.includes(unit.id)) await setClusterMembers(app, current, [...current.members, unit.id]);
+          await refreshAfterMembership(app);
+        });
+      } }); },
   });
   dialog.setAttribute('data-form', 'detach-agent');
 }
@@ -6014,7 +6177,72 @@ function placeBefore(anchor, node) {
   return true;
 }
 
+// A finished item stays in the corner this long, then only in the bell's list.
+const QUEUE_DONE_SHOWN_MS = 4000;
+
+function queueStateText(app, item) {
+  if (item.state === 'running' && item.progress?.total) return text(app.language, 'queueProgress', { done: item.progress.done, total: item.progress.total });
+  return text(app.language, { waiting: 'queueWaiting', running: 'queueRunning', done: 'queueDone', failed: 'queueFailed' }[item.state]);
+}
+
+function queueCard(app, item) {
+  const document = app.root.ownerDocument;
+  const card = element(document, 'div', { class: `queue-item is-${item.state}`, 'data-queue-item': item.id, 'data-queue-state': item.state, role: item.state === 'failed' ? 'alert' : 'status' },
+    element(document, 'div', { class: 'queue-head' }, element(document, 'strong', { class: 'queue-label', text: item.label }), element(document, 'span', { class: 'queue-state', text: queueStateText(app, item) })));
+  if (item.state === 'running' || item.state === 'waiting') {
+    const total = item.progress?.total, done = item.progress?.done ?? 0;
+    const fill = element(document, 'span', { class: 'queue-fill' });
+    if (total) fill.style.width = `${Math.max(4, Math.round((done / total) * 100))}%`;
+    card.append(element(document, 'div', { class: `queue-bar${total && item.state === 'running' ? '' : ' is-indeterminate'}${item.state === 'waiting' ? ' is-waiting' : ''}`, role: 'progressbar', 'aria-label': item.label,
+      ...(total ? { 'aria-valuemin': '0', 'aria-valuemax': String(total), 'aria-valuenow': String(done) } : {}) }, fill));
+  }
+  if (item.state === 'failed') {
+    const partial = item.progress?.total > 1 ? `${text(app.language, 'queueProgress', { done: item.progress.done, total: item.progress.total })}. ` : '';
+    card.append(element(document, 'p', { class: 'queue-error', text: partial + actionText(app.language, item.error?.code) }),
+      element(document, 'div', { class: 'queue-actions' },
+        element(document, 'button', { type: 'button', class: 'btn primary', 'data-action': 'queue-retry', text: text(app.language, 'retry'), onclick: () => app.queue.retry(item.id) }),
+        element(document, 'button', { type: 'button', class: 'btn quiet', 'data-action': 'queue-dismiss', text: text(app.language, 'close'), onclick: () => app.queue.dismiss(item.id) })));
+  }
+  return card;
+}
+
+// The corner shows what runs, waits or failed, and what just finished; the bell opens the whole list.
+function paintQueue(app, shell) {
+  if (!app.queue || app.layout === 'phone') return;
+  const document = app.root.ownerDocument, now = app.api.now();
+  const items = app.queue.items;
+  if (app.queuePanelOpen) {
+    const panel = element(document, 'section', { class: 'queue-panel', 'data-queue-panel': 'true', role: 'dialog', 'aria-label': text(app.language, 'queueTitle') },
+      element(document, 'header', { class: 'queue-panel-head' }, element(document, 'h2', { text: text(app.language, 'queueTitle') }),
+        element(document, 'button', { type: 'button', class: 'btn quiet', 'data-action': 'close-queue', text: text(app.language, 'close'), onclick: () => { app.queuePanelOpen = false; renderShell(app); } })));
+    if (!items.length) panel.append(element(document, 'p', { class: 'queue-empty', text: text(app.language, 'queueEmpty') }));
+    for (const item of [...items].reverse()) panel.append(queueCard(app, item));
+    if (items.some(item => ['done', 'failed'].includes(item.state))) panel.append(element(document, 'button', { type: 'button', class: 'btn ghost', 'data-action': 'queue-clear', text: text(app.language, 'queueClear'), onclick: () => app.queue.clearFinished() }));
+    shell.append(panel);
+    return;
+  }
+  const shown = items.filter(item => item.state !== 'done' || now - (item.endedAt ?? now) < QUEUE_DONE_SHOWN_MS);
+  if (!shown.length) return;
+  // A finished item leaves the corner on its own.
+  const leaving = shown.filter(item => item.state === 'done').map(item => (item.endedAt ?? now) + QUEUE_DONE_SHOWN_MS - now);
+  if (leaving.length) {
+    clearTimeout(app.queueTimer);
+    app.queueTimer = setTimeout(() => { if (!app.disposed) renderShell(app); }, Math.max(50, Math.min(...leaving) + 20));
+    app.queueTimer.unref?.();
+  }
+  const stack = element(document, 'div', { class: 'queue-stack', 'data-queue-stack': 'true' });
+  const visible = shown.slice(-3);
+  for (const item of visible) stack.append(queueCard(app, item));
+  if (shown.length > visible.length) stack.prepend(element(document, 'button', { type: 'button', class: 'btn quiet queue-more', 'data-action': 'open-queue',
+    text: text(app.language, 'queueMore', { count: shown.length - visible.length }), onclick: () => { app.queuePanelOpen = true; renderShell(app); } }));
+  shell.append(stack);
+}
+
 const SLOW_NOTICE_S = 5;
+
+function deletionRunning(app) {
+  return Boolean(app.queue?.items.some(item => item.state === 'running' && ['delete', 'undo'].includes(item.kind)));
+}
 
 const TRANSIENT_CODES = new Set(['timeout', 'service_unavailable', 'request_rate_limited', 'closed']);
 function transientFailure(error) {
@@ -6860,42 +7088,11 @@ function removalText(app, key, unit = "") {
 }
 
 function removeSelectedUnit(app, unit) {
-  if (app.pendingChat?.unitId === unit.id) app.pendingChat = null;
-  let operation = null;
-  const refresh = async () => {
-    await loadSnapshot(app.store, app.api);
-    if (app.unitList) await reloadList(app.unitList);
-    if (app.chatList) await reloadList(app.chatList);
-    await refreshGroups(app);
-  };
   const dialog = showDialog(app.root.ownerDocument, {
     title: removalText(app, "title", unitDisplayName(unit)), body: removalText(app, "body"),
     confirm: removalText(app, "confirm"), cancel: text(app.language, "cancel"), retry: text(app.language, "retry"),
-    onConfirm: async () => {
-      try {
-        const result = await removeUnit(app.api, unit, operation);
-        if (app.pendingChat?.unitId === unit.id) app.pendingChat = null;
-        app.mapState?.selection.delete(unit.id);
-        app.store.selected.unitId = null;
-        if (app.thread?.chat?.kind === "direct" && app.thread.chat.members.includes(unit.id)) app.thread = null;
-        // The dialog closes once the service confirms: the agent leaves the screen now and the lists catch up behind it.
-        for (const shown of [app.unitList?.catalog?.find((item) => item.id === unit.id), app.store.indexes.units.get(unit.id)]) if (shown) shown.removed = true;
-        refresh().then(() => { if (!app.disposed) renderShell(app); }).catch(() => {});
-        showMapToast(app, `${unitDisplayName(unit)} · ${removalText(app, "archived")}`, async (record) => {
-          await undoChange(app.api, result.data.changeId, record.operation);
-          await refresh();
-          app.store.selected.unitId = unit.id;
-          app.mapState?.onSelection([unit.id]);
-          focusUnitRow(app, unit.id);
-        }, app.api.now() + Math.max(0, Date.parse(result.data.undoUntil) - Date.parse(result.meta.readAt)));
-        renderShell(app);
-      } catch (error) {
-        operation = error.operation ?? operation;
-        // The dialog shows the failure in the person's language, not the service's wording.
-        if (error?.code && Object.hasOwn(ACTION_COPY, error.code)) error.message = actionText(app.language, error.code);
-        throw error;
-      }
-    },
+    // The dialog closes at once; the removal, with any session it has to stop first, runs in the background, in Activity.
+    onConfirm: () => { enqueueDeletion(app, { units: [unit.id] }); },
   });
   dialog.setAttribute("data-remove-unit", unit.id);
   Object.assign(dialog.style, { width: "480px", maxWidth: "calc(100vw - 32px)", padding: "24px", borderRadius: "22px", background: "var(--panel)", border: "1px solid var(--line2)" });
