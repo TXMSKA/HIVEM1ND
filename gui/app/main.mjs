@@ -875,7 +875,7 @@ async function onStream(app, event) {
   }
   if (event?.name === "stream.ready" || event?.name === "settings.changed") {
     await loadPresentation(app);
-    if (event?.name === "stream.ready") await recheckTracked(app);
+    if (event?.name === "stream.ready") { await recheckTracked(app); retryTransient(app); }
     result?.consume?.();
     return;
   }
@@ -1334,7 +1334,7 @@ function renderWorkspace(app, t, view, counts) {
     }
   }
   if (app.mapToast) inspectorBody.append(mapToast(app, t));
-  if (app.startError && !failedCauses(app).has(String(app.startError.code ?? 'unknown'))) inspectorBody.append(element(document, 'div', { class: 'notice notice-error', role: 'alert', 'data-start-error': 'true' },
+  if (app.startError && !failedCauses(app).has(String(app.startError.code ?? 'unknown')) && !(serviceDown(app) && transientFailure(app.startError))) inspectorBody.append(element(document, 'div', { class: 'notice notice-error', role: 'alert', 'data-start-error': 'true' },
     element(document, 'p', { text: startErrorText(app) }),
     mapButton(app, 'retry-start-reports', startText(app.language, 'retry'), async () => { await loadStartReports(app); maybeStartDiscovery(app); })));
   dropRepeatedNotices(inspectorBody);
@@ -6016,13 +6016,29 @@ function placeBefore(anchor, node) {
 
 const SLOW_NOTICE_S = 5;
 
+const TRANSIENT_CODES = new Set(['timeout', 'service_unavailable', 'request_rate_limited', 'closed']);
+function transientFailure(error) {
+  return Boolean(error) && (TRANSIENT_CODES.has(String(error.code)) || error.name === 'TypeError' || (error.status === 0 && !error.code));
+}
+function serviceDown(app) {
+  return Boolean(app.serviceStopped || app.recoveryError || ['connecting', 'reconnecting', 'error'].includes(app.store.stream?.state));
+}
+// When the live connection comes back, what failed because the service did not answer is asked again by itself.
+function retryTransient(app) {
+  // Only reads are asked again here; a write the service may have applied is replayed under its own identity by recheckTracked.
+  for (const record of [...(app.activity?.values() ?? [])]) if (record.phase === 'error' && transientFailure(record.error) && !record.operation && !record.error?.operation) record.retry?.();
+  if (app.startError && transientFailure(app.startError)) loadStartReports(app);
+}
+
 function paintActivity(app, shell) {
   const here = noteScope(app);
   const scoped = [...(app.activity?.values() ?? [])].filter((record) => (record.scope ?? here) === here);
   const records = activityNotices(scoped);
   // A request is only "taking longer than usual" once it really is: before SLOW_NOTICE_S the button's own loader says it is working.
   const pending = records.filter((record) => record.phase === "pending" && !quietActivity(record.key, scoped) && (Number(record.elapsed) || 0) >= (app.slowNoticeAfterS ?? SLOW_NOTICE_S));
-  const failed = records.filter((record) => record.phase === "error");
+  // While the service is unreachable its banner speaks for every request that failed for that reason; they are retried by
+  // themselves when it answers again, instead of each asking for its own Retry.
+  const failed = records.filter((record) => record.phase === "error" && !(serviceDown(app) && transientFailure(record.error)));
   if (!pending.length && !failed.length) return;
   const document = app.root.ownerDocument;
   const region = element(document, "div", { class: "activity", "data-activity-region": "true" });
