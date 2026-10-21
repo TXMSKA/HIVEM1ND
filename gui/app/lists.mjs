@@ -207,13 +207,15 @@ function renderRow(document, list, row, handlers) {
   node.setAttribute("role", row.kind === "heading" || row.kind === "issue" ? "presentation" : "option");
   node.setAttribute("aria-posinset", String(row.pos ?? 1));
   node.setAttribute("aria-setsize", String(row.setsize ?? 1));
-  node.setAttribute("aria-selected", String(Boolean(handlers.selectedId && handlers.selectedId === row.id)));
+  node.setAttribute("aria-selected", String(Boolean(handlers.isSelected ? handlers.isSelected(row) : handlers.selectedId && handlers.selectedId === row.id)));
   node.tabIndex = list.focusId === row.id ? 0 : -1;
   node.style.height = `${list.rowHeight}px`;
   node.style.paddingLeft = `${8 + (row.depth ?? 0) * 14}px`;
   node.textContent = row.text ?? row.label ?? "";
   node.addEventListener("click", (event) => {
     list.focusId = row.id;
+    // Ctrl or Cmd and Shift pick several rows instead of opening one.
+    if (row.kind !== "more" && (event.ctrlKey || event.metaKey || event.shiftKey) && handlers.onPick?.(row, { toggle: Boolean(event.ctrlKey || event.metaKey), range: Boolean(event.shiftKey) })) return;
     if (row.kind === "more") handlers.onReveal?.(row.groupId, row.count);
     else if (event.detail > 1) handlers.onActivate?.(row, "double");
     else handlers.onActivate?.(row, "single");

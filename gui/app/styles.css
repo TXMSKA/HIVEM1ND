@@ -1927,3 +1927,7 @@ summary:focus-visible, .row:focus-visible, .library-item:focus-visible { outline
 .queue-panel-head h2 { margin: 0; font-size: 15px; }
 .queue-panel .queue-item { box-shadow: none; }
 .queue-empty { margin: 4px 0; color: var(--mute); font-size: 13px; }
+/* With several rows picked, a bar over the Hierarchy deletes them. */
+.pick-bar { display: flex; align-items: center; gap: 8px; margin: 6px 0; padding: 6px 8px 6px 12px; border: 1px solid var(--line2); border-radius: 12px; background: var(--card); font-size: 12.5px; }
+.pick-bar > span { flex: 1; min-width: 0; color: var(--body); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pick-bar .btn { min-height: 28px; padding: 4px 12px; }

@@ -7822,6 +7822,32 @@ async function startMenuDesktop(t) {
   return { ...desktop, state, calls };
 }
 
+test('agents picked in the Hierarchy are deleted in one background job with a bar, and Undo brings them back', async t => {
+  const { root, app, document, state, calls } = await startMenuDesktop(t);
+  const [first, second] = state.units;
+  const pick = (unit, how = { toggle: true }) => app.activeHandlers.onPick({ id: unit.id, kind: 'unit', unit: unitOf(app, unit.id) }, how);
+  pick(first); pick(second);
+  assert.equal(root.querySelector('[data-pick-bar]')?.getAttribute('data-pick-bar'), '2');
+  root.querySelector('[data-action="delete-picked"]').listeners.get('click')[0]();
+  const dialog = document.querySelector('[data-delete-many]');
+  assert.equal(dialog.getAttribute('data-delete-many'), '2');
+  dialog.querySelector('.primary').listeners.get('click')[0]();
+  // The dialog closes at once and both agents leave the screen; the job runs in Activity.
+  await waitFor(() => !document.querySelector('[data-delete-many]'), 'The dialog did not close at once.');
+  assert.equal(app.unitList.catalog.filter(unit => [first.id, second.id].includes(unit.id) && !unit.removed).length, 0);
+  await waitFor(() => root.querySelector("[data-action='map-undo']"), 'The deletions did not finish.');
+  assert.equal(calls.filter(call => call.method === 'DELETE' && call.path.includes('/units/')).length, 2);
+  const job = app.queue.items.find(item => item.kind === 'delete');
+  assert.equal(job.state, 'done'); assert.deepEqual(job.progress, { done: 2, total: 2 });
+  // The bell lists the job.
+  root.querySelector('[data-action="open-notifications"]').listeners.get('click')[0]();
+  assert.ok(root.querySelector('[data-queue-panel]').querySelector(`[data-queue-item="${job.id}"]`));
+  root.querySelector('[data-action="close-queue"]').listeners.get('click')[0]();
+  root.querySelector("[data-action='map-undo']").listeners.get('click')[0]();
+  await waitFor(() => app.queue.items.some(item => item.kind === 'undo' && item.state === 'done'), 'Undo did not run in Activity.');
+  await waitFor(() => [first.id, second.id].every(id => app.unitList.catalog.some(unit => unit.id === id && !unit.removed)), 'Undo did not bring the agents back.');
+});
+
 test('a cluster with a cluster inside it is deleted with it, the inner one first', async t => {
   const { app, document, state, calls } = await startMenuDesktop(t);
   const parent = state.cluster;
@@ -8162,3 +8188,5 @@ test('a failure notice can be closed without retrying', async t => {
   assert.equal(desktop.root.querySelector('[data-action="dismiss-activity"]'), null);
   assert.equal(desktop.app.activity.has('older:shop'), false);
 });
+
+function unitOf(app, id) { return app.unitList.catalog.find(unit => unit.id === id); }

@@ -297,6 +297,7 @@ export async function mount(root, env = globalThis) {
   } });
   const view = root.ownerDocument.defaultView;
   view?.addEventListener?.("keydown", (event) => onFocusKey(app, event));
+  view?.addEventListener?.("keydown", (event) => onPickKey(app, event));
   root.addEventListener("keydown", (event) => {
     if (event.key !== "F2" || app.layout === "phone" || event.target?.closest?.("input, textarea")) return;
     const row = app.activeRows?.find((item) => item.id === event.target?.closest?.("[data-id]")?.getAttribute("data-id"));
@@ -1766,11 +1767,22 @@ function renderCollection(app, t) {
   const host = element(document, "div", { class: "list", role: "listbox", "aria-label": t(app.tab), "data-collection": "true", "aria-busy": list.status === "loading" ? "true" : null });
   if (app.tab === "hierarchy") {
     host.addEventListener("contextmenu", (event) => hierarchyMenu(app, event));
-    host.addEventListener("keydown", (event) => { if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) hierarchyMenu(app, event); });
+    host.addEventListener("keydown", (event) => {
+      if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) hierarchyMenu(app, event);
+      else if (app.layout !== "phone" && (event.ctrlKey || event.metaKey) && String(event.key).toLowerCase() === "a") { event.preventDefault?.(); pickEverything(app); }
+      else if (app.layout !== "phone" && (event.key === "Delete" || event.key === "Backspace")) { event.preventDefault?.(); deletePicked(app, event.target?.closest?.("[data-id]")?.getAttribute?.("data-id")); }
+      else if (event.key === "Escape" && app.hierarchySelection?.size) { app.hierarchySelection.clear(); renderShell(app); }
+    });
   }
   const handlers = {
     selectedId: app.tab === "chats" ? app.store.selected.chatId : app.store.selected.groupId ? `cluster:${app.store.selected.groupId}` : app.store.selected.unitId,
+    ...(app.tab === "hierarchy" && app.layout !== "phone" ? {
+      isSelected: (row) => app.hierarchySelection?.size ? app.hierarchySelection.has(row.id) : row.id === (app.store.selected.groupId ? `cluster:${app.store.selected.groupId}` : app.store.selected.unitId),
+      onPick: (row, how) => pickRow(app, row, how),
+    } : {}),
     onActivate: (row, kind) => {
+      // A plain click ends a multiple pick.
+      if (app.hierarchySelection?.size) app.hierarchySelection.clear();
       if (row.kind === "cluster") {
         if (kind === 'single' && app.lastClusterClick?.id === row.groupId && app.api.now() - app.lastClusterClick.at < 500) kind = 'double';
         app.lastClusterClick = kind === 'single' ? { id: row.groupId, at: app.api.now() } : null;
@@ -1810,7 +1822,8 @@ function renderCollection(app, t) {
   // With no cluster yet, the hint sits under the Clusters heading at the top, not at the foot of the panel.
   const noClusters = app.tab === 'hierarchy' && ![...app.store.indexes.groups.values()].some(group => !group.deleted)
     ? element(document, 'p', { class: 'start-hint empty-clusters', text: startText(app.language, 'noClusters') }) : null;
-  block.append(search, total, host);
+  const bar = app.tab === "hierarchy" && app.layout !== "phone" ? pickBar(app) : null;
+  block.append(search, total, ...(bar ? [bar] : []), host);
   if (noClusters) block.append(noClusters);
   if (app.tab === "chats" && app.layout !== "phone") {
     block.append(element(document, "button", { type: "button", class: "btn", "data-action": "archived-chats", "aria-pressed": String(Boolean(app.archivedChats)), text: t("finalArchived"), onclick: () => {
@@ -2876,6 +2889,23 @@ function askVoidAgain(app, editor, proposal) {
     if (!comment && !record.operation) { explain(app, "quoteNeedsSelection"); return; }
     await createComment(app.api, { ...app.editors, current: editor }, comment?.anchor, comment?.text, record.operation, commentChoice(app.editors, editor));
   });
+}
+
+// Ctrl or Cmd+A and Delete work on the Map screen wherever the focus is, unless it is in a field or a dialog: the rows
+// are drawn again after a click, so the focus does not stay on the list.
+function onPickKey(app, event) {
+  if (app.layout === 'phone' || app.mode !== 'map' || event.defaultPrevented) return;
+  const target = event.target;
+  if (target?.closest?.('input, textarea, select, [contenteditable="true"], dialog, [data-context-menu]') || app.root.ownerDocument.querySelector?.('dialog[open]')) return;
+  if (target?.closest?.('.map-host, [data-map-host], .map') ) return;
+  if ((event.ctrlKey || event.metaKey) && String(event.key).toLowerCase() === 'a' && app.tab === 'hierarchy') {
+    event.preventDefault?.();
+    pickEverything(app);
+  } else if (event.key === 'Delete') {
+    if (app.hierarchySelection?.size) { event.preventDefault?.(); deletePicked(app); return; }
+    const units = [...(app.mapState?.selection ?? [])];
+    if (units.length || app.store.selected.groupId) { event.preventDefault?.(); app.mapState?.onDelete?.({ units, cluster: units.length ? null : app.store.selected.groupId }); }
+  }
 }
 
 function onFocusKey(app, event) {
@@ -4153,6 +4183,84 @@ function clusterInspector(app, cluster) {
   });
 }
 
+// ---- Picking several rows and deleting them -------------------------------------------------------------------
+// The Hierarchy keeps the picked rows by their row ids: an agent's id, or cluster:<id>. Ctrl or Cmd toggles a row, Shift picks
+// the range from the last picked row, Ctrl+A picks every agent and cluster, and Delete deletes what is picked.
+function pickable(row) { return Boolean(row && (row.unit && row.unit.role !== 'master' || row.kind === 'cluster')); }
+
+function pickRow(app, row, { toggle = false, range = false } = {}) {
+  if (!pickable(row)) return false;
+  const picked = app.hierarchySelection ??= new Set();
+  // The row open before the pick starts it.
+  if (!picked.size) {
+    const current = app.store.selected.groupId ? `cluster:${app.store.selected.groupId}` : app.store.selected.unitId;
+    if (current && app.activeRows?.some(item => item.id === current && pickable(item))) { picked.add(current); app.hierarchyAnchor = current; }
+  }
+  if (range && app.hierarchyAnchor) {
+    const rows = (app.activeRows ?? []).filter(pickable), from = rows.findIndex(item => item.id === app.hierarchyAnchor), to = rows.findIndex(item => item.id === row.id);
+    if (from >= 0 && to >= 0) for (const item of rows.slice(Math.min(from, to), Math.max(from, to) + 1)) picked.add(item.id);
+    else picked.add(row.id);
+  } else if (picked.has(row.id) && toggle) picked.delete(row.id);
+  else picked.add(row.id);
+  if (!range) app.hierarchyAnchor = row.id;
+  renderShell(app);
+  return true;
+}
+
+function pickEverything(app) {
+  const picked = app.hierarchySelection ??= new Set();
+  for (const group of app.store.indexes.groups.values()) if (!group.deleted) picked.add(`cluster:${group.id}`);
+  for (const unit of app.unitList?.catalog ?? []) if (!unit.removed && unit.role !== 'master') picked.add(unit.id);
+  renderShell(app);
+}
+
+function pickedTargets(app) {
+  const units = [], clusters = [];
+  for (const id of app.hierarchySelection ?? []) {
+    if (id.startsWith('cluster:')) { if (app.store.indexes.groups.get(id.slice(8))) clusters.push(id.slice(8)); }
+    else if (unitById(app, id)) units.push(id);
+  }
+  return { units, clusters };
+}
+
+// Delete with several rows picked asks once for all of them; with one row, it opens that row's own Delete.
+function deletePicked(app, focusedId = null) {
+  if (!app.store.capabilities?.includes('unit.create') && !app.store.capabilities?.includes('chat.manage')) return;
+  const { units, clusters } = pickedTargets(app);
+  if (units.length + clusters.length > 1) return confirmDeleteMany(app, units, clusters);
+  const only = units[0] ?? (clusters[0] ? `cluster:${clusters[0]}` : focusedId);
+  if (!only) return;
+  if (only.startsWith('cluster:')) { const cluster = app.store.indexes.groups.get(only.slice(8)); if (cluster) removeStartCluster(app, cluster); }
+  else { const unit = unitById(app, only); if (unit && unit.role !== 'master') removeSelectedUnit(app, unit); }
+}
+
+function confirmDeleteMany(app, units, clusters) {
+  const inside = new Set(clusters.flatMap(id => clusterSubtree(app, id)));
+  const count = units.length + inside.size;
+  const dialog = showDialog(app.root.ownerDocument, { title: text(app.language, 'deleteManyTitle', { count }),
+    body: text(app.language, 'deleteManyBody', { what: deletionSummary(app, units.length, inside.size) }),
+    confirm: text(app.language, 'delete'), cancel: text(app.language, 'cancel'),
+    onConfirm: () => { enqueueDeletion(app, { units, clusters }); } });
+  dialog.setAttribute('data-delete-many', String(count));
+}
+
+function deletionSummary(app, units, clusters) {
+  const parts = [units ? text(app.language, units === 1 ? 'deleteManyAgent' : 'deleteManyAgents', { count: units }) : '',
+    clusters ? text(app.language, clusters === 1 ? 'deleteManyCluster' : 'deleteManyClusters', { count: clusters }) : ''].filter(Boolean);
+  const joined = parts.length === 2 ? text(app.language, 'deleteManyAnd', { first: parts[0], second: parts[1] }) : parts[0] ?? '';
+  return joined.charAt(0).toLocaleUpperCase() + joined.slice(1);
+}
+
+// A bar over the Hierarchy says how many rows are picked and deletes them.
+function pickBar(app) {
+  const document = app.root.ownerDocument, { units, clusters } = pickedTargets(app), count = units.length + clusters.length;
+  if (count < 2) return null;
+  return element(document, 'div', { class: 'pick-bar', 'data-pick-bar': String(count) },
+    element(document, 'span', { text: text(app.language, 'finalSelection', { count }) }),
+    element(document, 'button', { type: 'button', class: 'btn danger', 'data-action': 'delete-picked', text: text(app.language, 'delete'), 'aria-label': text(app.language, 'menuDeleteSelected', { count }), onclick: () => confirmDeleteMany(app, units, clusters) }),
+    element(document, 'button', { type: 'button', class: 'btn quiet', 'data-action': 'clear-picked', 'aria-label': text(app.language, 'clearSelection'), text: '×', onclick: () => { app.hierarchySelection.clear(); renderShell(app); } }));
+}
+
 function removeStartCluster(app, cluster) {
   const tree = clusterSubtree(app, cluster.id), inside = tree.length - 1;
   showDialog(app.root.ownerDocument, { title: text(app.language, 'delete') + ': ' + displayName(cluster.title),
@@ -4592,6 +4700,16 @@ function renderPlanDraft(app) {
 // and an entry is listed only when the current state allows it. The first entry is the primary action.
 function openItemMenu(app, target) {
   const t = (key, values) => startText(app.language, key, values), caps = app.store.capabilities ?? [], desktop = app.layout !== 'phone';
+  // With several rows picked, the menu of one of them acts on all of them.
+  const rowId = target.kind === 'cluster' ? `cluster:${target.id}` : target.id;
+  if (desktop && target.kind !== 'map' && app.hierarchySelection?.size > 1 && app.hierarchySelection.has(rowId)) {
+    const { units, clusters } = pickedTargets(app), count = units.length + clusters.length;
+    openContextMenu(app.root.ownerDocument, { x: target.x, y: target.y, label: text(app.language, 'finalSelection', { count }), items: [
+      { id: 'delete-picked', label: text(app.language, 'menuDeleteSelected', { count }), danger: true, primary: true, run: () => confirmDeleteMany(app, units, clusters) },
+      { id: 'clear-picked', label: text(app.language, 'clearSelection'), run: () => { app.hierarchySelection.clear(); renderShell(app); } },
+    ] });
+    return;
+  }
   const groups = [...app.store.indexes.groups.values()].filter(group => !group.deleted);
   const items = [];
   let name = '';
@@ -4907,6 +5025,13 @@ function ensureMap(app) {
   app.mapState.onRename = (id) => beginAlias(app, id);
   app.mapState.onConnect = (pending) => confirmConnection(app, pending.source, [pending.target]);
   app.mapState.onConnectDrop = (drop) => openReportMenu(app, drop);
+  app.mapState.onDelete = ({ units, cluster }) => {
+    if (units.length > 1) return confirmDeleteMany(app, units, []);
+    const unit = units[0] ? unitById(app, units[0]) : null;
+    if (unit && unit.role !== 'master') return removeSelectedUnit(app, unit);
+    const group = cluster ? app.store.indexes.groups.get(cluster) : null;
+    if (group && !group.deleted) removeStartCluster(app, group);
+  };
   app.mapState.onGroupConnect = (pending, point) => chooseSelectionLead(app, null, point);
   app.mapState.onGroupMessage = (ids) => {
     settle(app, "group-chat", text(app.language, "loadingConversation"), async (record) => {
@@ -7111,6 +7236,7 @@ function selectionInspector(app, t, units) {
   const actions = element(document, "div", { class: "selection-actions" });
   if (app.store.capabilities.includes("chat.manage")) actions.append(mapButton(app, "message-all", t("messageAll", { count: units.length }), () => app.mapState.onGroupMessage(units.map((unit) => unit.id))));
   if (app.store.capabilities.includes("unit.connect")) actions.append(mapButton(app, "connect-lead", t("connectToLead"), () => chooseSelectionLead(app)));
+  if (app.store.capabilities.includes("unit.create")) actions.append(mapButton(app, "delete-selection", text(app.language, "menuDeleteSelected", { count: units.length }), () => confirmDeleteMany(app, units.map((unit) => unit.id), []), { class: "btn danger" }));
   actions.append(mapButton(app, "clear-selection", t("clearSelection"), () => { app.mapState.selection.clear(); app.store.selected.unitId = null; app.thread = null; renderShell(app); }));
   panel.append(actions, element(document, "p", { class: "field-hint", text: t("finalGroupHint") }));
   return panel;

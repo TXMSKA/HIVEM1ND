@@ -654,6 +654,19 @@ export function keyDown(map, event) {
       return;
     }
   }
+  // Ctrl or Cmd+A picks every agent on the Map; Delete deletes the picked agents, or the picked cluster.
+  if ((event.ctrlKey || event.metaKey) && String(event.key).toLowerCase() === "a") {
+    event.preventDefault?.();
+    map.selectedGroupId = null;
+    map.selection = new Set(paintNodes(map).filter((node) => !node.person).map((node) => node.id));
+    map.onSelection?.([...map.selection]);
+    return;
+  }
+  if ((event.key === "Delete" || event.key === "Backspace") && (map.selection.size || map.selectedGroupId) && map.onDelete) {
+    event.preventDefault?.();
+    map.onDelete({ units: [...map.selection], cluster: map.selection.size ? null : map.selectedGroupId });
+    return;
+  }
   const id = map.focusId ?? [...map.selection][0] ?? null;
   if (event.key === "F2" && id) {
     event.preventDefault?.();
