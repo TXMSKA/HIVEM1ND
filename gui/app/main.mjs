@@ -7171,7 +7171,7 @@ async function saveAlias(app, edit) {
     app.store.indexes.units.set(edit.id, result.data);
     app.aliasEdit = null;
     await reloadList(app.unitList);
-    showMapToast(app, text(app.language, "aliasSaved", { unit: result.data.unit, alias: result.data.alias || result.data.unit }), async (record) => {
+    showMapToast(app, text(app.language, "aliasSaved", { unit: displayName(result.data.unit), alias: result.data.alias || displayName(result.data.unit) }), async (record) => {
       const current = (await request(app.api, "GET", "/units/:unitId", { params: { unitId: edit.id } })).data;
       await setUnitAlias(app.api, current, edit.previous, record.operation);
       await reloadList(app.unitList);
@@ -7946,7 +7946,7 @@ function chatPanel(app, t) {
       title: t("send"),
       onclick: () => submitComposer(app, composer),
     }, icon(document, "send"));
-    const name = group ? t("messageTheGroup") : directUnit ? t("messageUnit", { unit: directUnit.alias || directUnit.unit }) : t("composerLabel");
+    const name = group ? t("messageTheGroup") : directUnit ? t("messageUnit", { unit: directUnit.alias || displayName(directUnit.unit) }) : t("composerLabel");
     const hint = group ? startText(app.language, 'goesToLead') : directUnit ? startText(app.language, 'readsNext') : t("composerHint");
     composer.setAttribute("aria-label", name);
     composer.setAttribute("placeholder", name);
@@ -8212,7 +8212,7 @@ function revealAbove(thread, messageId) {
 
 function firstMessageComposer(app, t, unit) {
   const document = app.root.ownerDocument;
-  const name = t("messageUnit", { unit: unit.alias || unit.unit });
+  const name = t("messageUnit", { unit: unit.alias || displayName(unit.unit) });
   const hint = startText(app.language, 'readsNext');
   const key = `first:${unit.id}`;
   // Not data-composer: that marks an open conversation, which this agent does not have yet.
