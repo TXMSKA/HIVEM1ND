@@ -619,12 +619,16 @@ test("phone capabilities select the phone shell and desktop capabilities stay de
   }
 });
 
-test("the shell has no remote assets, token storage, or inline code", async () => {
+test("the shell has no remote assets, no token storage beyond the tab session, and no inline code", async () => {
   const files = ["gui/app/index.html", "gui/app/favicon.svg", "gui/app/main.mjs", "gui/app/i18n.mjs", "gui/app/styles.css", "gui/app/components.mjs", "gui/app/lists.mjs", "gui/app/hierarchy.mjs", "gui/app/map.mjs", "gui/app/map-geometry.mjs", "gui/app/actions.mjs", "gui/app/chats.mjs", "gui/app/chat-media.mjs", "gui/app/inspector.mjs", "gui/app/editors.mjs", "gui/app/blueprint.mjs", "gui/app/markup.mjs", "gui/app/void.mjs", "gui/app/settings.mjs", "gui/app/qr.mjs", "gui/app/qr-render.mjs", "gui/app/phone.mjs", "gui/app/embed.mjs"];
   const sources = await Promise.all(files.map(async (file) => [file, await readFile(file, "utf8")]));
   for (const [file, source] of sources) {
     if (file !== "gui/app/main.mjs") assert.equal(source.includes("localStorage"), false, file);
-    assert.equal(source.includes("sessionStorage"), false, file);
+    // Decided 2026-10-21: a desktop viewer keeps its session in its own tab, so a reload does not sign it out. The page
+    // only hands the tab's storage to the api; nothing else reads or writes it.
+    const tabStorage = source.match(/sessionStorage/g) ?? [];
+    if (file === "gui/app/main.mjs") assert.deepEqual([tabStorage.length, source.includes("return env.sessionStorage ?? null;")], [1, true], file);
+    else assert.equal(tabStorage.length, 0, file);
     assert.equal(source.includes("fonts.googleapis"), false, file);
     assert.equal(source.includes("\u2014"), false, file);
     const remote = source.match(/https?:\/\/[^\s"'`)]+/g) ?? [];
