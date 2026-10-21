@@ -8,7 +8,7 @@ import { OWNED_RULE_MODES, autoRuleLine, prepareContentAgentAssets } from '../in
 import { machineRecordPath, machineSettingsPath, readMachineRecord, serializeMachineRecord } from '../records.mjs';
 import { parseRoutes } from '../relay/store.mjs';
 import { CoreError, canonicalJson, hashBytes, isUuid, parseUnitId, uuidV8, validateMachineName } from './identity.mjs';
-import { answersFor, readProjection } from './projection.mjs';
+import { answersFor, readProjection, readSessions } from './projection.mjs';
 import { assertNoLinks } from './paths.mjs';
 import { atomicWrite, bindProjects, checkRevision, commitChange, prepareChangeUndo, readBytes, revisionOf, withLocalChanges, withLocks } from './store.mjs';
 import { clusterEntry, clusterEvents, clusterOwner, mappingKey, prepareRepositoryClusters, rawClusters, readClusterMappings, resolveClusterLink } from './clusters.mjs';
@@ -1139,8 +1139,7 @@ export async function removeClusterLink(context, clusterId, input) {
     const current = (await rawClusters(context)).find(item => item.cluster.id === clusterId && !item.cluster.deleted);
     if (!current) fail(404, 'cluster_not_found', 'The cluster does not exist.');
     checkRevision(current.bytes, input.expectedRevision);
-    const view = await readProjection(context);
-    if (view.sessions.some(session => current.cluster.members.includes(session.unitId) && session.state !== 'stopped')) fail(409, 'stop_unavailable', 'Stop the owned sessions before removing this link.');
+    if ((await readSessions(context)).some(session => current.cluster.members.includes(session.unitId) && session.state !== 'stopped')) fail(409, 'stop_unavailable', 'Stop the owned sessions before removing this link.');
     const after = bytes({ ...current.record, link: { kind: 'none' } }), cluster = { ...current.cluster, link: { kind: 'none' }, revision: revisionOf(after) };
     const entries = [clusterEntry(context, current.relative, current.bytes, after)], id = randomUUID();
     const undo = await prepareChangeUndo(context, { id, permission: 'settings.write', resourceIds: [clusterId], entries, events: clusterEvents(current.cluster) });

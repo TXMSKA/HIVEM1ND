@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { CLUSTER_ROLES, CoreError, canonicalJson, hashBytes, parseUnitId, replaceHeader, unitStatePath, uuidV8, validateCustomRole, validateName, validateRole, canonicalScope } from './identity.mjs';
-import { answersFor, readProjection, viewBatch } from './projection.mjs';
+import { answersFor, readProjection, readSessions, viewBatch } from './projection.mjs';
 import { readUnitState as readState, readUnitStates } from './state.mjs';
 import { checkRevision, commitChange, commitTransaction, prepareChangeUndo, readBytes, revisionOf, withLocalChanges, withLocks, withReceipt } from './store.mjs';
 import { prepareUnitMembershipRemoval, projectGroup } from './groups.mjs';
@@ -109,8 +109,9 @@ export async function removeUnit(context, unitId, input) {
     if (journal?.phase === 'committed' && header(current.bytes, 'removed') === 'true') return journal.response;
     if (header(current.bytes, 'removed') === 'true') throw new CoreError(404, 'unit_not_found', 'The unit is archived.');
     checkRevision(current.bytes, input.expectedRevision);
-    let view = await readProjection(context);
-    if (view.units.some((unit) => unit.leadId === parsed.id)) throw new CoreError(409, 'unit_has_reports', 'Connect the surviving reports to another lead first.');
+    // Before the sessions stop only the leads and the sessions are needed; the whole view is read once, after them.
+    if ([...(await leadMap(context)).values()].some((unit) => unit.leadId === parsed.id)) throw new CoreError(409, 'unit_has_reports', 'Connect the surviving reports to another lead first.');
+    const running = (await readSessions(context)).filter((session) => session.unitId === parsed.id && session.state !== 'stopped');
     let membership = await prepareUnitMembershipRemoval(context, parsed.id);
     const newJournal = !journal || journal.phase === 'committed';
     if (newJournal) {
@@ -126,12 +127,12 @@ export async function removeUnit(context, unitId, input) {
       journal = value;
     };
     if (newJournal) await saveJournal(journal);
-    for (const session of view.sessions.filter((session) => session.unitId === parsed.id && session.state !== 'stopped')) {
+    for (const session of running) {
       if (journal.stoppedSessionIds.includes(session.id)) continue;
       if (journal.phase === 'stopping') {
         // An interrupted native call is reconciled from its durable acknowledgment, never signaled again.
-        const stopped = await readProjection(context);
-        if (!stopped.sessions.some((item) => item.id === journal.stoppingSessionId && item.state === 'stopped')) {
+        const stopped = await readSessions(context);
+        if (!stopped.some((item) => item.id === journal.stoppingSessionId && item.state === 'stopped')) {
           throw new CoreError(409, 'stop_unavailable', 'The interrupted stop has no verified acknowledgment.');
         }
       }
@@ -151,7 +152,7 @@ export async function removeUnit(context, unitId, input) {
       if (context.removalFault === 'after-stop') throw new CoreError(500, 'injected_crash', 'Injected crash after acknowledged stop.');
     }
     checkRevision((await readState(context, parsed))?.bytes, input.expectedRevision);
-    view = await readProjection(context);
+    const view = await readProjection(context);
     if (view.units.some((unit) => unit.leadId === parsed.id)) throw new CoreError(409, 'unit_has_reports', 'Connect the surviving reports to another lead first.');
     membership = await prepareUnitMembershipRemoval(context, parsed.id);
     const unit = view.units.find((unit) => unit.id === parsed.id);

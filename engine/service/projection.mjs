@@ -159,7 +159,16 @@ async function builtProjection(context) {
   }
   // Work that holds the local changes lock builds its own view: a shared build started by another reader waits for that
   // same lock, so waiting on it would never end.
-  if (holdsLocalChanges(context.store)) return projectionRead(context, () => buildProjection(context));
+  if (holdsLocalChanges(context.store)) {
+    const generation = cache.generation, value = await projectionRead(context, () => buildProjection(context));
+    // Kept for the readers after it when nothing changed while it was built.
+    if (cache.generation === generation) {
+      const kept = cache.entries.get(key) ?? { ready: null, pending: null };
+      kept.ready = { generation, now, builtAt: Date.now(), value };
+      cache.entries.set(key, kept);
+    }
+    return structuredClone(value);
+  }
   // Readers share a build that started after the last change; one that started before it may predate what they just wrote.
   let pending = slot.pending;
   if (!pending || pending.generation !== cache.generation || !near(pending.now)) pending = startProjectionBuild(cache, key, context, now);
@@ -354,6 +363,18 @@ export function collectIssues(issues) {
 // One build of the M1ND lists the files under user/ once and every section takes its own files from that listing. The sections
 // used to walk their folders one after another, and the receipts walked all of user/ again.
 const build = new AsyncLocalStorage();
+
+// Only the sessions, derived as the full view derives them, for a write that needs to know whether one still runs. It
+// reads the session records alone instead of the whole M1ND, which took seconds on a large M1ND while every other change
+// waited for the lock.
+export async function readSessions(context) {
+  const mind = context.paths?.mind;
+  if (!mind) throw new CoreError(503, 'mind_unavailable', 'The M1ND is not available.');
+  const now = context.now(), issues = [], observed = [];
+  const sessionFiles = (await filesUnder(mind, 'user/relay/sessions')).filter((relative) => relative.endsWith('.json') && !relative.includes('.conflict-'));
+  await eachFile(mind, sessionFiles, (bytes, relative) => observed.push(...readSession(bytes, relative, now, issues)));
+  return mergeSessions(observed, await readStatuses(mind, issues), await readWake(mind, issues));
+}
 
 function loadMind(context) {
   return build.run({ root: context.paths?.mind, listing: null }, () => loadMindFiles(context));

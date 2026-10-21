@@ -6,7 +6,7 @@ import { assertNoLinks } from './paths.mjs';
 import { checkRevision, commitChange, prepareChangeUndo, readBytes, recoverTransactions, revisionOf, withLocalChanges } from './store.mjs';
 import { editChatMetadata, groupChatBytes, projectChatBytes } from './chats.mjs';
 import { projectGroup, groupTitle, groupMembers } from './groups.mjs';
-import { readCollection, readProjection } from './projection.mjs';
+import { readCollection, readProjection, readSessions } from './projection.mjs';
 import { readUnitStates, stateHeader } from './state.mjs';
 import { parseRoutes } from '../relay/store.mjs';
 import { directoryIdentity, pathKey, readRepositoryIdentity } from './cluster-git.mjs';
@@ -162,8 +162,7 @@ export async function prepareClusterRemoval(context, id, expectedRevision) {
   if (!current) fail(404, 'cluster_not_found', 'The cluster does not exist.');
   checkRevision(current.bytes, expectedRevision);
   if (records.some(item => !item.cluster.deleted && item.cluster.parentId === id)) fail(409, 'cluster_has_children', 'Move the surviving child clusters before removal.');
-  const view = await readProjection(context);
-  if (view.sessions.some(session => current.cluster.members.includes(session.unitId) && session.state !== 'stopped')) fail(409, 'stop_unavailable', 'Stop the owned sessions before removing this cluster.');
+  if ((await readSessions(context)).some(session => current.cluster.members.includes(session.unitId) && session.state !== 'stopped')) fail(409, 'stop_unavailable', 'Stop the owned sessions before removing this cluster.');
   const relative = `user/relay/chats/${id}/chat.md`, beforeChat = await readBytes(context.store, absolute(context, relative));
   if (!beforeChat || revisionOf(beforeChat) !== current.record.chatRevision) fail(409, 'chat_changed', 'The linked chat changed.');
   const afterChat = editChatMetadata(beforeChat, { listed: false, archived: true });
