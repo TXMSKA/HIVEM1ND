@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- A `performance` knowledge module: rendering, loading, network and data access, with four protocols, `render-audit`, `bundle-and-scripts`, `requests-and-caching` and `queries-and-n-plus-one`. Each starts by measuring a production build, changes only what the figures point to, measures again the same way and leaves a test or a check that fails when the gain regresses. Images and fonts stay with the design module's `assets-and-media` protocol.
+
 ## 2.1.0 - 2026-10-19
 
 Relay fixes collected from the live use of 2.0, released together. 2.0.2 was never published; its changes are part of this release.
