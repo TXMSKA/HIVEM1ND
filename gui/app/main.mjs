@@ -37,7 +37,7 @@ import {
 } from "./chats.mjs";
 import { IMAGE_MAX_BYTES, IMAGE_TYPES, galleryState, messageParts, renderActions, renderAttachDialog, renderGallery, renderPendingParts } from "./chat-media.mjs";
 import { addNode, addBoardFrame, appendBoardNode, boardBounds, boardColors, boardCommentAnchor, boardDocument, dragNodeGeometry, editedBoard, hitBoardNode, indexNodes, loadAssets, parentPoint, patchNode, releaseAssets, removeNode, renderBoard, replaceBoard, setBoardDraft, sketchStroke, touchedStrokes, uploadAsset } from "./blueprint.mjs";
-import { ApiError, clearCredentials, createApi, createOperation, dispose as disposeApi, fetchAsset, operationId, perform, request } from "./api.mjs";
+import { ApiError, clearCredentials, createApi, createOperation, dispose as disposeApi, fetchAsset, forgetSession, operationId, perform, request } from "./api.mjs";
 import { clusterGlyph, element, icon, labelDialog, labeledField, pathIcon, progressMark, restoreRunning, runAction, setBusy, showDialog, showError } from "./components.mjs";
 import {
   applyWatch,
@@ -257,6 +257,11 @@ export function shellLayout(capabilities, audience) {
   return names.has("viewer.write") || names.has("layout.write") ? "desktop" : "phone";
 }
 
+// The tab's own storage, when the browser allows it.
+function tabStorage(env) {
+  try { return env.sessionStorage ?? null; } catch { return null; }
+}
+
 export async function mount(root, env = globalThis) {
   const document = root.ownerDocument;
   const api = createApi({
@@ -264,6 +269,7 @@ export async function mount(root, env = globalThis) {
     history: env.history ?? globalThis.history,
     fetch: env.fetch,
     clock: env.clock,
+    storage: tabStorage(env),
   });
   const store = createStore();
   const app = {
@@ -404,7 +410,7 @@ async function runBoot(app) {
     startOwnEmbed(app);
   } catch (error) {
     if (!app.disposed) {
-      if (error?.status === 401) clearCredentials(app.api);
+      if (error?.status === 401) forgetSession(app.api);
       app.bootFailed = true;
       clearTimeout(app.readyTimer);
       renderFailure(app, error);
