@@ -1,5 +1,5 @@
 import { watch } from 'node:fs';
-import { lstat, readdir } from 'node:fs/promises';
+import { lstat, readdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { hashBytes } from './identity.mjs';
 import { assertNoLinks, resolveTarget } from './paths.mjs';
@@ -9,6 +9,11 @@ import { eligibleTargets, observationSnapshot, observeLocalChange, settleApplied
 
 const SLICE_MS = 60;
 const SLICE_TARGETS = 400;
+// The size, time and file id of every M1ND file at the end of the last pass, kept on this machine. The first pass after a
+// start reads only the files that differ from it, instead of reading and hashing the whole M1ND again (minutes on a large
+// one, during which every other change waited between slices).
+const SIGNATURES_FILE = 'local-watch-signatures.json';
+const SIGNATURES_FORMAT = 'hivem1nd-local-signatures-v1';
 
 // The first pass reads every eligible file of the M1ND against what was staged before, which takes tens of seconds on a large
 // one. A caller that wants the service to answer first passes deferBaseline and starts that pass with close.baseline().
@@ -20,6 +25,8 @@ export async function watchLocalChanges(runtime, onChanges, { deferBaseline = fa
   };
   const known = new Map();
   const seen = new Map();
+  let remembered = new Map();
+  let saveTimer = null;
   const validatedHashes = new Map();
   let catalogHash = null;
   const handles = new Map();
@@ -186,6 +193,7 @@ export async function watchLocalChanges(runtime, onChanges, { deferBaseline = fa
       await runtime.pulse.changed(unique.map(change => change.id));
       await onChanges?.(unique);
     }
+    if (!baseline) scheduleSave();
     if (previousError && !localError && runtime.lastError === previousError) {
       runtime.lastError = null;
       runtime.bus?.emit({ name: 'issue.changed', data: { issue: 'local_change_recovered' } });
@@ -209,6 +217,11 @@ export async function watchLocalChanges(runtime, onChanges, { deferBaseline = fa
         const stats = await lstat(absolute).catch(() => null);
         const signature = stats?.isFile() ? `${stats.size}:${stats.mtimeMs}:${stats.ino}` : null;
         if (!baseline && signature !== null && seen.get(key) === signature && known.has(key) && !snapshot.markers.has(key)) continue;
+        // On the first pass a M1ND file unchanged since the last run is not read again.
+        if (baseline && target.kind === 'mind' && signature !== null && remembered.get(key) === signature && known.has(key) && !snapshot.markers.has(key)) {
+          seen.set(key, signature);
+          continue;
+        }
         if (snapshot.markers.has(key)) {
           const settled = await settleAppliedMarker(runtime.sync, target);
           if (settled.change) changes.push(settled.change);
@@ -286,12 +299,37 @@ export async function watchLocalChanges(runtime, onChanges, { deferBaseline = fa
     handles.clear();
     await running;
     await baselineRun?.catch(() => {});
+    clearTimeout(saveTimer);
+    if (baselineDone) await saveSignatures();
     for (const { watcher } of handles.values()) watcher.close();
     handles.clear();
     context.store.localChangesWatched = false;
   }
 
+  // A service that is stopped without closing still leaves signatures no older than this.
+  function scheduleSave() {
+    if (saveTimer || closed || !baselineDone) return;
+    saveTimer = setTimeout(() => { saveTimer = null; saveSignatures(); }, 30000);
+    saveTimer.unref?.();
+  }
+
+  async function loadSignatures() {
+    try {
+      const record = JSON.parse(await readFile(path.join(runtime.paths.localDirectory, SIGNATURES_FILE), 'utf8'));
+      if (record?.format === SIGNATURES_FORMAT && record.entries && typeof record.entries === 'object') remembered = new Map(Object.entries(record.entries));
+    } catch { remembered = new Map(); }
+  }
+
+  async function saveSignatures() {
+    const file = path.join(runtime.paths.localDirectory, SIGNATURES_FILE), temporary = `${file}.${process.pid}.tmp`;
+    try {
+      await writeFile(temporary, JSON.stringify({ format: SIGNATURES_FORMAT, entries: Object.fromEntries(seen) }));
+      await rename(temporary, file);
+    } catch { /* the next start only reads more */ }
+  }
+
   async function baseline() {
+    await loadSignatures();
     for (const folder of ['acked', 'changes']) {
       const directory = path.join(runtime.paths.localDirectory, 'staging', folder);
       const names = await readdir(directory).catch(error => {
@@ -306,6 +344,8 @@ export async function watchLocalChanges(runtime, onChanges, { deferBaseline = fa
       }
     }
     await reconcile(true);
+    remembered = new Map();
+    if (!closed) await saveSignatures();
   }
 
   function startBaseline() {
