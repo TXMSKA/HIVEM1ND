@@ -1928,6 +1928,9 @@ summary:focus-visible, .row:focus-visible, .library-item:focus-visible { outline
 .queue-panel .queue-item { box-shadow: none; }
 .queue-empty { margin: 4px 0; color: var(--mute); font-size: 13px; }
 /* With several rows picked, a bar over the Hierarchy deletes them. */
-.pick-bar { display: flex; align-items: center; gap: 8px; margin: 6px 0; padding: 6px 8px 6px 12px; border: 1px solid var(--line2); border-radius: 12px; background: var(--card); font-size: 12.5px; }
+.list-block { position: relative; }
+.pick-bar { position: absolute; z-index: 3; left: var(--gap); right: var(--gap); bottom: 8px; display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; border: 1px solid var(--line2); border-radius: 12px; background: var(--card); box-shadow: 0 8px 24px rgb(0 0 0 / 0.35); font-size: 12.5px; }
+.has-pick-bar { padding-bottom: 56px; }
+.has-pick-bar .row[aria-selected="true"] { background: color-mix(in srgb, var(--accent) 16%, var(--card)); box-shadow: inset 3px 0 0 var(--accent); }
 .pick-bar > span { flex: 1; min-width: 0; color: var(--body); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pick-bar .btn { min-height: 28px; padding: 4px 12px; }

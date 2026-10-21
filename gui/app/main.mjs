@@ -1822,8 +1822,10 @@ function renderCollection(app, t) {
   // With no cluster yet, the hint sits under the Clusters heading at the top, not at the foot of the panel.
   const noClusters = app.tab === 'hierarchy' && ![...app.store.indexes.groups.values()].some(group => !group.deleted)
     ? element(document, 'p', { class: 'start-hint empty-clusters', text: startText(app.language, 'noClusters') }) : null;
+  // The bar floats over the foot of the list, so the rows do not move under the pointer when it appears.
   const bar = app.tab === "hierarchy" && app.layout !== "phone" ? pickBar(app) : null;
-  block.append(search, total, ...(bar ? [bar] : []), host);
+  if (bar) host.setAttribute("class", "list has-pick-bar");
+  block.append(search, total, host, ...(bar ? [bar] : []));
   if (noClusters) block.append(noClusters);
   if (app.tab === "chats" && app.layout !== "phone") {
     block.append(element(document, "button", { type: "button", class: "btn", "data-action": "archived-chats", "aria-pressed": String(Boolean(app.archivedChats)), text: t("finalArchived"), onclick: () => {
