@@ -6219,6 +6219,17 @@ function renderSignedOut(app) {
   document.documentElement.lang = app.language;
   document.documentElement.dataset.look = app.look;
   document.documentElement.dataset.mode = 'phone';
+  // A desktop window opened from the desktop icon that lost its session (a reload, for one) is not a phone: it is told how to
+  // open the app again instead of being asked for a phone code.
+  if (/^\/gui\/[^/]+/.test(String(app.api.location?.pathname ?? '')) && !app.api.homeKey) {
+    const gate = element(document, 'section', { class: 'gate desktop-gate', 'data-desktop-signed-out': 'true' });
+    document.title = `${t('desktopReopenTitle')} · HIVEM1ND`;
+    gate.append(element(document, 'div', { class: 'phone-gate-content' }, brand(document).querySelector('.mark'),
+      element(document, 'h1', { text: t('desktopReopenTitle') }), element(document, 'p', { role: 'status', text: t('desktopReopenBody') })));
+    app.root.replaceChildren(gate);
+    releaseBootstrapAnnouncement(app);
+    return;
+  }
   const locked = app.phoneLockDeadline > app.api.now();
   const state = app.phoneEnded ? 'ended' : locked ? 'locked' : app.phoneError === 'phoneCodeMismatch' ? 'error' : 'pair';
   const gate = element(document, "section", { class: "gate phone-gate", "data-phone-state": state });

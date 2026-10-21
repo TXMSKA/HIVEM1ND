@@ -114,6 +114,8 @@ const COPY = {
   highContrast: ["Nocturne", "Nocturne"],
   cancel: ["Cancel", "Cancelar"],
   close: ["Close", "Cerrar"],
+  desktopReopenTitle: ["Open HIVEM1ND again", "Abrir HIVEM1ND de nuevo"],
+  desktopReopenBody: ["This window has no session anymore. Open HIVEM1ND from the desktop icon; your work is saved.", "Esta ventana ya no tiene sesión. Abrir HIVEM1ND desde el ícono del escritorio; el trabajo quedó guardado."],
   stopUnavailable: ["Its running session could not be stopped safely. Stop it first, then try again.", "No se pudo detener con seguridad la sesión en ejecución. Detenerla primero y volver a intentar."],
   retry: ["Retry", "Reintentar"],
   showMore: ["Show {count} more", "Mostrar {count} más"],
