@@ -953,6 +953,24 @@ async function openLocalUrl(url) {
   child.unref();
 }
 
+// The desktop shortcut opens the app in a window of its own when it can, and in the default browser otherwise.
+async function openAppWindow(url) {
+  const { appWindowCommand } = await import("../engine/launcher.mjs");
+  const window = appWindowCommand(url);
+  if (!window) return openLocalUrl(url);
+  const { spawn } = await import("node:child_process");
+  try {
+    const child = spawn(window.command, window.args, { detached: true, stdio: "ignore", windowsHide: false });
+    await new Promise((resolve, reject) => {
+      child.once("spawn", resolve);
+      child.once("error", reject);
+    });
+    child.unref();
+  } catch {
+    await openLocalUrl(url);
+  }
+}
+
 async function waitForServer(server, output) {
   output.write(`Local wizard: ${server.url}\nPress Ctrl+C to stop it.\n`);
   await new Promise((resolve) => {
@@ -1144,7 +1162,7 @@ async function runService(options, dependencies, output) {
             cosmicPath: common.cosmicPath, hostname: common.hostname, aclRunner: dependencies.aclRunner, userKey: dependencies.userKey,
             guardPort: dependencies.guardPort }),
         })).viewerUrl,
-        openUrl: dependencies.openUrl ?? openLocalUrl,
+        openUrl: dependencies.openUrl ?? openAppWindow,
         ...(dependencies.launchTiming ?? {}),
       });
     } catch (error) {

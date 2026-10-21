@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 
 // What a shortcut runs. The app is the local service plus a viewer in the browser. Opening it never hosts the service
 // in the window that was clicked: a service that is not running is started detached and without a console, and a
@@ -54,6 +56,21 @@ export async function launchApp(options, deps) {
   }
   await openUrl(await viewerUrl());
   return { started };
+}
+
+// The app opens in a window of its own, with its own taskbar entry and close button, when Edge or Chrome is installed on
+// Windows; elsewhere, or without either, the default browser opens it. Returns the command to run, or null.
+export function appWindowCommand(url, { platform = process.platform, env = process.env, exists = existsSync } = {}) {
+  if (platform !== 'win32') return null;
+  const roots = [env['ProgramFiles(x86)'], env.ProgramFiles, env.LOCALAPPDATA].filter(Boolean);
+  const browsers = [['Microsoft', 'Edge', 'Application', 'msedge.exe'], ['Google', 'Chrome', 'Application', 'chrome.exe']];
+  for (const parts of browsers) {
+    for (const root of roots) {
+      const command = path.win32.join(root, ...parts);
+      if (exists(command)) return { command, args: [`--app=${url}`] };
+    }
+  }
+  return null;
 }
 
 function delay(ms) {

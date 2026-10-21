@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { LaunchError, launchApp, serviceState, spawnDetachedService } from '../engine/launcher.mjs';
+import { LaunchError, appWindowCommand, launchApp, serviceState, spawnDetachedService } from '../engine/launcher.mjs';
 import { runCli } from '../cli/index.mjs';
 
 const TOKEN_URL = 'http://127.0.0.1:4310/gui/viewer#session=SECRET-TOKEN';
@@ -114,4 +114,14 @@ test('the hidden launcher runs the CLI with no window, waits for it, and shows o
   assert.match(script, /service launch --mind-path/);
   assert.match(script, /If code <> 0 Then MsgBox WScript\.Arguments\(3\)/);
   assert.doesNotMatch(script, /StdOut|Echo|viewerUrl|session/i);
+});
+
+test('the app opens in a window of its own with Edge, then Chrome, and in the default browser otherwise', () => {
+  const env = { 'ProgramFiles(x86)': 'C:\\Program Files (x86)', ProgramFiles: 'C:\\Program Files', LOCALAPPDATA: 'C:\\Users\\a\\AppData\\Local' };
+  const edge = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
+  const chrome = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+  assert.deepEqual(appWindowCommand(TOKEN_URL, { platform: 'win32', env, exists: file => file === edge || file === chrome }), { command: edge, args: [`--app=${TOKEN_URL}`] });
+  assert.deepEqual(appWindowCommand(TOKEN_URL, { platform: 'win32', env, exists: file => file === chrome }), { command: chrome, args: [`--app=${TOKEN_URL}`] });
+  assert.equal(appWindowCommand(TOKEN_URL, { platform: 'win32', env, exists: () => false }), null);
+  assert.equal(appWindowCommand(TOKEN_URL, { platform: 'linux', env, exists: () => true }), null);
 });
