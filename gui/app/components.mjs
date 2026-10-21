@@ -141,6 +141,26 @@ export function progressMark(document, label, attributes = {}) {
   }, element(document, "span", { class: "spinner", "aria-hidden": "true" }), label);
 }
 
+// What is loading shows the shape of what will come instead of a sentence: rows for a list, bubbles for a conversation,
+// lines for details. The sentence stays for assistive technology.
+const SKELETON_SHAPES = {
+  rows: [72, 54, 66, 48, 60, 40, 56],
+  chat: [[false, 62], [true, 44], [false, 74], [true, 38], [false, 52]],
+  details: [80, 64, 72, 50, 68],
+};
+
+export function skeletonMark(document, label, kind = "rows", attributes = {}) {
+  const node = element(document, "div", { class: `skeleton skeleton-${kind}`, role: "status", "aria-busy": "true", "aria-label": label, ...attributes },
+    element(document, "span", { class: "visually-hidden", text: label }));
+  for (const shape of SKELETON_SHAPES[kind] ?? SKELETON_SHAPES.rows) {
+    if (kind === "chat") node.append(element(document, "span", { class: `skeleton-bubble${shape[0] ? " is-own" : ""}`, "aria-hidden": "true", style: `width: ${shape[1]}%` }));
+    else if (kind === "rows") node.append(element(document, "span", { class: "skeleton-row", "aria-hidden": "true" },
+      element(document, "span", { class: "skeleton-dot" }), element(document, "span", { class: "skeleton-bar", style: `width: ${shape}%` })));
+    else node.append(element(document, "span", { class: "skeleton-bar", "aria-hidden": "true", style: `width: ${shape}%` }));
+  }
+  return node;
+}
+
 export function runAction(bucket, key, { label, work, render, operation = null }) {
   const current = bucket.get(key);
   if (current?.phase === "pending") return current.promise;

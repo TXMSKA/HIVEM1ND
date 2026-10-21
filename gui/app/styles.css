@@ -146,6 +146,17 @@ button, input { font: inherit; color: inherit; }
 .shell-opening .workspace, .shell-empty .workspace { padding: 0 var(--gap); }
 .opening-skeletons { padding: 18px; gap: 14px; }
 .opening-skeleton { flex: none; max-width: 100%; border-radius: 6px; background: var(--card2); }
+/* What is loading shows the shape of what will come. */
+.skeleton { display: flex; flex-direction: column; gap: 12px; padding: 10px var(--gap); }
+.skeleton-row { display: flex; align-items: center; gap: 10px; min-height: 22px; }
+.skeleton-dot, .skeleton-bar, .skeleton-bubble { flex: none; max-width: 100%; border-radius: 6px; background: var(--card2); animation: skeleton-pulse 1.4s ease-in-out infinite; }
+.skeleton-dot { width: 16px; height: 16px; border-radius: 5px; }
+.skeleton-bar { height: 12px; }
+.skeleton-bubble { align-self: flex-start; height: 40px; border-radius: 14px; }
+.skeleton-bubble.is-own { align-self: flex-end; }
+.skeleton-chat { padding: 12px 4px; gap: 14px; }
+@keyframes skeleton-pulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .skeleton-dot, .skeleton-bar, .skeleton-bubble { animation: none; } }
 .shell-opening .opening-stage { padding: 0; align-items: center; justify-content: center; }
 .opening-content { display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; }
 .opening-stage .opening-content h2 { margin: 0; font-size: 14px; font-weight: 600; }

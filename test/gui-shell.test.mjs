@@ -7983,6 +7983,7 @@ test('the Hierarchy list says it is loading only while it has nothing to show, a
   assert.equal(total.textContent, '', 'the list total holds no sentence of its own');
   assert.equal(root.querySelector('[data-list-progress]').getAttribute('aria-label'), 'Loading the list.', 'the one mark carries the sentence');
   assert.equal(root.querySelectorAll('[data-list-progress]').length, 1);
+  assert.ok(root.querySelector('[data-list-progress]').className.includes('skeleton-rows'), 'the list shows the rows to come');
   assert.equal(total.className.includes('visually-hidden'), false);
   assert.equal(root.querySelector('[data-collection]').getAttribute('aria-busy'), 'true');
 });
@@ -8063,7 +8064,7 @@ test('an unread conversation says it could not be read instead of saying it has 
   desktop.app.activity.set(`chat-load:${chat.id}`, { key: `chat-load:${chat.id}`, phase: 'pending', scope: 'unit', label: 'Loading', elapsed: 0 });
   renderShell(desktop.app);
   assert.equal(desktop.root.querySelector('[data-empty="chat"]'), null);
-  assert.ok(desktop.root.querySelector('[data-loading="chat"]'));
+  assert.ok(desktop.root.querySelector('[data-loading="chat"]').className.includes('skeleton-chat'), 'the conversation shows the messages to come');
 });
 
 test('the inspector keeps its scroll position when the shell draws again', async t => {

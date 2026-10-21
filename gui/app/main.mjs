@@ -38,7 +38,7 @@ import {
 import { IMAGE_MAX_BYTES, IMAGE_TYPES, galleryState, messageParts, renderActions, renderAttachDialog, renderGallery, renderPendingParts } from "./chat-media.mjs";
 import { addNode, addBoardFrame, appendBoardNode, boardBounds, boardColors, boardCommentAnchor, boardDocument, dragNodeGeometry, editedBoard, hitBoardNode, indexNodes, loadAssets, parentPoint, patchNode, releaseAssets, removeNode, renderBoard, replaceBoard, setBoardDraft, sketchStroke, touchedStrokes, uploadAsset } from "./blueprint.mjs";
 import { ApiError, clearCredentials, createApi, createOperation, dispose as disposeApi, fetchAsset, forgetSession, operationId, perform, request } from "./api.mjs";
-import { clusterGlyph, element, icon, labelDialog, labeledField, pathIcon, progressMark, restoreRunning, runAction, setBusy, showDialog, showError } from "./components.mjs";
+import { clusterGlyph, element, icon, labelDialog, labeledField, pathIcon, progressMark, restoreRunning, runAction, setBusy, showDialog, showError, skeletonMark } from "./components.mjs";
 import {
   applyWatch,
   createComment,
@@ -1609,11 +1609,11 @@ function renderWaitingSurface(app, t) {
     text: cardinal(app.language, "waitingCount", total),
   }));
   if (!list) {
-    surface.append(progressMark(document, t("loadingList")));
+    surface.append(skeletonMark(document, t("loadingList")));
     return surface;
   }
-  // A refresh under items already shown keeps them; the loading line is only for an empty list.
-  if (list.status === "loading" && !(list.items ?? []).length) surface.append(progressMark(document, t("loadingList"), { "data-list-progress": "true" }));
+  // A refresh under items already shown keeps them; the loading rows are only for an empty list.
+  if (list.status === "loading" && !(list.items ?? []).length) surface.append(skeletonMark(document, t("loadingList"), "rows", { "data-list-progress": "true" }));
   if (list.status === "error") {
     surface.append(element(document, "p", { text: t("listError") }));
     surface.append(element(document, "button", {
@@ -1737,7 +1737,7 @@ function renderCollection(app, t) {
   const list = app.tab === "chats" ? app.chatList : app.unitList;
   const block = element(document, "div", { class: "list-block" });
   if (!list) {
-    block.append(element(document, "p", { text: t("loadingList") }));
+    block.append(skeletonMark(document, t("loadingList")));
     return block;
   }
   if (app.layout === "phone") list.rowHeight = 44;
@@ -1759,8 +1759,8 @@ function renderCollection(app, t) {
   const status = list.status === "error" ? t("listError") : waiting ? "" : list.status === "empty" ? (list.query ? t("emptySearch") : emptyCollectionText(t, list.name)) : t("listTotal", { count: formatNumber(app.language, list.total ?? rows.length) });
   // A list that shows rows says its count only to assistive technology; the board shows the rows, not a count.
   const total = element(document, "p", { class: `list-total${list.status === "ready" || (loading && showing) ? " visually-hidden" : ""}`, "data-total": String(list.total ?? ""), "data-list-status": list.status, text: status });
-  // One mark carries the loading text, so the sentence is never written twice.
-  if (waiting) total.append(progressMark(document, t("loadingList"), { "data-list-progress": "true" }));
+  // One mark carries the loading text, so the sentence is never written twice; it shows the rows to come.
+  const skeleton = waiting ? skeletonMark(document, t("loadingList"), "rows", { "data-list-progress": "true" }) : null;
   if (list.status === "error") {
     total.append(element(document, "button", {
       type: "button",
@@ -1831,7 +1831,7 @@ function renderCollection(app, t) {
   // The bar floats over the foot of the list, so the rows do not move under the pointer when it appears.
   const bar = app.tab === "hierarchy" && app.layout !== "phone" ? pickBar(app) : null;
   if (bar) host.setAttribute("class", "list has-pick-bar");
-  block.append(search, total, host, ...(bar ? [bar] : []));
+  block.append(search, total, ...(skeleton ? [skeleton] : []), host, ...(bar ? [bar] : []));
   if (noClusters) block.append(noClusters);
   if (app.tab === "chats" && app.layout !== "phone") {
     block.append(element(document, "button", { type: "button", class: "btn", "data-action": "archived-chats", "aria-pressed": String(Boolean(app.archivedChats)), text: t("finalArchived"), onclick: () => {
@@ -7803,7 +7803,7 @@ function chatPanel(app, t) {
   if (!windowed.items.length) {
     // An empty list is only "no messages" once the messages were read; while they load, or when reading failed, it says so.
     const reading = app.activity?.get(`chat-load:${thread.chat.id}`);
-    if (reading?.phase === "pending") transcript.append(progressMark(document, t("loadingConversation"), { "data-loading": "chat" }));
+    if (reading?.phase === "pending") transcript.append(skeletonMark(document, t("loadingConversation"), "chat", { "data-loading": "chat" }));
     else if (reading?.phase === "error") transcript.append(element(document, "p", { "data-empty": "unread", text: t("chatNotRead") }));
     else {
       const canPost = (app.store.capabilities ?? []).includes("chat.post");
@@ -8339,7 +8339,7 @@ function renderInspector(app, t, selected) {
   }
   if (!data || data.unitId !== selected?.id) {
     if (selected && activityPending(app, `inspector:${selected.id}`)) {
-      panel.append(progressMark(document, t("loadingDetails", { name: selected.unit || selected.id }), { "data-inspector-progress": selected.id }));
+      panel.append(skeletonMark(document, t("loadingDetails", { name: displayName(selected.unit || selected.id) }), "details", { "data-inspector-progress": selected.id }));
     }
     return panel;
   }
