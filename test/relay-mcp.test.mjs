@@ -163,7 +163,7 @@ test('stdio advertises protocol 3.0.0 and editor tools, and a caller flag is not
     { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'blueprint_open', arguments: { resourceId: 'board-1' } } },
     { jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'blueprint_open', arguments: { resourceId: 'board-1' } } },
   ]);
-  assert.equal(lines[0].result.serverInfo.version, '3.1.1');
+  assert.equal(lines[0].result.serverInfo.version, '3.0.0');
   assert.equal(lines[0].result.protocolVersion, '2025-03-26');
   const names = lines[1].result.tools.map((tool) => tool.name);
   for (const name of ['register', 'send_message', 'link', 'blueprint_open', 'blueprint_add_node', 'blueprint_update_node', 'blueprint_remove_node', 'blueprint_reply_comment', 'void_open', 'void_replace_range', 'void_reply_comment']) {

@@ -275,7 +275,7 @@ test('evolve does not advance completion markers or service phases while Relay c
   await writeFile(config, '{}');
   assert.equal((await evolve(options)).completed, true);
   assert.equal(serviceCalls, 1);
-  assert.equal(await readFile(version, 'utf8'), '3.1.1\n');
+  assert.equal(await readFile(version, 'utf8'), '3.0.0\n');
 });
 
 test('evolve configures a client that gained no entry yet, then only reports it', async (context) => {

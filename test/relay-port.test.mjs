@@ -256,8 +256,8 @@ test('the source manifest classifies every enumerated commit and restores each s
     for (const suite of Object.keys(entry.sourceRegressions)) assert.match(await readFile(suite, 'utf8'), /test\(/);
   }
   assert.match(manifest.find(entry => entry.hash.startsWith('32ea6a0')).adaptation, /Release-only/);
-  assert.equal(JSON.parse(await readFile('package.json', 'utf8')).version, '3.1.1');
-  assert.equal(JSON.parse(await readFile('package-lock.json', 'utf8')).version, '3.1.1');
+  assert.equal(JSON.parse(await readFile('package.json', 'utf8')).version, '3.0.0');
+  assert.equal(JSON.parse(await readFile('package-lock.json', 'utf8')).version, '3.0.0');
 });
 
 test('a non-expiring consent retains the daily cap, including urgent wakes, while the owner keeps polling at no model cost', async t => {

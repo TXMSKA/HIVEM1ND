@@ -68,7 +68,7 @@ test('HTTP MCP accepts only the pinned protocol and lists the editor tools', asy
   });
   assert.equal(ready.json.result.capabilities.tools.listChanged, false);
   assert.equal(ready.json.result.serverInfo.name, 'hivem1nd-relay');
-  assert.equal(ready.json.result.serverInfo.version, '3.1.1');
+  assert.equal(ready.json.result.serverInfo.version, '3.0.0');
   const ping = await call(port, 'POST', '/mcp', {
     token,
     body: { jsonrpc: '2.0', id: 8, method: 'ping' },
