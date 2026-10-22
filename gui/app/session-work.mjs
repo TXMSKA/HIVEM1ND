@@ -50,14 +50,16 @@ export function changeContext(api, view, action, notify = () => {}) {
 
 export function renderSessionTabs(document, view, language, onChange) {
   const root = element(document, 'div', { class: 'session-tabs', role: 'tablist', 'aria-label': startText(language, 'work') });
-  const names = ['chat', 'work'];
+  // An agent's inspector has a third tab for its details; a session view of its own keeps Chat and Work.
+  const names = view.detailsTab ? ['chat', 'work', 'details'] : ['chat', 'work'];
   for (const name of names) {
     const tab = element(document, 'button', { type: 'button', role: 'tab', id: `session-${view.session.id}-${name}`,
       class: 'session-tab', 'data-action': `session-${name}`, 'aria-selected': String(view.tab === name),
       'aria-controls': `session-${view.session.id}-panel`, tabindex: view.tab === name ? '0' : '-1',
       text: startText(language, name), onclick: () => onChange(name), onkeydown: event => {
-        const next = event.key === 'Home' ? 'chat' : event.key === 'End' ? 'work'
-          : ['ArrowLeft', 'ArrowRight'].includes(event.key) ? names[(names.indexOf(name) + 1) % 2] : null;
+        const step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? names.length - 1 : 0;
+        const next = event.key === 'Home' ? names[0] : event.key === 'End' ? names.at(-1)
+          : step ? names[(names.indexOf(name) + step) % names.length] : null;
         if (next) { event.preventDefault(); onChange(next); }
       } });
     root.append(tab);
@@ -143,7 +145,9 @@ export function renderContext(document, view, language, onAction) {
     root.append(element(document, 'div', { class: 'context-bar' + (waiting ? ' is-full' : ''), role: 'meter', 'aria-label': label,
       'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': percent }, fill));
   }
-  if (waiting && !context.dismissed || view.contextError || context?.operation?.state === 'pending') {
+  // With no reading of the context there is nothing to compact or clear: the label says so, and no notice offers actions
+  // that cannot run.
+  if (waiting && !context.dismissed || view.contextError && percent !== null || context?.operation?.state === 'pending') {
     const pending = Boolean(view.pending || context?.operation?.state === 'pending');
     const button = action => element(document, 'button', { type: 'button', class: action === 'compact' ? 'btn primary' : 'btn',
       'data-action': `context-${action}`, 'aria-label': t(action === 'dismiss' ? 'close' : action), disabled: pending ? '' : null,

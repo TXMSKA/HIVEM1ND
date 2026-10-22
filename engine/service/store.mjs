@@ -10,10 +10,40 @@ import { clearResource } from './watch.mjs';
 export const RECEIPT_TTL_MS = 24 * 60 * 60 * 1000;
 const localChanges = new AsyncLocalStorage();
 
+// The projection of the M1ND is built from many files. A service keeps the last build in this cache and throws it away
+// when anything it could be built from changes: a write through the store, or a change seen by the file watcher.
+// A store without a cache (every test store, a CLI process) rebuilds on every read, as before.
+export function createProjectionCache() {
+  // A build older than refreshAfterMs is still answered at once while a new one is built behind it; one older than maxAgeMs
+  // is never answered, because the beats and observations in it expire with the clock.
+  return { generation: 0, entries: new Map(), builds: 0, refreshAfterMs: 15000, maxAgeMs: 120000 };
+}
+
+// A write to `target` only matters when the projection reads it: the M1ND, and the run records beside the staging area. The
+// objects, changes and ledgers a first publication writes by the thousand are not read by it and leave the cache alone.
+export function noteProjectionChange(store, target = null) {
+  if (!store?.projectionCache) return;
+  if (target !== null && !isInside(store.mindPath, target) && !isInside(path.join(store.localDirectory, 'runs'), target)) return;
+  store.projectionCache.generation += 1;
+}
+
+// The lock every local change takes is always watched: who took it is kept, so a holder that never lets go can be named
+// (see longHeld). The call site is kept as an Error and formatted only when it is read.
+const WATCHED_LOCKS = new Set(['local-observation']);
+
 function createLockTable() {
   const tails = new Map();
+  const holders = new Map();
+  let ticketSeq = 0;
+  // HIVEM1ND_DEBUG_LOCKS=1 records who holds and who waits for each lock, readable as globalThis.__hivemindLocks.
+  const debug = process.env.HIVEM1ND_DEBUG_LOCKS === '1' ? (globalThis.__hivemindLocks ??= { held: new Map(), waiting: new Map(), next: 0 }) : null;
   return {
+    longHeld(minimumMs, now = Date.now()) {
+      return [...holders.entries()].filter(([, entry]) => now - entry.at >= minimumMs)
+        .map(([ticket, entry]) => ({ ticket, key: entry.key, at: entry.at, stack: String(entry.site.stack ?? '') }));
+    },
     async acquire(key) {
+      const site = WATCHED_LOCKS.has(key) ? new Error('lock holder') : null;
       let release;
       const gate = new Promise((resolve) => {
         release = resolve;
@@ -24,8 +54,20 @@ function createLockTable() {
       next.then(() => {
         if (tails.get(key) === next) tails.delete(key);
       });
+      const ticket = debug ? ++debug.next : 0;
+      if (debug) debug.waiting.set(ticket, { key, since: Date.now(), stack: new Error().stack });
       await previous;
-      return release;
+      if (site) {
+        const held = ++ticketSeq;
+        holders.set(held, { key, at: Date.now(), site });
+        const inner = release;
+        release = () => { holders.delete(held); inner(); };
+      }
+      if (!debug) return release;
+      const entry = debug.waiting.get(ticket);
+      debug.waiting.delete(ticket);
+      debug.held.set(ticket, { ...entry, at: Date.now() });
+      return () => { debug.held.delete(ticket); release(); };
     },
   };
 }
@@ -228,6 +270,11 @@ export async function withLocalChanges(store, operation) {
   });
 }
 
+// Whether the running work already holds the local changes lock of this store.
+export function holdsLocalChanges(store) {
+  return localChanges.getStore()?.get(store)?.active === true;
+}
+
 // Work started from a timer or watcher belongs to no caller: it must take local-observation itself instead of
 // inheriting the lease of whatever call happened to schedule it.
 export function withoutLocalChanges(operation) {
@@ -299,6 +346,7 @@ export async function atomicWrite(store, destination, bytes) {
   await handle.close();
   await renameReplacing(temporary, target, payload);
   store.writes.push(target);
+  noteProjectionChange(store, target);
   return target;
 }
 
@@ -341,6 +389,7 @@ export async function exclusiveRecord(store, destination, bytes) {
   }
   await handle.close();
   store.writes.push(target);
+  noteProjectionChange(store, target);
   return target;
 }
 
@@ -545,11 +594,13 @@ async function commitLocked(store, prepared) {
     const committed = { ...journal, phase: 'committed', emitted: true, staged: true };
     await atomicWrite(store, journalFile(store, prepared.id), journalBytes(committed));
     for (const entry of entries) store.hidden.delete(entry.recordPath);
+    noteProjectionChange(store);
     emit(store, journal.events);
     if (journal.sync) for (const event of journal.events) store.changeBus?.emit(event);
     return { status: receipt?.status ?? prepared.response?.status ?? 200, body: receipt?.response ?? prepared.response?.body ?? null, id: prepared.id };
   } catch (error) {
     store.recovered = false;
+    noteProjectionChange(store);
     throw error;
   }
 }
@@ -564,6 +615,7 @@ async function applyJournalEntry(store, entry, destination) {
     await assertNoLinks(file, { root: store.confineRoot });
     await unlink(file).catch((error) => { if (error.code !== 'ENOENT') throw error; });
     store.writes.push(file);
+    noteProjectionChange(store, file);
   } else {
     await atomicWrite(store, destination, Buffer.from(entry.afterBytesBase64, 'base64'));
     if (entry.private) await protectLocalFile(entry.recordPath, { store });
@@ -586,6 +638,7 @@ async function recoverTransactionsLocked(store, beforeRecover) {
     }
     const recovered = [];
     for (const name of names) recovered.push(await recoverOne(store, name.slice(0, -'.json'.length)));
+    if (names.length > 0) noteProjectionChange(store);
     return recovered.filter(Boolean);
   } finally {
     store.recovering = false;

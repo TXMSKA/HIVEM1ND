@@ -6,6 +6,23 @@ export const PRESET_ICON = Object.freeze({ 'ux-designer': 'blueprint', 'ui-desig
   'security-consultant': 'alert', qa: 'check', 'code-reviewer': 'graph', 'product-manager': 'map', helper: 'adjutant', custom: 'settings' });
 const ROLE_ICON = { overseer: 'crown', overlord: 'executive', executor: 'executor', genesis: 'genesis', incubator: 'genesis', adjutant: 'adjutant', executive: 'executive', ...PRESET_ICON };
 
+// What a person reads for a unit, a cluster or a chat: its name with a capital first letter and spaces for the hyphens and
+// underscores of the id, so "guest-or-ghost" reads "Guest or ghost". The id itself never changes. Each part of a list of
+// names, separated by commas, starts with a capital.
+export function displayName(value) {
+  const text = String(value ?? '').replace(/[-_]+/g, ' ').replace(/[ 	]+/g, ' ').trim();
+  return text.split(/(,\s*)/).map(part => part.charAt(0).toLocaleUpperCase() + part.slice(1)).join('');
+}
+
+// A phrase that starts a line begins with a capital; the rest stays as written.
+export function upperFirst(value) {
+  const text = String(value ?? '');
+  return text.charAt(0).toLocaleUpperCase() + text.slice(1);
+}
+
+// The number beside a cluster's name, in the Hierarchy and on a folded chip of the Map: the clusters inside it, otherwise its agents.
+export const clusterCount = (children, agents) => children || agents;
+
 export function pathFolder(value) {
   const parts = String(value ?? '').split(/[\\/]/).filter(Boolean);
   return parts.at(-1) ?? '';
@@ -24,7 +41,7 @@ export function listedWorktrees(linkPath, worktrees = []) {
 export function readableIdentity(value, personLabel = 'You') {
   if (value === 'root:master' || value === 'root:person' || value === 'master') return personLabel;
   // The unit's own name, as the Map and Hierarchy show it: only the scope prefix goes.
-  return String(value ?? '').split(':').at(-1);
+  return displayName(String(value ?? '').split(':').at(-1));
 }
 
 export function hierarchyIcon(unit) {
@@ -74,7 +91,10 @@ export function buildHierarchy(units, issues = [], groups = []) {
     services, hidden, cycles: [...cycles], issues };
 }
 
-export function flattenVisibleHierarchy(tree, state, query = '') {
+// Incubator and Genesis always have a place at the end of the list: their unit when one exists, otherwise a row that offers to set it up.
+const SERVICES = Object.freeze([{ role: 'incubator', labelKey: 'finalIncubator', glyph: 'bulb' }, { role: 'genesis', labelKey: 'finalGenesis', glyph: 'genesis' }]);
+
+export function flattenVisibleHierarchy(tree, state, query = '', { loaded = true } = {}) {
   const rows = [], fold = state ?? { shown: new Map(), collapsed: new Set() };
   const matches = unit => !query || [unit.unit, unit.alias, unit.job, unit.context].some(value => String(value ?? '').toLowerCase().includes(query.toLowerCase()));
   const pushUnits = (units, depth) => {
@@ -102,7 +122,7 @@ export function flattenVisibleHierarchy(tree, state, query = '') {
     emitted.add(cluster.id);
     const key = `cluster:${cluster.id}`, children = all.filter(item => item.parentId === cluster.id && contains(item));
     const expanded = !fold.collapsed.has(key) || Boolean(query);
-    rows.push({ id: key, kind: 'cluster', groupId: cluster.id, group: cluster, label: cluster.title, depth, count: children.length || cluster.units.length, expanded });
+    rows.push({ id: key, kind: 'cluster', groupId: cluster.id, group: cluster, label: displayName(cluster.title), depth, count: clusterCount(children.length, cluster.units.length), expanded });
     if (!expanded) return;
     pushUnits(cluster.units.filter(matches), depth + 1);
     for (const worktree of cluster.worktrees ?? []) rows.push({ id: `worktree:${cluster.id}:${worktree.id}`, kind: 'worktree', groupId: cluster.id, worktree, label: pathFolder(worktree.path) || worktree.branch || '', depth: depth + 1 });
@@ -111,9 +131,14 @@ export function flattenVisibleHierarchy(tree, state, query = '') {
     if (children.length > shown) rows.push({ id: `more:${key}`, kind: 'more', groupId: key, count: children.length - shown, depth: depth + 1, labelKey: 'more' });
   };
   for (const cluster of all.filter(item => !all.some(parent => parent.id === item.parentId))) appendCluster(cluster, 0);
-  if (tree.services.length) {
+  // Until the units are known, and while a search narrows them, a missing service does not mean it is not set up.
+  const offer = loaded && !query, found = SERVICES.map(service => tree.services.filter(unit => unit.role === service.role && matches(unit)));
+  if (offer || found.some(units => units.length)) {
     rows.push({ id: 'section:services', kind: 'heading', labelKey: 'services', depth: 0 });
-    pushUnits(tree.services.filter(matches), 0);
+    SERVICES.forEach((service, index) => {
+      if (found[index].length) pushUnits(found[index], 0);
+      else if (offer) rows.push({ id: `service:${service.role}`, kind: 'service', role: service.role, glyph: service.glyph, labelKey: service.labelKey, depth: 0 });
+    });
   }
   if (tree.cycles.length) rows.push({ id: 'issue:cycle', kind: 'issue', labelKey: 'cycleIssue', depth: 0 });
   rows.forEach((row, index) => { row.pos = index + 1; row.setsize = rows.length; });
@@ -152,7 +177,63 @@ export function unitsForTree(matches, catalog) {
 function unitRow(unit, depth) { return { id: unit.id, kind: 'unit', unit, depth, label: unitDisplayName(unit) }; }
 
 export function unitDisplayName(unit) {
-  const id = String(unit?.unit ?? unit?.id ?? '');
+  const id = displayName(String(unit?.unit ?? unit?.id ?? '').split(':').at(-1));
   const alias = typeof unit?.alias === 'string' ? unit.alias.trim() : '';
   return alias ? alias + ' (' + id + ')' : id;
+}
+
+// The right-click menu of a Map node, a Map cluster and a Hierarchy row. It opens at the pointer, stays on screen and closes on
+// Escape, on a click elsewhere, on scrolling and on a choice. Each item is { id, label, danger, disabled, rule, glyph, run }; rule draws a line above it
+// and glyph puts an icon before the label.
+export function openContextMenu(document, { x = 0, y = 0, items = [], label = '', title = '' } = {}) {
+  document.querySelector?.('[data-context-menu]')?.remove();
+  const view = document.defaultView, invoker = document.activeElement;
+  // The Map and the list draw themselves again while the menu is open, so the control that opened it may be gone by then.
+  const mark = ['data-unit-id', 'data-group-id', 'data-id'].map(key => [key, invoker?.getAttribute?.(key)]).find(([, value]) => value);
+  const refocus = () => {
+    if (invoker?.isConnected !== false) { invoker?.focus?.(); return; }
+    if (mark) document.querySelector?.(`[${mark[0]}="${String(mark[1]).replace(/["\\]/g, '\\$&')}"]`)?.focus?.();
+  };
+  const menu = element(document, 'div', { class: 'context-menu', role: 'menu', 'aria-label': label, 'data-context-menu': 'true' });
+  // A title says what the entries make, as when a dropped connection offers a new agent.
+  if (title) menu.append(element(document, 'p', { class: 'context-title', role: 'presentation', 'data-context-title': 'true', text: title }));
+  const entries = items.map(item => {
+    const entry = element(document, 'button', { type: 'button', class: `context-item${item.primary ? ' is-primary' : ''}${item.danger ? ' is-danger' : ''}`, role: 'menuitem',
+      'data-action': `context-${item.id}`, disabled: item.disabled ? '' : null, text: item.glyph ? null : item.label }, item.glyph ? [icon(document, item.glyph), item.label] : []);
+    entry.addEventListener('click', () => { close(false); item.run?.(); });
+    if (item.rule) menu.append(element(document, 'div', { class: 'context-rule', role: 'separator' }));
+    menu.append(entry);
+    return entry;
+  });
+  const enabled = () => entries.filter(entry => !entry.disabled && entry.getAttribute('disabled') === null);
+  function close(restore = true) {
+    document.removeEventListener?.('pointerdown', outside, true);
+    document.removeEventListener?.('keydown', keys, true);
+    view?.removeEventListener?.('resize', dismiss);
+    view?.removeEventListener?.('blur', dismiss);
+    document.removeEventListener?.('scroll', dismiss, true);
+    menu.remove();
+    if (restore) refocus();
+  }
+  function dismiss() { close(false); }
+  function outside(event) { if (!menu.contains?.(event.target)) close(false); }
+  function keys(event) {
+    const live = enabled(), index = live.indexOf(document.activeElement);
+    if (event.key === 'Escape') { event.preventDefault?.(); close(); return; }
+    if (event.key === 'Tab') { close(false); return; }
+    const next = event.key === 'ArrowDown' ? live[(index + 1) % live.length] : event.key === 'ArrowUp' ? live[(index - 1 + live.length) % live.length]
+      : event.key === 'Home' ? live[0] : event.key === 'End' ? live.at(-1) : null;
+    if (next) { event.preventDefault?.(); next.focus?.(); }
+  }
+  document.addEventListener?.('pointerdown', outside, true);
+  document.addEventListener?.('keydown', keys, true);
+  view?.addEventListener?.('resize', dismiss);
+  view?.addEventListener?.('blur', dismiss);
+  document.addEventListener?.('scroll', dismiss, true);
+  document.body.append(menu);
+  const box = menu.getBoundingClientRect?.(), width = box?.width ?? 0, height = box?.height ?? 0;
+  menu.style.left = `${Math.max(8, Math.min(x, (view?.innerWidth ?? x + width + 8) - width - 8))}px`;
+  menu.style.top = `${Math.max(8, Math.min(y, (view?.innerHeight ?? y + height + 8) - height - 8))}px`;
+  enabled()[0]?.focus?.();
+  return { menu, close };
 }

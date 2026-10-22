@@ -248,7 +248,7 @@ test("Electron shows the window after the local wizard finishes loading", async 
 test("terminal setup renders descriptors and installs only after preview", async () => {
   const steps = [
  {id:'install',number:1,total:4,language:'es',title:'Instalar HIVEM1ND',fields:[],values:{}},
- {id:'location',number:2,total:4,language:'es',title:'Dónde se guarda el M1ND',fields:[{id:'mindPath',type:'text',label:'Carpeta',required:true}],values:{mindPath:'C:/fixture/M1ND'}},
+ {id:'location',number:2,total:4,language:'es',title:'Dónde se guarda la M1ND',fields:[{id:'mindPath',type:'text',label:'Carpeta',required:true}],values:{mindPath:'C:/fixture/M1ND'}},
  {id:'service',number:3,total:4,language:'es',title:'Iniciando el servicio Relay',fields:[],values:{}},
  {id:'ready',number:4,total:4,language:'es',title:'HIVEM1ND está en ejecución',description:'Listo.',fields:[],values:{},done:true,result:{completed:true,message:'Listo.',attachPrompts:[{agent:'otro',text:'Adjuntar'}]}}
  ];
@@ -432,6 +432,20 @@ test("init gives the setup session the Relay setup option, in the terminal and i
   const setup = { async createSetupSession(options) { sessionOptions = options; return {}; } };
   await runCli(["init"], { stdout: sink().stream, stderr: sink().stream, setup, prompts: new Proxy({}, { get() { throw new Error("stop"); } }) }).catch(() => {});
   assert.equal(sessionOptions.relaySetup, true);
+});
+
+test("init makes both shortcuts unless --no-desktop-shortcut is given, which only init accepts", async () => {
+  assert.equal(parseArgs(["init"]).options.desktopShortcut, undefined);
+  assert.equal(parseArgs(["init", "--no-desktop-shortcut"]).options.desktopShortcut, false);
+  assert.throws(() => parseArgs(["init", "--no-desktop-shortcut", "--no-desktop-shortcut"]), /Conflicting or repeated/);
+  assert.throws(() => parseArgs(["evolve", "--no-desktop-shortcut"]), /not valid for evolve/);
+  assert.match(await helpText(), /--no-desktop-shortcut/);
+  const received = [];
+  for (const argv of [["init", "--gui"], ["init", "--gui", "--no-desktop-shortcut"]]) {
+    const wizard = { async createWizardServer({ sessionOptions }) { received.push(sessionOptions); return { url: "http://127.0.0.1" }; } };
+    assert.equal(await runCli(argv, { stdout: sink().stream, stderr: sink().stream, wizard, openUrl: async () => {}, waitForServer: async () => {} }), 0);
+  }
+  assert.deepEqual(received.map((options) => [options.shortcuts, options.desktopShortcut]), [[true, undefined], [true, false]]);
 });
 
 test("ordinary evolve enables the real service phases and preserves injected registration boundaries", async () => {

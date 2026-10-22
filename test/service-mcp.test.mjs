@@ -353,6 +353,62 @@ test('legacy MCP tools cannot cross the credential unit', async (t) => {
   assert.equal(audit.includes(token), false);
 });
 
+test('the link tool runs through the service: its receipt replays the code and a second unit joins with it', async (t) => {
+  const fixture = await makeCoreFixture();
+  const mind = fixture.paths.mind;
+  const units = [['one', 'native-one', 4242], ['two', 'native-two', 4243]].map(([name, nativeSessionId, pid]) => ({
+    name, nativeSessionId, pid, unitId: `root:${name}`, registrationId: randomUUID(),
+    sessionId: uuidV8(['session', fixture.machine, 'cursor', nativeSessionId, `root:${name}`]),
+  }));
+  await mkdir(path.join(mind, 'user', 'relay', 'sessions'), { recursive: true });
+  await mkdir(path.join(fixture.paths.localDirectory, 'session-starts'), { recursive: true });
+  for (const unit of units) {
+    await mkdir(path.join(mind, 'user', 'state'), { recursive: true });
+    await mkdir(path.join(mind, 'user', 'inbox', unit.name), { recursive: true });
+    await writeFile(path.join(mind, 'user', 'state', `${unit.name}.md`), `unit: ${unit.name}\nunit-id: ${unit.unitId}\nstate: in\nmachine: DESKTOP\n\nReady.\n`);
+    await writeFile(path.join(mind, 'user', 'relay', 'sessions', `${unit.registrationId}.json`), `${JSON.stringify({
+      kind: 'registration', registrationId: unit.registrationId, instanceId: `service-${fixture.machine}`, sessionId: unit.sessionId,
+      unit: unit.name, unitId: unit.unitId, scopeId: 'root', nativeSessionId: unit.nativeSessionId, client: 'cursor', machine: fixture.machine,
+      registeredAt: '2026-10-11T12:00:00.000Z', activity: 'idle', activityObservedAt: '2026-10-11T12:00:00.000Z', quota: null, quotaObservedAt: null,
+    })}\n`);
+    await writeFile(path.join(fixture.paths.localDirectory, 'session-starts', `${randomUUID()}.json`), `${JSON.stringify({ sessionId: unit.sessionId, pid: unit.pid })}\n`);
+  }
+  const core = await composeCore({
+    store: fixture.store, paths: fixture.paths, now: () => fixture.clock.now, projects: [], ownedPids: new Set(units.map((unit) => unit.pid)),
+    adapters: { cursor: { confirm: (proof) => units.some((unit) => proof.unitId === unit.unitId && proof.nativeSessionId === unit.nativeSessionId && proof.client === 'cursor' && proof.machine === fixture.machine) } },
+  });
+  t.after(async () => {
+    await core.http.close();
+    await dispose(fixture);
+  });
+  const [one, two] = units.map((unit) => core.credentials.issue({ audience: 'agent', unitId: unit.unitId, sessionId: unit.sessionId, attached: true, capabilities: ['own'] }).token);
+  const headers = { accept: 'application/json, text/event-stream' };
+  let id = 0;
+  const tool = async (token, name, args) => {
+    const response = await call(core.http.port, 'POST', '/mcp', { token, headers, body: { jsonrpc: '2.0', id: id += 1, method: 'tools/call', params: { name, arguments: args } } });
+    return { failed: response.json.result.isError, data: JSON.parse(response.json.result.content[0].text) };
+  };
+  const requestId = randomUUID();
+  const made = await tool(one, 'link', { requestId });
+  assert.equal(made.failed, false);
+  const link = made.data.data;
+  assert.match(link.code, /^[2-9A-HJ-NP-Z]{5}$/);
+  assert.equal((await tool(one, 'link', { requestId })).data.data.code, link.code, 'the receipt replays the same code');
+  assert.equal((await readdir(path.join(mind, 'user', 'relay', 'links'))).filter((name) => name.endsWith('.json')).length, 1);
+
+  const joined = await tool(two, 'link', { code: link.code });
+  assert.equal(joined.failed, false);
+  assert.deepEqual(joined.data.data.members, ['one', 'two']);
+  assert.equal(joined.data.data.joined, true);
+  const sent = await tool(two, 'send_message', { to: `link:${link.linkId}`, subject: 'Over the link', body: 'hello one' });
+  assert.deepEqual(sent.data.data.recipients, ['one']);
+  const inbox = await tool(one, 'list_inbox', {});
+  assert.deepEqual(inbox.data.data.messages.map((message) => message.subject).sort(), ['Linked', 'Over the link']);
+  const wrong = await tool(one, 'link', { code: 'AAAAA' });
+  assert.equal(wrong.failed, true);
+  assert.equal(wrong.data.error.code, 'link_not_found');
+});
+
 async function bindUnit(fixture, resourceId, unitId) {
   const directory = path.join(fixture.paths.mind, 'user', 'relay', 'editors');
   await mkdir(directory, { recursive: true });

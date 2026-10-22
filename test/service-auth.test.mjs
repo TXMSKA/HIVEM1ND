@@ -15,7 +15,7 @@ import { createNativeAdapter, enqueueStart } from '../engine/service/adapters.mj
 import { requestApproval } from '../engine/service/approvals.mjs';
 import { createHttpServer } from '../engine/service/http.mjs';
 import { legacyTreeInventory } from '../engine/legacy-copy.mjs';
-import { authorize, checkHost, checkLimits, checkOrigin, checkPeer, createAclRunner, createCredentialStore, createSecuritySink, protectLocalFile, safeError, SECURITY_ALERT_THRESHOLD, SECURITY_FAILURE_LIMIT, SECURITY_FAILURE_WINDOW_MS, stubAclRunner } from '../engine/service/security.mjs';
+import { authorize, checkHost, checkLimits, checkOrigin, checkPeer, createAclRunner, createCredentialStore, createSecuritySink, protectBootstrapFiles, protectLocalFile, safeError, SECURITY_ALERT_THRESHOLD, SECURITY_FAILURE_LIMIT, SECURITY_FAILURE_WINDOW_MS, stubAclRunner } from '../engine/service/security.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
 const PHONE_FORBIDDEN = ['unit.create', 'chat.manage', 'layout.write', 'settings.write', 'home.manage', 'grant.revoke', 'session.start', 'session.stop', 'task.undo', 'editor.write', 'comment.write', 'asset.write', 'proposal.answer', 'watch', 'viewer.write'];
@@ -343,7 +343,8 @@ test('local login requires the protected bootstrap secret and binds only the vie
   const localBody = { embedded: false, hostOrigin: null, look: null, language: null };
   const flooded = await requestJson(httpPort, 'POST', '/api/v1/auth/local', { token: secret, body: localBody });
   const spared = await requestJson(httpPort, 'POST', '/api/v1/auth/local', { token: secret, body: localBody });
-  for (let index = 0; index < 240; index += 1) {
+  // The local desktop has a budget of 1200 reads a minute; other callers keep 240.
+  for (let index = 0; index < 1200; index += 1) {
     const once = await requestJson(httpPort, 'GET', '/api/v1/viewer', { token: flooded.json.data.token });
     assert.equal(once.status, 200);
   }
@@ -577,4 +578,24 @@ test('ending a watch, logging out and opening the event stream refuse unknown fi
   assert.equal(extraLogout.json.error.code, 'unknown_field');
   assert.equal((await requestJson(port, 'POST', '/api/v1/auth/logout', { token: viewer, body: {} })).status, 204);
   assert.equal((await requestJson(port, 'POST', '/api/v1/auth/logout', { token: await signIn() })).status, 204, 'a logout without a body still works');
+});
+
+test('a private folder already limited to its owner is not protected again, and one that is not gets protected', { skip: process.platform !== 'win32' }, async (t) => {
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const directory = await mkdtemp(path.join(tmpdir(), 'hivem1nd-acl-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'bootstrap.json');
+  await writeFile(file, '{}\n');
+  // Protecting a folder rewrites everything inside it, which outlasted the time limit on a large folder after a restart.
+  const limited = stubAclRunner();
+  await protectBootstrapFiles(directory, file, { aclRunner: limited });
+  assert.deepEqual(limited.calls.filter((call) => call.op === 'protect').map((call) => call.target), [file]);
+  const open = stubAclRunner();
+  let first = true;
+  const check = open.check;
+  open.check = (target) => { if (first && target === directory) { first = false; throw new Error('inherits'); } return check(target); };
+  await protectBootstrapFiles(directory, file, { aclRunner: open });
+  assert.deepEqual(open.calls.filter((call) => call.op === 'protect').map((call) => call.target), [directory, file]);
+  assert.ok(open.calls.some((call) => call.op === 'check' && call.target === directory), 'the folder is checked after it is protected');
 });

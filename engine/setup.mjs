@@ -41,13 +41,16 @@ import {
   hashContent,
   writeMachineRecord,
 } from './records.mjs';
+import { applyFolderIcon } from './folder-icon.mjs';
+import { applyShortcuts, removeOwnedShortcuts, shortcutPlan, windowsShortcutFolders } from './shortcuts.mjs';
+import { estimateStagedFiles, syncProgress } from './setup-progress.mjs';
 import { detectLanguage, LANGUAGES, option, relayLine, text } from './texts.mjs';
 
 const SETUP_PHASES = ['prepare', 'close-legacy', 'copy', 'migrate', 'configure', 'start', 'open', 'ready'];
 const SETUP_COPY = {
   en: { joinTitle: 'Join this M1ND', join: 'Join', closeTitle: 'Close HIVEM1ND 2.x first', close: 'Sessions closed, migrate',
     offline: 'A session on an offline machine closes the next time that machine starts HIVEM1ND.', review: 'Review changes in Settings' },
-  es: { joinTitle: 'Unirse a este M1ND', join: 'Unirse', closeTitle: 'Cerrar HIVEM1ND 2.x primero', close: 'Sesiones cerradas, migrar',
+  es: { joinTitle: 'Unirse a esta M1ND', join: 'Unirse', closeTitle: 'Cerrar HIVEM1ND 2.x primero', close: 'Sesiones cerradas, migrar',
     offline: 'Una sesión en una máquina desconectada se cierra la próxima vez que esa máquina inicia HIVEM1ND.', review: 'Revisar cambios en Configuración' },
 };
 
@@ -89,6 +92,13 @@ export async function createSetupSession(options = {}) {
     serviceStart: options.serviceStart ?? null,
     serviceQuery: options.serviceQuery ?? null,
     aclRunner: options.aclRunner ?? null,
+    folderIconPlatform: options.folderIconPlatform ?? null,
+    shortcuts: options.shortcuts === true,
+    desktopShortcut: options.desktopShortcut !== false,
+    shortcutFolders: options.shortcutFolders ?? null,
+    shortcutRunner: options.shortcutRunner ?? null,
+    nodePath: options.nodePath ?? null,
+    attribRunner: options.attribRunner ?? null,
     sid: options.sid ?? null,
     serviceProtect: options.serviceProtect !== false,
     openViewer: options.openViewer ?? null,
@@ -260,9 +270,15 @@ class SetupSession {
           sessions: sessions.map(({ binding }) => ({ unit: binding.unit, client: binding.client, machine: binding.machine,
             local: binding.machine === this.hostname })) };
       }
+      if (this.offersDesktopShortcut()) {
+        base.fields.push(field('desktopShortcut', 'boolean', text(language, 'desktopShortcut'), false));
+        base.values.desktopShortcut = this.desktopShortcut !== false;
+        base.shortcut = { title: text(language, 'desktopShortcut') };
+      }
     }
     if (id === 'service') {
       base.progress = this.setupProgress();
+      await this.attachSyncProgress(base.progress, language);
       base.failure = this.checkpoint?.error ? { code: this.checkpoint.error.code,
         headline: this.checkpoint.error.message, body: text(language, 'failureScope') } : null;
       const preview = this.checkpoint?.completed.includes('configure') ? { conflicts: [] }
@@ -333,6 +349,27 @@ class SetupSession {
     }).filter(row => migrating || row.id !== 'legacy');
   }
 
+  // While the service starts for the first time it stages and publishes every file of the M1ND, which takes minutes.
+  // The counts come from the staging folders the service writes, so the step can show a bar instead of a bare spinner.
+  async attachSyncProgress(rows, language) {
+    const row = rows.find(item => item.id === 'start' && item.state === 'busy');
+    if (!row) return;
+    try {
+      const directory = this.localDirectory();
+      if (this.stagingEstimate === undefined) {
+        this.stagingEstimate = null;
+        estimateStagedFiles(this.mindPath).then(count => { this.stagingEstimate = count; }, () => {});
+      }
+      const found = await syncProgress({ localDirectory: directory, estimate: this.stagingEstimate });
+      const numbers = { done: found.done.toLocaleString(language), total: found.total === null ? '' : found.total.toLocaleString(language) };
+      const key = found.phase === 'preparing' ? 'syncPreparing' : found.phase === 'publishing' ? 'syncPublishing'
+        : found.total === null ? 'syncStagingUnknown' : 'syncStaging';
+      row.sync = { phase: found.phase, done: found.done, total: found.total, detail: text(language, key, numbers) };
+    } catch {
+      // The count is a courtesy; the step keeps its spinner and its seconds when the folders cannot be read.
+    }
+  }
+
   async setLanguage(value) {
     this.answers.language = normalizeLanguage(value);
     await this.persistDraft();
@@ -346,6 +383,10 @@ class SetupSession {
     if (this.currentStep === 1) {
       this.currentStep = 2;
     } else if (this.currentStep === 2) {
+      if (values.desktopShortcut !== undefined) {
+        if (typeof values.desktopShortcut !== 'boolean') throw new SetupValidationError('desktopShortcut must be a boolean');
+        this.desktopShortcut = values.desktopShortcut;
+      }
       const selected = path.resolve(requireValue(values.mindPath ?? this.mindPath, 'mindPath'));
       validateMindSelection(selected, this.kitPath);
       await validateDestinationType(selected);
@@ -752,6 +793,7 @@ class SetupSession {
     if (!this.answers.confirm) throw new SetupValidationError('Installation must be confirmed');
     if (this.installing) throw new CoreError(409, 'setup_busy', 'Setup is already running.');
     this.installing = true;
+    this.stagingEstimate = undefined;
     try {
       await this.prepareSetup();
       await this.phase('prepare', () => this.prepareDestination());
@@ -818,7 +860,7 @@ class SetupSession {
       // Known migration stops say what stopped them in the person's language; nothing was copied or closed.
       const open = (this.checkpointProof.sessions ?? []).filter(session => session.binding?.machine === this.hostname && session.status !== 'closed');
       const causeMessage = typeof error?.legacyPath === 'string' ? (spanish
-        ? `La migración se detuvo: el M1ND anterior tiene un enlace o un elemento que no es un archivo en ${error.legacyPath}, y la migración no sigue enlaces. Quitarlo o moverlo fuera del M1ND y reintentar. No se copió nada.`
+        ? `La migración se detuvo: la M1ND anterior tiene un enlace o un elemento que no es un archivo en ${error.legacyPath}, y la migración no sigue enlaces. Quitarlo o moverlo fuera de la M1ND y reintentar. No se copió nada.`
         : `Migration stopped: the previous M1ND has a link or an entry that is not a file at ${error.legacyPath}, and migration does not follow links. Remove it or move it out of the M1ND, then retry. Nothing was copied.`)
         : error?.code === 'legacy_closure_required' ? (spanish
           ? `La migración se detuvo: no se pudieron cerrar las sesiones de HIVEM1ND 2.x de esta máquina (${open.length}). No se cerró ninguna y no se copió nada.`
@@ -855,9 +897,23 @@ class SetupSession {
     await this.createMindLayout();
     const display = await this.writeDisplaySettings();
     const applied = await applyInstallPlan(plan, this.answers.conflicts);
-    const managedFiles = { ...(this.machineRecord?.managedFiles ?? {}), ...applied.managedFiles };
+    const folderIcon = await this.writeFolderIcon();
+    const shortcuts = await this.writeShortcuts();
+    // A migrated copy inherits the machine record of the previous M1ND; the files inside that M1ND are not this installation's.
+    const inherited = { ...(this.machineRecord?.managedFiles ?? {}) };
+    const legacySource = this.checkpoint?.mode === 'migrate' ? this.checkpoint.sourcePath ?? this.legacySourcePath : null;
+    if (legacySource) for (const filePath of Object.keys(inherited)) if (isWithin(legacySource, filePath)) delete inherited[filePath];
+    const managedFiles = { ...inherited, ...applied.managedFiles };
     // Setup wrote this file, so uninstall may remove it while its bytes are unchanged.
     if (display) managedFiles[display.file] = display.hash;
+    // The folder icon file is recorded only when setup created it or already owned it; a desktop.ini the person had is merged, never claimed.
+    if (folderIcon?.status === 'applied' && (folderIcon.created || Object.hasOwn(inherited, folderIcon.file))) managedFiles[folderIcon.file] = folderIcon.hash;
+    // A shortcut is recorded when setup made it or already owned it, so uninstall removes it while it is unchanged;
+    // one the person put there under the same name is left alone and never claimed; a removed one leaves the record.
+    for (const shortcut of shortcuts) {
+      if (shortcut.status === 'applied') managedFiles[shortcut.file] = shortcut.hash;
+      else delete managedFiles[shortcut.file];
+    }
     for (const filePath of plan.retired) delete managedFiles[filePath];
     for (const conflict of plan.conflicts) {
       if (this.answers.conflicts[conflict.path] === 'keep') delete managedFiles[conflict.path];
@@ -1152,7 +1208,8 @@ class SetupSession {
       for (const entry of this.checkpointProof.inventory ?? []) {
         // Outside user/ a 2.x M1ND holds only the old kit (its files, package.json and node_modules). In the copy that
         // is upgraded it is replaced without a question; the original M1ND keeps every byte.
-        if (entry.kind === 'file' && !entry.path.startsWith('user/') && !entry.path.startsWith('.migration/')) existingManaged[path.join(this.mindPath, entry.path)] = entry.sha256;
+        // A desktop.ini is the folder's own setting (its icon and view), never part of the old kit.
+        if (entry.kind === 'file' && !entry.path.startsWith('user/') && !entry.path.startsWith('.migration/') && entry.path.toLowerCase() !== 'desktop.ini') existingManaged[path.join(this.mindPath, entry.path)] = entry.sha256;
       }
     }
     const peerHashes = await readPeerHashes(this.mindPath, this.hostname);
@@ -1220,10 +1277,51 @@ class SetupSession {
     ), {
       managedFiles: Object.fromEntries(Object.entries(existingManaged).filter(([file]) => isWithin(this.mindPath, file))),
       mindPath: this.mindPath,
-      retainedPaths: attach ? Object.keys(existingManaged) : [],
+      retainedPaths: [path.join(this.mindPath, 'desktop.ini'), ...(attach ? Object.keys(existingManaged) : [])],
       skillsRoots: [],
       peerHashes,
     });
+  }
+
+  // The icon is cosmetic: when it cannot be set the installation goes on without it.
+  async writeFolderIcon() {
+    if (this.answers.attach || this.checkpoint?.mode === 'join') return null;
+    return applyFolderIcon(this.mindPath, { platform: this.folderIconPlatform ?? process.platform, attrib: this.attribRunner ?? undefined, env: this.env })
+      .catch(error => ({ status: 'failed', reason: error.code ?? error.message }));
+  }
+
+  // The wizard offers the desktop shortcut wherever setup makes shortcuts.
+  offersDesktopShortcut() {
+    return this.shortcuts === true && (this.folderIconPlatform ?? process.platform) === 'win32';
+  }
+
+  // The desktop and Start menu shortcuts start the app without a console. They are made only for a real Windows
+  // installation, and only when the M1ND holds the launcher they run. Without the desktop shortcut, the one setup made
+  // before and the person has not changed is removed.
+  async writeShortcuts() {
+    const platform = this.folderIconPlatform ?? process.platform;
+    if (this.shortcuts !== true || this.serviceDryRun !== false || platform !== 'win32') return [];
+    try {
+      const mind = this.mindPath;
+      const hasLauncher = async (root) => {
+        for (const file of [['gui', 'launch.vbs'], ['cli', 'index.mjs']]) if (!await lstat(path.join(root, ...file)).then(state => state.isFile(), () => false)) return false;
+        return true;
+      };
+      const kit = this.kitPath && await hasLauncher(this.kitPath) ? this.kitPath : await hasLauncher(mind) ? mind : null;
+      if (!kit) return [];
+      const language = this.answers.language;
+      const folders = this.shortcutFolders ?? await windowsShortcutFolders({ env: this.env, home: this.homeDir });
+      const desktop = this.desktopShortcut !== false;
+      const managed = this.machineRecord?.managedFiles ?? {};
+      const plan = shortcutPlan({ platform, mindPath: mind, kitPath: kit, nodePath: this.nodePath ?? process.execPath, cosmicPath: this.cosmicPath ?? '',
+        folders: desktop ? folders : { startMenu: folders.startMenu },
+        message: text(language, 'launchFailed'), description: text(language, 'shortcutDescription'), env: this.env });
+      const applied = await applyShortcuts(plan, { managed, run: this.shortcutRunner ?? undefined, env: this.env });
+      return desktop ? applied : [...applied, ...await removeOwnedShortcuts([folders.desktop], { managed })];
+    } catch {
+      // A shortcut is a convenience: the installation goes on without it.
+      return [];
+    }
   }
 
   // A new or migrated M1ND without display settings opens in the language chosen in setup; a joined one is never written.

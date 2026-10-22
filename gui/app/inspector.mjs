@@ -2,9 +2,16 @@ import { canAccept, canSendBack } from "./actions.mjs";
 import { clientLabel, clusterLead } from './clusters.mjs';
 import { element, icon, labeledField, pathIcon, progressMark } from "./components.mjs";
 import { formatWhen } from "./i18n.mjs";
-import { readableIdentity, unitDisplayName } from './hierarchy.mjs';
+import { displayName, hierarchyIcon, readableIdentity, unitDisplayName, upperFirst } from './hierarchy.mjs';
 import { roleLabel, startText } from './start-copy.mjs';
 import { addText } from './add-view.mjs';
+
+// "Starts fresh every session" is only true of an Overseer that holds nothing: a unit with sessions, unread messages or a
+// recorded state keeps what it has, so it does not say so.
+export function startsFresh(unit) {
+  if (unit?.role !== 'overseer' || unit.fresh === false) return false;
+  return !(unit.sessionIds?.length || unit.unread > 0 || unit.context || unit.date);
+}
 
 export function renderAgentHeader(document, unit, session, language, onMore) {
   const t = key => startText(language, key), working = ['busy', 'working', 'active'].includes(session?.activity);
@@ -12,33 +19,34 @@ export function renderAgentHeader(document, unit, session, language, onMore) {
     element(document, 'span', { class: 'agent-avatar', 'aria-hidden': 'true' }, icon(document, unit.role === 'overseer' ? 'crown' : 'executor')),
     element(document, 'div', {}, element(document, 'h2', { text: unitDisplayName(unit) }),
       element(document, 'p', { class: 'agent-status' }, working ? element(document, 'span', { class: 'spinner', 'aria-hidden': 'true' }) : null,
-        unit.role === 'overseer' && unit.fresh !== false ? t('freshStatus') : t(working ? 'busy' : 'pending'))),
+        startsFresh(unit) ? t('freshStatus') : t(working ? 'busy' : 'pending'))),
     element(document, 'button', { type: 'button', class: 'icon-button agent-more', 'data-action': 'agent-more', 'aria-label': t('moreMenu'), text: '···', onclick: onMore }));
+}
+
+const clusterMembers = (cluster, units) => (units ?? []).filter(unit => !unit.removed && unit.role !== 'master' && cluster.members.includes(unit.id));
+
+// The one line under a cluster's name: what it is, what it holds and how many agents work in it.
+export function clusterSummary(model) {
+  const t = (key, values) => startText(model.language, key, values);
+  const cluster = model.cluster, kind = cluster.link?.kind ?? 'none', repositories = (model.children ?? []).length, agents = clusterMembers(cluster, model.units).length;
+  const parts = [t(kind === 'repository' ? 'repository' : kind === 'folder' ? 'folder' : 'notLinked')];
+  if (kind === 'folder' && repositories) parts.push(t(repositories === 1 ? 'repositoryOne' : 'repositoryMany', { count: repositories }));
+  if (kind === 'repository' && model.git?.branch) parts.push(t('onBranch', { branch: model.git.branch }));
+  parts.push(!agents ? t('agentsNone') : t(agents === 1 ? 'agentOne' : 'agentMany', { count: agents }));
+  return parts.join(', ');
 }
 
 export function renderCluster(document, model, actions = {}) {
   const t = (key, values) => startText(model.language, key, values);
-  const cluster = model.cluster, kind = cluster.link?.kind ?? 'none';
+  const cluster = model.cluster;
   const root = element(document, 'section', { class: 'cluster-inspector', 'data-cluster-inspector': cluster.id });
-  const action = (key, id, run, glyph = null) => element(document, 'button', { type: 'button', class: glyph ? 'icon-button' : 'btn',
-    'data-action': id, 'aria-label': t(key), title: t(key), onclick: run }, glyph ? icon(document, glyph) : t(key));
-  const add = action('newAgent', 'new-agent', actions.onNewAgent, 'executor'); add.replaceChildren(icon(document, 'plus'));
-  const more = action('moreMenu', 'cluster-more', actions.onMore, 'settings'); more.replaceChildren(pathIcon(document, 'M5 12h.1M12 12h.1M19 12h.1'));
+  const action = (key, id, run) => element(document, 'button', { type: 'button', class: 'icon-button',
+    'data-action': id, 'aria-label': t(key), title: t(key), onclick: run });
+  const add = action('newAgent', 'new-agent', actions.onNewAgent); add.replaceChildren(icon(document, 'plus'));
+  const more = action('moreMenu', 'cluster-more', actions.onMore); more.replaceChildren(pathIcon(document, 'M5 12h.1M12 12h.1M19 12h.1'));
   root.append(element(document, 'header', { class: 'cluster-heading' }, element(document, 'span', { class: 'cluster-avatar', 'aria-hidden': 'true' }, icon(document, 'folder')),
-    element(document, 'div', {}, element(document, 'h2', { text: cluster.title }), element(document, 'p', { text: t(kind === 'repository' ? 'repoCluster' : kind === 'folder' ? 'folder' : 'unlinkedCluster') })),
+    element(document, 'div', {}, element(document, 'h2', { text: displayName(cluster.title) }), element(document, 'p', { 'data-cluster-summary': 'true', text: clusterSummary(model) })),
     add, more));
-  const facts = element(document, 'section', { class: 'cluster-git', 'data-cluster-git': cluster.id });
-  if (model.git) {
-    const git = model.git;
-    facts.append(element(document, 'div', { class: 'cluster-git-identity' }, element(document, 'code', { text: git.remote ?? '' }),
-      element(document, 'code', { class: 'cluster-branch', text: git.branch ?? 'HEAD' })),
-      element(document, 'p', { class: 'cluster-dirty', text: t(git.dirtyCount === 1 ? 'changedOne' : 'changedMany', { count: git.dirtyCount }) }));
-    if (git.lastCommit) facts.append(element(document, 'p', { class: 'start-hint', text: [git.lastCommit.subject, formatWhen(model.language, git.lastCommit.at)].join(' · ') }));
-    facts.append(element(document, 'div', { class: 'action-row' }, action('changes', 'cluster-changes', actions.onChanges), action('openEditor', 'cluster-open-editor', actions.onEditor)));
-  } else if (kind === 'none') facts.append(element(document, 'p', { class: 'start-hint', text: t('noLinkBody') }), action('linkFolder', 'link-folder', actions.onLink));
-  else facts.append(element(document, 'code', { text: model.link?.localPath ?? t('unavailable') }));
-  if (model.error) facts.append(element(document, 'p', { role: 'alert', text: model.error }));
-  root.append(facts);
   if (model.addition) {
     const item = model.addition;
     root.append(element(document, 'section', { class: 'cluster-origin', 'data-cluster-origin': item.id },
@@ -46,11 +54,45 @@ export function renderCluster(document, model, actions = {}) {
         text: addText(model.language, 'projectOrigin', { source: item.source.display }), onclick: () => actions.onUpdate?.(item) }),
       element(document, 'p', { class: 'start-hint', text: addText(model.language, 'pinned', { kind: addText(model.language, item.pin.kind), pin: item.pin.kind === 'commit' ? item.pin.value.slice(0, 7) : item.pin.value }) })));
   }
-  const lead = clusterLead(cluster, model.units), members = (model.units ?? []).filter(unit => !unit.removed && unit.role !== 'master' && cluster.members.includes(unit.id));
-  root.append(element(document, 'div', { class: 'cluster-members', 'data-cluster-lead': lead?.id ?? '' },
-    element(document, 'p', { text: !members.length ? t('noAgents') : lead && members.length > 1
-      ? t('leads', { lead: unitDisplayName(lead), members: members.filter(unit => unit.id !== lead.id).map(unitDisplayName).join(', ') })
-      : members.map(unitDisplayName).join(', ') })));
+  return root;
+}
+
+// A cluster's Details tab: what it is and where it lives, then the agents that work in it.
+export function renderClusterDetails(document, model, actions = {}) {
+  const t = (key, values) => startText(model.language, key, values);
+  const cluster = model.cluster, kind = cluster.link?.kind ?? 'none';
+  const action = (key, id, run, look = 'btn') => element(document, 'button', { type: 'button', class: look, 'data-action': id, text: t(key), onclick: run });
+  const root = element(document, 'section', { class: 'agent-details cluster-details', 'data-cluster-details': cluster.id, role: 'tabpanel',
+    id: `session-${cluster.id}-panel`, 'aria-labelledby': `session-${cluster.id}-details` });
+  const card = (key, ...parts) => root.append(element(document, 'section', { class: 'details-section', 'data-details-section': key },
+    element(document, 'h3', { class: 'details-section-title', text: t(key) }), ...parts.filter(Boolean)));
+  const fact = (label, value, attributes = {}) => element(document, 'p', { class: 'fact', ...attributes },
+    element(document, 'span', { class: 'fact-label', text: label }), typeof value === 'string' ? element(document, 'span', { class: 'fact-value', text: value }) : element(document, 'span', { class: 'fact-value' }, value));
+  const facts = element(document, 'div', { class: 'unit-facts cluster-facts' }, fact(t('kind'), t(kind === 'repository' ? 'repository' : kind === 'folder' ? 'folder' : 'notLinked')));
+  // The folder is shown once the machine's reports are in; until then it loads, and without it the folder is said to be missing here.
+  if (kind !== 'none') {
+    if (model.link?.localPath) facts.append(fact(t('path'), element(document, 'code', { text: model.link.localPath })));
+    else if (model.loading) facts.append(fact(t('path'), progressMark(document, t('loadingFolder'))));
+    else facts.append(fact(t('path'), t(model.unreadable ? 'unavailable' : 'notOnMachine'), { 'data-folder-missing': 'true' }));
+  }
+  const children = model.children ?? [];
+  if (kind === 'folder' && children.length) facts.append(fact(t('repositories'), children.map(child => displayName(child.title)).join(', ')));
+  if (kind === 'repository' && model.git) facts.append(fact(t('branch'), element(document, 'code', { text: model.git.branch ?? 'HEAD' })));
+  const git = model.git, parts = [facts];
+  if (git) {
+    if (git.remote) parts.push(element(document, 'code', { class: 'cluster-remote', text: git.remote }));
+    parts.push(element(document, 'p', { class: 'cluster-dirty', text: t(git.dirtyCount === 1 ? 'changedOne' : 'changedMany', { count: git.dirtyCount }) }));
+    if (git.lastCommit) parts.push(element(document, 'p', { class: 'start-hint', text: [git.lastCommit.subject, formatWhen(model.language, git.lastCommit.at)].join(' · ') }));
+    parts.push(element(document, 'div', { class: 'action-row' }, action('changes', 'cluster-changes', actions.onChanges), action('openEditor', 'cluster-open-editor', actions.onEditor)));
+  } else if (kind === 'none') parts.push(element(document, 'p', { class: 'start-hint', text: t('noLinkBody') }), action('linkFolder', 'link-folder', actions.onLink));
+  if (model.error) parts.push(element(document, 'p', { role: 'alert', text: model.error }));
+  card('cluster', ...parts);
+  const members = clusterMembers(cluster, model.units), lead = clusterLead(cluster, model.units);
+  const lines = members.map(unit => element(document, 'p', { class: 'cluster-agent', 'data-cluster-agent': unit.id }, icon(document, hierarchyIcon(unit)),
+    element(document, 'span', { class: 'cluster-agent-name', text: unitDisplayName(unit) }), element(document, 'span', { class: 'cluster-agent-role', text: roleLabel(model.language, unit.role, unit.roleName) })));
+  if (members.length) card('agents', ...lines);
+  else card('agents', element(document, 'p', { class: 'cluster-agents-empty', text: kind === 'folder' && children.length ? t(children.length === 1 ? 'noAgentsFolderOne' : 'noAgentsFolder', { count: children.length }) : t('noAgentsHere') }),
+    element(document, 'div', { class: 'action-row' }, action('newAgent', 'new-agent-card', actions.onNewAgent, 'btn primary'), lead ? null : action('choosePlanner', 'choose-planner', actions.onChoosePlanner, 'btn ghost')));
   return root;
 }
 
@@ -67,7 +109,8 @@ export function renderUnit(document, unit, t, language = "en") {
   card.append(element(document, "p", { text: `${t("role")}: ${unit?.role ? roleLabel(language, unit.role, unit.roleName) : t("unknown")}` }));
   card.append(element(document, "p", { text: `${t("job")}: ${unit?.job ?? t("unknown")}` }));
   const lines = [
-    ["scope", unit?.scope?.name ?? unit?.scope?.kind],
+    // The root scope is every cluster; any other scope is named.
+    ["worksIn", unit?.scope?.kind === 'root' ? upperFirst(startText(language, 'everyCluster')) : unit?.scope?.name ?? unit?.scope?.kind],
     // The lead by its name, never its scoped id.
     ["lead", unit?.leadId ? readableIdentity(unit.leadId, t("person")) : null],
     ["model", unit?.model],
@@ -79,7 +122,8 @@ export function renderUnit(document, unit, t, language = "en") {
   for (const [label, value] of lines) {
     facts.append(element(document, "p", { text: `${t(label)}: ${value ?? t("unknown")}` }));
   }
-  if (unit?.context) facts.append(element(document, "p", { text: unit.context }));
+  // "Ready." is the body every new unit starts with; it says nothing about this one.
+  if (unit?.context && unit.context.trim() !== "Ready.") facts.append(element(document, "p", { class: "unit-context", text: unit.context }));
   card.append(facts);
   return card;
 }
@@ -90,10 +134,12 @@ const CHECKOUT_REASONS = {
 };
 
 // The folder and branch rows of an agent's facts: [copy key, value, tooltip]. Nothing is guessed: an unknown
-// answer says so, a stopped session keeps its last reading marked with the time it was last seen.
-export function checkoutFacts(t, language, { session, local, entry }) {
+// folder says so, a branch nobody knows is not a row, and a stopped session keeps its last reading marked with the time it was last seen.
+// A unit of the root scope works in every cluster, so for it an unknown folder is not "Not known".
+export function checkoutFacts(t, language, { session, local, entry, root = false }) {
   if (!session) return [];
-  const stopped = session.state === 'stopped', unknown = reason => [['worksIn', t('notKnown'), t(reason)], ['branch', t('notKnown'), t(reason)]];
+  const stopped = session.state === 'stopped';
+  const unknown = reason => [root ? ['worksIn', upperFirst(startText(language, 'everyCluster')), null] : ['worksIn', t('notKnown'), t(reason)]];
   if (session.machine && session.machine !== local) return stopped ? [] : unknown('checkoutOtherMachine');
   const data = entry?.data;
   if (!data) return entry?.error && !stopped ? unknown('checkoutFailed') : [];
@@ -101,9 +147,8 @@ export function checkoutFacts(t, language, { session, local, entry }) {
   const seen = data.live === false ? ` · ${t('lastSeen', { time: formatWhen(language, data.observedAt) })}` : '';
   const folder = data.kind === 'private' ? t('checkoutPrivate') : String(data.path).split(/[\\/]+/).filter(Boolean).at(-1) ?? data.path;
   const rows = [['worksIn', `${folder}${data.kind === 'worktree' ? ` · ${t('worktree')}` : ''}${seen}`, data.path]];
-  if (data.kind === 'repository' || data.kind === 'worktree') {
-    rows.push(['branch', `${data.detached ? t('detachedAt', { head: String(data.head ?? '').slice(0, 7) }) : data.branch ?? t('notKnown')}${seen}`, null]);
-  }
+  const branch = data.detached ? t('detachedAt', { head: String(data.head ?? '').slice(0, 7) }) : data.branch;
+  if ((data.kind === 'repository' || data.kind === 'worktree') && branch) rows.push(['branch', `${branch}${seen}`, null]);
   return rows;
 }
 
@@ -218,44 +263,67 @@ export function renderApproval(document, approval, t, onAnswer, busy = false, al
   return block;
 }
 
-export function renderTask(document, task, t, onStatus, onUndo, draft = "", onDraft, allowSendBack = canSendBack(task), busy = false) {
-  const block = element(document, "section", { class: "card", "data-task": task.id, "data-reviewable": String(Boolean(task.reviewable)), "data-task-status": task.status });
-  block.append(element(document, "p", { text: `${task.number} ${task.title}` }));
+// `brief` is the compact card of a review opened in Waiting: what was asked in place of the task's number and title, and a way to open the task.
+// There the note is asked for only once Send back is pressed (`noteShown` says it already was, `onReveal` keeps that across redraws): the
+// first press shows and focuses the required note, the second sends it.
+export function renderTask(document, task, t, onStatus, onUndo, draft = "", onDraft, allowSendBack = canSendBack(task), busy = false, brief = null) {
+  const block = element(document, "section", { class: brief ? "card waiting-review" : "card", "data-task": task.id, "data-reviewable": String(Boolean(task.reviewable)), "data-task-status": task.status });
+  if (!brief) block.append(element(document, "p", { text: `${task.number} ${task.title}` }));
+  else if (brief.request) block.append(element(document, "p", { class: "waiting-request", text: brief.request }));
   if (busy) block.append(progressMark(document, t("working"), { "data-task-progress": task.id }));
   const accept = element(document, "button", {
     type: "button",
-    class: "btn",
+    class: brief ? "btn primary" : "btn",
     "data-action": "accept",
     "aria-busy": busy ? "true" : "false",
     text: t("accept"),
     onclick: () => onStatus?.(task, "done"),
   });
+  let acceptHint = null, backHint = null;
   if (!canAccept(task) || busy) accept.disabled = true;
   if (!canAccept(task) && !busy) {
     const hint = element(document, "p", { id: `reason-accept-${task.id}`, class: "field-hint", "data-disabled-reason": "accept", text: t("acceptNeedsReview") });
     accept.setAttribute("aria-describedby", hint.id ?? `reason-accept-${task.id}`);
-    block.append(hint);
+    acceptHint = hint;
   }
   const note = element(document, "input", { "data-note": task.id, "data-keep": `note|${encodeURIComponent(task.id)}` });
   note.value = draft;
   note.required = true;
+  const field = labeledField(document, t("sendBack"), t("sendBackHint"), note);
+  let asked = !brief || brief.noteShown === true || Boolean(draft);
+  if (!asked) field.setAttribute("hidden", "");
   const back = element(document, "button", {
     type: "button",
-    class: "btn",
+    class: brief ? "btn ghost" : "btn",
     "data-action": "send-back",
     text: t("sendBack"),
-    onclick: () => { if (allowSendBack && !busy && note.value.trim()) onStatus?.(task, "open", note.value); },
+    onclick: () => {
+      if (!allowSendBack || busy) return;
+      if (!asked) {
+        asked = true;
+        field.removeAttribute("hidden");
+        brief.onReveal?.();
+        updateNote();
+        note.focus?.();
+      } else if (note.value.trim()) onStatus?.(task, "open", note.value);
+    },
   });
-  const updateNote = () => { back.disabled = !allowSendBack || busy || !note.value.trim(); };
+  const updateNote = () => { back.disabled = !allowSendBack || busy || (asked && !note.value.trim()); };
   note.addEventListener("input", () => { updateNote(); onDraft?.(note.value, note.selectionStart, note.selectionEnd); });
   updateNote();
   if (busy) back.setAttribute("aria-busy", "true");
   if (!allowSendBack && !busy) {
     const hint = element(document, "p", { id: `reason-back-${task.id}`, class: "field-hint", "data-disabled-reason": "send-back", text: t("sendBackNeedsReview") });
     back.setAttribute("aria-describedby", `reason-back-${task.id}`);
-    block.append(hint);
+    backHint = hint;
   }
-  block.append(accept, labeledField(document, t("sendBack"), t("sendBackHint"), note), back);
+  if (brief) {
+    const open = element(document, "button", { type: "button", class: "btn ghost", "data-action": "open-task", text: t("waitingOpenTask"), onclick: brief.onOpen });
+    block.append(field, element(document, "div", { class: "waiting-actions" }, accept, back, open), ...[acceptHint, backHint].filter(Boolean));
+  } else {
+    // Each control is followed by the reason it cannot be used.
+    block.append(...[accept, acceptHint, field, back, backHint].filter(Boolean));
+  }
   if (task.undoAvailable && onUndo) {
     block.append(element(document, "button", {
       type: "button",
@@ -268,6 +336,15 @@ export function renderTask(document, task, t, onStatus, onUndo, draft = "", onDr
     }));
   }
   return block;
+}
+
+// The first paragraph of what a task asked, on one line, cut on a word boundary when it is long.
+export function requestBrief(request, limit = 240) {
+  const first = String(request ?? "").split(/\n\s*\n/).find((part) => part.trim()) ?? "";
+  const line = first.replace(/\s+/g, " ").trim();
+  if (line.length <= limit) return line;
+  const head = line.slice(0, limit);
+  return `${(/\s/.test(line[limit]) ? head : head.replace(/\s+\S*$/, "")).replace(/[\s,;:.-]+$/, "")}…`;
 }
 
 export function renderWaiting(document, items, t, onOpen, emptyAction = null) {

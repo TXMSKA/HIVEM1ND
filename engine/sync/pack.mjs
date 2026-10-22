@@ -1,4 +1,4 @@
-import { brotliCompressSync, brotliDecompressSync } from 'node:zlib';
+import { brotliCompress, brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from 'node:zlib';
 import { CoreError, canonicalJson, hashBytes, isUuid, uuidV8, validateMachineName, validateName } from '../service/identity.mjs';
 import { safeRelative } from '../service/paths.mjs';
 
@@ -26,10 +26,24 @@ const CHANGE_KEYS = ['at', 'baseHash', 'format', 'hash', 'id', 'machine', 'messa
 const LOCAL_PREFIXES = ['user/relay/leases/', 'user/relay/credentials/', 'user/relay/endpoints/'];
 const LOCAL_FIELDS = new Set(['endpoint', 'endpoints', 'credential', 'credentials', 'token', 'secret', 'secrets', 'pid', 'lease', 'bootstrap', 'password', 'authorization', 'socket', 'pipe']);
 
+// Brotli quality 11 (the zlib default) compressed this M1ND at about 8 files per second and held the event loop for up to
+// 15 s on one file. Quality 5 is about 100 times faster and about 15% larger on text, and every Brotli stream decodes alike.
+export const COMPRESSION_QUALITY = 5;
+const COMPRESSION_OPTIONS = { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: COMPRESSION_QUALITY } };
+
 export function compressObject(raw) {
   const bytes = asBuffer(raw);
   if (bytes.length > MAX_OBJECT_BYTES) throw new CoreError(413, 'resource_too_large', 'An object exceeds 16 MB.');
-  return brotliCompressSync(bytes);
+  return brotliCompressSync(bytes, COMPRESSION_OPTIONS);
+}
+
+// The same bytes as compressObject, compressed on the thread pool so a large batch does not hold the event loop.
+export function compressObjectAsync(raw) {
+  const bytes = asBuffer(raw);
+  if (bytes.length > MAX_OBJECT_BYTES) return Promise.reject(new CoreError(413, 'resource_too_large', 'An object exceeds 16 MB.'));
+  return new Promise((resolve, reject) => {
+    brotliCompress(bytes, COMPRESSION_OPTIONS, (error, result) => (error ? reject(error) : resolve(result)));
+  });
 }
 
 export function decompressObject(compressed, maxOutputLength) {
@@ -274,7 +288,10 @@ export function validateHead(head, { machine = null, previous = null, packBytes 
   return normalized;
 }
 
-export async function resolveDependencies(packBytes, provider, state = { stack: new Set(), seen: 0 }) {
+// A pack reached through several dependency paths is resolved once per call: without the memo every path decoded it
+// again, so each publication of a large M1ND decoded its earlier packs many times over.
+export async function resolveDependencies(packBytes, provider, state = { stack: new Set(), seen: 0, memo: new Map() }) {
+  state.memo ??= new Map();
   const buffer = asBuffer(packBytes);
   const decoded = decodePack(buffer);
   const here = `${decoded.header.machine}:${decoded.header.sequence}`;
@@ -307,16 +324,21 @@ export async function resolveDependencies(packBytes, provider, state = { stack: 
         continue;
       }
       if (listed.hash !== dependency.packHash) throw new CoreError(422, 'corrupt_resource', 'The dependency digest does not match the head.');
-      const packed = await provider.readPack(dependency.machine, dependency.sequence);
-      if (!packed) {
-        missing.push(dependency);
-        continue;
+      const memoKey = `${dependency.machine}:${dependency.sequence}:${dependency.packHash}`;
+      let nested = state.memo.get(memoKey);
+      if (!nested) {
+        const packed = await provider.readPack(dependency.machine, dependency.sequence);
+        if (!packed) {
+          missing.push(dependency);
+          continue;
+        }
+        const body = asBuffer(packed);
+        if (body.length !== listed.bytes || hashBytes(body) !== dependency.packHash) {
+          throw new CoreError(422, 'corrupt_resource', 'The dependency bytes do not match the head.');
+        }
+        nested = await resolveDependencies(body, provider, state);
+        state.memo.set(memoKey, nested);
       }
-      const body = asBuffer(packed);
-      if (body.length !== listed.bytes || hashBytes(body) !== dependency.packHash) {
-        throw new CoreError(422, 'corrupt_resource', 'The dependency bytes do not match the head.');
-      }
-      const nested = await resolveDependencies(body, provider, state);
       if (nested.status === 'pending') {
         missing.push(...nested.missing);
         continue;

@@ -201,6 +201,10 @@ test('cluster agents derive stable names, owner and nearest lead while retaining
   assert.equal(two.unit, `${one.unit}-2`); assert.equal(one.machine, fixture.machine); assert.equal(one.clusterId, child.id);
   assert.ok((await readCluster(context, child.id, { machine: fixture.machine })).members.includes(two.id));
   assert.ok((await readProjection(context)).units.filter(unit => ['root:one', 'root:two'].includes(unit.id)).every(unit => unit.leadId === 'root:overseer'));
+  // A lead chosen on the Map, by dropping a connection on empty space, wins over the cluster's own.
+  const chosen = (await createUnit(context, { role: 'executor', clusterId: child.id, machine: fixture.machine, leadId: one.id })).unit;
+  assert.equal(chosen.leadId, one.id);
+  await assert.rejects(createUnit(context, { role: 'executor', clusterId: child.id, machine: fixture.machine, leadId: 'root:missing' }), { code: 'invalid_lead' });
 });
 
 test('HTTP clusters enforce exact bodies, explicit owner and replay without exposing phone mutations', async t => {

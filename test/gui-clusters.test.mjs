@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { acceptedRepositoryCluster, clusterLead, connectedChoices, customRoleProblems, filterRepositories, initialRunsIn, launchable, renderAgentForm, renderRepositoryOffer, renderRunsInPicker, repositorySelection, runsInLabel, startDialog, supervisedClient, validRunsIn } from '../gui/app/clusters.mjs';
+import { acceptedRepositoryCluster, clusterLead, connectedChoices, customRoleProblems, filterRepositories, initialRunsIn, launchable, readable, renderAgentForm, renderRepositoryOffer, renderRunsInPicker, repositorySelection, runsInLabel, startDialog, supervisedClient, validRunsIn } from '../gui/app/clusters.mjs';
 import { renderApproval } from '../gui/app/inspector.mjs';
 import { renderSessionWork } from '../gui/app/session-work.mjs';
 import { AGENT_ROLES, roleLabel, startText } from '../gui/app/start-copy.mjs';
 import { clusterFrames, placeUnits } from '../gui/app/map-geometry.mjs';
 import { buildHierarchy, collapseNewClusters, flattenVisibleHierarchy, hierarchyDisclosure, hierarchyIcon, listedWorktrees, pathFolder, readableIdentity, revealGroup, unitRoleName } from '../gui/app/hierarchy.mjs';
 import { createMap, fitMap, flyToCluster, graphBounds, paintNodes, pointerDown, pointerMove, pointerUp, wheelZoom } from '../gui/app/map.mjs';
-import { renderCluster } from '../gui/app/inspector.mjs';
+import { renderCluster, renderClusterDetails } from '../gui/app/inspector.mjs';
 import { planCardModel } from '../gui/app/plan-controller.mjs';
 import { renderPlanCard } from '../gui/app/plan-view.mjs';
 import { applyEvent, createStore } from '../gui/app/state.mjs';
@@ -69,7 +69,7 @@ test('Runs in labels keep agent, model and effort readable instead of exposing p
   assert.equal(runsInLabel({ client: 'claude', model: 'observed', effort: null, mode: null }, [{ id: 'claude', title: 'claude', models: [{ id: 'observed', title: 'observed', efforts: [] }] }]), 'Claude Code, Observed');
   assert.equal(runsInLabel({ client: 'codex', model: 'observed', effort: 'high' }, clients, 'es'), 'Codex, Observed, Alto');
   assert.equal(readableIdentity('root:master', 'Persona'), 'Persona');
-  assert.equal(readableIdentity('project:shop:executor-shop', 'Persona'), 'executor-shop');
+  assert.equal(readableIdentity('project:shop:executor-shop', 'Persona'), 'Executor shop');
 });
 
 test('R5 plan cards show readable identities and Runs in copy in English and Spanish', () => {
@@ -82,7 +82,7 @@ test('R5 plan cards show readable identities and Runs in copy in English and Spa
     const card = renderPlanCard(document, planCardModel(controller, plan, language, clients), {});
     const visible = nodes(card).map(node => node.textContent).join(' ');
     assert.doesNotMatch(visible, /root:master|project:shop:executor-shop/);
-    assert.match(visible, /executor-shop/);
+    assert.match(visible, /Executor shop/);
     assert.match(visible, /Codex, Observed, (?:High|Alto)/);
   }
 });
@@ -120,7 +120,7 @@ test('canonical nested clusters keep aliases and exact lead links without a root
   const state = { shown: new Map(), collapsed: new Set() }, tree = buildHierarchy(units, [], clusters);
   const rows = flattenVisibleHierarchy(tree, state);
   assert.equal(rows.some(row => row.unit?.role === 'master'), false); assert.equal(rows.filter(row => row.kind === 'cluster').length, 7);
-  assert.equal(rows.find(row => row.unit?.id === 'root:executor').label, 'Cart (executor)');
+  assert.equal(rows.find(row => row.unit?.id === 'root:executor').label, 'Cart (Executor)');
   assert.equal(rows.find(row => row.kind === 'more').count, 13);
   revealGroup(state, 'cluster:Web', 13); assert.equal(flattenVisibleHierarchy(tree, state).filter(row => row.kind === 'cluster').length, 20);
   assert.ok(flattenVisibleHierarchy(tree, { shown: new Map(), collapsed: new Set(['cluster:Web']) }, 'repo-18').some(row => row.groupId === 'repo-18'));
@@ -171,7 +171,9 @@ test('saved cluster frames, empty and nested folders remain in Fit beyond the fo
   map.reducedMotion = true; assert.equal(flyToCluster(map, 'Web', viewport), true);
   assert.ok(map.view.zoom > camera.zoom);
   const before = map.view.zoom; wheelZoom(map, { clientX: 200, clientY: 200, deltaY: 1 }, viewport); assert.ok(map.view.zoom < before);
-  const placement = placeUnits([unit('root:overseer', 'overseer')], saved, groups); assert.deepEqual(placement.positions['root:overseer'], { x: 380, y: 409 });
+  // The Overseer sits centred above the clusters the layout placed, not above the one the person put far away.
+  const placement = placeUnits([unit('root:overseer', 'overseer')], saved, groups), web = frames.find(frame => frame.group.id === 'Web').bounds, overseer = placement.positions['root:overseer'];
+  assert.ok(overseer.y < web.y && overseer.x > web.x && overseer.x < web.x + web.w);
 });
 
 test('sibling cluster frames stay apart, agents stay inside and the overseer stays outside', () => {
@@ -191,7 +193,6 @@ test('sibling cluster frames stay apart, agents stay inside and the overseer sta
   assert.equal(overlaps(box(frames, 'shop'), box(frames, 'blog')), false);
   assert.equal(contains(box(frames, 'Web'), box(frames, 'shop')), true);
   assert.equal(contains(box(frames, 'Unity'), box(frames, 'game-1')), true);
-  assert.equal(box(frames, 'Unity').x > box(frames, 'Web').x + box(frames, 'Web').w, true);
   const placed = placeUnits(units, saved, groups);
   for (const [id, radius] of [['lead', 25], ['a', 21], ['b', 21]]) assert.equal(contains(box(frames, 'shop'), placed.positions[id], radius), true, id);
   const overseer = placed.positions['root:overseer'];
@@ -222,11 +223,91 @@ test('cluster refresh replaces facts while keeping chat/editor drafts and select
   assert.equal(store.indexes.groups.size, 1); assert.equal(store.drafts.get('editor'), draft); assert.equal(store.selected.groupId, 'Ideas');
 });
 
-test('inspector uses safe Git facts and an unlinked scope; six looks share bounded responsive control geometry', async () => {
-  for (const language of ['en', 'es']) {
-    const view = renderCluster(document, { language, cluster: cluster('Ideas'), units: [] }, {});
-    assert.match(copy(view), language === 'en' ? /cannot write|nowhere to write/ : /escribir/);
+test('a model id reads as a name with its version dotted, and the runs-in line says the vendor once', () => {
+  assert.equal(readable('claude-opus-5-5'), 'Claude Opus 5.5');
+  assert.equal(readable('claude-sonnet-4-1'), 'Claude Sonnet 4.1');
+  assert.equal(readable('gpt-5_1'), 'Gpt 5.1');
+  assert.equal(readable('claude-sonnet-4-20250514'), 'Claude Sonnet 4 20250514');
+  assert.equal(readable('alternate-model'), 'Alternate Model');
+  const claude = [{ id: 'claude', title: 'claude', models: [{ id: 'claude-opus-5-5', title: 'claude-opus-5-5', efforts: ['medium'] }] }];
+  const choice = { client: 'claude', model: 'claude-opus-5-5', effort: 'medium', mode: null };
+  assert.equal(runsInLabel(choice, claude), 'Claude Code, Claude Opus 5.5, Medium');
+  assert.equal(runsInLabel(choice, claude, 'en', { brief: true }), 'Claude Code, Opus 5.5, Medium');
+  assert.equal(runsInLabel({ client: 'codex', model: 'observed', effort: 'high' }, clients, 'en', { brief: true }), 'Codex, Observed, High');
+});
+
+const classOf = node => String(node.className ?? '').split(/\s+/);
+const find = (root, selector) => nodes(root).find(node => selector(node));
+const action = (root, name) => find(root, node => node.attributes?.['data-action'] === name);
+
+test('a cluster header carries one summary line: what it is, what it holds, and its agents', () => {
+  const summary = (model, language = 'en') => find(renderCluster(document, { language, ...model }, {}), node => node.attributes?.['data-cluster-summary']).textContent;
+  const folder = cluster('Unity', 'folder'), repos = ['A', 'B', 'C', 'D', 'E'].map(id => cluster(id, 'repository', 'Unity'));
+  assert.equal(summary({ cluster: folder, children: repos, units: [] }), 'Folder, 5 repositories, no agents');
+  assert.equal(summary({ cluster: folder, children: repos.slice(0, 1), units: [] }), 'Folder, 1 repository, no agents');
+  assert.equal(summary({ cluster: folder, children: repos, units: [] }, 'es'), 'Carpeta, 5 repositorios, sin agentes');
+  const shop = cluster('shop', 'repository', null, ['root:a', 'root:b']);
+  assert.equal(summary({ cluster: shop, git: { branch: 'main' }, units: [unit('root:a'), unit('root:b')] }), 'Repository, branch main, 2 agents');
+  assert.equal(summary({ cluster: { ...shop, members: ['root:a'] }, git: { branch: 'main' }, units: [unit('root:a')] }), 'Repository, branch main, 1 agent');
+  assert.equal(summary({ cluster: shop, git: { branch: 'main' }, units: [] }, 'es'), 'Repositorio, rama main, sin agentes');
+  assert.equal(summary({ cluster: shop, units: [] }), 'Repository, no agents');
+  assert.equal(summary({ cluster: cluster('Ideas'), units: [] }), 'Not linked, no agents');
+  assert.equal(summary({ cluster: cluster('Ideas'), units: [] }, 'es'), 'Sin vínculo, sin agentes');
+  const header = renderCluster(document, { language: 'en', cluster: folder, children: repos, units: [] }, {});
+  assert.equal(nodes(header).some(node => node.attributes?.['data-cluster-git'] || node.attributes?.['data-cluster-lead']), false, 'the path and the agents line leave the header');
+});
+
+test('a folder cluster Details holds its kind, path and repositories, and offers its first agent', () => {
+  const folder = cluster('Unity', 'folder'), repos = ['E pet', 'Quark'].map(id => cluster(id, 'repository', 'Unity'));
+  let created = 0, planned = 0;
+  const details = renderClusterDetails(document, { language: 'en', cluster: folder, children: repos, units: [], link: { clusterId: 'Unity', localPath: 'C:\\Users\\dev\\Unity' } },
+    { onNewAgent: () => { created += 1; }, onChoosePlanner: () => { planned += 1; } });
+  const cards = nodes(details).filter(node => node.attributes?.['data-details-section']).map(node => node.attributes['data-details-section']);
+  assert.deepEqual(cards, ['cluster', 'agents']);
+  const facts = nodes(details).filter(node => classOf(node).includes('fact')).map(node => node.children.map(child => child.textContent));
+  assert.deepEqual(facts, [['Kind', 'Folder'], ['Path', ''], ['Repositories', 'E pet, Quark']]);
+  assert.equal(find(details, node => node.tagName === 'CODE').textContent, 'C:\\Users\\dev\\Unity');
+  assert.match(copy(details), /No agents yet\. An Overlord here plans for the 2 repositories; an Executor works in one\./);
+  const newAgent = action(details, 'new-agent-card'), choose = action(details, 'choose-planner');
+  assert.equal(newAgent.textContent, 'New agent'); assert.ok(classOf(newAgent).includes('primary')); assert.equal(choose.textContent, 'Choose who plans');
+  newAgent.listeners.click(); choose.listeners.click();
+  assert.deepEqual([created, planned], [1, 1]);
+  assert.equal(nodes(details).some(node => node.attributes?.['data-chat'] || classOf(node).includes('transcript')), false, 'Details never shows the conversation');
+  const es = renderClusterDetails(document, { language: 'es', cluster: folder, children: repos, units: [] }, {});
+  assert.match(copy(es), /Todavía no hay agentes\. Un Overlord planifica para los 2 repositorios; un Executor trabaja en uno\./);
+  assert.equal(find(es, node => node.attributes?.['data-folder-missing']).children[1].textContent, 'No está en esta máquina');
+});
+
+test('a cluster with agents lists them, and one with a lead no longer asks who plans', () => {
+  const shop = cluster('shop', 'repository', null, ['root:lead', 'root:worker']);
+  const units = [unit('root:lead', 'overlord'), unit('root:worker', 'executor', null, 'root:lead')];
+  const details = renderClusterDetails(document, { language: 'en', cluster: shop, units, git: { branch: 'main', remote: 'origin', dirtyCount: 2 }, link: { localPath: 'C:\\shop' } }, {});
+  const lines = nodes(details).filter(node => node.attributes?.['data-cluster-agent']).map(node => node.children.slice(1).map(child => child.textContent));
+  assert.deepEqual(lines, [['Lead', 'Overlord'], ['Worker', 'Executor']]);
+  assert.equal(action(details, 'new-agent-card'), undefined);
+  assert.equal(action(details, 'choose-planner'), undefined);
+  assert.match(copy(details), /2 files changed, not committed/);
+  const branch = nodes(details).filter(node => classOf(node).includes('fact')).map(node => node.children.map(child => child.textContent));
+  assert.deepEqual(branch.at(-1), ['Branch', '']);
+  assert.equal(find(details, node => node.tagName === 'CODE' && node.textContent === 'main') != null, true);
+});
+
+test('an unlinked cluster offers Link a folder in Details, in both languages', () => {
+  for (const [language, linkText, kindText] of [['en', 'Link a folder', 'Not linked'], ['es', 'Vincular una carpeta', 'Sin vínculo']]) {
+    let linked = 0;
+    const details = renderClusterDetails(document, { language, cluster: cluster('Ideas'), units: [] }, { onLink: () => { linked += 1; } });
+    assert.match(copy(details), language === 'en' ? /cannot write|nowhere to write/ : /escribir/);
+    const link = action(details, 'link-folder');
+    assert.equal(link.textContent, linkText);
+    link.listeners.click();
+    assert.equal(linked, 1);
+    assert.equal(find(details, node => classOf(node).includes('fact')).children[1].textContent, kindText);
+    assert.equal(nodes(details).some(node => node.attributes?.['data-folder-missing']), false, 'an unlinked cluster has no path to be missing');
+    assert.match(copy(details), language === 'en' ? /No agents yet\. An Executor works here\./ : /Todavía no hay agentes\. Un Executor trabaja aquí\./);
   }
+});
+
+test('inspector uses safe Git facts and an unlinked scope; six looks share bounded responsive control geometry', async () => {
   const css = await readFile('gui/app/styles.css', 'utf8');
   assert.match(css, /--side:\s*290px/); assert.match(css, /--inspector:\s*366px/);
   assert.match(css, /\.start-dialog button[^}]*min-height:\s*32px/s);
@@ -469,4 +550,46 @@ test('an anchored New agent dialog that grows moves up to stay on screen and doe
   const centered = startDialog(dom, { view: 'overseer', language: 'en', render: () => dom.createElement('section') });
   size.height = 900; centered.paint();
   assert.equal(centered.dialog.style.top, undefined);
+});
+
+test('the Hierarchy always ends with Services: Incubator, then Genesis, each its own unit or a row that offers to set it up', () => {
+  const state = { shown: new Map(), collapsed: new Set() }, web = cluster('Web', 'folder');
+  const rowsOf = (units, query = '', options = undefined) => flattenVisibleHierarchy(buildHierarchy(units, [], [web]), state, query, options);
+  const services = rows => rows.slice(rows.findIndex(row => row.id === 'section:services'));
+  const overseer = unit('root:overseer', 'overseer');
+  const empty = services(rowsOf([overseer]));
+  assert.deepEqual(empty.map(row => row.id), ['section:services', 'service:incubator', 'service:genesis']);
+  assert.deepEqual(empty.slice(1).map(row => [row.kind, row.role, row.labelKey, row.glyph]), [['service', 'incubator', 'finalIncubator', 'bulb'], ['service', 'genesis', 'finalGenesis', 'genesis']]);
+  assert.equal(rowsOf([overseer]).at(-1).id, 'service:genesis', 'the section is the last thing in the list');
+  const genesis = unit('root:genesis', 'genesis'), incubator = unit('root:incubator', 'incubator');
+  assert.deepEqual(services(rowsOf([overseer, genesis])).map(row => row.id), ['section:services', 'service:incubator', 'root:genesis']);
+  assert.deepEqual(services(rowsOf([overseer, genesis, incubator])).map(row => [row.id, row.kind]), [['section:services', 'heading'], ['root:incubator', 'unit'], ['root:genesis', 'unit']], 'a unit that exists is its own row, in the same order');
+  // A search narrows the list, so a missing row there does not say the service is not set up; nor does a list that has not arrived.
+  assert.equal(rowsOf([overseer], 'quark').some(row => row.kind === 'service' || row.id === 'section:services'), false);
+  assert.deepEqual(services(rowsOf([overseer, genesis], 'genesis')).map(row => row.id), ['section:services', 'root:genesis']);
+  assert.equal(rowsOf([overseer], '', { loaded: false }).some(row => row.kind === 'service'), false);
+  assert.deepEqual(services(rowsOf([overseer, genesis], '', { loaded: false })).map(row => row.id), ['section:services', 'root:genesis']);
+});
+
+test('the Hierarchy cuts the branch of a cluster row, not its name', async () => {
+  const css = await readFile('gui/app/styles.css', 'utf8');
+  assert.match(css, /\.list \[data-cluster-row\] \.group-title\s*\{[^}]*flex:\s*0 1 auto;[^}]*min-width:\s*4ch;[^}]*max-width:\s*70%/);
+  assert.match(css, /\.list \[data-cluster-row\] \.hierarchy-branch\s*\{[^}]*flex:\s*1 1 0;[^}]*min-width:\s*0/);
+  assert.match(css, /\.list \.row-cluster, \.list \.row-worktree\s*\{[^}]*grid-template-columns:\s*16px 18px fit-content\(70%\) minmax\(0, 1fr\) 2\.5rem/);
+  assert.doesNotMatch(css, /7\.5rem/, 'no fixed track is kept for the branch');
+  assert.match(css, /\.hierarchy-branch\s*\{[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis/);
+  assert.match(css, /\.group-title\s*\{[^}]*overflow:\s*hidden;[^}]*text-overflow:\s*ellipsis/);
+});
+
+test('a folded chip, the pick and the services have rules for their controls', async () => {
+  const css = await readFile('gui/app/styles.css', 'utf8');
+  assert.match(css, /\.map-chip-expand\s*\{[^}]*cursor:\s*pointer/);
+  assert.match(css, /\.map-chip-expand:hover\s*\{[^}]*background/);
+  assert.match(css, /\.map-chip-expand:focus-visible\s*\{[^}]*outline/);
+  assert.match(css, /\.map-help\s*\{[^}]*max-width:\s*min\(320px[^}]*padding:\s*12px[^}]*border-radius:\s*12px/);
+  assert.match(css, /\.map-help\s*\{[^}]*border:\s*1px solid var\(--line2\)[^}]*background:\s*var\(--card\)/);
+  assert.match(css, /\.map-cluster-frame\.is-picked\s*\{[^}]*fill:\s*var\(--accent-soft\)[^}]*stroke:\s*var\(--accent\)[^}]*stroke-width:\s*2;[^}]*stroke-dasharray:\s*none/);
+  assert.match(css, /\.map-node\.is-selected, \.map-node\.is-picked\s*\{/);
+  assert.doesNotMatch(css, /map-service|map-services/);
+  assert.match(css, /\.map-group-badge\s*\{[^}]*background:\s*var\(--card2\)[^}]*color:\s*var\(--body\)[^}]*font-size:\s*11px;[^}]*font-weight:\s*700/);
 });

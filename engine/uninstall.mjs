@@ -11,6 +11,8 @@ const MANAGED_FILE_MODIFIED_REASON = 'The HIVEM1ND-managed file was modified aft
 const SYMLINK_REASON = 'The path is a symbolic link and is not managed by HIVEM1ND.';
 // Setup keeps its checkpoint, proof and draft for one M1ND in this machine's local service folder.
 const SETUP_STATE_FILES = ['setup.json', 'setup-proof.json', 'setup-draft.json'];
+// A migrated copy records the 2.x M1ND it came from; that M1ND is never written, so nothing inside it is removed.
+const LEGACY_CLOSURE = path.join('.migration', 'legacy-closure.json');
 
 export async function uninstall(options = {}) {
   const mindPath = path.resolve(requireValue(options.mindPath, 'mindPath'));
@@ -57,10 +59,16 @@ export async function uninstall(options = {}) {
 
   const managedFiles = record.managedFiles ?? {};
   const cleanupDirectories = new Set();
+  const legacySource = await migrationSource(mindPath);
+  let legacyKept = 0;
 
   for (const [filePath, expectedHash] of Object.entries(managedFiles)) {
     const resolved = path.resolve(filePath);
     if (isWithin(mindPath, resolved) || normalizePath(resolved) === normalizePath(machinePath)) continue;
+    if (legacySource && isWithin(legacySource, resolved)) {
+      legacyKept += 1;
+      continue;
+    }
     const outcome = await planFileRemoval(resolved, expectedHash);
     if (outcome === 'missing') continue;
     if (outcome === 'symlink') {
@@ -98,6 +106,7 @@ export async function uninstall(options = {}) {
     else if (outcome === 'removed') updated.push(rulesPath);
   }
 
+  if (legacyKept > 0) warnings.push(`${legacyKept} files inside the previous M1ND at ${legacySource} were left untouched.`);
   const relay = await removeRelayEntries({ homeDir, env, mindPath, dryRun });
   if (!dryRun) await removeEmptyDirectories(cleanupDirectories, bases);
 
@@ -123,7 +132,17 @@ export async function uninstall(options = {}) {
     if (eligibility) kept.push({ path: mindPath, reason: eligibility.reason });
   }
 
-  return { action: 'uninstall', removed, updated, kept, relay, warnings };
+  return { action: 'uninstall', dryRun, removed, updated, kept, relay, warnings };
+}
+
+async function migrationSource(mindPath) {
+  const bytes = await readFile(path.join(mindPath, LEGACY_CLOSURE), 'utf8').catch((error) => {
+    if (error?.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (bytes === null) return null;
+  const sourcePath = JSON.parse(bytes)?.sourcePath;
+  return typeof sourcePath === 'string' && path.isAbsolute(sourcePath) ? path.resolve(sourcePath) : null;
 }
 
 // The folder is the one setup writes: an explicit Cosmic root, or the parent of the default M1ND.

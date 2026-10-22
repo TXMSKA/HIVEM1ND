@@ -125,6 +125,8 @@ export async function applyEvent(store, api, event) {
     return { ready: true };
   }
   if (event.name === "stream.reset") return applyReset(store, api);
+  // While a batch of deletions runs, what it announces is read once when it ends; messages still arrive as they come.
+  if (store.deferViewRefresh && !['message.created', 'message.read', 'unit.unread', 'approval.requested', 'approval.answered'].includes(event.name)) return { deferred: true };
   const data = event.envelope?.data ?? {};
   if (event.name === 'additions.changed') {
     store.additions.report = null;
@@ -238,7 +240,8 @@ function openPaths(store) {
 
 // A view too large for one answer leaves the store paged; its open collections reload on their own events instead.
 async function refreshView(store, api) {
-  if (store.mode === "paged") return;
+  // A batch of deletions reads the view once when it ends, not after each change it announces.
+  if (store.mode === "paged" || store.deferViewRefresh) return;
   try {
     const response = await request(api, "GET", "/view");
     store.view = response.data;

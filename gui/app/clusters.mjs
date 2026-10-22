@@ -1,5 +1,5 @@
 import { element, icon, labelDialog, progressMark } from './components.mjs';
-import { pathFolder } from './hierarchy.mjs';
+import { displayName as shownName, pathFolder } from './hierarchy.mjs';
 import { AGENT_ROLES, ROLE_DESCRIPTION_MAX, ROLE_NAME_MAX, roleHint, roleLabel, startText } from './start-copy.mjs';
 
 export function connectedChoices(clients = []) {
@@ -39,9 +39,10 @@ export function initialRunsIn(clients, preferred = null, kind = null) {
 const CLIENT_KEYS = { codex: 'clientCodex', claude: 'clientClaude', cursor: 'clientCursor', lyra: 'clientLyra' };
 const EFFORT_KEYS = ['low', 'medium', 'high', 'max', 'xhigh', 'fast', 'normal', 'thinking'];
 
-function readable(value) {
+// Two short numbers joined by a separator are one version: "claude-opus-5-5" reads "Claude Opus 5.5".
+export function readable(value) {
   if (value == null || value === '') return '';
-  return String(value).replace(/[_-]+/g, ' ').replace(/\b\w/g, letter => letter.toUpperCase());
+  return String(value).replace(/(?<!\d)(\d{1,2})[_-](\d{1,2})(?!\d)/g, '$1.$2').replace(/[_-]+/g, ' ').replace(/\b\w/g, letter => letter.toUpperCase());
 }
 
 // A catalog that only knows the id shows a readable name instead of the raw id.
@@ -68,11 +69,16 @@ export function effortLabel(value, language = 'en') {
   return EFFORT_KEYS.includes(value) ? startText(language, value) : readable(value);
 }
 
-export function runsInLabel(choice, clients = [], language = 'en') {
+// `brief` says the vendor once: "Claude Code" with "Claude Opus 5.5" reads "Claude Code, Opus 5.5".
+export function runsInLabel(choice, clients = [], language = 'en', { brief = false } = {}) {
   if (!choice) return '';
   const client = clients.find(item => item.id === choice.client);
   const effort = choice.mode ?? choice.effort;
-  return [catalogLabel(client?.title, choice.client, language), catalogLabel(client?.models.find(item => item.id === choice.model)?.title, choice.model, language), effortLabel(effort, language)].filter(Boolean).join(', ');
+  const clientName = catalogLabel(client?.title, choice.client, language);
+  let modelName = catalogLabel(client?.models.find(item => item.id === choice.model)?.title, choice.model, language);
+  const vendor = `${clientName.split(' ')[0]} `;
+  if (brief && modelName.length > vendor.length && modelName.startsWith(vendor)) modelName = modelName.slice(vendor.length);
+  return [clientName, modelName, effortLabel(effort, language)].filter(Boolean).join(', ');
 }
 
 export function repositorySelection(offer) {
@@ -187,10 +193,13 @@ export function renderRunsInPicker(document, model, actions) {
     return option(`runs-client-${client.id}`, displayName(client.title, client.id, id => clientLabel(id, model.language)), launchable(client) ? quota : t('scopeUnavailable'), current?.id === client.id,
       () => actions.onChoice(initialRunsIn([client])), !launchable(client) || !initialRunsIn([client]));
   })));
-  columns.append(column(t('model'), (current?.models ?? []).map(item => {
+  // "Default" and the model it stands for can share an id; only the first of them reads as chosen, so one row is checked.
+  const models = current?.models ?? [];
+  const chosenIndex = models.findIndex(item => item.id === selectedModel?.id);
+  columns.append(column(t('model'), models.map((item, index) => {
     const choice = { ...model.choice, model: item.id };
     // A model change keeps the selected mode/effort. An incompatible pair needs an explicit new choice.
-    return option(`runs-model-${item.id}`, displayName(item.title, item.id), validRunsIn(choice, clients) ? '' : t('unavailable'), selectedModel?.id === item.id,
+    return option(`runs-model-${item.id}-${index}`, displayName(item.title, item.id), validRunsIn(choice, clients) ? '' : t('unavailable'), index === chosenIndex,
       () => actions.onChoice(choice));
   })));
   const local = current?.id === 'lyra';
@@ -249,8 +258,22 @@ function customRoleFields(document, model, actions, t) {
 export function renderAgentForm(document, model, actions) {
   const t = (key, values) => startText(model.language, key, values);
   const overseer = model.kind === 'overseer';
+  // The Incubator and Genesis are set up from their rows in the Hierarchy: a root unit with the role already chosen, in no cluster.
+  const service = model.service ?? null;
   const root = element(document, 'section', { class: overseer ? 'overseer-view' : 'new-agent-view' },
-    element(document, 'h2', { text: overseer ? t('createOverseer') : t('newAgentIn', { name: model.cluster.title }) }));
+    element(document, 'h2', { text: overseer ? t('createOverseer') : service ? t('setUpService', { name: roleLabel(model.language, service) }) : model.clusterChoices?.length > 1 ? t('newAgent') : t('newAgentIn', { name: shownName(model.cluster.title) }) }));
+  // Created from the Map with no cluster under it, the agent's cluster is chosen here; the lead it reports to is named.
+  if (!overseer && !service && model.clusterChoices?.length > 1) {
+    const select = element(document, 'select', { name: 'clusterId', 'data-start-field': 'clusterId', onchange: () => actions.onCluster?.(select.value) });
+    for (const group of model.clusterChoices) {
+      const option = element(document, 'option', { value: group.id, text: shownName(group.title) });
+      option.value = group.id;
+      select.append(option);
+    }
+    select.value = model.cluster.id;
+    root.append(element(document, 'label', { class: 'field start-cluster-field' }, element(document, 'span', { text: t('moveTo') }), select));
+  }
+  if (!overseer && model.leadName) root.append(element(document, 'p', { class: 'start-hint start-lead', 'data-start-lead': 'true', text: t('reportsToLead', { name: model.leadName }) }));
   if (overseer) {
     root.append(element(document, 'p', { class: 'start-hint', text: t('overseerHint') }),
       element(document, 'div', { class: 'overseer-kinds' }, ...['external', 'local'].map(kind => {
@@ -259,7 +282,7 @@ export function renderAgentForm(document, model, actions) {
         node.append(icon(document, kind === 'local' ? 'genesis' : 'executor'), element(document, 'strong', { text: t(kind) }), element(document, 'small', { text: t(`${kind}Hint`) }));
         return node;
       })));
-  } else {
+  } else if (!service) {
     root.append(roleOptions(document, model, actions));
     if (model.role === 'custom') root.append(customRoleFields(document, model, actions, t));
   }
@@ -271,7 +294,7 @@ export function renderAgentForm(document, model, actions) {
   if (none && actions.onConnect) root.append(button(document, t('connectAgent'), 'connect-agent', actions.onConnect));
   if (overseer) root.append(tick(document, t('fresh'), model.fresh, actions.onFresh, { 'data-start-fresh': 'true' }),
     element(document, 'p', { class: 'start-hint', text: t('freshHint') }));
-  else root.append(element(document, 'p', { class: 'start-hint', text: t(model.cluster.link.kind === 'repository' ? 'agentScope' : model.cluster.link.kind === 'folder' ? 'folderScope' : 'unlinkedScope', { name: model.cluster.title }) }));
+  else if (!service) root.append(element(document, 'p', { class: 'start-hint', text: t(model.cluster.link.kind === 'repository' ? 'agentScope' : model.cluster.link.kind === 'folder' ? 'folderScope' : 'unlinkedScope', { name: shownName(model.cluster.title) }) }));
   const create = button(document, t('create'), 'create-agent', actions.onCreate, true);
   create.disabled = !validRunsIn(model.choice, model.clients);
   root.append(element(document, 'footer', { class: 'dialog-actions' }, button(document, t(overseer ? 'later' : 'cancel'), 'cancel-agent', actions.onCancel), create));

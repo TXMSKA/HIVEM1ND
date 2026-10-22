@@ -377,6 +377,48 @@ export async function discoverResources(context, projectName) {
   return found;
 }
 
+// A mind that was migrated holds its boards in the projects but has no register of them. The first time a project is read,
+// the boards it already holds in its flows folder are registered in one change, so they list
+// without anyone registering them by hand. A board that cannot be read is left out and the rest still list.
+const BOARD_PLACES = [['docs/flows/boards', 'index.json']];
+const foundProjects = new WeakMap();
+
+export async function registerFound(context, names) {
+  const key = context.store ?? context.paths;
+  if (!key || typeof key !== 'object') return 0;
+  const done = foundProjects.get(key) ?? new Set();
+  foundProjects.set(key, done);
+  const fresh = names.filter((name) => !done.has(name));
+  if (!fresh.length) return 0;
+  for (const name of fresh) done.add(name);
+  const catalog = await readCatalog(context);
+  const known = new Set(catalog.value.resources.map((item) => `${item.project}\u0000${item.path}`));
+  const added = [];
+  for (const name of fresh) {
+    const project = (context.projects ?? []).find((item) => item.name === name && item.eligible !== false && item.localPath);
+    if (!project) { done.delete(name); continue; }
+    for (const [place, skip] of BOARD_PLACES) {
+      let files = [];
+      try { files = await readdir(inside(project.localPath, place)); } catch { continue; }
+      for (const file of files.sort()) {
+        if (file === skip || !/\.(json|mjs)$/.test(file) || known.has(`${name}\u0000${place}/${file}`)) continue;
+        const relative = `${place}/${file}`;
+        try {
+          const loaded = await loadBytes(inside(project.localPath, relative));
+          if (!loaded.bytes) continue;
+          const readOnly = file.endsWith('.mjs');
+          const document = readOnly ? null : validateBoard(parseJson(loaded.bytes));
+          added.push({ id: editorId('blueprint', name, relative), kind: 'blueprint', project: name, path: relative,
+            legacyId: document?.id ?? file.replace(/\.(json|mjs)$/, ''), readOnly, attached: [] });
+        } catch { /* This board is not readable; it stays out of the register. */ }
+      }
+    }
+  }
+  if (!added.length) return 0;
+  await commit(context, [record(catalogFile(context), catalog.revision, jsonBytes({ ...catalog.value, resources: [...catalog.value.resources, ...added] }))]);
+  return added.length;
+}
+
 export async function registerResource(context, input) {
   const project = projectOf(context, input.project);
   const relative = input.path;
@@ -411,41 +453,46 @@ export async function registerResource(context, input) {
   return created;
 }
 
-export function editorSearchText(editor) {
-  const values = [editor.title, editor.path, editor.id];
-  for (const screen of editor.document?.screens ?? []) {
-    values.push(screen.title);
-    const walk = (node) => {
-      if (!node) return;
-      values.push(node.name, node.value);
-      for (const child of node.kids ?? []) walk(child);
-    };
-    walk(screen.root);
+// The library search reads names: the title, the file, the folders above it. A document's body never takes part.
+export function editorSearchText(editor, folders = '') {
+  return [editor.title, editor.path, editor.id, folders].filter((value) => typeof value === 'string').join('\n').toLowerCase();
+}
+
+function folderTitles(library, folderId) {
+  const titles = [];
+  const seen = new Set();
+  for (let current = folderId; current && !seen.has(current);) {
+    seen.add(current);
+    const folder = library.value.folders.find((item) => item.id === current);
+    if (!folder) break;
+    titles.unshift(folder.title);
+    current = folder.parentId;
   }
-  for (const page of editor.document?.pages ?? []) {
-    for (const [key, value] of Object.entries(page)) {
-      if (key !== 'k' && typeof value === 'string') values.push(value);
-    }
-  }
-  for (const thread of editor.threads ?? []) {
-    for (const message of thread.messages ?? []) values.push(message.text);
-  }
-  return values.filter((value) => typeof value === 'string').join('\n').toLowerCase();
+  return titles.join('/');
 }
 
 export async function list(context, query = {}) {
   if (query.q != null && String(query.q).length > 200) fail(422, 'invalid_query', 'The search is longer than 200 characters.');
   const names = query.project ? [query.project] : (context.projects ?? []).map((item) => item.name);
+  if (!query.kind || query.kind === 'blueprint') await registerFound(context, names).catch(() => 0);
   const catalog = await readCatalog(context);
+  const needle = query.q == null || query.q === '' ? '' : String(query.q).toLowerCase();
   const editors = [];
   const issues = [];
   for (const name of names) {
-    let project;
-    try { project = (await loadLibrary(context, name)).project; }
+    let library;
+    try { library = await loadLibrary(context, name); }
     catch (error) { issues.push({ project: name, code: error.code ?? 'project_unavailable', message: 'The project library is not available.' }); continue; }
+    const project = library.project;
     for (const entry of catalog.value.resources) {
       if (entry.project !== project.name) continue;
       if (query.kind && entry.kind !== query.kind) continue;
+      const item = library.value.items[entry.id];
+      const folders = needle ? folderTitles(library, item?.folderId) : '';
+      const named = (title) => editorSearchText({ title, path: entry.path, id: entry.id }, folders).includes(needle);
+      // The title the library keeps for a resource decides without opening its document. A resource with none is named by its
+      // document, so only that one is read before the search can tell.
+      if (needle && typeof item?.title === 'string' && !named(item.title)) continue;
       try {
         const file = inside(project.localPath, entry.path);
         const loaded = await loadBytes(file, context.store);
@@ -458,6 +505,7 @@ export async function list(context, query = {}) {
           }
         }
         if (!loaded.bytes) issues.push({ project: name, resourceId: entry.id, code: 'corrupt_resource', message: 'The library document is not available.' });
+        if (needle && !named(item?.title ?? document?.title ?? entry.title ?? entry.legacyId ?? '')) continue;
         editors.push(await projectEditor(context, entry, document, loaded.revision));
       } catch (error) {
         issues.push({ project: name, resourceId: entry.id, code: error.code ?? 'corrupt_resource', message: 'The library item is not available.' });
@@ -465,10 +513,7 @@ export async function list(context, query = {}) {
     }
   }
   editors.sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
-  const needle = query.q == null || query.q === '' ? '' : String(query.q).toLowerCase();
-  let matched = needle
-    ? editors.filter((item) => editorSearchText(item).includes(needle))
-    : editors;
+  let matched = editors;
   if (query.folderId !== undefined) {
     if (!isUuid(query.folderId)) fail(422, 'invalid_query', 'The folder id must be a UUID.');
     matched = matched.filter((item) => item.folderId === query.folderId);
@@ -1774,7 +1819,8 @@ export async function listComments(context, id, query = {}) {
   const status = query.status ?? 'all';
   const threads = (projected.threads ?? []).filter((thread) => status === 'all' || thread.status === status);
   const pages = found.entry.kind === 'void' ? await currentPages(context, found) : [];
-  const board = found.entry.kind === 'blueprint' ? parseJson((await loadBytes(inside(found.project.localPath, found.entry.path))).bytes ?? Buffer.from('{}')) : null;
+  // A board kept as a script module is read only and has no JSON to place comments on; its threads list without a place.
+  const board = found.entry.kind === 'blueprint' && /\.json$/i.test(found.entry.path) ? parseJson((await loadBytes(inside(found.project.localPath, found.entry.path))).bytes ?? Buffer.from('{}')) : null;
   const items = [];
   for (const thread of threads) {
     items.push(await presentThread(context, thread, found.entry.id, loaded.revision, found.entry.kind === 'void' ? place(pages, thread) : blueprintPlace(board, thread)));
@@ -1801,7 +1847,8 @@ function validateAnchor(found, document, anchor) {
     if (rendered.slice(anchor.start, anchor.end) !== anchor.quote) fail(409, 'anchor_changed', 'The anchor no longer matches the text.');
     return createAnchor(rendered, anchor.start, anchor.end, anchor.lang, anchor.k);
   }
-  if (anchor.screen) {
+  // A module board is code the service never runs, so its anchors are kept as the viewer drew them.
+  if (anchor.screen && document) {
     const screen = (document.screens ?? []).find((item) => item.id === anchor.screen);
     if (!screen) fail(409, 'anchor_changed', 'The anchor no longer matches the board.');
     if (anchor.element && !findNode(document, anchor.element)) fail(409, 'anchor_changed', 'The anchor no longer matches the board.');
@@ -1814,7 +1861,8 @@ export async function createComment(context, id, input) {
   const found = await resourceOf(context, id);
   await requireAttachment(context, found.entry.id);
   const text = commentText(input.text);
-  const document = found.entry.kind === 'void' ? (await textBundle(context, id)).document : (await boardFile(context, id)).document;
+  const moduleBoard = found.entry.kind === 'blueprint' && found.entry.path.endsWith('.mjs');
+  const document = found.entry.kind === 'void' ? (await textBundle(context, id)).document : moduleBoard ? null : (await boardFile(context, id)).document;
   const fileRevision = found.entry.kind === 'void'
     ? (await loadBytes(inside(found.project.localPath, found.entry.path))).revision
     : (await loadBytes(inside(found.project.localPath, found.entry.path))).revision;
@@ -1893,6 +1941,7 @@ async function notificationsFor(context, thread) {
 }
 
 function blueprintPlace(document, thread) {
+  if (!document) return null;
   const anchor = thread?.anchor;
   if (!anchor || (anchor.screen == null && anchor.element == null)) return null;
   const screen = (document?.screens ?? []).find((item) => item.id === anchor.screen);
@@ -2255,6 +2304,7 @@ function createdEditor(context, entry, document, bytes, comments, library) {
 export async function listFolders(context, query = {}) {
   if (!['blueprint', 'void'].includes(query.kind)) fail(422, 'invalid_query', 'The editor kind is required.');
   const items = [], issues = [];
+  if (query.kind === 'blueprint') await registerFound(context, query.project ? [query.project] : (context.projects ?? []).map((item) => item.name)).catch(() => 0);
   for (const name of query.project ? [query.project] : (context.projects ?? []).map((item) => item.name)) {
     try {
       const library = await loadLibrary(context, name);

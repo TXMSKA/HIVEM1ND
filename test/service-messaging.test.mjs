@@ -97,11 +97,16 @@ test('posts keep the credential author, reject cross-chat replies, and cap compl
   assert.equal(names.includes(`${foreign.message.id}.md`), false);
   await assert.rejects(() => postChat(context, chat.chat.id, { body: 'é'.repeat(500000) }), (error) => error.code === 'message_too_large');
   const inbox = path.join(fixture.paths.mind, 'user', 'projects', 'shop', 'inbox', 'executor-shop');
-  assert.equal((await readdir(inbox)).length, 1);
+  const files = await readdir(inbox), copies = [];
+  for (const name of files) if ((await readFile(path.join(inbox, name), 'utf8')).includes('\nkind: chat-copy\n')) copies.push(name);
+  assert.equal(files.length - copies.length, 1, 'the mailbox message is the only message of its own in the inbox');
+  assert.ok(copies.length >= 1, 'chat messages reach the agent as inbox copies');
 });
 
 test('fanout is restart-safe and a chat read leaves a late message unread', async (t) => {
   const { context, fixture } = await world(t);
+  // This test covers a service with no delivery at all, so the built-in inbox delivery is off.
+  context.chatDelivery = false;
   const chat = await createChat(context, { members: ['project:shop:executor-shop', 'env:web:overlord-web'] });
   const early = await postChat(context, chat.chat.id, { body: 'Early' });
   fixture.clock.now += 1000;
@@ -373,6 +378,8 @@ for (const failure of ['response loss', 'partial transaction']) test(`a chat ${f
   const key = randomUUID();
   const options = { token, body: { body: 'Only once', subject: 'Receipt' }, headers: { 'idempotency-key': key } };
   if (failure === 'partial transaction') {
+    // A file watcher pass between the crash and the retry would complete the half-applied write first.
+    await core.runtime?.unwatchProject?.();
     fixture.store.fault = { afterRenames: 1 };
     assert.equal((await httpCall(core.http.port, 'POST', target, options)).status, 500);
   } else {

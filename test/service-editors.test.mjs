@@ -567,12 +567,44 @@ test('library search filters AND over every folder and report one offline projec
   await createComment(context, text.id, { text: 'Search inside folded folders', expectedRevision: text.revision, expectedCommentsRevision: text.commentsRevision,
     anchor: { k: text.document.pages[0].k, lang: 'en', start: 0, end: 4, quote: plain(text.document.pages[0].en).slice(0, 4) } });
   context.projects.push({ name: 'offline' });
-  const found = await list(context, { kind: 'void', q: 'folded folders', openComments: true, attachedAgents: true, changedThisWeek: true, folderId: folder.folder.id });
+  const found = await list(context, { kind: 'void', q: 'notes', openComments: true, attachedAgents: true, changedThisWeek: true, folderId: folder.folder.id });
   assert.deepEqual(found.items.map((item) => item.id), [text.id]);
   assert.equal(found.issues[0].code, 'project_unavailable');
+  assert.equal((await list(context, { kind: 'void', q: 'folded folders' })).items.length, 0, 'a comment is not searched');
   fixture.clock.now += 7 * 86400000;
   assert.equal((await list(context, { changedThisWeek: true })).items.length, 0);
   await assert.rejects(() => list(context, { openComments: 'yes' }), { code: 'invalid_query' });
+});
+
+test('the library search matches file names, folder paths and titles, and opens only the documents that can match', async (t) => {
+  const { context, fixture, localPath } = await shop(t);
+  const folder = await createFolder(context, { project: 'shop', kind: 'void', title: 'Handbook', parentId: null, expectedRevision: null });
+  const inside = await createFolder(context, { project: 'shop', kind: 'void', title: 'Guides', parentId: folder.folder.id, expectedRevision: folder.revision });
+  const titled = await createText(context, { project: 'shop', path: 'docs/alpha.json', document: { ...release(), title: 'Alpha' } });
+  const named = await createText(context, { project: 'shop', path: 'docs/needle-guide.json', document: { ...release(), title: 'Beta' } });
+  const foldered = await createText(context, { project: 'shop', path: 'docs/gamma.json', folderId: inside.folder.id, document: { ...release(), title: 'Gamma' } });
+  await createText(context, { project: 'shop', path: 'docs/delta.json', document: { ...release(), title: 'Delta', pages: [{ k: 'Intro.Welcome', en: 'needle in the body', es: '' }] } });
+  await writeFile(path.join(localPath, 'docs', 'loose.json'), JSON.stringify({ ...release(), title: 'Loose leaf' }));
+  const loose = await registerResource(context, { kind: 'void', project: 'shop', path: 'docs/loose.json' });
+  const reads = [];
+  class SpyMap extends Map { has(key) { reads.push(key); return super.has(key); } }
+  fixture.store.hidden = new SpyMap(fixture.store.hidden);
+  const documents = () => reads.filter((file) => /docs[\\/][a-z-]+\.json$/.test(file)).map((file) => path.basename(file)).sort();
+  const search = async (q) => { reads.length = 0; return (await list(context, { kind: 'void', q })).items.map((item) => item.id).sort(); };
+  // A file name, found without opening any other document.
+  assert.deepEqual(await search('needle'), [named.id]);
+  assert.deepEqual(documents(), ['loose.json', 'needle-guide.json'], 'the body of a document is not searched; only a resource with no stored title is opened to read its own');
+  // A folder path, at any depth.
+  assert.deepEqual(await search('handbook'), [foldered.id]);
+  assert.deepEqual(await search('handbook/guides'), [foldered.id]);
+  // The title the library keeps, and the title of a document the library has no title for.
+  assert.deepEqual(await search('alpha'), [titled.id]);
+  assert.deepEqual(documents(), ['alpha.json', 'loose.json']);
+  assert.deepEqual(await search('LOOSE LEAF'), [loose.id]);
+  assert.deepEqual(await search(foldered.id.slice(0, 8)), [foldered.id]);
+  assert.deepEqual(await search('in the body'), []);
+  // Without a search every document is listed.
+  assert.equal((await list(context, { kind: 'void' })).total, 5);
 });
 
 test('duplicate preserves real unknown content and starts fresh comments original and history', async (t) => {
@@ -762,6 +794,10 @@ test('a module stays read-only and a board id cannot be registered twice', async
   assert.equal(registered.readOnly, true);
   assert.equal(registered.document, null);
   await assert.rejects(() => replaceBoard(context, registered.id, { document: sketch('legacy'), expectedRevision: registered.revision }), { status: 409, code: 'read_only_resource' });
+  const moduleEditor = await readEditor(context, registered.id);
+  const moduleComment = await createComment(context, registered.id, { text: 'Comment on a drawn module screen', anchor: { screen: 's-from-the-viewer', label: 'Screen' }, expectedRevision: moduleEditor.revision, expectedCommentsRevision: moduleEditor.commentsRevision });
+  assert.equal(moduleComment.thread.anchor.screen, 's-from-the-viewer');
+  assert.equal(moduleComment.thread.place, null);
   const created = await createBoard(context, { project: 'shop', document: sketch('cart') });
   await assert.rejects(() => createBoard(context, { project: 'shop', path: 'docs/flows/boards/other.json', document: sketch('cart') }), { status: 409, code: 'board_id_exists' });
   await assert.rejects(() => createBoard(context, { project: 'shop', path: created.path, document: sketch('other') }), { status: 409, code: 'resource_exists' });
@@ -784,6 +820,26 @@ test('a module stays read-only and a board id cannot be registered twice', async
   await assert.rejects(() => writeAttachments(context, created.id, { attached: ['root:builder', 'root:builder'], expectedRevision: null }), { code: 'invalid_body' });
   await assert.rejects(() => writeAttachments(context, created.id, { attached: ['not a unit'], expectedRevision: null }), { code: 'invalid_unit' });
   await assert.rejects(() => writeAttachments(context, created.id, { attached: ['root:builder'], expectedRevision: null }), { code: 'unknown_unit' });
+});
+
+test('a project that already holds boards lists them without a manual registration', async (t) => {
+  const { context, localPath } = await shop(t);
+  const boards = path.join(localPath, 'docs', 'flows', 'boards');
+  await mkdir(boards, { recursive: true });
+  await writeFile(path.join(boards, 'app.mjs'), 'export const board = {}\n');
+  await writeFile(path.join(boards, 'broken.json'), '{ not json');
+  await writeFile(path.join(boards, 'index.json'), '[]\n');
+  const first = await list(context, { kind: 'blueprint' });
+  assert.deepEqual(first.items.map((item) => item.path), ['docs/flows/boards/app.mjs']);
+  assert.equal(first.items[0].readOnly, true);
+  assert.deepEqual(first.issues, []);
+  // The register is written once: a second read lists the same board and writes nothing more.
+  const writes = context.store.writes?.length ?? 0;
+  const second = await list(context, { kind: 'blueprint' });
+  assert.deepEqual(second.items.map((item) => item.id), first.items.map((item) => item.id));
+  assert.equal(context.store.writes?.length ?? 0, writes);
+  const folders = await listFolders(context, { kind: 'blueprint' });
+  assert.equal(folders.issues.length, 0);
 });
 
 test('an absent project is unavailable', async (t) => {
@@ -1707,12 +1763,13 @@ function call(port, method, target, { token = null, body = undefined, headers = 
   });
 }
 
-test('editor search includes screen labels nested text pages and comments', () => {
-  const value = editorSearchText({ title: 'Cart page', path: 'docs/cart.json', document: {
+test('editor search reads the title, the path, the id and the folders, and never the body or the comments', () => {
+  const value = editorSearchText({ id: 'f0e1d2c3', title: 'Cart page', path: 'docs/cart.json', document: {
     screens: [{ title: 'Empty cart', root: { name: 'Root', kids: [{ name: 'Continue button', value: 'Return to shop', kids: [] }] } }],
     pages: [{ k: 'intro', en: 'Relay manual', es: 'Manual de Relay' }],
-  }, threads: [{ messages: [{ text: 'Add checkout errors' }] }] });
-  for (const query of ['cart page', 'empty cart', 'continue button', 'return to shop', 'relay manual', 'manual de relay', 'checkout errors']) assert.ok(value.includes(query));
+  }, threads: [{ messages: [{ text: 'Add checkout errors' }] }] }, 'Design/Checkout');
+  for (const query of ['cart page', 'docs/cart.json', 'f0e1d2c3', 'design/checkout']) assert.ok(value.includes(query));
+  for (const query of ['empty cart', 'continue button', 'return to shop', 'relay manual', 'manual de relay', 'checkout errors']) assert.equal(value.includes(query), false);
   assert.equal(editorSearchText({ document: { screens: [{ root: { kids: [] } }], pages: [] } }), '');
 });
 

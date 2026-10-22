@@ -1,13 +1,13 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { repositoryCheckoutPath } from './addition-parts.mjs';
-import { lstat, mkdir, open, readdir, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises';
+import { appendFile, lstat, mkdir, open, readdir, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises';
 import { createConnection, createServer } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CoreError, canonicalJson, hashBytes, isUuid, uuidV8, validateName } from './identity.mjs';
 import { assertNoLinks, localCosmic, mindKeyFor, servicePaths } from './paths.mjs';
-import { atomicWrite, bindProjects, createStore, recoverTransactions } from './store.mjs';
+import { atomicWrite, bindProjects, createProjectionCache, createStore, noteProjectionChange, recoverTransactions } from './store.mjs';
 import { applyPack, recoverIncomingGroups } from '../sync/apply.mjs';
 import { openLedger } from '../sync/limits.mjs';
 import { closeOrigin, listMachineNames, openOrigin, readHead, readOriginPack, watchOrigin, writeDurable } from '../sync/origin.mjs';
@@ -177,6 +177,7 @@ export async function startService(options, retained = null) {
       receiptPrincipals: handle.receiptPrincipals,
       recoveryHosts: handle.recoveryHosts,
       restartService: () => restartService(handle),
+      afterFirstView: () => handle.runtime?.startSync?.(),
     });
     handle.bridge.origin = `http://127.0.0.1:${handle.http.port}`;
     await recoverRuns({ ...options, paths, bus, now: options.now ?? (() => Date.now()), adapters: handle.adapters.adapters,
@@ -210,7 +211,14 @@ export async function startService(options, retained = null) {
     handle.shutdownBytes = Buffer.from(`${canonicalJson(handle.shutdown)}\n`);
     await atomicWrite(options.store, shutdownPath(options), handle.shutdownBytes);
     await protectBootstrapFiles(paths.localDirectory, shutdownPath(options), { aclRunner: options.aclRunner, store: options.store });
-    handle.beat = await armServiceBeat(handle.runtime);
+    // The beat tells the other machines and the interface that this one answers, so it is written before the service is
+    // offered; the settings report that goes with it waits for the deferred start.
+    handle.beat = await armServiceBeat(handle.runtime, { settings: options.deferSync !== true });
+    if (options.deferSync === true) {
+      // Nobody may ask for a view (an agent using the service alone), so the deferred work starts on its own soon after.
+      handle.syncTimer = setTimeout(() => { handle.runtime?.startSync?.(); }, options.deferSyncMs ?? 5000);
+      handle.syncTimer.unref?.();
+    }
     return handle;
   } catch (error) {
     await rollback(handle);
@@ -247,6 +255,8 @@ export async function runConfiguredService(options = {}) {
     userKey: options.userKey,
     guardPort: options.guardPort,
     retainHosts: true,
+    // The running service answers before it starts its first pass over the files, its publishing and its report.
+    deferSync: options.deferSync ?? true,
   });
 }
 
@@ -867,6 +877,7 @@ async function openServiceSync(options, paths, { migrate = true } = {}) {
     startedAt: new Date(options.startedAt ?? now()).toISOString(),
   };
   runtime.settingsOwner = createSettingsOwner({ ...options, paths, now, sync, pulse, ledger, bus: runtime.bus, startedAt: runtime.startedAt });
+  runtime.lockWatch = watchHeldLocks(options.store, paths.localDirectory);
   await recoverTransactions(options.store, { beforeRecover: () => refreshClusterProjects(runtime.settingsOwner) });
   await refreshAdditionProjects(runtime.settingsOwner);
   if (migrate) await migrateClusters(runtime.settingsOwner);
@@ -878,10 +889,39 @@ async function openServiceSync(options, paths, { migrate = true } = {}) {
       runtime.lastError = error;
       runtime.bus?.emit({ name: 'issue.changed', data: { issue: 'incoming_recovery_failed', code: error?.code ?? 'sync_failed' } });
     }
-    runtime.unwatchProject = await watchLocalChanges(runtime, changes => emitObserved(runtime, changes));
-    await pulse.resume();
-    await publishMachineSettings(runtime.settingsOwner);
+    // A service that answers first (deferSync) starts its first pass over the files, the publication of what is staged and the
+    // settings report when the first view has been served, instead of before it listens: on a large M1ND those took the
+    // start from seconds to tens of seconds. startSync is that start, and it runs once.
+    const defer = options.deferSync === true;
+    runtime.unwatchProject = await watchLocalChanges(runtime, changes => emitObserved(runtime, changes), { deferBaseline: defer });
+    runtime.syncStarted = false;
+    runtime.startSync = () => {
+      runtime.syncStart ??= (async () => {
+        try {
+          if (runtime.closed) return;
+          await runtime.unwatchProject?.baseline?.();
+          if (runtime.closed) return;
+          await pulse.resume();
+          await publishMachineSettings(runtime.settingsOwner);
+        } catch (error) {
+          if (!defer) throw error;
+          runtime.lastError = error;
+          runtime.bus?.emit({ name: 'issue.changed', data: { issue: 'sync_start_failed', code: error?.code ?? 'sync_failed' } });
+        }
+        runtime.syncStarted = true;
+        if (runtime.originWaiting && !runtime.closed) {
+          runtime.originWaiting = false;
+          reconcileOrigin(runtime).catch((error) => { runtime.lastError = error; });
+        }
+      })();
+      return runtime.syncStart;
+    };
+    if (!defer) await runtime.startSync();
     runtime.unwatch = watchOrigin(origin, () => {
+      if (!runtime.syncStarted) {
+        runtime.originWaiting = true;
+        return;
+      }
       reconcileOrigin(runtime).catch((error) => {
         runtime.lastError = error;
       });
@@ -893,7 +933,7 @@ async function openServiceSync(options, paths, { migrate = true } = {}) {
   }
 }
 
-async function publishServiceBeat(runtime, state) {
+async function publishServiceBeat(runtime, state, { settings = true } = {}) {
   if (!runtime.clientRecords) {
     if (runtime.clientOptions) runtime.clientRecords = runtime.clientOptions;
     else {
@@ -916,13 +956,33 @@ async function publishServiceBeat(runtime, state) {
   const result = await runtime.pulse.beat(record);
   if (result.published) runtime.beat = result.record ?? record;
   runtime.settingsOwner.active = state === 'running';
-  await publishMachineSettings(runtime.settingsOwner, 'service');
+  if (settings) await publishMachineSettings(runtime.settingsOwner, 'service');
   return runtime.beat;
+}
+
+// A lock held for a minute is a service that stopped answering: who took it is written once to the machine's diagnostics,
+// so the next stall can be traced instead of guessed.
+const HELD_LOCK_MS = 60000;
+
+function watchHeldLocks(store, localDirectory) {
+  if (typeof store?.locks?.longHeld !== 'function') return null;
+  const logged = new Set();
+  const timer = setInterval(() => {
+    const held = store.locks.longHeld(HELD_LOCK_MS).filter((entry) => !logged.has(entry.ticket));
+    if (!held.length) return;
+    for (const entry of held) logged.add(entry.ticket);
+    const lines = held.map((entry) => `${new Date().toISOString()} ${entry.key} held since ${new Date(entry.at).toISOString()}\n${entry.stack}\n`).join('\n');
+    mkdir(path.join(localDirectory, 'diagnostics'), { recursive: true })
+      .then(() => appendFile(path.join(localDirectory, 'diagnostics', 'held-locks.log'), `${lines}\n`)).catch(() => {});
+  }, HELD_LOCK_MS / 2);
+  timer.unref?.();
+  return timer;
 }
 
 async function closeServiceSync(runtime, { beat = true } = {}) {
   if (!runtime || runtime.closed) return;
   runtime.closed = true;
+  if (runtime.lockWatch) clearInterval(runtime.lockWatch);
   if (runtime.beatTimer) clearInterval(runtime.beatTimer);
   runtime.beatTimer = null;
   if (runtime.unwatch) await runtime.unwatch();
@@ -943,6 +1003,7 @@ async function closeServiceSync(runtime, { beat = true } = {}) {
 
 async function reconcileOrigin(runtime) {
   if (runtime.closed) return;
+  noteProjectionChange(runtime.sync.store);
   runtime.reconcileAgain = true;
   if (runtime.reconciling) return runtime.reconciling;
   runtime.reconciling = (async () => {
@@ -1577,6 +1638,8 @@ function createRuntimeStore(paths, options) {
     confineRoot: options.confineRoot ?? null,
   });
   if (options.aclRunner) store.aclRunner = options.aclRunner;
+  // The running service keeps its last build of the M1ND; the file watchers and the store's own writes throw it away.
+  if (options.projectionCache !== false) store.projectionCache = createProjectionCache();
   bindProjects(store, options.projects ?? []);
   return store;
 }
@@ -1649,9 +1712,9 @@ export function openNativeAdapters(env = process.env, hooks = {}) {
   };
 }
 
-async function armServiceBeat(runtime) {
+async function armServiceBeat(runtime, { settings = true } = {}) {
   if (!runtime || runtime.closed || runtime.beatTimer) return runtime?.beat ?? null;
-  runtime.beat = await publishServiceBeat(runtime, 'running');
+  runtime.beat = await publishServiceBeat(runtime, 'running', { settings });
   runtime.beatTimer = setInterval(() => {
     publishServiceBeat(runtime, 'running').catch((error) => {
       runtime.lastError = error;
@@ -1662,6 +1725,7 @@ async function armServiceBeat(runtime) {
 }
 
 async function closeOwned(handle, { beat = true } = {}) {
+  if (handle.syncTimer) clearTimeout(handle.syncTimer);
   handle.http?.stopAdmission();
   let runContext;
   if (handle.options?.store) {

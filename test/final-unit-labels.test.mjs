@@ -3,7 +3,7 @@ import test from 'node:test';
 import { unitDisplayName } from '../gui/app/hierarchy.mjs';
 
 test('alias labels retain the actual unit name and preserve user text', () => {
-  assert.equal(unitDisplayName({ id: 'project:blog:executor-blog', unit: 'executor-blog', alias: 'Blog' }), 'Blog (executor-blog)');
-  assert.equal(unitDisplayName({ unit: 'executor-blog', alias: null }), 'executor-blog');
-  assert.equal(unitDisplayName({ unit: 'executor-blog', alias: 'M1ND notes' }), 'M1ND notes (executor-blog)');
+  assert.equal(unitDisplayName({ id: 'project:blog:executor-blog', unit: 'executor-blog', alias: 'Blog' }), 'Blog (Executor blog)');
+  assert.equal(unitDisplayName({ unit: 'executor-blog', alias: null }), 'Executor blog');
+  assert.equal(unitDisplayName({ unit: 'executor-blog', alias: 'M1ND notes' }), 'M1ND notes (Executor blog)');
 });

@@ -36,9 +36,9 @@ Usage:
   hivem1nd pylon <repo> [--state branch|main] [options]
   hivem1nd swarm [options]
   hivem1nd view [--project <name>] [options]
-  hivem1nd relay <in|register|send|inbox|read|history|threads|status|events|reminder|delivery|mcp|hook|wake|configure|unconfigure|diagnose> [options]
+  hivem1nd relay <in|register|send|link|inbox|read|history|threads|status|events|reminder|delivery|mcp|hook|wake|configure|unconfigure|diagnose> [options]
   hivem1nd uninstall [--dry-run] [--remove-mind] [options]
-  hivem1nd service <install|uninstall|status|run> [--dry-run] [options]
+  hivem1nd service <install|uninstall|status|run|launch> [--dry-run] [options]
   hivem1nd task status <project> <id> <status> [--note <text>]
   hivem1nd task undo <project> <id>
 
@@ -49,7 +49,7 @@ Commands:
   pylon      Attach a repository to the shared M1ND
   swarm      Show units, tasks and unread messages
   view       Show chats, squads, what waits on the person, tasks, inbox and products
-  relay     Send and read messages, register sessions, or configure Relay clients
+  relay     Send and read messages, link sessions in one thread, register sessions, or configure Relay clients
   uninstall  Remove what HIVEM1ND wrote on this machine
   service    Plan the user login service, or print its status
   task       Change a task status or undo the last change through the service
@@ -69,6 +69,8 @@ Relay options:
   --priority <normal|urgent> --attachment <path> (repeatable)
   --id <message-id> (repeatable) --limit <count>
   relay delivery --id <message-id> [--id ...] shows how far messages sent by the registered unit have come (at most 100)
+  relay link [<code>|--code <code>] [--json] makes a code valid for 10 minutes, or joins the message thread of a code
+  --to link:<linkId> sends one message to every member of a link
 
 Relay wake actions:
   relay wake attach --client <${Object.keys(WAKE_ADAPTERS).join('|')}> --unit <name> [--native-session-id <id>] [--hours <n>] [--extended] [--max-daily-handoffs <1-1000>] [--mind-path <path>]
@@ -83,6 +85,7 @@ ${Object.values(WAKE_ADAPTERS).flatMap((adapter) => adapter.helpLines).map((line
 Init options:
   --gui                 Open the local browser wizard
   --resume              Continue the saved setup session
+  --no-desktop-shortcut Do not add a shortcut to the desktop on Windows (the Start menu one stays)
   --language <en|es>    Start in English or Spanish
 
 Evolve options:
@@ -96,6 +99,7 @@ Uninstall options:
 
 Service options:
   service install --dry-run    Print the login plan. This does not register a task.
+  service launch               Open the app: start the service in the background when it is not running, then open the viewer. Prints nothing.
   --origin-kind <folder|onedrive>
   --origin-path <path>         Explicit origin folder
   --cosmic-path <path>         Cosmic parent. The M1ND folder ${MIND_DIRECTORY_NAME} is appended when no M1ND path is set.
@@ -140,6 +144,7 @@ const VALUE_FLAGS = new Map([
 const BOOLEAN_FLAGS = new Map([
   ["--gui", ["gui", true]],
   ["--resume", ["resume", true]],
+  ["--no-desktop-shortcut", ["desktopShortcut", false]],
   ["--check-only", ["checkOnly", true]],
   ["--ai-files", ["aiFiles", true]],
   ["--no-ai-files", ["aiFiles", false]],
@@ -151,7 +156,7 @@ const BOOLEAN_FLAGS = new Map([
 ]);
 
 const ALLOWED_FLAGS = {
-  init: new Set(["gui", "resume", "language", "kitPath", "mindPath", "homeDir", "hostname", "originKind", "originPath", "cosmicPath"]),
+  init: new Set(["gui", "resume", "desktopShortcut", "language", "kitPath", "mindPath", "homeDir", "hostname", "originKind", "originPath", "cosmicPath"]),
   evolve: new Set(["checkOnly", "conflicts", "json", "kitPath", "mindPath", "homeDir", "hostname", "originKind", "originPath", "cosmicPath", "dryRun"]),
   pylon: new Set(["state", "aiFiles", "aiTrailers", "environment", "json", "kitPath", "mindPath", "homeDir", "hostname"]),
   check: new Set(["json", "kitPath", "mindPath", "homeDir", "hostname"]),
@@ -239,8 +244,8 @@ const SERVICE_FLAGS = new Set(["dryRun", "originKind", "originPath", "cosmicPath
 function parseServiceArgs(tokens) {
   const action = tokens[0];
   if (!action || action === "--help" || action === "-h") return { command: "service", help: true };
-  if (!["install", "uninstall", "status", "run"].includes(action)) {
-    throw new CliUsageError("service requires install, uninstall, status or run.");
+  if (!["install", "uninstall", "status", "run", "launch"].includes(action)) {
+    throw new CliUsageError("service requires install, uninstall, status, run or launch.");
   }
   const options = { action };
   for (let index = 1; index < tokens.length; index += 1) {
@@ -326,11 +331,11 @@ const RELAY_VALUE_FLAGS = new Map([
   ["--session-id", "sessionId"], ["--native-session-id", "nativeSessionId"], ["--client", "client"], ["--unit", "unit"],
   ["--event", "event"], ["--to", "to"], ["--subject", "subject"], ["--body", "body"], ["--priority", "priority"],
   ["--reply-to", "replyTo"], ["--thread-id", "threadId"], ["--limit", "limit"], ["--activity", "activity"], ["--quota", "quota"],
-  ["--attachment", "attachments"], ["--id", "ids"],
+  ["--attachment", "attachments"], ["--id", "ids"], ["--code", "code"],
   ["--hours", "hours"],
   ["--max-handoffs", "maxHandoffs"], ["--max-daily-handoffs", "maxDailyHandoffs"], ["--machine", "machine"],
 ]);
-const RELAY_ACTIONS = new Set(["in", "register", "send", "inbox", "read", "history", "threads", "status", "events", "reminder", "delivery", "mcp", "hook", "wake", "configure", "unconfigure", "diagnose"]);
+const RELAY_ACTIONS = new Set(["in", "register", "send", "link", "inbox", "read", "history", "threads", "status", "events", "reminder", "delivery", "mcp", "hook", "wake", "configure", "unconfigure", "diagnose"]);
 
 function parseRelayArgs(tokens) {
   let [action, ...rest] = tokens;
@@ -352,6 +357,17 @@ function parseRelayArgs(tokens) {
     if (token === "--extended") { if (options.extended) throw new CliUsageError("--extended was provided more than once."); options.extended = true; continue; }
     if (token === "--unlimited") { if (options.unlimited) throw new CliUsageError("--unlimited was provided more than once."); options.unlimited = true; continue; }
     if (token === "--manual-consent") { if (options.manualConsent) throw new CliUsageError("--manual-consent was provided more than once."); options.manualConsent = true; continue; }
+    if (token === "--json") {
+      if (action !== "link") throw new CliUsageError("--json is only valid with relay link.");
+      if (options.json) throw new CliUsageError("--json was provided more than once.");
+      options.json = true;
+      continue;
+    }
+    if (action === "link" && !token.startsWith("-")) {
+      if (Object.hasOwn(options, "code")) throw new CliUsageError("relay link takes at most one code.");
+      options.code = token;
+      continue;
+    }
     const key = RELAY_VALUE_FLAGS.get(token);
     if (!key) throw new CliUsageError(`Unknown Relay option: ${token}`);
     const value = rest[index + 1];
@@ -363,6 +379,7 @@ function parseRelayArgs(tokens) {
   }
   if (options.limit !== undefined && (!/^\d+$/.test(options.limit) || Number(options.limit) < 1 || Number(options.limit) > 500)) throw new CliUsageError("--limit must be between 1 and 500.");
   if (options.machine !== undefined && wakeAction !== "status") throw new CliUsageError("--machine is only valid with relay wake status.");
+  if (options.code !== undefined && action !== "link") throw new CliUsageError("--code is only valid with relay link.");
   if (options.priority !== undefined && !["normal", "urgent"].includes(options.priority)) throw new CliUsageError("--priority must be normal or urgent.");
   if (options.hours !== undefined && !["4", "5", "6", "7", "8", "12", "24"].includes(options.hours)) throw new CliUsageError("--hours must be 4 through 8, 12 or 24.");
   if (options.maxHandoffs !== undefined && (!/^\d+$/.test(options.maxHandoffs) || Number(options.maxHandoffs) < 1 || Number(options.maxHandoffs) > 100)) throw new CliUsageError("--max-handoffs must be between 1 and 100.");
@@ -385,6 +402,13 @@ function formatResult(result) {
 
 function firstLine(value) {
   return String(value ?? "").split(/\r?\n/, 1)[0];
+}
+
+function formatLink(result, joining) {
+  if (joining) return `Linked with ${result.members.join(", ")}. Thread ${result.threadId}.`;
+  const until = new Date(result.expiresAt);
+  const time = `${String(until.getHours()).padStart(2, "0")}:${String(until.getMinutes()).padStart(2, "0")}`;
+  return `Code ${result.code}, valid until ${time}. Share it; whoever runs /link ${result.code} joins this thread.`;
 }
 
 function formatCheck(result) {
@@ -534,9 +558,9 @@ function relayUninstallLine({ client, status, reason }) {
 
 function formatUninstall(result) {
   const lines = result.removed.length
-    ? result.removed.map((path) => `Removed: ${path}`)
-    : ["Nothing was removed."];
-  for (const path of result.updated ?? []) lines.push(`Rule line removed: ${path}`);
+    ? result.removed.map((path) => `${result.dryRun ? "Would remove" : "Removed"}: ${path}`)
+    : [result.dryRun ? "Nothing would be removed." : "Nothing was removed."];
+  for (const path of result.updated ?? []) lines.push(`${result.dryRun ? "Rule line would be removed" : "Rule line removed"}: ${path}`);
   for (const item of result.kept ?? []) lines.push(`Kept: ${item.path} (${item.reason})`);
   for (const item of result.relay ?? []) lines.push(relayUninstallLine(item));
   for (const warning of result.warnings ?? []) lines.push(`Warning: ${warning}`);
@@ -573,6 +597,8 @@ function setupOptions(options, { env = process.env, lifecycle = false, serviceRu
     relaySetup: true,
     serviceSetup: true,
     serviceDryRun: options.dryRun === true,
+    ...(!lifecycle && options.dryRun !== true ? { shortcuts: true } : {}),
+    ...(options.desktopShortcut === false ? { desktopShortcut: false } : {}),
     ...(options.dryRun === true ? {} : { serviceRunner: serviceRunner ?? runRegistrationCommand, serviceStart: serviceStart ?? (config => startUserService(config, serviceOptions)) }),
     ...(serviceQuery ? { serviceQuery } : {}),
     ...(serviceAclRunner ? { aclRunner: serviceAclRunner } : {}),
@@ -638,8 +664,8 @@ const terminalCopy = {
     report: "Reporte",
     confirm: "¿Escribir estos archivos?",
     cancelled: "No se escribió nada.",
-    installing: "Instalando el M1ND",
-    installed: "M1ND instalado",
+    installing: "Instalando la M1ND",
+    installed: "M1ND instalada",
     stopped: "Instalación detenida",
     done: "Listo.",
     step: "Paso",
@@ -951,6 +977,24 @@ async function openLocalUrl(url) {
   child.unref();
 }
 
+// The desktop shortcut opens the app in a window of its own when it can, and in the default browser otherwise.
+async function openAppWindow(url) {
+  const { appWindowCommand } = await import("../engine/launcher.mjs");
+  const window = appWindowCommand(url);
+  if (!window) return openLocalUrl(url);
+  const { spawn } = await import("node:child_process");
+  try {
+    const child = spawn(window.command, window.args, { detached: true, stdio: "ignore", windowsHide: false });
+    await new Promise((resolve, reject) => {
+      child.once("spawn", resolve);
+      child.once("error", reject);
+    });
+    child.unref();
+  } catch {
+    await openLocalUrl(url);
+  }
+}
+
 async function waitForServer(server, output) {
   output.write(`Local wizard: ${server.url}\nPress Ctrl+C to stop it.\n`);
   await new Promise((resolve) => {
@@ -1124,6 +1168,32 @@ async function runService(options, dependencies, output) {
     output.write(`${JSON.stringify({ status: configured.status, phase: configured.phase, viewerUrl: configured.viewerUrl ?? null, error: configured.error ?? configured.conflict ?? null })}\n`);
     if (configured.status === "started" && configured.viewerUrl) await (dependencies.openUrl ?? openLocalUrl)(configured.viewerUrl);
     return configured.status === "started" ? 0 : 1;
+  }
+  if (options.action === "launch") {
+    // What the desktop shortcut runs: no console, no output. A service that is not running starts detached.
+    const runtime = dependencies.serviceRuntime ?? await import("../engine/service/service.mjs");
+    const { launchApp, serviceState, spawnDetachedService } = dependencies.launcher ?? await import("../engine/launcher.mjs");
+    const selected = { mindPath, platform: registration.platform, env: common.env, homeDir: registration.home, cosmicPath: common.cosmicPath,
+      hostname: common.hostname, aclRunner: dependencies.aclRunner, userKey: dependencies.userKey, guardPort: dependencies.guardPort };
+    try {
+      await launchApp(selected, {
+        state: () => serviceState(selected, runtime),
+        spawnService: () => spawnDetachedService({ cliPath: path.join(KIT_PATH, "cli", "index.mjs"), mindPath, cosmicPath: common.cosmicPath,
+          hostname: options.hostname, env: common.env }),
+        // The viewer address is handed to the browser and never written anywhere a person could read it.
+        viewerUrl: async () => (await installers.startConfiguredViewer({ mindPath, machine: common.hostname }, {
+          start: () => runtime.runConfiguredService({ mindPath, platform: registration.platform, env: common.env, home: registration.home,
+            cosmicPath: common.cosmicPath, hostname: common.hostname, aclRunner: dependencies.aclRunner, userKey: dependencies.userKey,
+            guardPort: dependencies.guardPort }),
+        })).viewerUrl,
+        openUrl: dependencies.openUrl ?? openAppWindow,
+        ...(dependencies.launchTiming ?? {}),
+      });
+    } catch (error) {
+      output.write(`${error.code ?? "error"}: ${error.message}\n`);
+      return 1;
+    }
+    return 0;
   }
   if (options.action === "run") {
     const { runConfiguredService, stopService } = dependencies.serviceRuntime ?? await import("../engine/service/service.mjs");
@@ -1476,6 +1546,8 @@ async function runRelay(options, dependencies, output) {
     args = { unit: options.unit, nativeSessionId: options.nativeSessionId, client: options.client };
   } else if (action === "delivery") {
     args = { ids: options.ids };
+  } else if (action === "link" && options.code !== undefined) {
+    args = { code: options.code };
   }
   const method = action === "register" ? "register"
     : action === "send" ? "send"
@@ -1483,7 +1555,7 @@ async function runRelay(options, dependencies, output) {
         : action === "read" ? "read"
           : action;
   const result = await relay[method](args);
-  output.write(`${formatResult(result)}\n`);
+  output.write(`${action === "link" && !options.json ? formatLink(result, options.code !== undefined) : formatResult(result)}\n`);
   return 0;
 }
 

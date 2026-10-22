@@ -42,7 +42,7 @@ export const BROWSER_STATIC_FILES = Object.freeze([
   'index.html', 'styles.css', 'main.mjs', 'api.mjs', 'stream.mjs', 'state.mjs', 'i18n.mjs', 'components.mjs',
   'lists.mjs', 'map-geometry.mjs', 'map.mjs', 'hierarchy.mjs', 'chats.mjs', 'chat-media.mjs', 'inspector.mjs', 'actions.mjs',
   'start-api.mjs', 'start-copy.mjs', 'cluster-geometry.mjs', 'clusters.mjs',
-  'plan-view.mjs', 'session-work.mjs', 'plan-controller.mjs',
+  'plan-view.mjs', 'session-work.mjs', 'plan-controller.mjs', 'queue.mjs',
   'add-api.mjs', 'add-view.mjs', 'add-controller.mjs',
   'settings.mjs', 'qr.mjs', 'qr-render.mjs', 'phone.mjs', 'embed.mjs', 'editors.mjs', 'blueprint.mjs', 'void.mjs', 'markup.mjs', 'find-worker.mjs',
   'mark.svg', 'favicon.svg',
@@ -455,6 +455,7 @@ export async function createHttpServer(options) {
   const sockets = new Set();
   const requests = new Set();
   let closing = false;
+  let viewServed = false;
   const server = createServer({ maxHeaderSize: 8192 }, (req, res) => acceptRequest(req, res));
   homeState.serve = (req, res) => acceptRequest(req, res);
 
@@ -533,8 +534,11 @@ export async function createHttpServer(options) {
     const write = req.method !== 'GET' && req.method !== 'HEAD';
     checkOrigin(headerOne(req, 'origin') ?? null, listener, { write });
     const now = options.now?.() ?? Date.now();
-    const bucket = principalBucket(principals, req, requested.path, verifiedPrincipal(credentials, req), now);
-    checkLimits(bucket, { url, headerBytes, stream: requested.path === '/api/v1/events' }, now);
+    const caller = verifiedPrincipal(credentials, req);
+    const bucket = principalBucket(principals, req, requested.path, caller, now);
+    // The desktop app on this computer reads several lists for every change it is told about; while an agent works that is
+    // well over the general budget, and a refused read there stops the live connection.
+    checkLimits(bucket, { url, headerBytes, stream: requested.path === '/api/v1/events', limit: caller?.audience === 'desktop' ? DESKTOP_REQUEST_LIMIT : undefined }, now);
     if (requested.path === '/mcp') {
       if (listener.kind === 'lan') throw new CoreError(403, 'forbidden', 'A desktop credential is not accepted on the home network.');
       await serveMcp(req, res, options, credentials);
@@ -667,6 +671,11 @@ export async function createHttpServer(options) {
       });
     }
     respond(res, outcome.status ?? 200, successEnvelope(outcome, { requestId, readAt, eventCursor: readCursor }));
+    // What a service puts off until it has answered its first view (the first pass over the files, publishing) starts here.
+    if (route.handler === 'view' && !viewServed) {
+      viewServed = true;
+      setImmediate(() => { try { options.afterFirstView?.(); } catch { /* the deferred work reports its own failures */ } });
+    }
   }
 
   server.on('connection', (socket) => {
@@ -796,6 +805,8 @@ function expireIdleBuckets(principals, now) {
     if (now - (bucket.seen ?? 0) >= 60_000) principals.delete(key);
   }
 }
+
+const DESKTOP_REQUEST_LIMIT = 1200;
 
 function principalBucket(principals, req, pathname, credential, now) {
   expireIdleBuckets(principals, now);
@@ -1143,7 +1154,7 @@ function allowedBody(route) {
     'DELETE /units/:unitId': ['confirmed', 'expectedRevision'],
     'PUT /units/:unitId/lead': ['leadId', 'confirmed', 'expectedRevision'],
     'POST /units/:unitId/session': ['prompt', 'runMode', 'taskId', 'expectedRevision'],
-    'POST /clusters/:clusterId/agents': ['machine', 'role', 'roleName', 'roleDescription', 'runsIn', 'useAsDefault', 'expectedRevision'],
+    'POST /clusters/:clusterId/agents': ['machine', 'role', 'roleName', 'roleDescription', 'runsIn', 'useAsDefault', 'leadId', 'expectedRevision'],
     'POST /overseer': ['machine', 'runsIn', 'fresh', 'expectedRevision'],
     'PATCH /units/:unitId/runs-in': ['machine', 'runsIn', 'useAsDefault', 'expectedRevision'],
     'POST /session-requests/:requestId/cancel': [],

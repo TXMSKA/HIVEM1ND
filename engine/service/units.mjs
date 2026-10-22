@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { CLUSTER_ROLES, CoreError, canonicalJson, hashBytes, parseUnitId, replaceHeader, unitStatePath, uuidV8, validateCustomRole, validateName, validateRole, canonicalScope } from './identity.mjs';
-import { answersFor, readProjection, viewBatch } from './projection.mjs';
+import { answersFor, readProjection, readSessions, viewBatch } from './projection.mjs';
 import { readUnitState as readState, readUnitStates } from './state.mjs';
 import { checkRevision, commitChange, commitTransaction, prepareChangeUndo, readBytes, revisionOf, withLocalChanges, withLocks, withReceipt } from './store.mjs';
 import { prepareUnitMembershipRemoval, projectGroup } from './groups.mjs';
@@ -109,8 +109,9 @@ export async function removeUnit(context, unitId, input) {
     if (journal?.phase === 'committed' && header(current.bytes, 'removed') === 'true') return journal.response;
     if (header(current.bytes, 'removed') === 'true') throw new CoreError(404, 'unit_not_found', 'The unit is archived.');
     checkRevision(current.bytes, input.expectedRevision);
-    let view = await readProjection(context);
-    if (view.units.some((unit) => unit.leadId === parsed.id)) throw new CoreError(409, 'unit_has_reports', 'Connect the surviving reports to another lead first.');
+    // Before the sessions stop only the leads and the sessions are needed; the whole view is read once, after them.
+    if ([...(await leadMap(context)).values()].some((unit) => unit.leadId === parsed.id)) throw new CoreError(409, 'unit_has_reports', 'Connect the surviving reports to another lead first.');
+    const running = (await readSessions(context)).filter((session) => session.unitId === parsed.id && session.state !== 'stopped');
     let membership = await prepareUnitMembershipRemoval(context, parsed.id);
     const newJournal = !journal || journal.phase === 'committed';
     if (newJournal) {
@@ -126,12 +127,12 @@ export async function removeUnit(context, unitId, input) {
       journal = value;
     };
     if (newJournal) await saveJournal(journal);
-    for (const session of view.sessions.filter((session) => session.unitId === parsed.id && session.state !== 'stopped')) {
+    for (const session of running) {
       if (journal.stoppedSessionIds.includes(session.id)) continue;
       if (journal.phase === 'stopping') {
         // An interrupted native call is reconciled from its durable acknowledgment, never signaled again.
-        const stopped = await readProjection(context);
-        if (!stopped.sessions.some((item) => item.id === journal.stoppingSessionId && item.state === 'stopped')) {
+        const stopped = await readSessions(context);
+        if (!stopped.some((item) => item.id === journal.stoppingSessionId && item.state === 'stopped')) {
           throw new CoreError(409, 'stop_unavailable', 'The interrupted stop has no verified acknowledgment.');
         }
       }
@@ -151,7 +152,7 @@ export async function removeUnit(context, unitId, input) {
       if (context.removalFault === 'after-stop') throw new CoreError(500, 'injected_crash', 'Injected crash after acknowledged stop.');
     }
     checkRevision((await readState(context, parsed))?.bytes, input.expectedRevision);
-    view = await readProjection(context);
+    const view = await readProjection(context);
     if (view.units.some((unit) => unit.leadId === parsed.id)) throw new CoreError(409, 'unit_has_reports', 'Connect the surviving reports to another lead first.');
     membership = await prepareUnitMembershipRemoval(context, parsed.id);
     const unit = view.units.find((unit) => unit.id === parsed.id);
@@ -193,14 +194,13 @@ export async function patchLayout(context, input) {
     nextNodes[id] = { x: coordinate(position?.x), y: coordinate(position?.y) };
   }
   for (const [id, group] of Object.entries(groups ?? {})) {
-    if (!/^(project|env):[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id)) throw new CoreError(422, 'invalid_body', 'The group id is not canonical.');
+    // A scope group, or the frame of a cluster: the place a person dragged it to and whether it is collapsed.
+    if (!/^(project|env):[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id) && !/^cluster:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)) throw new CoreError(422, 'invalid_body', 'The group id is not canonical.');
     const prior = nextGroups[id] ?? {};
-    nextGroups[id] = {
-      ...prior,
-      x: coordinate(group?.x),
-      y: coordinate(group?.y),
-      collapsed: Object.prototype.hasOwnProperty.call(group, 'collapsed') ? group.collapsed === true : prior.collapsed === true,
-    };
+    const collapsed = Object.prototype.hasOwnProperty.call(group, 'collapsed') ? group.collapsed === true : prior.collapsed === true;
+    // A cluster frame may be collapsed without being moved, so its patch can leave the place out.
+    if (id.startsWith('cluster:') && group?.x === undefined && group?.y === undefined && Object.prototype.hasOwnProperty.call(group, 'collapsed')) nextGroups[id] = { ...prior, collapsed };
+    else nextGroups[id] = { ...prior, x: coordinate(group?.x), y: coordinate(group?.y), collapsed };
   }
   const next = { ...layout, format: 'hivem1nd-layout-v1', nodes: nextNodes, groups: nextGroups };
   const bytes = Buffer.from(`${canonicalJson(next)}\n`);
@@ -403,7 +403,8 @@ async function deriveClusterUnit(context, input) {
   const base = `${custom ? roleSlug(custom.name) : input.role}-${scope.name ?? cluster.id.slice(0, 8)}`.slice(0, 70);
   let unit = base, index = 2;
   while (records.some(record => record.id === unitIdFor(unit, scope))) unit = `${base}-${index++}`;
-  let current = cluster, leadId = null;
+  // A lead chosen on the Map, by dropping a connection, wins over the one the cluster implies.
+  let current = input.leadId ? null : cluster, leadId = input.leadId ?? null;
   const seen = new Set();
   while (current && !seen.has(current.id)) {
     seen.add(current.id);

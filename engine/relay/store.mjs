@@ -1,11 +1,11 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { randomUUID, createHash, randomBytes } from 'node:crypto';
+import { randomUUID, createHash, randomBytes, randomInt } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import { mkdir, open, lstat, readdir, readFile, rename, realpath, unlink, link as linkFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { assertWithin } from '../records.mjs';
-import { uuidV8, inboxDirectory, parseUnitId } from '../service/identity.mjs';
+import { canonicalJson, uuidV8, inboxDirectory, parseUnitId } from '../service/identity.mjs';
 import { ASSET_MAX_BYTES, ASSET_NAME, MESSAGE_ASSETS, messagePart } from '../service/message-parts.mjs';
 
 const MAX_BODY_BYTES = 256 * 1024;
@@ -30,6 +30,16 @@ const DELIVERY_STATES = new Set(['attempting', 'submitted', 'ambiguous', 'not_su
 const LEGACY_LOCK_AGE_MS = 10 * 60 * 1000;
 // A message file that was changed a moment ago may still be arriving, so it counts as complete once it stays as it is for this long.
 const MESSAGE_SETTLE_MS = 50;
+// A link joins sessions in one message thread through a short code. The code takes its characters from the alphabet of the home
+// pairing code, which leaves out the ones that read alike.
+const LINK_FORMAT = 'hivem1nd-relay-link-v1';
+const LINK_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+const LINK_CODE_LENGTH = 5;
+const LINK_LIFETIME_MS = 10 * 60 * 1000;
+const LINK_ATTEMPTS = 5;
+const LINK_ATTEMPT_WINDOW_MS = 10 * 60 * 1000;
+const LINK_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const LINK_TARGET = /^link:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 
 function relayError(code, message, cause) {
   const error = new Error(message, cause ? { cause } : undefined);
@@ -147,6 +157,18 @@ function checkedParts(values) {
   });
 }
 
+// What a message to a unit and a message to a link must both satisfy, checked before anything is written.
+function checkedContent(args) {
+  const subject = scalar(args.subject, 'subject', MAX_SUBJECT_LENGTH);
+  if (!subject.trim()) throw relayError('INVALID_SUBJECT', 'subject cannot be empty.');
+  if (typeof args.body !== 'string' || Buffer.byteLength(args.body, 'utf8') > MAX_BODY_BYTES) throw relayError('INVALID_BODY', `body must be a string of at most ${MAX_BODY_BYTES} UTF-8 bytes.`);
+  const priority = args.priority ?? 'normal';
+  if (!['normal', 'urgent'].includes(priority)) throw relayError('INVALID_PRIORITY', 'priority must be normal or urgent.');
+  const replyRequested = args.replyRequested ?? false;
+  if (typeof replyRequested !== 'boolean') throw relayError('INVALID_METADATA', 'replyRequested must be a boolean.');
+  return { subject, body: args.body, priority, replyRequested, parts: checkedParts(args.attachments ?? []) };
+}
+
 function attachmentPath(entry) {
   if (typeof entry !== 'string' || entry.length > 2048 || /[\u0000-\u001f\u007f]/.test(entry) || entry.split(/[\\/]+/).includes('..')) {
     throw relayError('MALFORMED_MESSAGE', 'The attachment metadata contains an unsafe path reference.');
@@ -212,6 +234,8 @@ function parseMessage(raw, sourcePath, archived = false) {
   if (!/^[a-zA-Z0-9_-]{1,180}$/.test(threadId)) throw relayError('MALFORMED_MESSAGE', 'The thread id is invalid.');
   const replyTo = header(headers, 'reply-to') || null;
   if (replyTo && !/^[a-zA-Z0-9_-]{1,180}$/.test(replyTo)) throw relayError('MALFORMED_MESSAGE', 'The reply id is invalid.');
+  const fanoutId = header(headers, 'fanout-id');
+  if (fanoutId && !/^[a-zA-Z0-9_-]{1,180}$/.test(fanoutId)) throw relayError('MALFORMED_MESSAGE', 'The fan-out id is invalid.');
   const fromId = header(headers, 'from-id');
   const toId = header(headers, 'to-id');
   const kind = header(headers, 'kind');
@@ -222,6 +246,7 @@ function parseMessage(raw, sourcePath, archived = false) {
     ...(fromId ? { fromId } : {}),
     ...(toId ? { toId } : {}),
     ...(kind ? { kind } : {}),
+    ...(fanoutId ? { fanoutId } : {}),
     machine: header(headers, 'machine') || legacySender?.[2] || null,
     timestamp: header(headers, 'timestamp') || header(headers, 'date') || null,
     date: header(headers, 'date') || null,
@@ -237,6 +262,11 @@ function parseMessage(raw, sourcePath, archived = false) {
     legacyFilenameSender: legacySender ? rawFrom : null,
     body,
   };
+}
+
+// Relay names the root scope "user"; the app names its units "root:<unit>".
+function appScopeId(scopeId) {
+  return scopeId === 'user' ? 'root' : scopeId;
 }
 
 function metadata(message) {
@@ -267,6 +297,7 @@ function serializeMessage(message) {
     ['id', message.id], ['from', message.from], ['to', message.to], ['machine', message.machine],
     ['timestamp', message.timestamp], ['date', message.date], ['priority', message.priority], ['subject', message.subject],
     ['thread-id', message.threadId], ['reply-to', message.replyTo ?? ''],
+    ...(message.fanoutId ? [['fanout-id', message.fanoutId]] : []),
     ['reply-requested', message.replyRequested ? 'true' : 'false'],
     ['attachments', JSON.stringify(message.attachments)],
     ['body-bytes', Buffer.byteLength(message.body, 'utf8')],
@@ -631,6 +662,31 @@ async function publishExclusive(root, destination, bytes) {
   }
 }
 
+// A record that changes is replaced whole by renaming a finished copy over it, so a reader sees the old record or the new one.
+async function replaceFile(root, destination, bytes) {
+  await ensureDirectory(root, path.dirname(destination));
+  await safePath(root, destination);
+  const prior = await lstatOrNull(destination);
+  if (prior && (!prior.isFile() || prior.isSymbolicLink())) throw relayError('UNSAFE_PATH', 'A Relay record path is unsafe.');
+  const temporary = path.join(path.dirname(destination), `.${path.basename(destination)}.${randomBytes(12).toString('hex')}.tmp`);
+  await safePath(root, temporary);
+  const handle = await open(temporary, 'wx', 0o600);
+  try { await handle.writeFile(bytes); await handle.sync(); } finally { await handle.close(); }
+  try {
+    for (let attempt = 0; ; attempt += 1) {
+      try { await rename(temporary, destination); return; }
+      catch (error) {
+        // Windows refuses the rename while a scanner or the sync client holds the old file.
+        if (!['EPERM', 'EBUSY'].includes(error?.code) || attempt === 4) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 10 * (attempt + 1)));
+      }
+    }
+  } catch (error) {
+    await unlink(temporary).catch(() => {});
+    throw error;
+  }
+}
+
 async function vanishedArchiveSource(root, source, error) {
   if (error?.code === 'ENOENT') return true;
   if (error?.code !== 'EPERM') return false;
@@ -858,6 +914,8 @@ export async function createRelay(options = {}) {
   const sessionsPath = path.join(relayPath, 'sessions');
   const archivePath = path.join(relayPath, 'archive');
   const eventsPath = path.join(relayPath, 'events');
+  const linksPath = path.join(relayPath, 'links');
+  const attemptsFile = path.join(linksPath, 'attempts.json');
 
   async function routesAndScopes() {
     const routesFile = path.join(userPath, 'routes.md');
@@ -1293,6 +1351,195 @@ export async function createRelay(options = {}) {
     return records[0];
   }
 
+  // Reading the inbox copy of a chat message is reading that message: the chat gets the agent's read receipt, in the form the
+  // service writes, so the app stops counting it as unread for the agent.
+  async function markChatCopiesRead(messages, unit, target) {
+    const byChat = new Map();
+    for (const message of messages) {
+      if (message.kind !== 'chat-copy' || message.archive?.alreadyArchived) continue;
+      const raw = await readRegularFileSafe(mindPath, path.join(userPath, message.archive.path)).catch(() => null);
+      const header = raw ? raw.toString('utf8').split(/\r?\n\r?\n/, 1)[0] : '';
+      const chatId = header.match(/^chat-id:\s*([0-9a-f-]{36})\s*$/mi)?.[1]?.toLowerCase();
+      const messageId = header.match(/^chat-message-id:\s*([0-9a-f-]{36})\s*$/mi)?.[1]?.toLowerCase();
+      if (!chatId || !messageId) continue;
+      byChat.set(chatId, [...(byChat.get(chatId) ?? []), messageId]);
+    }
+    const reader = target?.unitId ?? (target?.scope?.id ? `${appScopeId(target.scope.id)}:${unit}` : null);
+    if (!reader) return;
+    for (const [chatId, messageIds] of byChat) {
+      const record = { format: 'hivem1nd-chat-read-v1', chatId, unitId: reader, machine: hostname, messageIds, at: isoNow() };
+      const destination = path.join(mindPath, 'user', 'relay', 'chats', chatId, 'read', Buffer.from(reader).toString('base64url'), hostname, `${randomUUID()}.json`);
+      try { await publish(destination, Buffer.from(`${canonicalJson(record)}\n`)); } catch { /* the message was read; a missed receipt only keeps its badge */ }
+    }
+  }
+
+  // An agent answers in a chat of the app: the message is written into that chat in the form the service writes, from the
+  // registered unit, which has to be a member of the chat. The service's watcher shows it in the chat.
+  async function sendToChat(sender, chatId, args) {
+    // A chat message needs no subject; the app shows the text.
+    const subject = args.subject ? scalar(args.subject, 'subject', MAX_SUBJECT_LENGTH) : '';
+    if (typeof args.body !== 'string' || Buffer.byteLength(args.body, 'utf8') > MAX_BODY_BYTES) throw relayError('INVALID_BODY', `body must be a string of at most ${MAX_BODY_BYTES} UTF-8 bytes.`);
+    const priority = args.priority ?? 'normal';
+    if (!['normal', 'urgent'].includes(priority)) throw relayError('INVALID_PRIORITY', 'priority must be normal or urgent.');
+    const directory = path.join(mindPath, 'user', 'relay', 'chats', chatId);
+    const chatBytes = await readRegularFileSafe(mindPath, path.join(directory, 'chat.md'));
+    if (!chatBytes) throw relayError('UNKNOWN_CHAT', 'No chat of the app has that id.');
+    const header = chatBytes.toString('utf8').split(/\r?\n\r?\n/, 1)[0];
+    let members = [];
+    try { members = JSON.parse(header.match(/^members:\s*(.*)$/m)?.[1] ?? '[]'); } catch { members = []; }
+    const resolved = await resolveUnit(sender.unit);
+    const fromId = sender.unitId ?? resolved.unitId ?? `${appScopeId(resolved.scope.id)}:${sender.unit}`;
+    if (!Array.isArray(members) || !members.includes(fromId)) throw relayError('NOT_CHAT_MEMBER', 'This unit is not a member of that chat.');
+    const attachments = await storedParts(checkedParts(args.attachments ?? []));
+    const id = randomUUID(), timestamp = isoNow();
+    const lines = [
+      `id: ${id}`, `from: ${sender.unit}`, `from-id: ${fromId}`, `to: chat:${chatId}`, `to-id: chat:${chatId}`, `machine: ${hostname}`,
+      `timestamp: ${timestamp}`, `priority: ${priority}`, `subject: ${subject}`, `thread-id: ${chatId}`, 'reply-to: ', 'reply-requested: false',
+      `attachments: ${JSON.stringify(attachments)}`, 'kind: message', `recipient-ids: ${JSON.stringify(members.filter((member) => member !== fromId))}`,
+    ];
+    await publish(path.join(directory, `${id}.md`), Buffer.from(`${lines.join('\n')}\n\n${args.body}`, 'utf8'));
+    return { id, threadId: chatId, from: sender.unit, to: `chat:${chatId}`, timestamp, priority, replyRequested: false };
+  }
+
+  // The inbox file of the recipient, then the event that announces it.
+  async function deliver(message, scope) {
+    const stamp = new Date(message.timestamp);
+    const secondStamp = `${stamp.getFullYear()}${String(stamp.getMonth() + 1).padStart(2, '0')}${String(stamp.getDate()).padStart(2, '0')}-${String(stamp.getHours()).padStart(2, '0')}${String(stamp.getMinutes()).padStart(2, '0')}${String(stamp.getSeconds()).padStart(2, '0')}`;
+    const filename = `${secondStamp}-${hostname}-${message.id}.md`;
+    const destination = path.join(scope.path, 'inbox', message.to, filename);
+    await publish(destination, serializeMessage(message));
+    message.sourcePath = destination;
+    const event = { kind: 'message', ...metadata(message) };
+    await publish(path.join(eventsPath, `${message.id}.json`), Buffer.from(`${JSON.stringify(event)}\n`));
+  }
+
+  function linkPath(id) {
+    return path.join(linksPath, `${id}.json`);
+  }
+
+  async function readLink(id) {
+    const record = await readBriefly(() => readJsonSafe(mindPath, linkPath(id)));
+    return validLink(record, id) ? record : null;
+  }
+
+  async function allLinks() {
+    const files = await listRegularFiles(mindPath, linksPath, (name) => name.endsWith('.json') && LINK_ID.test(name.slice(0, -5)));
+    const outcomes = await inParallel(files, (file) => readBriefly(() => readJsonSafe(mindPath, file)));
+    return files.flatMap((file, index) => {
+      const outcome = outcomes[index];
+      if ('error' in outcome) {
+        if (isSkippableRecordError(outcome.error)) return [];
+        throw outcome.error;
+      }
+      return validLink(outcome.value, path.basename(file, '.json')) ? [outcome.value] : [];
+    });
+  }
+
+  async function memberLink(sender, id) {
+    const link = await readLink(id);
+    if (!link || !isMember(link, sender.unit)) throw relayError('NOT_LINK_MEMBER', 'This unit is not a member of that link.');
+    return link;
+  }
+
+  // A link is a thread by membership, so its members can write to each other in it before any message of it exists.
+  async function inLinkThread(threadId, ...units) {
+    const id = /^link-(.+)$/.exec(threadId)?.[1];
+    const link = id && LINK_ID.test(id) ? await readLink(id) : null;
+    return link !== null && units.every((unit) => isMember(link, unit));
+  }
+
+  // One message to every other member of a link, in the thread of the link, all sharing a fan-out id. Every member is resolved
+  // before anything is written, and pictures are copied last, so a refusal leaves nothing behind.
+  async function fanOut(sender, link, { parts = [], ...content }) {
+    const recipients = link.members.filter((member) => member.toLowerCase() !== sender.toLowerCase());
+    if (!recipients.length) throw relayError('LINK_EMPTY', 'Nobody else has joined this link yet.');
+    const scopes = [];
+    for (const unit of recipients) scopes.push((await resolveUnit(unit)).scope);
+    const attachments = await storedParts(parts);
+    const fanoutId = randomUUID(), now = new Date();
+    const ids = [];
+    for (const [index, unit] of recipients.entries()) {
+      const message = {
+        priority: 'normal', replyRequested: false, ...content,
+        id: randomUUID(), from: sender, to: unit, machine: hostname, timestamp: now.toISOString(), date: formatLocalDate(now),
+        threadId: link.threadId, replyTo: null, fanoutId, attachments, archived: false,
+      };
+      await deliver(message, scopes[index]);
+      ids.push(message.id);
+    }
+    return { ids, threadId: link.threadId, recipients, fanoutId };
+  }
+
+  async function sendToLink(sender, linkId, args) {
+    const link = await memberLink(sender, linkId);
+    if (args.replyTo !== undefined) throw relayError('INVALID_REPLY', 'A message to a link cannot be a reply; answer the sender by name.');
+    if (args.threadId !== undefined && args.threadId !== link.threadId) throw relayError('INVALID_THREAD', 'A message to a link stays in the thread of the link.');
+    return fanOut(sender.unit, link, checkedContent(args));
+  }
+
+  async function createLink(unit) {
+    const now = Date.now();
+    const taken = new Set((await allLinks()).filter((link) => Date.parse(link.expiresAt) > now).map((link) => link.code));
+    let code;
+    do code = Array.from({ length: LINK_CODE_LENGTH }, () => LINK_ALPHABET[randomInt(LINK_ALPHABET.length)]).join('');
+    while (taken.has(code));
+    const id = randomUUID();
+    const record = {
+      format: LINK_FORMAT, id, code, threadId: `link-${id}`, createdBy: unit, createdAt: new Date(now).toISOString(),
+      expiresAt: new Date(now + LINK_LIFETIME_MS).toISOString(), members: [unit],
+    };
+    await publish(linkPath(id), Buffer.from(`${JSON.stringify(record)}\n`, 'utf8'));
+    return linkAnswer(record);
+  }
+
+  async function readAttempts() {
+    const stored = await readBriefly(() => readJsonSafe(mindPath, attemptsFile));
+    return stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {};
+  }
+
+  // Every write drops the attempts that no longer count, so the file holds only what a lock may still need.
+  async function noteWrongCode(key, now) {
+    await withWakeLock('link-attempts', async () => {
+      const stored = await readAttempts();
+      const attempts = {};
+      for (const name of Object.keys(stored)) {
+        const recent = recentAttempts(stored, name, now);
+        if (recent.length) attempts[name] = recent;
+      }
+      attempts[key] = [...(attempts[key] ?? []), new Date(now).toISOString()];
+      await publish(attemptsFile, Buffer.from(`${JSON.stringify(attempts)}\n`, 'utf8'), { replace: true });
+    });
+  }
+
+  async function joinLink(unit, input) {
+    const code = scalar(typeof input === 'string' ? input.trim().toUpperCase() : input, 'code', 16);
+    const now = Date.now();
+    const key = unit.toLowerCase();
+    const recent = recentAttempts(await readAttempts(), key, now);
+    if (recent.length >= LINK_ATTEMPTS) {
+      const until = new Date(Date.parse(recent[recent.length - LINK_ATTEMPTS]) + LINK_ATTEMPT_WINDOW_MS).toISOString();
+      throw relayError('LINK_LOCKED', `Too many wrong codes. Try again after ${until}.`);
+    }
+    const found = (await allLinks()).find((link) => link.code === code && Date.parse(link.expiresAt) > now);
+    if (!found) {
+      await noteWrongCode(key, now);
+      throw relayError('LINK_NOT_FOUND', 'The code is not valid or has expired.');
+    }
+    if (isMember(found, unit)) return linkAnswer(found);
+    // Two parties joining at once each read the members and write them back, so the change is made one at a time.
+    const { link, added } = await withWakeLock(`link-${found.id}`, async () => {
+      const current = await readLink(found.id);
+      if (!current) throw relayError('LINK_NOT_FOUND', 'The code is not valid or has expired.');
+      if (isMember(current, unit)) return { link: current, added: false };
+      const next = { ...current, members: [...current.members, unit] };
+      await publish(linkPath(found.id), Buffer.from(`${JSON.stringify(next)}\n`, 'utf8'), { replace: true });
+      return { link: next, added: true };
+    });
+    if (!added) return linkAnswer(link);
+    await fanOut(unit, link, { subject: 'Linked', body: `${unit} joined this link.` });
+    return { ...linkAnswer(link), joined: true };
+  }
+
   async function currentIdentity() {
     if (!scopeLock && servedSession !== null) return servedRegistration();
     if (currentRegistration) return currentRegistration;
@@ -1308,12 +1555,12 @@ export async function createRelay(options = {}) {
     return newest;
   }
 
-  async function publish(destination, bytes) {
+  async function publish(destination, bytes, { replace = false } = {}) {
     if (scopeLock && typeof options.commitFile === 'function') {
       await options.commitFile(destination, bytes);
       return;
     }
-    await publishExclusive(mindPath, destination, bytes);
+    await (replace ? replaceFile : publishExclusive)(mindPath, destination, bytes);
   }
 
   function assetFile(name) {
@@ -1647,16 +1894,13 @@ export async function createRelay(options = {}) {
       validateArgs(args, 'send', ['to', 'subject', 'body', 'priority', 'replyTo', 'threadId', 'replyRequested', 'attachments']);
       const sender = await currentIdentity();
       if (!sender) throw relayError('NOT_REGISTERED', 'Register this session before sending a message.');
+      const chatTarget = /^chat:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(String(args.to ?? ''));
+      if (chatTarget) return sendToChat(sender, chatTarget[1].toLowerCase(), args);
+      const linkTarget = LINK_TARGET.exec(String(args.to ?? ''));
+      if (linkTarget) return sendToLink(sender, linkTarget[1].toLowerCase(), args);
       const to = validUnit(args.to, 'recipient');
       const recipient = await resolveUnit(to);
-      const subject = scalar(args.subject, 'subject', MAX_SUBJECT_LENGTH);
-      if (!subject.trim()) throw relayError('INVALID_SUBJECT', 'subject cannot be empty.');
-      if (typeof args.body !== 'string' || Buffer.byteLength(args.body, 'utf8') > MAX_BODY_BYTES) throw relayError('INVALID_BODY', `body must be a string of at most ${MAX_BODY_BYTES} UTF-8 bytes.`);
-      const priority = args.priority ?? 'normal';
-      if (!['normal', 'urgent'].includes(priority)) throw relayError('INVALID_PRIORITY', 'priority must be normal or urgent.');
-      const replyRequested = args.replyRequested ?? false;
-      if (typeof replyRequested !== 'boolean') throw relayError('INVALID_METADATA', 'replyRequested must be a boolean.');
-      const parts = checkedParts(args.attachments ?? []);
+      const { subject, priority, replyRequested, parts } = checkedContent(args);
       const id = randomUUID();
       let threadId = args.threadId === undefined ? id : scalar(args.threadId, 'threadId', 180);
       const replyTo = args.replyTo === undefined ? null : scalar(args.replyTo, 'replyTo', 180);
@@ -1669,7 +1913,7 @@ export async function createRelay(options = {}) {
         if (to.toLowerCase() !== original.from.toLowerCase()) throw relayError('INVALID_REPLY', 'A reply must be addressed to the original sender.');
         if (args.threadId !== undefined && args.threadId !== original.threadId) throw relayError('INVALID_REPLY', 'A reply must remain in the original thread.');
         threadId = original.threadId;
-      } else if (args.threadId !== undefined) {
+      } else if (args.threadId !== undefined && !await inLinkThread(threadId, sender.unit, to)) {
         const threadMessages = (await allMessages({ includeArchived: true })).filter((message) => message.threadId === threadId);
         if (threadMessages.length === 0 || !threadMessages.some((message) => message.from.toLowerCase() === sender.unit.toLowerCase() || message.to.toLowerCase() === sender.unit.toLowerCase())
           || !threadMessages.some((message) => message.from.toLowerCase() === to.toLowerCase() || message.to.toLowerCase() === to.toLowerCase())) {
@@ -1683,15 +1927,16 @@ export async function createRelay(options = {}) {
         subject, threadId, replyTo, replyRequested, attachments,
         archived: false, body: args.body,
       };
-      const stamp = new Date(message.timestamp);
-      const secondStamp = `${stamp.getFullYear()}${String(stamp.getMonth() + 1).padStart(2, '0')}${String(stamp.getDate()).padStart(2, '0')}-${String(stamp.getHours()).padStart(2, '0')}${String(stamp.getMinutes()).padStart(2, '0')}${String(stamp.getSeconds()).padStart(2, '0')}`;
-      const filename = `${secondStamp}-${hostname}-${id}.md`;
-      const destination = path.join(recipient.scope.path, 'inbox', to, filename);
-      await publish(destination, serializeMessage(message));
-      message.sourcePath = destination;
-      const event = { kind: 'message', ...metadata(message) };
-      await publish(path.join(eventsPath, `${id}.json`), Buffer.from(`${JSON.stringify(event)}\n`));
+      await deliver(message, recipient.scope);
       return { id, threadId, from: sender.unit, to, timestamp: message.timestamp, priority, replyRequested };
+    },
+
+    // A short code that joins sessions in one message thread: without a code it makes one, with a code it joins the link that made it.
+    async link(args = {}) {
+      validateArgs(args, 'link', ['code']);
+      const sender = await currentIdentity();
+      if (!sender) throw relayError('NOT_REGISTERED', 'Register this session before linking.');
+      return args.code === undefined ? createLink(sender.unit) : joinLink(sender.unit, args.code);
     },
 
     async inbox(args = {}) {
@@ -1773,6 +2018,7 @@ export async function createRelay(options = {}) {
           if (archived?.archived) messages.push({ ...metadata(archived), body: archived.body, archive: { path: path.relative(userPath, archived.sourcePath).replaceAll('\\', '/'), archived: true, alreadyArchived: true } });
         }
       }
+      await markChatCopiesRead(messages, unit, target);
       messages.sort(sortByTimestamp);
       return { messages, malformed };
     },
@@ -1793,7 +2039,7 @@ export async function createRelay(options = {}) {
         messages = messages.filter((message) => ids.has(message.id));
       }
       messages.sort(sortByTimestamp);
-      return { messages: messages.slice(-limit).map((message) => ({ ...metadata(message), body: message.body })) };
+      return { messages: collapseFanouts(messages, unit).slice(-limit).map((message) => ({ ...metadata(message), body: message.body })) };
     },
 
     async threads(args = {}) {
@@ -1815,7 +2061,8 @@ export async function createRelay(options = {}) {
             && candidate.replyTo === request.id);
           return { messageId: request.id, from: request.from, to: request.to, requestedAt: request.timestamp, pending: !replied };
         });
-        threads.push({ threadId, participants, messageCount: items.length, latestAt: items.at(-1)?.timestamp ?? null, pendingReplies: requests.filter((request) => request.pending), messages: items.map(metadata) });
+        const shown = collapseFanouts(items, unit);
+        threads.push({ threadId, participants, messageCount: shown.length, latestAt: items.at(-1)?.timestamp ?? null, pendingReplies: requests.filter((request) => request.pending), messages: shown.map(metadata) });
       }
       threads.sort((a, b) => String(b.latestAt).localeCompare(String(a.latestAt)));
       return { threads };
@@ -2239,6 +2486,33 @@ export async function createRelayWakePersistence(options = {}) {
   return relay.wakePersistence;
 }
 
+// A message written in a chat of the app reaches each agent of the chat as an inbox message, so list_inbox and read_inbox
+// show it and the wake of a running session sees it. It keeps the id of the chat message, so a retry
+// after a crash writes the same file. The answer goes back with send_message to "chat:<id>".
+export async function queueChatNotice(context, notice) {
+  const root = context.paths.mind, recipient = parseUnitId(notice.recipientId);
+  const directory = path.join(root, inboxDirectory(recipient));
+  // The copy has its own id, fixed by the chat message and the recipient, and is marked as a chat copy: the app counts and
+  // shows the chat message once, and the copy only serves the agent's inbox.
+  const id = uuidV8(['chat-copy', notice.messageId, recipient.id]);
+  const date = new Date(notice.at);
+  const stampText = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}-${String(date.getHours()).padStart(2, '0')}${String(date.getMinutes()).padStart(2, '0')}${String(date.getSeconds()).padStart(2, '0')}`;
+  const file = path.join(directory, `${stampText}-${context.paths.machine}-${id}.md`);
+  const title = String(notice.chatTitle ?? '').replace(/[\r\n]+/g, ' ').slice(0, 120);
+  const body = `${notice.body ?? ''}\n\n---\nWritten in the chat "${title}" of the HIVEM1ND app. Answer in that chat with send_message to "chat:${notice.chatId}".\n`;
+  const bytes = serializeMessage({
+    id, from: notice.fromUnit, to: recipient.unit, machine: context.paths.machine, timestamp: notice.at, date: formatLocalDate(date),
+    priority: notice.priority === 'urgent' ? 'urgent' : 'normal', subject: String(notice.subject || `Chat: ${title}`).slice(0, MAX_SUBJECT_LENGTH),
+    threadId: `chat-${notice.chatId}`, replyTo: null, replyRequested: true, attachments: notice.attachments ?? [], body,
+  }).toString('utf8').replace('\n\n', `\nkind: chat-copy\nchat-id: ${notice.chatId}\nchat-message-id: ${notice.messageId}\n\n`);
+  await ensureDirectory(root, directory);
+  const previous = await readRegularFileSafe(root, file);
+  if (previous) return { state: 'submitted' };
+  try { await publishExclusive(root, file, Buffer.from(bytes, 'utf8')); }
+  catch (error) { if (error.code !== 'EEXIST') throw error; }
+  return { state: 'submitted' };
+}
+
 // A pointer preserves the original authored message in its chat. Reading a pointer is not its read receipt.
 export async function queueRunPointer(context, notice) {
   const root = context.paths.mind, recipient = parseUnitId(notice.recipientId);
@@ -2289,6 +2563,44 @@ function formatLocalDate(date) {
 
 function sortByTimestamp(left, right) {
   return String(left.timestamp).localeCompare(String(right.timestamp)) || left.id.localeCompare(right.id);
+}
+
+// The copies of one fan-out are shown once to their sender, as one entry whose `to` lists every recipient; a recipient only holds its own copy.
+function collapseFanouts(messages, unit) {
+  const entries = new Map();
+  const shown = [];
+  for (const message of messages) {
+    if (!message.fanoutId || message.from.toLowerCase() !== unit.toLowerCase()) { shown.push(message); continue; }
+    const entry = entries.get(message.fanoutId);
+    if (entry) { entry.to.push(message.to); continue; }
+    const first = { ...message, to: [message.to] };
+    entries.set(message.fanoutId, first);
+    shown.push(first);
+  }
+  // The copies share a time, so their order is only the order of their ids.
+  for (const entry of entries.values()) entry.to.sort();
+  return shown;
+}
+
+// A link record names its own id and thread, so a file that was moved or edited by hand does not stand for another link.
+function validLink(record, id) {
+  return record?.format === LINK_FORMAT && record.id === id && record.threadId === `link-${id}` && typeof record.code === 'string'
+    && Number.isFinite(Date.parse(record.expiresAt)) && Array.isArray(record.members)
+    && record.members.every((member) => typeof member === 'string' && UNIT_PATTERN.test(member));
+}
+
+function isMember(link, unit) {
+  return link.members.some((member) => member.toLowerCase() === unit.toLowerCase());
+}
+
+function linkAnswer(link) {
+  return { linkId: link.id, code: link.code, threadId: link.threadId, expiresAt: link.expiresAt, members: link.members };
+}
+
+// The times of the wrong codes a unit tried that are still counted against it, oldest first.
+function recentAttempts(attempts, unit, now) {
+  return (Array.isArray(attempts[unit]) ? attempts[unit] : [])
+    .filter((at) => typeof at === 'string' && now - Date.parse(at) < LINK_ATTEMPT_WINDOW_MS).sort();
 }
 
 // OneDrive keeps the older of two edits as "<name>-<MACHINE>.md". A state file is the one of the unit its name says: another unit in

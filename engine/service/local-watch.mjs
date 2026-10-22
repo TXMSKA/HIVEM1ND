@@ -1,19 +1,32 @@
 import { watch } from 'node:fs';
-import { lstat, readdir } from 'node:fs/promises';
+import { lstat, readdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { hashBytes } from './identity.mjs';
 import { assertNoLinks, resolveTarget } from './paths.mjs';
-import { readBytes, withLocalChanges, withoutLocalChanges } from './store.mjs';
+import { noteProjectionChange, readBytes, withLocalChanges, withoutLocalChanges } from './store.mjs';
 import { observeExternal, readComments, readEditor } from './editors.mjs';
 import { eligibleTargets, observationSnapshot, observeLocalChange, settleAppliedMarker, targetKey, withVersionBatch } from '../sync/store.mjs';
 
-export async function watchLocalChanges(runtime, onChanges) {
+const SLICE_MS = 60;
+const SLICE_TARGETS = 400;
+// The size, time and file id of every M1ND file at the end of the last pass, kept on this machine. The first pass after a
+// start reads only the files that differ from it, instead of reading and hashing the whole M1ND again (minutes on a large
+// one, during which every other change waited between slices).
+const SIGNATURES_FILE = 'local-watch-signatures.json';
+const SIGNATURES_FORMAT = 'hivem1nd-local-signatures-v1';
+
+// The first pass reads every eligible file of the M1ND against what was staged before, which takes tens of seconds on a large
+// one. A caller that wants the service to answer first passes deferBaseline and starts that pass with close.baseline().
+export async function watchLocalChanges(runtime, onChanges, { deferBaseline = false } = {}) {
   const context = {
     store: runtime.sync.store, paths: runtime.paths, projects: runtime.sync.projects,
     sync: runtime.sync, pulse: runtime.pulse, ledger: runtime.ledger,
     bus: runtime.bus, now: runtime.now, principal: { audience: 'desktop', unitId: 'root:master' },
   };
   const known = new Map();
+  const seen = new Map();
+  let remembered = new Map();
+  let saveTimer = null;
   const validatedHashes = new Map();
   let catalogHash = null;
   const handles = new Map();
@@ -22,12 +35,16 @@ export async function watchLocalChanges(runtime, onChanges) {
   let running = null;
   let dirty = false;
   let localError = null;
+  let baselineDone = false;
+  let baselineRun = null;
   context.store.localChangesWatched = true;
 
   function schedule() {
     if (closed) return;
+    // Whatever moved on disk, the next read of the M1ND builds it again.
+    noteProjectionChange(context.store);
     dirty = true;
-    if (timer || running) return;
+    if (!baselineDone || timer || running) return;
     timer = setTimeout(() => {
       timer = null;
       // A drain scheduled during the startup reconcile must wait for it, not run beside it under its lease.
@@ -152,25 +169,59 @@ export async function watchLocalChanges(runtime, onChanges) {
   }
 
   async function reconcile(baseline = false) {
-    return withLocalChanges(context.store, () => withVersionBatch(runtime.sync, () => reconcileLocal(baseline)));
+    return reconcileLocal(baseline);
   }
 
+  // A pass over a large M1ND takes seconds. It holds the local-observation lock that every read of the M1ND and every write
+  // waits on, so it takes the lock for a slice of the targets at a time and lets what is waiting through in between.
   async function reconcileLocal(baseline) {
     const previousError = localError;
     localError = null;
     await bindRoots();
-    const held = await importedTargets();
+    await importedTargets();
     const targets = await eligibleTargets(runtime.sync);
     const candidates = new Map(targets.map(target => [targetKey(target), target]));
     for (const [key, target] of known) if (!candidates.has(key)) candidates.set(key, target);
+    const entries = [...candidates];
+    const changes = [];
+    for (let index = 0; index < entries.length && !closed;) {
+      index = await withLocalChanges(context.store, () => withVersionBatch(runtime.sync, () => reconcileSlice(entries, index, baseline, changes)));
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    if (changes.length > 0 && !closed) {
+      const unique = [...new Map(changes.map(change => [change.id, change])).values()];
+      await runtime.pulse.changed(unique.map(change => change.id));
+      await onChanges?.(unique);
+    }
+    if (!baseline) scheduleSave();
+    if (previousError && !localError && runtime.lastError === previousError) {
+      runtime.lastError = null;
+      runtime.bus?.emit({ name: 'issue.changed', data: { issue: 'local_change_recovered' } });
+    }
+  }
+
+  async function reconcileSlice(entries, from, baseline, changes) {
+    const held = await importedTargets();
     const catalog = await resources();
     let snapshot = await observationSnapshot(runtime.sync);
-    const changes = [];
-    for (const [key, target] of candidates) {
+    const started = performance.now();
+    let index = from;
+    for (; index < entries.length; index += 1) {
       if (closed) break;
+      if (index > from && (index - from >= SLICE_TARGETS || performance.now() - started >= SLICE_MS)) break;
+      const [key, target] = entries[index];
       if (held.has(key)) continue;
       try {
         const { absolute } = await resolveTarget(runtime.paths, target, { projects: runtime.sync.projects });
+        // A file whose size and time are those of the last pass is not read again: a pass reads every file of the M1ND.
+        const stats = await lstat(absolute).catch(() => null);
+        const signature = stats?.isFile() ? `${stats.size}:${stats.mtimeMs}:${stats.ino}` : null;
+        if (!baseline && signature !== null && seen.get(key) === signature && known.has(key) && !snapshot.markers.has(key)) continue;
+        // On the first pass a M1ND file unchanged since the last run is not read again.
+        if (baseline && target.kind === 'mind' && signature !== null && remembered.get(key) === signature && known.has(key) && !snapshot.markers.has(key)) {
+          seen.set(key, signature);
+          continue;
+        }
         if (snapshot.markers.has(key)) {
           const settled = await settleAppliedMarker(runtime.sync, target);
           if (settled.change) changes.push(settled.change);
@@ -184,6 +235,7 @@ export async function watchLocalChanges(runtime, onChanges) {
         if (unchanged && (target.kind === 'mind' || validatedHashes.get(key) === revision)) {
           if (bytes) known.set(key, target);
           else known.delete(key);
+          if (bytes && signature !== null) seen.set(key, signature);
           continue;
         }
         if (bytes && entry && !entry.readOnly) {
@@ -222,20 +274,13 @@ export async function watchLocalChanges(runtime, onChanges) {
         validatedHashes.set(key, bytes ? hashBytes(bytes) : null);
         if (bytes) known.set(key, target);
         else known.delete(key);
+        if (bytes && signature !== null) seen.set(key, signature);
       } catch (error) {
         if (error?.code === 'project_unavailable' || error?.code === 'invalid_pack') known.delete(key);
         report(error);
       }
     }
-    if (changes.length > 0 && !closed) {
-      const unique = [...new Map(changes.map(change => [change.id, change])).values()];
-      await runtime.pulse.changed(unique.map(change => change.id));
-      await onChanges?.(unique);
-    }
-    if (previousError && !localError && runtime.lastError === previousError) {
-      runtime.lastError = null;
-      runtime.bus?.emit({ name: 'issue.changed', data: { issue: 'local_change_recovered' } });
-    }
+    return index;
   }
 
   async function drain() {
@@ -253,12 +298,38 @@ export async function watchLocalChanges(runtime, onChanges) {
     for (const { watcher } of handles.values()) watcher.close();
     handles.clear();
     await running;
+    await baselineRun?.catch(() => {});
+    clearTimeout(saveTimer);
+    if (baselineDone) await saveSignatures();
     for (const { watcher } of handles.values()) watcher.close();
     handles.clear();
     context.store.localChangesWatched = false;
   }
 
-  try {
+  // A service that is stopped without closing still leaves signatures no older than this.
+  function scheduleSave() {
+    if (saveTimer || closed || !baselineDone) return;
+    saveTimer = setTimeout(() => { saveTimer = null; saveSignatures(); }, 30000);
+    saveTimer.unref?.();
+  }
+
+  async function loadSignatures() {
+    try {
+      const record = JSON.parse(await readFile(path.join(runtime.paths.localDirectory, SIGNATURES_FILE), 'utf8'));
+      if (record?.format === SIGNATURES_FORMAT && record.entries && typeof record.entries === 'object') remembered = new Map(Object.entries(record.entries));
+    } catch { remembered = new Map(); }
+  }
+
+  async function saveSignatures() {
+    const file = path.join(runtime.paths.localDirectory, SIGNATURES_FILE), temporary = `${file}.${process.pid}.tmp`;
+    try {
+      await writeFile(temporary, JSON.stringify({ format: SIGNATURES_FORMAT, entries: Object.fromEntries(seen) }));
+      await rename(temporary, file);
+    } catch { /* the next start only reads more */ }
+  }
+
+  async function baseline() {
+    await loadSignatures();
     for (const folder of ['acked', 'changes']) {
       const directory = path.join(runtime.paths.localDirectory, 'staging', folder);
       const names = await readdir(directory).catch(error => {
@@ -273,10 +344,33 @@ export async function watchLocalChanges(runtime, onChanges) {
       }
     }
     await reconcile(true);
+    remembered = new Map();
+    if (!closed) await saveSignatures();
+  }
+
+  function startBaseline() {
+    baselineRun ??= (async () => {
+      try {
+        await baseline();
+      } catch (error) {
+        if (!deferBaseline) throw error;
+        report(error);
+      } finally {
+        baselineDone = true;
+      }
+      if (dirty) schedule();
+    })();
+    return baselineRun;
+  }
+
+  close.baseline = startBaseline;
+  try {
+    // Roots are watched from the start, so a change made while the first pass waits is seen and drops what the service has built.
+    await bindRoots();
+    if (!deferBaseline) await startBaseline();
   } catch (error) {
     await close();
     throw error;
   }
-  if (dirty) schedule();
   return close;
 }

@@ -6,7 +6,7 @@ import { assertNoLinks } from './paths.mjs';
 import { checkRevision, commitChange, prepareChangeUndo, readBytes, recoverTransactions, revisionOf, withLocalChanges } from './store.mjs';
 import { editChatMetadata, groupChatBytes, projectChatBytes } from './chats.mjs';
 import { projectGroup, groupTitle, groupMembers } from './groups.mjs';
-import { readCollection, readProjection } from './projection.mjs';
+import { readCollection, readProjection, readSessions } from './projection.mjs';
 import { readUnitStates, stateHeader } from './state.mjs';
 import { parseRoutes } from '../relay/store.mjs';
 import { directoryIdentity, pathKey, readRepositoryIdentity } from './cluster-git.mjs';
@@ -162,8 +162,7 @@ export async function prepareClusterRemoval(context, id, expectedRevision) {
   if (!current) fail(404, 'cluster_not_found', 'The cluster does not exist.');
   checkRevision(current.bytes, expectedRevision);
   if (records.some(item => !item.cluster.deleted && item.cluster.parentId === id)) fail(409, 'cluster_has_children', 'Move the surviving child clusters before removal.');
-  const view = await readProjection(context);
-  if (view.sessions.some(session => current.cluster.members.includes(session.unitId) && session.state !== 'stopped')) fail(409, 'stop_unavailable', 'Stop the owned sessions before removing this cluster.');
+  if ((await readSessions(context)).some(session => current.cluster.members.includes(session.unitId) && session.state !== 'stopped')) fail(409, 'stop_unavailable', 'Stop the owned sessions before removing this cluster.');
   const relative = `user/relay/chats/${id}/chat.md`, beforeChat = await readBytes(context.store, absolute(context, relative));
   if (!beforeChat || revisionOf(beforeChat) !== current.record.chatRevision) fail(409, 'chat_changed', 'The linked chat changed.');
   const afterChat = editChatMetadata(beforeChat, { listed: false, archived: true });
@@ -194,19 +193,33 @@ export async function clusterChoices(context, unitId) {
 }
 
 // Shared identities are journaled with their chats; absolute directories exist only in this owner's ledger.
+const IDENTITY_READS = 6;
+
 export async function prepareRepositoryClusters(context, projects, { remove = false, cache = null } = {}) {
   const records = await rawClusters(context), mapping = await readClusterMappings(context), entries = [], events = [], undoEvents = [], clusters = [];
   const links = structuredClone(mapping.record.links), known = new Map(records.map(item => [item.cluster.id, item]));
+  // Reading a repository asks Git four times, and a first start does it for every project in turn (7.6 s for 26). The reads
+  // only look, so they run a few at a time, and each one's failure is raised where the loop below reaches that project.
+  const identities = new Map();
+  const unread = projects.filter(project => project.eligible !== false && project.localPath && !(project.identity?.id && project.identity.path));
+  for (let at = 0; at < unread.length; at += IDENTITY_READS) {
+    await Promise.all(unread.slice(at, at + IDENTITY_READS).map(async project => {
+      try {
+        await assertNoLinks(project.localPath, cache ? { cache } : {});
+        identities.set(project, { identity: await readRepositoryIdentity(project.localPath, { ...(context.settingsOwner ?? context), ...(cache ? { cache } : {}) }).catch(error => {
+          if (error.code === 'git_unavailable') return null; throw error;
+        }) });
+      } catch (error) { identities.set(project, { error }); }
+    }));
+  }
   for (const project of projects) {
     const projectPath = project.eligible === false ? null : project.localPath;
     let identity = null;
     if (projectPath) {
       await assertNoLinks(projectPath, cache ? { cache } : {});
-      identity = project.identity?.id && project.identity.path
-        ? project.identity
-        : await readRepositoryIdentity(projectPath, { ...(context.settingsOwner ?? context), ...(cache ? { cache } : {}) }).catch(error => {
-          if (error.code === 'git_unavailable') return null; throw error;
-        });
+      const read = identities.get(project);
+      if (read?.error) throw read.error;
+      identity = project.identity?.id && project.identity.path ? project.identity : read ? read.identity : null;
     }
     let current = records.find(item => item.cluster.link.kind === 'repository' && item.cluster.link.projectId === project.name);
     if (!current && identity) current = records.find(item => links[mappingKey(item.cluster.link)]?.repositoryId === identity.id);

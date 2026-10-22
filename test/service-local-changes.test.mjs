@@ -10,7 +10,7 @@ import { createText, readEditor, replaceText } from '../engine/service/editors.m
 import { applyPack } from '../engine/sync/apply.mjs';
 import { openLedger, reservePublication, SYNC_BYTES_MAX } from '../engine/sync/limits.mjs';
 import { encodePack } from '../engine/sync/pack.mjs';
-import { listStaged } from '../engine/sync/store.mjs';
+import { listStaged, targetKey } from '../engine/sync/store.mjs';
 import { hashBytes } from '../engine/service/identity.mjs';
 import { withLocalChanges } from '../engine/service/store.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
@@ -300,4 +300,26 @@ test('the events of one batch of observed files read one view, not one per file'
   fsPromises.readFile = original;
   syncBuiltinESMExports();
   assert.ok(projections < 20, `the projection was read ${projections} times for 40 observed state files`);
+});
+
+test('a restart reads only the M1ND files that changed since the last pass, and still sees an edit made while stopped', async t => {
+  const { fixture, core, cores, context } = await boot(t);
+  const kept = path.join(fixture.paths.mind, 'user', 'kept.md'), edited = path.join(fixture.paths.mind, 'user', 'edited.md');
+  await writeFile(kept, 'Stays the same.\n');
+  await writeFile(edited, 'First version.\n');
+  await until(async () => (await listStaged(core.runtime.sync)).filter(change => ['user/kept.md', 'user/edited.md'].includes(change.target.path)).length === 2);
+  await core.runtime.unwatchProject?.baseline?.();
+  await core.http.close();
+  const signatures = JSON.parse(await readFile(path.join(fixture.paths.localDirectory, 'local-watch-signatures.json'), 'utf8'));
+  assert.equal(signatures.format, 'hivem1nd-local-signatures-v1');
+  assert.ok(Object.hasOwn(signatures.entries, targetKey({ kind: 'mind', path: 'user/kept.md' })));
+  fixture.clock.now += 1000;
+  await writeFile(edited, 'Changed while the service was stopped.\n');
+  const before = (await listStaged(core.runtime.sync)).filter(change => change.target.path === 'user/kept.md').length;
+  const again = await composeCore({ ...context, pulse: undefined, sync: undefined, ledger: undefined, bus: undefined, clients: [], env: fixture.env, port: 0 });
+  cores.push(again);
+  await again.runtime.unwatchProject?.baseline?.();
+  const edit = hashBytes(Buffer.from('Changed while the service was stopped.\n'));
+  await until(async () => (await listStaged(again.runtime.sync)).some(change => change.target.path === 'user/edited.md' && change.hash === edit));
+  assert.equal((await listStaged(again.runtime.sync)).filter(change => change.target.path === 'user/kept.md').length, before);
 });

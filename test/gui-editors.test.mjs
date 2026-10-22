@@ -11,6 +11,7 @@ import {
   addNode,
   addBoardFrame,
   appendBoardNode,
+  boardBounds,
   boardCommentAnchor,
   boardDocument,
   dragNodeGeometry,
@@ -25,6 +26,7 @@ import {
   loadAssets,
   patchNode,
   removeNode,
+  renderBoard,
   renderNode,
   replaceBoard,
   updateNodeOperation,
@@ -1283,6 +1285,26 @@ function fullBoard() {
   };
 }
 
+test("a board opens fitted to its screens and centred, and a view the editor already has is kept", () => {
+  const document = fakeDocument(), host = document.createElement("div");
+  const board = (...screens) => ({ ...fullBoard(), screens: screens.map(([id, x, y, w, h]) => ({ ...fullBoard().screens[0], id, x, y, w, h })) });
+  assert.deepEqual(boardBounds(board(["a", 0, 0, 300, 560])), { x: -70, y: -140, w: 440, h: 760 }, "one narrow screen is not padded out to a wide canvas");
+  assert.deepEqual(boardBounds(board(["a", 100, 200, 300, 560], ["b", 500, 200, 300, 560])), { x: 30, y: 60, w: 840, h: 760 });
+  assert.deepEqual(boardBounds({ screens: [] }), { x: -70, y: -100, w: 900, h: 760 });
+  const editor = { authoritative: { document: board(["a", 0, 0, 300, 560]) }, focus: null };
+  const viewBox = () => host.children[0].getAttribute("viewBox");
+  renderBoard(document, host, editor);
+  assert.equal(viewBox(), "-70 -140 440 760");
+  // A redraw never fits the board again: the view the editor holds is the one drawn, even after the board grows.
+  editor.boardView = { x: 10, y: 20, w: 100, h: 50 };
+  editor.authoritative = { document: board(["a", 0, 0, 300, 560], ["b", 400, 0, 300, 560]) };
+  renderBoard(document, host, editor);
+  assert.equal(viewBox(), "10 20 100 50");
+  editor.boardView = null;
+  renderBoard(document, host, editor);
+  assert.equal(viewBox(), "-70 -140 840 760", "a board with no view yet starts fitted to all its screens");
+});
+
 function sentinels(value, found = []) {
   if (typeof value === "string" && value.includes("sentinel")) found.push(value);
   else if (Array.isArray(value)) for (const item of value) sentinels(item, found);
@@ -1399,26 +1421,99 @@ async function phoneApi(fixture) {
   return apiFrom(`${home.origin}/#session=${json.data.token}`);
 }
 
-test("both editor kinds use the shared library with empty folders, recursive counts and matching ancestors", () => {
+test("both editor kinds use the shared library: folders start folded except the open item's path, empty folders stay out, a search opens its matches", () => {
   const document = fakeDocument();
   for (const kind of ["blueprint", "void"]) {
     const editors = createEditors(), state = libraryState(editors, kind);
     editors.catalog = [{ id: "deep", kind, title: "Cart", project: "shop", folderId: "child", openThreads: 2 }];
     state.folders = [{ id: "parent", project: "shop", title: "Parent", parentId: null, count: 1 }, { id: "child", project: "shop", title: "Child", parentId: "parent", count: 1 }, { id: "empty", project: "shop", title: "Empty", parentId: null, count: 0 }];
-    state.collapsed = new Set(["project:shop", "shop:parent", "shop:child"]);
     const render = () => renderLibrary(document, { kind, data: editors, project: "deep", t: (key, vars) => text("en", key, vars), actions: {} });
-    assert.equal(nodesOf(render()).some((node) => node.getAttribute?.("data-library-item") === "deep"), false);
-    state.query = "screen text";
+    const folders = (view) => nodesOf(view).filter((node) => node.getAttribute?.("data-library-folder")).map((node) => node.getAttribute("data-library-folder"));
+    const hasItem = (view) => nodesOf(view).some((node) => node.getAttribute?.("data-library-item") === "deep");
+    const project = (view) => nodesOf(view).find((node) => node.getAttribute?.("data-library-project") === "shop");
+    // Nothing is open: only the project shows, folded.
+    let view = render();
+    assert.equal(project(view).getAttribute("aria-expanded"), "false");
+    assert.deepEqual(folders(view), []);
+    assert.equal(hasItem(view), false);
+    // The person opens the project: its folders show, each folded.
+    state.opened.add("project:shop");
+    view = render();
+    assert.deepEqual(folders(view), ["parent"]);
+    assert.equal(hasItem(view), false);
+    // The open item's path is open on its own, down to the item.
+    state.opened.clear(); editors.current = { kind, resourceId: "deep" };
+    view = render();
+    assert.deepEqual(folders(view), ["parent", "child"]);
+    assert.equal(hasItem(view), true);
+    // A folder on that path closes when the person closes it, and stays closed.
+    state.collapsed.add("shop:parent");
+    view = render();
+    assert.deepEqual(folders(view), ["parent"]);
+    assert.equal(hasItem(view), false);
+    state.collapsed.clear();
+    // An empty folder is hidden unless the person made it in this session.
+    assert.equal(folders(render()).includes("empty"), false);
+    state.created.add("empty"); state.opened.add("project:shop");
+    const empty = nodesOf(render()).find((node) => node.getAttribute?.("data-library-folder") === "empty");
+    assert.equal(nodesOf(empty).find((node) => node.className === "library-count").textContent, "0");
+    // A search opens every match with the folders above it.
+    state.created.clear(); editors.current = null; state.opened.clear(); state.query = "screen text";
     const matching = nodesOf(render());
     assert.equal(matching.find((node) => node.getAttribute?.("data-library")).getAttribute("data-library"), kind);
     assert.equal(matching.some((node) => node.getAttribute?.("data-library-item") === "deep"), true);
-    assert.deepEqual(matching.filter((node) => node.getAttribute?.("data-library-folder")).map((node) => node.getAttribute("data-library-folder")), ["parent", "child"]);
-    state.query = ""; state.collapsed.clear();
-    const empty = nodesOf(render()).find((node) => node.getAttribute?.("data-library-folder") === "empty");
-    assert.equal(nodesOf(empty).find((node) => node.className === "library-count").textContent, "0");
+    assert.deepEqual(folders(render()), ["parent", "child"]);
     assert.equal(groupCatalog(editors.catalog, state.folders)[0].folders.length, 3);
-    assert.equal(state.collapsed.size, 0);
   }
+});
+
+test("a project with nothing in it stays out of the library unless a folder was made in it; without texts the library says what a text is", () => {
+  const document = fakeDocument(), t = (key, vars) => text("en", key, vars), made = [];
+  const editors = createEditors(), state = libraryState(editors, "void");
+  state.projects = [{ id: "shop" }, { id: "blog" }];
+  state.folders = [{ id: "fresh", project: "shop", title: "Fresh", parentId: null, count: 0 }];
+  const actions = { create: () => made.push("create"), register: () => made.push("register") };
+  const render = (kind = "void", extra = actions) => renderLibrary(document, { kind, data: editors, t, actions: extra });
+  let view = render();
+  assert.equal(nodesOf(view).some((node) => node.getAttribute?.("data-library-project")), false, "no project of 20 empty folders ahead of the empty state");
+  assert.equal(nodesOf(view).some((node) => node.getAttribute?.("data-library-folder")), false);
+  const empty = nodesOf(view).find((node) => node.className === "library-empty");
+  assert.deepEqual(empty.children.map((child) => child.tagName), ["H3", "P", "DIV"]);
+  assert.equal(empty.children[0].textContent, "No texts yet");
+  assert.equal(empty.children[1].textContent, "A text is a Markdown file in one of the 2 linked repositories.");
+  const [create, register] = nodesOf(empty).filter((node) => node.tagName === "BUTTON");
+  assert.equal(create.getAttribute("data-action"), "library-empty-create");
+  assert.equal(create.className, "btn primary");
+  assert.equal(register.getAttribute("data-action"), "library-empty-register");
+  create.listeners.get("click")(); register.listeners.get("click")();
+  assert.deepEqual(made, ["create", "register"]);
+  state.projects = [{ id: "shop" }];
+  assert.equal(nodesOf(render()).find((node) => node.className === "library-empty").children[1].textContent, "A text is a Markdown file in the linked repository.");
+  assert.equal(nodesOf(render("void", { ...actions, register: null })).some((node) => node.getAttribute?.("data-action") === "library-empty-register"), false);
+  // Without the right to create, the library keeps its plain read-only line; a Blueprint library keeps its own.
+  view = render("void", {});
+  assert.equal(nodesOf(view).some((node) => node.className === "library-empty"), false);
+  assert.equal(nodesOf(view).find((node) => node.getAttribute?.("data-empty") === "void").textContent, text("en", "emptyTextsRead"));
+  assert.equal(nodesOf(render("blueprint")).find((node) => node.getAttribute?.("data-empty") === "blueprint").textContent, text("en", "emptyBoards"));
+  // A folder made in this session keeps its empty project in the list.
+  state.created.add("fresh");
+  view = render();
+  assert.equal(nodesOf(view).some((node) => node.getAttribute?.("data-library-project") === "shop"), true);
+});
+
+test("a press on a library row reads the row it landed on, and does nothing when that row is gone", () => {
+  const document = fakeDocument(), picked = [];
+  const editors = createEditors(), state = libraryState(editors, "blueprint");
+  editors.catalog = [{ id: "one", kind: "blueprint", title: "One", project: "shop", folderId: null }];
+  state.opened.add("project:shop");
+  const view = renderLibrary(document, { kind: "blueprint", data: editors, t: (key, vars) => text("en", key, vars), actions: { select: (id) => picked.push(id) } });
+  const row = nodesOf(view).find((node) => node.getAttribute?.("data-id") === "one");
+  assert.equal(row.getAttribute("data-resource-id"), "one");
+  row.listeners.get("click")();
+  assert.deepEqual(picked, ["one"]);
+  row.isConnected = false;
+  row.listeners.get("click")();
+  assert.deepEqual(picked, ["one"], "a row that was replaced opens nothing");
 });
 
 test("catalog search loads every result page and keeps AND filters and kind-specific state", async () => {
@@ -1502,8 +1597,23 @@ test("an offline project is reported once without hiding another project's libra
   } });
   const editors = createEditors(); await loadCatalog(api, editors, "blueprint");
   assert.deepEqual(editors.catalogIssues, [issue]);
-  const view = renderLibrary(fakeDocument(), { kind: "blueprint", data: editors, actions: {}, t: (key, vars) => text("en", key, vars) });
-  assert.equal(nodesOf(view).filter((node) => node.getAttribute?.("data-library-issue")).length, 1);
+  const state = libraryState(editors, "blueprint"), toggled = [];
+  state.opened.add("project:shop");
+  const render = () => renderLibrary(fakeDocument(), { kind: "blueprint", data: editors, actions: { issues: () => toggled.push(true) }, t: (key, vars) => text("en", key, vars) });
+  // The projects that cannot be read are one folded row, whatever their number, with their names behind it.
+  let view = render();
+  assert.equal(nodesOf(view).filter((node) => node.getAttribute?.("data-library-issues")).length, 1);
+  const row = nodesOf(view).find((node) => node.getAttribute?.("data-action") === "library-issues");
+  assert.equal(nodesOf(row).find((node) => node.tagName === "SPAN").textContent, "1 repository is not on this machine");
+  assert.equal(row.getAttribute("aria-expanded"), "false");
+  assert.equal(nodesOf(view).filter((node) => node.getAttribute?.("data-library-issue")).length, 0);
+  row.listeners.get("click")();
+  assert.equal(toggled.length, 1);
+  editors.catalogIssues = [issue, { project: "archive", code: "project_unavailable" }, { project: "archive", code: "corrupt_resource" }];
+  state.issuesOpen = true;
+  view = render();
+  assert.equal(nodesOf(nodesOf(view).find((node) => node.getAttribute?.("data-action") === "library-issues")).find((node) => node.tagName === "SPAN").textContent, "2 repositories are not on this machine");
+  assert.deepEqual(nodesOf(view).filter((node) => node.getAttribute?.("data-library-issue")).map((node) => node.getAttribute("data-library-issue")), ["offline", "archive"]);
   assert.ok(nodesOf(view).some((node) => node.getAttribute?.("data-library-item") === "accessible"));
 });
 

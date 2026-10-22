@@ -458,10 +458,10 @@ async function legacyNamed(name) {
 }
 
 const LEGACY_METHODS = {
-  register: 'register', send_message: 'send', list_inbox: 'inbox', read_inbox: 'read', history: 'history',
+  register: 'register', send_message: 'send', link: 'link', list_inbox: 'inbox', read_inbox: 'read', history: 'history',
   threads: 'threads', status: 'overview', events: 'events', reminder: 'reminder', delivery_status: 'delivery',
 };
-const LEGACY_MUTATIONS = new Set(['register', 'send', 'read']);
+const LEGACY_MUTATIONS = new Set(['register', 'send', 'link', 'read']);
 
 async function legacyCall(context, name, args) {
   const method = LEGACY_METHODS[name];
@@ -497,6 +497,9 @@ async function legacyCall(context, name, args) {
       if (error?.code === 'FORBIDDEN_SCOPE' || error?.code === 'UNPROVED_SESSION') {
         throw new CoreError(403, 'forbidden', 'The tool cannot use another unit or session.');
       }
+      // A wrong or expired code is the person's to fix, so its reason reaches the session instead of a generic failure.
+      const linkStatus = { LINK_NOT_FOUND: 404, LINK_LOCKED: 429, NOT_LINK_MEMBER: 403, LINK_EMPTY: 409 }[error?.code];
+      if (linkStatus) throw new CoreError(linkStatus, error.code.toLowerCase(), error.message);
       throw error;
     }
   };

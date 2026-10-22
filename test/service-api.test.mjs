@@ -878,6 +878,9 @@ test('library routes reject exact schema violations and foreign writes then repl
   for (const route of ['/library/folders?kind=void&unknown=true', '/void/texts?unknown=true', '/blueprint/boards?unknown=true']) assert.equal((await call(port, 'GET', `/api/v1${route}`, { token })).status, 400);
   assert.equal((await call(port, 'GET', '/api/v1/void/texts?openComments=yes', { token })).status, 422);
   const key = randomUUID(), body = { confirmed: true, ...revisions };
+  // The crash is the only thing that touches the store until the retry: a pass of the file watcher that read in between would
+  // recover the half-applied deletion first, and the retry would find the editor already gone.
+  await core.runtime.unwatchProject();
   fixture.store.fault = { afterRenames: 2 };
   assert.equal((await call(port, 'DELETE', `/api/v1/editors/${editor.id}`, { token, body, headers: { 'idempotency-key': key } })).status, 500);
   const recovered = await call(port, 'DELETE', `/api/v1/editors/${editor.id}`, { token, body, headers: { 'idempotency-key': key } });
@@ -1271,7 +1274,8 @@ test('every contract route has a success result and an authority or boundary fai
   });
   expectStatus(posted, 201, 'chat message');
   assert.equal(posted.json.data.message.body, 'Ship the notes.');
-  assert.deepEqual(posted.json.data.notifications, [{ unitId: 'root:builder', state: 'pending' }]);
+  // The service puts the chat message in the agent's inbox itself, so the notice is submitted.
+  assert.deepEqual(posted.json.data.notifications, [{ unitId: 'root:builder', state: 'submitted' }]);
   const forgedSender = await call(port, 'POST', `/api/v1/chats/${chatId}/messages`, {
     token,
     body: { body: 'Stolen', fromId: 'root:two', role: 'master' },
@@ -2331,6 +2335,8 @@ test('group HTTP receipts survive a partial write and enforce desktop authority 
   const port = core.http.port;
   const body = { title: 'Recovered group', members: ['root:one'] };
   const key = randomUUID();
+  // As in the library deletion test: a file watcher pass between the crash and the retry would complete the half-applied write first.
+  await core.runtime.unwatchProject();
   fixture.store.fault = { afterRenames: 1 };
   const failed = await call(port, 'POST', '/api/v1/groups', { token, body, headers: { 'idempotency-key': key } });
   assert.equal(failed.status, 500);

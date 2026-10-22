@@ -701,6 +701,20 @@ test('person aliases, waiting ids, lead approval and task requirements stay cano
   assert.equal(question.title, 'the registry name');
 });
 
+test('a task without a title line is titled from its file name and a written title is kept', async (t) => {
+  const fixture = await mind(t);
+  const root = fixture.paths.mind;
+  const fields = { status: 'review', 'from-id': 'root:master', 'to-id': 'root:master', date: '2026-10-10' };
+  await writeFile(path.join(root, 'user', 'tasks', '027-media-to-disk-and-webp.md'), stateFile({ id: 'root:027', ...fields }, '## Request\nMove them.\n'));
+  await writeFile(path.join(root, 'user', 'tasks', '028-written_title.md'), stateFile({ id: 'root:028', title: 'As written', ...fields }, '## Request\nKeep it.\n'));
+  await writeFile(path.join(root, 'user', 'tasks', '029.md'), stateFile({ id: 'root:029', ...fields }, '## Request\nNo name.\n'));
+  const view = await readProjection({ paths: fixture.paths, now: () => NOW });
+  assert.equal(view.tasks.find((item) => item.id === 'root:027').title, 'Media to disk and webp');
+  assert.equal(view.tasks.find((item) => item.id === 'root:028').title, 'As written');
+  assert.equal(view.tasks.find((item) => item.id === 'root:029').title, '');
+  assert.equal(view.waiting.find((item) => item.id === 'review:root:027')?.title, 'Media to disk and webp');
+});
+
 test('chat destinations stay on the message and the last message', async (t) => {
   const fixture = await mind(t);
   const root = fixture.paths.mind;
@@ -1087,4 +1101,24 @@ test('the clusters a unit leads are found with one projection, not one per membe
   assert.deepEqual(await leadClusterIds(context, units[3]), [other]);
   assert.deepEqual(await leadClusterIds(context, units[0]), []);
   assert.equal(calls.readFile.length, 1, `the view was built ${calls.readFile.length} times for the members of three clusters`);
+});
+
+test('a cluster frame is saved in the layout with its place and its collapsed flag, and a cluster id that is not a UUID is refused', async (t) => {
+  const fixture = await mind(t);
+  await answeringMachine(fixture);
+  const context = serviceContext(fixture);
+  const id = '3f2b8c1e-0a4d-4e5f-9b6a-1c2d3e4f5a6b', other = '8a1d2c3b-4e5f-4a6b-8c7d-9e0f1a2b3c4d';
+  const layoutPath = path.join(fixture.paths.mind, 'user', 'gui', 'layout.json');
+  const revision = async () => revisionOf(await readFile(layoutPath));
+  await patchLayout(context, { groups: { [`cluster:${id}`]: { x: 120, y: -30 } }, expectedRevision: null });
+  assert.deepEqual(JSON.parse(await readFile(layoutPath, 'utf8')).groups[`cluster:${id}`], { x: 120, y: -30, collapsed: false });
+  await patchLayout(context, { groups: { [`cluster:${id}`]: { collapsed: true } }, expectedRevision: await revision() });
+  assert.deepEqual(JSON.parse(await readFile(layoutPath, 'utf8')).groups[`cluster:${id}`], { x: 120, y: -30, collapsed: true }, 'collapsing keeps the place');
+  await patchLayout(context, { groups: { [`cluster:${other}`]: { collapsed: true } }, expectedRevision: await revision() });
+  assert.deepEqual(JSON.parse(await readFile(layoutPath, 'utf8')).groups[`cluster:${other}`], { collapsed: true }, 'a cluster never moved is collapsed without a place');
+  const before = await readFile(layoutPath, 'utf8');
+  for (const groups of [{ 'cluster:Web': { x: 1, y: 2 } }, { [`cluster:${id}`]: { x: 1 } }, { [`cluster:${id}`]: {} }, { 'other:thing': { x: 1, y: 2 } }]) {
+    await assert.rejects(() => patchLayout(context, { groups, expectedRevision: undefined }), (error) => error.code === 'invalid_body', JSON.stringify(groups));
+  }
+  assert.equal(await readFile(layoutPath, 'utf8'), before, 'a refused patch changes nothing');
 });

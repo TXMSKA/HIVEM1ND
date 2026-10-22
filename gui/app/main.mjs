@@ -37,8 +37,8 @@ import {
 } from "./chats.mjs";
 import { IMAGE_MAX_BYTES, IMAGE_TYPES, galleryState, messageParts, renderActions, renderAttachDialog, renderGallery, renderPendingParts } from "./chat-media.mjs";
 import { addNode, addBoardFrame, appendBoardNode, boardBounds, boardColors, boardCommentAnchor, boardDocument, dragNodeGeometry, editedBoard, hitBoardNode, indexNodes, loadAssets, parentPoint, patchNode, releaseAssets, removeNode, renderBoard, replaceBoard, setBoardDraft, sketchStroke, touchedStrokes, uploadAsset } from "./blueprint.mjs";
-import { ApiError, clearCredentials, createApi, createOperation, dispose as disposeApi, fetchAsset, operationId, perform, request } from "./api.mjs";
-import { clusterGlyph, element, icon, labelDialog, labeledField, pathIcon, progressMark, runAction, setBusy, showDialog, showError } from "./components.mjs";
+import { ApiError, clearCredentials, createApi, createOperation, dispose as disposeApi, fetchAsset, forgetSession, operationId, perform, request } from "./api.mjs";
+import { clusterGlyph, element, icon, labelDialog, labeledField, pathIcon, progressMark, restoreRunning, runAction, setBusy, showDialog, showError, skeletonMark } from "./components.mjs";
 import {
   applyWatch,
   createComment,
@@ -71,28 +71,32 @@ import {
   startWatch,
   stopWatch,
 } from "./editors.mjs";
-import { activateUnit, buildHierarchy, collapseNewClusters, flattenVisibleHierarchy, hierarchyDisclosure, hierarchyIcon, listedWorktrees, pathFolder, readableIdentity, revealGroup, toggleGroup, unitDisplayName, unitRoleName, unitsForTree } from "./hierarchy.mjs";
-import { checkoutFacts, openTaskDetail, renderApproval, renderGrants, renderMachine, renderSession, renderTask, renderUnit, renderWaiting } from "./inspector.mjs";
-import { cardinal, formatClock, formatNumber, formatShortTime, text } from "./i18n.mjs";
+import { activateUnit, buildHierarchy, collapseNewClusters, displayName, flattenVisibleHierarchy, hierarchyDisclosure, hierarchyIcon, listedWorktrees, openContextMenu, pathFolder, readableIdentity, revealGroup, toggleGroup, unitDisplayName, unitRoleName, unitsForTree, upperFirst } from "./hierarchy.mjs";
+import { checkoutFacts, openTaskDetail, renderApproval, renderGrants, renderMachine, renderSession, renderTask, renderUnit, renderWaiting, requestBrief, waitingSections } from "./inspector.mjs";
+import { cardinal, formatClock, formatNumber, formatRecent, formatShortDate, formatShortTime, text } from "./i18n.mjs";
 import { collectPages, createPagedList, loadAll, loadNext, reloadList, renderWindow, setQuery } from "./lists.mjs";
 import { adoptInitialLayout, applyRemoteLayout, centerUnit, createMap, keepLocalPosition, renderMap, retrySavedLayout, settlePositions, useIncomingPosition } from "./map.mjs";
 import { dispose as disposeEmbed, publishDirty, publishReady, startEmbedChannel } from "./embed.mjs";
 import { PHONE_NAV, exchangeCode, exchangeHomeFragment, logout, renderCodeEntry, renderPhone } from "./phone.mjs";
-import { applyIssueChange, applyServiceBeat, applySettingsRead, applySyncSnapshot, armExpiry, clearGrant, closeHome, LOOK_IDS, noteHomeChange, openHome, renderClientReview, renderSettings, saveSettings, takeGrant } from "./settings.mjs";
+import { applyAgent, applyIssueChange, applyServiceBeat, applySettingsRead, applySyncSnapshot, armExpiry, clearGrant, closeHome, LOOK_IDS, noteHomeChange, openHome, previewAgent, renderClientReview, renderReviewAll, renderSettings, saveSettings, takeGrant } from "./settings.mjs";
 import { acceptStreamEvent, createStore, loadSnapshot } from "./state.mjs";
 import { answerProposal, captureTextSelection, createTextFinder, documentSaver, draftSnapshot, editProposal, enterFocus, formatSelection, highlightFind, leaveFocus, loadProposals, moveFocus, noteProposal, proposalComment, proposalPassage, proposalStale, rememberTextDraft, renderDocument, renderProposal, replaceMatches, undoReplace, replaceVisible, restoreTextSelection, selectedPlainRange, showTools, TEXT_FORMATS, textAnchor, textDraft, textDraftKey } from "./void.mjs";
 import { assetIdentity, plainCaretFromSource, plainOffsets, plainText, sourceBoundary, tokenizeMarkup, validUtf16Boundary } from "./markup.mjs";
 import { close as closeStream, resetCredentials, synchronize } from "./stream.mjs";
 import * as startApi from './start-api.mjs';
-import { startText } from './start-copy.mjs';
-import { acceptedRepositoryCluster, clientLabel, clusterLead, customRoleProblems, initialRunsIn, repositorySelection, renderAgentForm, renderClusterForm, renderRepositoryOffer, renderRunsInPicker, runsInLabel, startDialog, supervisedClient } from './clusters.mjs';
-import { renderAgentHeader, renderCluster, renderClusterChanges } from './inspector.mjs';
-import { fitMap, flyToCluster } from './map.mjs';
+import { roleLabel, startText } from './start-copy.mjs';
+import { acceptedRepositoryCluster, catalogLabel, clientLabel, clusterLead, customRoleProblems, initialRunsIn, repositorySelection, renderAgentForm, renderClusterForm, renderRepositoryOffer, renderRunsInPicker, runsInLabel, startDialog, supervisedClient } from './clusters.mjs';
+import { renderAgentHeader, renderCluster, renderClusterChanges, renderClusterDetails } from './inspector.mjs';
+import { fitMap, flyToCluster, isCollapsed, toggleCollapsed } from './map.mjs';
 import { changeContext, createSessionView, loadSessionView, loadTranscriptPage, renderContext, renderSessionTabs, renderSessionWork, renderStartedWith } from './session-work.mjs';
 import { PLAN_TASK_LIMIT, controlPlan, createPlanController, loadChatPlans, planBranch, refreshPlan, renderControlledPlan, runPlan, savePlanDraft, tasksFromVoidText } from './plan-controller.mjs';
 import { createAddController, openAdd, disposeAdd } from './add-controller.mjs';
 import { addButton, addText } from './add-view.mjs';
 import { getAdditions, removeAddition } from './add-api.mjs';
+import { createQueue } from './queue.mjs';
+import { encodeHomeQr } from './qr.mjs';
+import { renderQr } from './qr-render.mjs';
+import { updateExpiry } from './settings.mjs';
 
 const DESKTOP_MODES = ["map", "blueprint", "document", "focus"];
 const BAR_MODES = ["map", "blueprint", "document"];
@@ -185,12 +189,12 @@ async function recoverSession(app) {
 }
 
 const OPENING_COPY = {
-  reading: ["Reading the M1ND", "Leyendo el M1ND"],
-  failure: ["The M1ND cannot be read", "No se puede leer el M1ND"],
+  reading: ["Reading the M1ND", "Leyendo la M1ND"],
+  failure: ["The M1ND cannot be read", "No se puede leer la M1ND"],
   chooseFolder: ["Choose another folder", "Elegir otra carpeta"],
   noUnits: ["No units yet", "Todavía no hay unidades"],
   first: ["The Overseer comes first; create it from the inspector.", "Crear primero el Overseer desde el inspector."],
-  empty: ["Your M1ND is empty", "El M1ND está vacío"],
+  empty: ["Your M1ND is empty", "La M1ND está vacía"],
   coordinates: ["The Overseer coordinates every other unit. Create it first; then add Overlords and Executors from the Map.", "El Overseer coordina las demás unidades. Crearlo primero y agregar después Overlords y Executors desde el Mapa."],
   create: ["Create the Overseer", "Crear el Overseer"],
   timeout: ["{path} did not answer in 30 s. The drive may be offline, or another program may hold the folder.", "{path} no respondió en 30 s. La unidad puede estar desconectada o la carpeta puede estar bloqueada por otro programa."],
@@ -198,6 +202,8 @@ const OPENING_COPY = {
   connecting: ["Connecting to the service", "Conectando con el servicio"],
   read: ["Reading", "Leyendo"],
   notRead: ["M1ND not read", "M1ND sin leer"],
+  stoppedTitle: ["The service stopped", "El servicio se detuvo"],
+  stopped: ["HIVEM1ND is not answering on this machine. Reopen HIVEM1ND, or run: {command}", "HIVEM1ND no responde en esta máquina. Volver a abrir HIVEM1ND o ejecutar: {command}"],
 };
 
 function openingText(app, key, variables = {}) {
@@ -254,6 +260,11 @@ export function shellLayout(capabilities, audience) {
   return names.has("viewer.write") || names.has("layout.write") ? "desktop" : "phone";
 }
 
+// The tab's own storage, when the browser allows it.
+function tabStorage(env) {
+  try { return env.sessionStorage ?? null; } catch { return null; }
+}
+
 export async function mount(root, env = globalThis) {
   const document = root.ownerDocument;
   const api = createApi({
@@ -261,6 +272,7 @@ export async function mount(root, env = globalThis) {
     history: env.history ?? globalThis.history,
     fetch: env.fetch,
     clock: env.clock,
+    storage: tabStorage(env),
   });
   const store = createStore();
   const app = {
@@ -284,8 +296,19 @@ export async function mount(root, env = globalThis) {
     startStorage: env.storage ?? viewStorage(document),
     recovery: env.recovery ?? ((env.hivem1nd ?? globalThis.hivem1nd)?.recoverService ? (env.hivem1nd ?? globalThis.hivem1nd) : null),
   };
+  // Slow actions run here in the background, one after another; their notices and the bell's list draw from it.
+  app.queue = createQueue({ now: () => api.now(), onChange: () => {
+    // While deletions run, the lists are read once at the end instead of after every change they announce: each read
+    // rebuilt the whole view and made the next deletion wait for it.
+    store.deferViewRefresh = deletionRunning(app);
+    if (app.disposed || app.layout === 'unknown') return;
+    if (app.rendering) queueMicrotask(() => { if (!app.disposed) renderShell(app); }); else renderShell(app);
+  } });
   const view = root.ownerDocument.defaultView;
   view?.addEventListener?.("keydown", (event) => onFocusKey(app, event));
+  view?.addEventListener?.("keydown", (event) => onEscapeKey(app, event));
+  view?.addEventListener?.("keydown", (event) => onPickKey(app, event));
+  root.addEventListener("click", (event) => closeBarPanels(app, event));
   root.addEventListener("keydown", (event) => {
     if (event.key !== "F2" || app.layout === "phone" || event.target?.closest?.("input, textarea")) return;
     const row = app.activeRows?.find((item) => item.id === event.target?.closest?.("[data-id]")?.getAttribute("data-id"));
@@ -297,6 +320,13 @@ export async function mount(root, env = globalThis) {
     showTools(app.voidState);
     renderShell(app);
   };
+  // A wheel, a touch drag or a scroll the shell did not cause itself marks the person as scrolling. A redraw sets the
+  // scroll positions back, which fires scroll events of its own just after it.
+  const scrolling = (event) => {
+    if (document.hidden || (event.type === "scroll" && scrollClock() - (app.paintedAt ?? 0) < 150)) return;
+    app.scrollingUntil = scrollClock() + SCROLL_QUIET_MS;
+  };
+  for (const type of ["wheel", "touchmove", "scroll"]) root.addEventListener?.(type, scrolling, { capture: true, passive: true });
   root.addEventListener?.("pointermove", revealFocusTools);
   root.addEventListener?.("pointerup", revealFocusTools);
   root.addEventListener?.("focusin", revealFocusTools);
@@ -346,6 +376,7 @@ async function runBoot(app) {
   if (app.disposed || app.bootRetrying) return app;
   app.bootRetrying = true;
   app.bootFailed = false;
+  app.bootStopped = false;
   app.bootSettled = false;
   app.bootReading = true;
   app.bootError = null;
@@ -363,14 +394,35 @@ async function runBoot(app) {
     if (!app.disposed && !app.bootFailed && app.bootReading && app.layout !== "phone") renderShell(app);
     if (app.disposed || app.bootFailed) return app;
     if (!app.disposed && !app.store.capabilities?.length) armBootDeadline(app, app.readyBudgetMs);
-    await loadPresentation(app);
+    // The first view is enough to draw the shell, the Map and the lists. Settings, the viewer, the lists and the folder
+    // reports then arrive in parallel and each fills its own part; a slow or failed one never takes the screen back.
+    const early = shellLayout(app.store.capabilities, app.store.audience) === "desktop";
+    if (early) {
+      app.layout = "desktop";
+      app.store.audience ??= app.layout;
+      createLists(app);
+      app.bootReading = false;
+      app.bootSettled = true;
+      clearTimeout(app.readyTimer);
+      app.readyTimer = null;
+      publish(app);
+    }
+    const presentation = loadPresentation(app).catch((error) => {
+      if (!early || error?.status === 401) throw error;
+      app.presentationError = error;
+      retryPresentation(app, 1);
+    });
+    if (!early) await presentation;
     if (app.disposed || app.bootFailed) return app;
-    await loadLists(app);
-    if (app.layout === 'desktop') { await loadStartReports(app); maybeStartDiscovery(app); }
+    const lists = early ? loadListData(app) : loadLists(app);
+    const reports = app.layout === 'desktop' ? loadStartReports(app) : Promise.resolve();
+    await Promise.all([presentation, lists, reports]);
+    if (app.disposed || app.bootFailed) return app;
+    if (app.layout === 'desktop') maybeStartDiscovery(app);
     startOwnEmbed(app);
   } catch (error) {
     if (!app.disposed) {
-      if (error?.status === 401) clearCredentials(app.api);
+      if (error?.status === 401) forgetSession(app.api);
       app.bootFailed = true;
       clearTimeout(app.readyTimer);
       renderFailure(app, error);
@@ -465,14 +517,29 @@ export function navigate(app, mode) {
     app.tab = mode;
     if (app.mode === "settings") app.mode = "map";
   }
-  else app.mode = mode;
+  else {
+    app.mode = mode;
+    // Waiting lives beside the Map, so any mode, the Map included, takes its panel away.
+    app.waitingOpen = false;
+  }
   if (mode !== "settings" && app.homeState?.grant) clearGrant(app.homeState);
   if (mode === "focus" && app.voidState) enterFocus(app.voidState);
   renderShell(app);
 }
 
+// Drawing the shell replaces the lists and the conversation, which stops a scroll in progress. While the person scrolls,
+// a redraw waits until the scrolling has been still for a moment, and only one waits.
+const SCROLL_QUIET_MS = 250;
+// Time as the screen lives it, which keeps running when the app's clock is held still.
+const scrollClock = () => globalThis.performance?.now?.() ?? Date.now();
+
 export function renderShell(app) {
   if (app.editors?.current?.boardGesture || app.editors?.current?.textComposing) return;
+  const wait = (app.scrollingUntil ?? 0) - scrollClock();
+  if (wait > 0) {
+    if (!app.scrollRedraw) app.scrollRedraw = setTimeout(() => { app.scrollRedraw = null; if (!app.disposed) renderShell(app); }, wait + 10);
+    return;
+  }
   if (app.voidFind?.open && (app.mode !== 'document' || app.editors.current?.kind !== 'void' || app.editors.current.sourceMode)) {
     clearTimeout(app.voidFind.timer); app.voidFind.finder.cancel(); app.voidFind.generation++;
     app.voidFind.open = false; app.voidFind.pending = false;
@@ -482,6 +549,8 @@ export function renderShell(app) {
     paintShell(app);
   } finally {
     app.rendering = false;
+    // A long redraw still counts from its end, so the scroll positions it sets back are not taken for the person's.
+    app.paintedAt = scrollClock();
   }
 }
 
@@ -518,7 +587,10 @@ function paintShell(app) {
   else if (app.store.stream?.state === 'error') shell.append(element(document, 'button', { type: 'button', class: 'btn phone-retry', 'data-action': 'retry-stream', text: t('retry'), onclick: () => startServiceStream(app) }));
   if (app.layout === "phone") shell.append(renderPhoneNav(app, t));
   clearPhoneDialog(app);
+  const scrolled = captureScrolls(app.root);
   app.root.replaceChildren(shell);
+  restoreScrolls(app.root, scrolled);
+  restoreRunning(app.root);
   const conversation = app.root.querySelector('.transcript');
   if (conversation && app.thread) conversation.scrollTop = app.thread.nearBottom ? conversation.scrollHeight ?? 0 : app.thread.scrollTop ?? 0;
   const work = app.root.querySelector('[data-session-work]');
@@ -531,6 +603,8 @@ function paintShell(app) {
   }
   syncLiveRegions(app);
   paintActivity(app, shell);
+  paintQueue(app, shell);
+  paintPhonePanel(app, shell);
   paintServiceBanner(app, shell);
   restoreInputFocus(app);
   app.editors?.current?.restoreSelection?.();
@@ -545,6 +619,26 @@ function paintShell(app) {
       phoneDialog.querySelector("[data-action='phone-done']")?.focus();
       homeState(app).phoneDialogFocused = true;
     }
+  }
+}
+
+// Every drawing replaces the whole shell. The panels that scroll keep where they were, so reading a long panel is not
+// interrupted by a retry, a refresh or a message arriving.
+const SCROLLING = ['.panel.side', '.panel.stage', '.panel.inspector', '.inspector-body', '.agent-controls', '.agent-details', '.chat-panel', '.settings-panel', '.transcript', '.session-work'];
+
+function captureScrolls(root) {
+  const saved = [];
+  for (const selector of SCROLLING) {
+    const node = root.querySelector?.(selector);
+    if (node && node.scrollTop > 0) saved.push([selector, node.scrollTop]);
+  }
+  return saved;
+}
+
+function restoreScrolls(root, saved) {
+  for (const [selector, top] of saved) {
+    const node = root.querySelector?.(selector);
+    if (node) node.scrollTop = top;
   }
 }
 
@@ -731,6 +825,7 @@ function trackDisclosure(app, node, key) {
 export function dispose(app) {
   if (app?.addController) disposeAdd(app.addController);
   if (app.mapState) { app.mapState.disposed = true; app.mapState.flight = null; }
+  stopWatchingMap(app);
   app.startDialog?.dialog?.close();
   if (!app || app.disposed) return;
   app.disposed = true;
@@ -740,6 +835,7 @@ export function dispose(app) {
   clearTimeout(app.phoneExpiryTimer);
   clearTimeout(app.phoneLockTimer);
   clearTimeout(app.mapToastTimer);
+  clearTimeout(app.scrollRedraw);
   clearTimeout(app.libraryToastTimer);
   clearTimeout(app.voidFind?.timer);
   app.voidFind?.finder.cancel();
@@ -815,7 +911,7 @@ async function onStream(app, event) {
   if (event?.name === "issue.changed") noteIssue(app, dataOf(event));
   if (event?.name === "machine.settings.changed" && dataOf(event).machine === app.settingsState?.machine
     || event?.name === "settings.content.changed" && app.settingsState) loadSettingsSections(app);
-  if (app.layout === 'desktop' && ['cluster.changed', 'machine.settings.changed', 'additions.changed', 'stream.reset'].includes(event?.name)) {
+  if (app.layout === 'desktop' && ['cluster.changed', 'machine.settings.changed', 'additions.changed', 'stream.reset'].includes(event?.name) && !deletionRunning(app)) {
     await loadStartReports(app);
     if (app.settingsState && event?.name === 'additions.changed') await loadSettingsSections(app);
     const cluster = app.store.indexes.groups.get(app.store.selected.groupId);
@@ -828,15 +924,17 @@ async function onStream(app, event) {
   }
   if (event?.name === "stream.ready" || event?.name === "settings.changed") {
     await loadPresentation(app);
-    if (event?.name === "stream.ready") await recheckTracked(app);
+    if (event?.name === "stream.ready") { await recheckTracked(app); retryTransient(app); }
     result?.consume?.();
     return;
   }
   if (event?.name === "stream.reset") await recheckTracked(app);
   if (event?.name === "unit.changed" || event?.name === "view.changed") {
-    if (app.unitList) await reloadList(app.unitList);
-    if (event?.name === "view.changed" && app.waitingList) await reloadList(app.waitingList);
-    if (event?.name === "view.changed" && app.thread?.chat) await loadMessages(app.api, app.thread);
+    if (!deletionRunning(app)) {
+      if (app.unitList) await reloadList(app.unitList);
+      if (event?.name === "view.changed" && app.waitingList) await reloadList(app.waitingList);
+      if (event?.name === "view.changed" && app.thread?.chat) await loadMessages(app.api, app.thread);
+    }
     if (event?.name === "unit.changed" && dataOf(event).unit?.removed) {
       const id = dataOf(event).unit.id;
       if (app.pendingChat?.unitId === id) app.pendingChat = null;
@@ -846,14 +944,14 @@ async function onStream(app, event) {
     }
   }
   if (event?.name === "chat.changed") {
-    if (app.chatList) await reloadList(app.chatList);
+    if (app.chatList && !deletionRunning(app)) await reloadList(app.chatList);
     const changed = dataOf(event).chat;
     if (changed?.id === app.thread?.chat?.id) app.thread.chat = app.store.indexes.chats.get(changed.id) ?? changed;
   }
   if (event?.name === "group.changed") {
     if (app.mapState) app.mapState.selectedGroupId = app.store.selected.groupId;
     if (dataOf(event).group?.deleted && app.thread?.chat?.id === dataOf(event).group.chatId) app.thread = null;
-    if (app.chatList) await reloadList(app.chatList);
+    if (app.chatList && !deletionRunning(app)) await reloadList(app.chatList);
   }
   if (event?.name === "layout.changed" && app.mapState) applyRemoteLayout(app.mapState, event);
   if (event?.name === "session.request.changed") noteSessionRequest(app, dataOf(event));
@@ -1083,8 +1181,10 @@ export function renderBar(app, t, counts) {
     class: "pill",
     "data-action": "waiting",
     "aria-pressed": String(app.mode === "map" && app.waitingOpen === true || app.mode === "waiting"),
+    "aria-label": cardinal(app.language, "waitingOnYou", counts.waiting ?? 0),
     onclick: () => openWaiting(app),
-  }, icon(document, "waiting"), cardinal(app.language, "waitingOnYou", counts.waiting ?? 0));
+  }, icon(document, "waiting"), element(document, "span", { class: "pill-count", "aria-hidden": "true", text: formatNumber(app.language, counts.waiting ?? 0) }),
+  element(document, "span", { class: "pill-label", text: cardinal(app.language, "waitingOnYou", counts.waiting ?? 0) }));
   const settings = element(document, "button", {
     type: "button",
     class: "icon-button",
@@ -1098,30 +1198,25 @@ export function renderBar(app, t, counts) {
     class: "icon-button",
     "data-action": "toggle-inspector",
     "aria-label": t(app.inspectorOpen ? "closeInspector" : "openInspector"),
-    onclick: () => {
-      app.inspectorOpen = !app.inspectorOpen;
-      renderShell(app);
-    },
-  }, icon(document, "hierarchy"));
+    onclick: () => toggleInspector(app),
+  }, icon(document, "inspector"));
   const phone = element(document, "button", {
-    type: "button", class: "icon-button", "data-action": "open-phone",
-    "aria-label": t("settingsOpenPhone"), onclick: () => openPhoneSettings(app),
+    type: "button", class: "icon-button", "data-action": "open-phone", "aria-pressed": String(app.phonePanelOpen === true),
+    "aria-label": t("settingsOpenPhone"), onclick: () => openPhonePanel(app),
   }, icon(document, "phone"));
+  // Below 1180 px Activity, the phone and Settings leave the bar for this menu, and below 987 px so does Details.
+  const more = element(document, "button", {
+    type: "button", class: "icon-button bar-more", "data-action": "bar-more", "aria-haspopup": "menu",
+    "aria-label": t("finalMore"), title: t("finalMore"), onclick: (event) => openBarMenu(app, event.currentTarget ?? event.target?.closest?.("button")),
+  }, icon(document, "more"));
+  // The bell lists the background work: what waits, what runs, what failed and what finished.
+  const openJobs = app.queue?.open.length ?? 0;
   const notifications = element(document, "button", {
-    type: "button", class: "icon-button", "data-action": "open-notifications",
-    "aria-label": t("finalNotifications"), title: t("finalNotificationsUnavailable"), disabled: "",
+    type: "button", class: "icon-button queue-bell", "data-action": "open-notifications", "aria-pressed": String(app.queuePanelOpen === true),
+    "aria-label": openJobs ? t("queueOpen", { count: openJobs }) : t("queueTitle"), title: t("queueTitle"),
+    onclick: () => { app.queuePanelOpen = app.queuePanelOpen !== true; renderShell(app); },
   }, icon(document, "bell"));
-  const catalogToggle = element(document, "button", {
-    type: "button",
-    class: "btn panel-toggle",
-    "data-action": "toggle-catalog",
-    "aria-pressed": String(app.catalogOpen === true),
-    text: t(app.catalogOpen ? "hideCatalog" : "showCatalog"),
-    onclick: () => {
-      app.catalogOpen = app.catalogOpen !== true;
-      renderShell(app);
-    },
-  });
+  if (openJobs) notifications.append(element(document, "span", { class: "queue-badge", "aria-hidden": "true", text: String(openJobs) }));
   const commentsToggle = element(document, "button", {
     type: "button",
     class: "btn panel-toggle",
@@ -1140,11 +1235,53 @@ export function renderBar(app, t, counts) {
   }
   if (counts.waiting) bar.append(waiting);
   if (app.layout !== "phone") {
-    bar.append(catalogToggle);
     if (app.mode === "blueprint" || app.mode === "document") bar.append(commentsToggle);
-    bar.append(phone, notifications, inspector, settings);
+    bar.append(phone, notifications, inspector, settings, more);
   }
   return bar;
+}
+
+// The side panel opens as a drawer from a button on the stage, which each mode draws in its own stage.
+function catalogToggle(app, t, name) {
+  const document = app.root.ownerDocument;
+  return element(document, "button", {
+    type: "button",
+    class: "btn panel-toggle stage-toggle",
+    "data-action": "toggle-catalog",
+    "aria-pressed": String(app.catalogOpen === true),
+    onclick: () => {
+      app.catalogOpen = app.catalogOpen !== true;
+      renderShell(app);
+    },
+  }, icon(document, { hierarchy: "hierarchy", boards: "blueprint", texts: "pen" }[name]), t(name));
+}
+
+function openBarMenu(app, anchor) {
+  const t = (key) => text(app.language, key);
+  const box = anchor?.getBoundingClientRect?.() ?? { right: 0, bottom: 0 };
+  const items = [
+    { id: "details", glyph: "inspector", label: t("details"), show: windowAtMost(app, SIDE_DRAWER_WIDTH), run: () => toggleInspector(app, true) },
+    { id: "activity", glyph: "bell", label: t("queueTitle"), run: () => { app.phonePanelOpen = false; app.queuePanelOpen = true; renderShell(app); } },
+    { id: "phone", glyph: "phone", label: t("settingsOpenPhone"), run: () => openPhonePanel(app, true) },
+    { id: "settings", glyph: "settings", label: t("settings"), run: () => navigate(app, "settings") },
+  ].filter((item) => item.show !== false);
+  openContextMenu(app.root.ownerDocument, { x: box.right - 220, y: box.bottom + 6, items, label: t("finalMore") });
+}
+
+function toggleInspector(app, open = !app.inspectorOpen) {
+  app.inspectorOpen = open;
+  renderShell(app);
+  refitBesideDrawer(app);
+}
+
+// A drawer over the Map covers part of it. While the view is still the fitted one, the graph is fitted again to what stays in sight.
+function refitBesideDrawer(app) {
+  const map = app.mapState, host = app.root.querySelector?.(".map");
+  if (app.mode !== "map" || !map?.autoFit || !host || !windowAtMost(app, INSPECTOR_DRAWER_WIDTH)) return;
+  const rect = host.getBoundingClientRect();
+  const covered = app.inspectorOpen ? app.root.querySelector(".inspector")?.getBoundingClientRect().width ?? 0 : 0;
+  // A drawer that covers the whole Map leaves nothing to fit to.
+  if (rect.width - covered > 96 && rect.height > 96) fitMap(map, { left: rect.left, top: rect.top, width: rect.width - covered, height: rect.height });
 }
 
 function renderWorkspace(app, t, view, counts) {
@@ -1197,11 +1334,9 @@ function renderWorkspace(app, t, view, counts) {
   );
   if (app.mode === "settings") {
     stage.append(settingsSurface(app, document, t));
-  } else if (app.layout !== "phone" && app.waitingOpen) {
-    stage.append(renderWaitingSurface(app, t));
   } else if (app.mode === "map") {
     ensureMap(app);
-    stage.append(element(document, "div", { class: "map" }));
+    stage.append(element(document, "div", { class: "map" }), catalogToggle(app, t, "hierarchy"));
   } else if (app.mode === "blueprint" || app.mode === "document" || app.mode === "focus") {
     stage.append(renderEditor(app, t));
   } else if (app.layout === "phone" && app.mode === "waiting") {
@@ -1230,7 +1365,7 @@ function renderWorkspace(app, t, view, counts) {
   const group = app.store.indexes.groups.get(app.store.selected.groupId);
   const selection = [...(app.mapState?.selection ?? [])].map((id) => unitById(app, id)).filter((unit) => unit && unit.role !== "master");
   const inspectorBody = element(document, "div", { class: "inspector-body" });
-  if (outcomeVisible(app) && app.actionScope !== "editor") {
+  if (outcomeVisible(app) && app.actionScope !== "editor" && !noticeSaysNote(app)) {
     inspectorBody.append(element(document, "p", {
       class: "action-note",
       "data-action-note": "true",
@@ -1247,8 +1382,15 @@ function renderWorkspace(app, t, view, counts) {
       text: t("syncConflict", { path: app.syncConflict.copyPath || t("unknown") }),
     }));
   }
-  if (app.layout !== "phone" && group && !group.deleted) {
-    inspectorBody.append(clusterInspector(app, group), clusterChatPanel(app, group));
+  // Rows picked in the Hierarchy are the inspector's subject, instead of the agent or cluster that was open before the pick.
+  const pick = app.layout !== "phone" ? pickedTargets(app) : null;
+  if (app.layout !== "phone" && app.waitingOpen) {
+    inspectorBody.append(renderWaitingPanel(app, t));
+  } else if (pick && pick.units.length + pick.clusters.length > 1) {
+    inspectorBody.append(pickInspector(app, t, pick));
+  } else if (app.layout !== "phone" && group && !group.deleted) {
+    inspectorBody.className += ' agent-inspector';
+    inspectorBody.append(clusterInspector(app, group), clusterPanel(app, t, group));
   } else if (app.layout !== "phone" && selection.length > 1) {
     inspectorBody.append(selectionInspector(app, t, selection));
   } else {
@@ -1256,39 +1398,21 @@ function renderWorkspace(app, t, view, counts) {
     if (agent) {
       inspectorBody.className += ' agent-inspector';
       inspectorBody.append(renderAgentHeader(document, agent, sessionForUnit(app, agent.id), app.language, () => openAgentMore(app, agent)));
-      const controls = trackDisclosure(app, element(document, 'details', { class: 'agent-controls' }, element(document, 'summary', { text: t('details') }), actionControls(app, t, agent)), `agent-controls:${agent.id}`);
-      inspectorBody.append(controls);
       const review = renderInspector(app, t, agent);
-      const facts = review.querySelector('[data-unit-facts]');
-      // The facts sit inside Details with the controls; the board keeps the conversation in front.
-      if (facts) {
-        facts.remove();
-        facts.className += ' agent-facts';
-        controls.append(facts);
-      }
       const progress = review.querySelector('[data-session-progress]');
       if (progress) {
         progress.remove();
         inspectorBody.append(progress);
       }
       const panel = chatPanel(app, t);
-      const cards = review.querySelector('[data-action-cards]');
-      if (cards) cards.remove();
-      const scroll = panel.querySelector('.transcript') ?? panel.querySelector('[data-session-work]') ?? panel.querySelector('[data-unit-work]');
-      // What is left of the unit card (its metadata, the machine, sessions, grants and waiting) belongs with the
-      // controls in Details; the conversation keeps only messages, as the board draws it.
-      for (const part of [...review.children]) {
-        part.remove();
-        // Nested disclosures open flat inside Details: one Details, not three.
-        for (const inner of [part, ...(part.querySelectorAll?.('details') ?? [])]) if (inner.matches?.('details')) inner.setAttribute('open', '');
-        controls.append(part);
-      }
-      // Asks and task cards belong to the conversation: they scroll with the messages, in one scroll area.
-      if (cards) {
-        const field = panel.querySelector('.field');
-        if (scroll) scroll.append(cards);
-        else if (!(field && placeBefore(field, cards))) panel.append(cards);
-      }
+      const details = agentDetails(app, t, agent, review, panel);
+      const tab = panel.getAttribute('data-agent-tab');
+      // Details is the third tab: while it is open the conversation is hidden, not removed, so a draft and the scroll stay.
+      if (tab === 'details') {
+        for (const part of [...panel.children]) if (!part.matches?.('.session-tabs')) part.setAttribute('hidden', '');
+      } else details.setAttribute('hidden', '');
+      const tabs = panel.querySelector('.session-tabs');
+      if (tabs && typeof panel.insertBefore === 'function' && tabs.nextSibling) panel.insertBefore(details, tabs.nextSibling); else panel.append(details);
       inspectorBody.append(panel);
     } else {
       const heading = element(document, "h2", { text: selected ? unitDisplayName(selected) : t("nothingSelected") });
@@ -1305,14 +1429,52 @@ function renderWorkspace(app, t, view, counts) {
     }
   }
   if (app.mapToast) inspectorBody.append(mapToast(app, t));
-  if (app.startError) inspectorBody.append(element(document, 'p', { role: 'alert', text: startText(app.language, 'unavailable') }),
-    mapButton(app, 'retry-start-reports', startText(app.language, 'retry'), async () => { await loadStartReports(app); maybeStartDiscovery(app); }));
+  if (app.startError && !failedCauses(app).has(String(app.startError.code ?? 'unknown')) && !(serviceDown(app) && transientFailure(app.startError))) inspectorBody.append(element(document, 'div', { class: 'notice notice-error', role: 'alert', 'data-start-error': 'true' },
+    element(document, 'p', { text: startErrorText(app) }),
+    mapButton(app, 'retry-start-reports', startText(app.language, 'retry'), async () => { await loadStartReports(app); maybeStartDiscovery(app); })));
+  dropRepeatedNotices(inspectorBody);
+  // As a drawer the inspector has a header of its own with the way to close it; beside the Map the stylesheet hides that header.
   const inspector = element(document, "aside", {
     class: `panel inspector${app.inspectorOpen ? " is-open" : ""}`,
-  }, inspectorBody);
+  }, app.layout === "phone" ? null : element(document, "header", { class: "inspector-drawer-head" },
+    element(document, "h2", { text: t(app.waitingOpen ? "waiting" : "details") }),
+    element(document, "button", { type: "button", class: "icon-button", "data-action": "close-inspector", "aria-label": t("closeInspector"), title: t("closeInspector"), onclick: () => toggleInspector(app, false) }, icon(document, "close"))), inspectorBody);
   const phoneHierarchy = app.layout === "phone" && app.mode !== "waiting" && app.tab !== "chats";
   const showSide = app.layout !== "phone" || app.mode !== "waiting";
   return element(document, "div", { class: "workspace" }, showSide ? side : null, phoneHierarchy ? null : stage, inspector);
+}
+
+// The failed requests this panel shows as notices, by cause.
+function failedCauses(app) {
+  const here = noteScope(app);
+  const causes = new Set();
+  for (const record of app.activity?.values() ?? []) if (record.phase === "error" && (record.scope ?? here) === here) causes.add(String(record.error?.code ?? "unknown"));
+  return causes;
+}
+
+// The note of the last failure is not said again when the notice of that same request is already on screen.
+function noticeSaysNote(app) {
+  if (app.actionTone !== "error" || !app.actionKey) return false;
+  const record = app.activity?.get(app.actionKey);
+  return record?.phase === "error" && (record.scope ?? noteScope(app)) === noteScope(app);
+}
+
+// The cause the person can act on: a slow service says so; any other failure keeps the connection sentence.
+function startErrorText(app) {
+  const code = app.startError?.code;
+  return code && Object.hasOwn(ACTION_COPY, code) && code !== 'service_unavailable' ? actionText(app.language, code) : startText(app.language, 'unavailable');
+}
+
+// The same sentence is never said twice in one panel: the later note with the same words goes.
+function dropRepeatedNotices(container) {
+  const seen = new Set();
+  for (const node of [...(container.children ?? [])]) {
+    const mark = String(node.className ?? '');
+    if (!/(?:action-note|notice)/.test(mark) && node.getAttribute?.('role') !== 'alert') continue;
+    const words = String(node.querySelector?.('p')?.textContent ?? node.textContent ?? '').trim();
+    if (!words) continue;
+    if (seen.has(words)) node.remove(); else seen.add(words);
+  }
 }
 
 function skeletonPanel(document, name, sizes) {
@@ -1361,9 +1523,12 @@ function openingWorkspace(app, t) {
   const content = element(document, "div", { class: `opening-content${failed ? " opening-failure" : ""}` });
   if (failed) {
     content.append(element(document, "div", { class: "opening-error-icon" }, icon(document, "alert")));
-    content.append(element(document, "h2", { text: openingText(app, "failure") }));
     const path = app.selectedFolder || "M1ND";
-    const cause = app.bootError?.code === "timeout" ? openingText(app, "timeout", { path }) : `${path}: ${safeOpeningCause(app)}`;
+    // A stopped service is said to be stopped, with how to open it again; only a service that is up but slow reads as a slow drive.
+    content.append(element(document, "h2", { text: openingText(app, app.bootStopped ? "stoppedTitle" : "failure") }));
+    const command = `hivem1nd service install${app.selectedFolder ? ` --mind-path "${String(app.selectedFolder).replace(/[\p{Cc}"]/gu, "")}"` : ""}`;
+    const cause = app.bootStopped ? openingText(app, "stopped", { command })
+      : app.bootError?.code === "timeout" ? openingText(app, "timeout", { path }) : `${path}: ${safeOpeningCause(app)}`;
     content.append(element(document, "p", { "data-opening-cause": "true", text: cause }));
     const actions = element(document, "div", { class: "opening-actions" },
       element(document, "button", { type: "button", class: "btn primary", "data-action": "retry-boot", text: t("retry"), onclick: () => resumeBoot(app) }),
@@ -1432,9 +1597,21 @@ function emptyMind(app) {
   return units.length === 1 && units[0].id === "root:master";
 }
 
-async function loadLists(app) {
+// Settings and the viewer are not needed to show the shell; when they are slow or fail they are asked again a few times.
+function retryPresentation(app, attempt) {
+  if (attempt > 4) return;
+  const timer = setTimeout(() => {
+    if (app.disposed || !app.presentationError) return;
+    loadPresentation(app, { keepShell: true }).then(() => { app.presentationError = null; }, (error) => {
+      if (error?.status !== 401) retryPresentation(app, attempt + 1);
+    });
+  }, 3000 * attempt);
+  timer.unref?.();
+}
+
+function createLists(app) {
   app.unitList = createPagedList({ api: app.api, store: app.store, name: "units", route: "/units" });
-  app.chatList = createPagedList({ api: app.api, store: app.store, name: "chats", route: "/chats", filters: { listed: "true" } });
+  app.chatList = createPagedList({ api: app.api, store: app.store, name: "chats", route: "/chats", filters: { listed: "true" }, rowHeight: 48 });
   app.waitingList = createPagedList({ api: app.api, store: app.store, name: "waiting", route: "/waiting" });
   const refresh = () => {
     if (!app.disposed && app.layout !== "unknown") renderShell(app);
@@ -1443,13 +1620,24 @@ async function loadLists(app) {
   app.unitList.onUpdate = () => { refresh(); app.attachRepaint?.(); };
   app.chatList.onUpdate = refresh;
   app.waitingList.onUpdate = refresh;
-  try {
-    const layout = await request(app.api, "GET", "/layout");
-    if (!app.disposed) app.store.layout = layout.data;
-  } catch {
+}
+
+// Each list fills as its pages arrive; the three load side by side and a failed one only marks itself.
+async function loadListData(app) {
+  const unitList = app.unitList, chatList = app.chatList, waitingList = app.waitingList;
+  const placement = request(app.api, "GET", "/layout").then((layout) => {
+    if (app.disposed) return;
+    app.store.layout = layout.data;
+    if (app.layout !== "unknown") renderShell(app);
+  }, () => {
     // Placement still runs when the layout route is unavailable.
-  }
-  await Promise.all([loadAll(app.unitList), loadAll(app.chatList), loadAll(app.waitingList)]);
+  });
+  await Promise.all([placement, loadAll(unitList), loadAll(chatList), loadAll(waitingList)]);
+}
+
+async function loadLists(app) {
+  createLists(app);
+  await loadListData(app);
 }
 
 function openWaiting(app) {
@@ -1458,17 +1646,53 @@ function openWaiting(app) {
     return;
   }
   app.waitingOpen = !(app.mode === "map" && app.waitingOpen === true);
-  if (app.waitingOpen) app.mode = "map";
+  if (app.waitingOpen) { app.mode = "map"; app.waitingRecord = null; }
   if (app.waitingOpen && app.waitingList) reloadList(app.waitingList);
+  // Where the inspector is a drawer, Waiting lives in it, so it opens with it.
+  if (app.waitingOpen && windowAtMost(app, INSPECTOR_DRAWER_WIDTH)) app.inspectorOpen = true;
   if (!app.disposed) renderShell(app);
 }
 
-function openPhoneSettings(app) {
-  settingsState(app).tab = 'general';
-  navigate(app, 'settings');
-  const section = app.root.querySelector('[data-home]');
-  section?.scrollIntoView?.({ block: 'nearest' });
-  (section?.querySelector('[data-action="open-home"], [data-action="replace-home"], [data-addresses]') ?? section)?.focus?.();
+function openPhonePanel(app, open = app.phonePanelOpen !== true) {
+  app.phonePanelOpen = open;
+  if (open) app.queuePanelOpen = false;
+  renderShell(app);
+  if (open) app.root.querySelector("[data-phone-panel] button")?.focus?.();
+}
+
+// The panel under the bar's phone button: the code to scan while home access is open, how long it stays open, and the switch for it.
+function paintPhonePanel(app, shell) {
+  if (!app.phonePanelOpen || app.layout === "phone") return;
+  const document = app.root.ownerDocument, t = (key, values) => text(app.language, key, values);
+  const home = homeState(app);
+  const open = Boolean(home.home?.enabled) && !updateExpiry(home.home, Date.now()).expired;
+  const grant = open ? home.grant : null;
+  const index = home.selected ?? 0;
+  const panel = element(document, "section", { class: "phone-panel", "data-phone-panel": "true", role: "dialog", "aria-label": t("settingsOpenPhone") },
+    element(document, "header", { class: "phone-panel-head" }, element(document, "h2", { text: t("settingsOpenPhone") }), element(document, "span", { class: "phone-panel-esc", text: t("escCloses") })));
+  if (grant?.qrPayloads?.[index]) {
+    const link = grant.links?.[index];
+    const copy = element(document, "button", { type: "button", class: "btn ghost", "data-action": "phone-copy-link", text: t("phoneCopyLink") });
+    copy.addEventListener("click", async () => {
+      const clipboard = document.defaultView?.navigator?.clipboard;
+      if (!link || !clipboard?.writeText) return;
+      try { await clipboard.writeText(link); copy.textContent = t("phoneLinkCopied"); } catch { /* The link stays on the Settings page when the browser refuses the clipboard. */ }
+    });
+    panel.append(element(document, "div", { class: "phone-panel-grant", "data-secret": "true" },
+      element(document, "div", { class: "phone-panel-code" }, renderQr(document, encodeHomeQr(grant.qrPayloads[index]), t("qrTitle")),
+        element(document, "p", { "data-code": grant.shortCode, text: grant.shortCode })),
+      element(document, "div", { class: "phone-panel-scan" }, element(document, "p", { text: t("phoneScan") }), element(document, "p", { class: "phone-panel-fine", text: t("phoneAccessCloses") }), copy)));
+  } else panel.append(element(document, "p", { class: "phone-panel-note", text: t(open ? "noGrantSecret" : "finalPhoneHint") }));
+  const foot = element(document, "div", { class: "phone-panel-foot" },
+    element(document, "span", { class: "status-dot", "data-status": open ? "working" : "idle", "aria-hidden": "true" }),
+    element(document, "span", { class: "phone-panel-state", "data-phone-state": open ? "open" : "closed", text: open ? t("phoneOpenUntil", { time: formatShortTime(app.language, home.home.expiresAt) }) : t("phoneAccessClosed") }));
+  if (app.store.capabilities.includes("home.manage")) {
+    foot.append(open
+      ? element(document, "button", { type: "button", class: "btn ghost", "data-action": "phone-close-home", text: t("settingsCloseAccess"), onclick: () => endHome(app) })
+      : element(document, "button", { type: "button", class: "btn primary", "data-action": "phone-open-home", text: t("phoneOpenTwelve"), onclick: () => beginHome(app, "", false) }));
+  }
+  panel.append(foot);
+  shell.append(panel);
 }
 
 function renderWaitingSurface(app, t) {
@@ -1487,20 +1711,16 @@ function renderWaitingSurface(app, t) {
     if (list) setQuery(list, search.value);
   });
   const total = list?.total ?? 0;
-  // Waiting takes the stage for a while: a way back to the Map, then the search.
-  if (app.layout !== "phone") surface.append(element(document, "div", { class: "waiting-head" },
-    element(document, "button", { type: "button", class: "btn quiet", "data-action": "waiting-back", onclick: () => { app.waitingOpen = false; app.mode = "map"; renderShell(app); } },
-      icon(document, "map"), t("showMap"))));
   surface.append(search, element(document, "p", {
     "data-waiting-total": String(total),
     text: cardinal(app.language, "waitingCount", total),
   }));
   if (!list) {
-    surface.append(progressMark(document, t("loadingList")));
+    surface.append(skeletonMark(document, t("loadingList")));
     return surface;
   }
-  // A refresh under items already shown keeps them; the loading line is only for an empty list.
-  if (list.status === "loading" && !(list.items ?? []).length) surface.append(progressMark(document, t("loadingList"), { "data-list-progress": "true" }));
+  // A refresh under items already shown keeps them; the loading rows are only for an empty list.
+  if (list.status === "loading" && !(list.items ?? []).length) surface.append(skeletonMark(document, t("loadingList"), "rows", { "data-list-progress": "true" }));
   if (list.status === "error") {
     surface.append(element(document, "p", { text: t("listError") }));
     surface.append(element(document, "button", {
@@ -1526,6 +1746,125 @@ function renderWaitingSurface(app, t) {
   return surface;
 }
 
+// Waiting opens in the inspector's column, so the Map stays in view. Each row is one thing that waits on the person, and one row opens in place.
+const WAITING_GLYPH = { review: "document", approval: "waiting", message: "send", question: "chats", plan: "blueprint" };
+
+// The project an item belongs to, named as the Hierarchy names its cluster.
+function waitingProject(app, item) {
+  const [kind, name] = String(item.taskId ?? "").split(":");
+  const scope = unitById(app, item.unitId)?.scope;
+  const project = kind === "project" || kind === "env" ? name : scope?.kind === "project" || scope?.kind === "environment" ? scope.name : "";
+  if (!project) return "";
+  const cluster = [...app.store.indexes.groups.values()].find((group) => !group.deleted && group.link?.projectId === project);
+  return displayName(cluster?.title ?? project);
+}
+
+function waitingTitle(t, item) {
+  return item.title || (item.taskId ? upperFirst(t("waitingTask", { number: String(item.taskId).split(":").at(-1) })) : t("unknown"));
+}
+
+// "Project, task 027, Oct 19" for a review, "Agent, Oct 19" for anything else. An open review also says who delivered it.
+function waitingMeta(app, t, item, delivered = false) {
+  const date = formatShortDate(app.language, item.since);
+  const unit = unitById(app, item.unitId);
+  const who = unit ? unitDisplayName(unit) : item.unitId ? readableIdentity(item.unitId, t("person")) : "";
+  const when = delivered && date && who ? t("waitingDelivered", { date, unit: who }) : date;
+  const parts = item.taskId ? [waitingProject(app, item), t("waitingTask", { number: String(item.taskId).split(":").at(-1) }), when] : [who, when];
+  if (item.state === "expired") parts.push(t("expiredAsk"));
+  return upperFirst(parts.filter(Boolean).join(", "));
+}
+
+// The projects behind what waits, three at most: "Reviews from Coffee cat page, TXMSKA and Guest or ghost".
+function waitingSub(app, t, items) {
+  const names = [...new Set(items.map((item) => waitingProject(app, item)).filter(Boolean))];
+  if (!names.length) return "";
+  const list = names.length > 3 ? t("listMore", { head: names.slice(0, 3).join(", "), count: names.length - 3 })
+    : names.length > 1 ? t("listAnd", { head: names.slice(0, -1).join(", "), last: names.at(-1) }) : names[0];
+  return t(items.every((item) => item.kind === "review") ? "waitingReviewsFrom" : "waitingFrom", { names: list });
+}
+
+function renderWaitingRow(app, t, item, open) {
+  const document = app.root.ownerDocument;
+  const row = element(document, "button", {
+    type: "button",
+    class: "waiting-row",
+    "aria-expanded": String(open),
+    "data-waiting-item": item.id,
+    "data-kind": item.kind ?? "",
+    "data-state": item.state ?? "pending",
+    "data-approval": item.approvalId ?? "",
+    "data-task": item.taskId ?? "",
+    "data-chat": item.chatId ?? "",
+    "data-message": item.messageId ?? "",
+    "data-unit": item.unitId ?? "",
+    onclick: () => {
+      if (!open) { openWaitingItem(app, item); return; }
+      app.waitingRecord = null;
+      renderShell(app);
+    },
+  }, icon(document, WAITING_GLYPH[item.kind] ?? "waiting"),
+  element(document, "span", { class: "waiting-row-text" },
+    element(document, "span", { class: "waiting-row-title", text: waitingTitle(t, item) }),
+    element(document, "span", { class: "waiting-row-meta", text: waitingMeta(app, t, item, open) })),
+  icon(document, open ? "chevron" : "chevronRight"));
+  if (!open) return row;
+  return element(document, "div", { class: "waiting-open", "data-waiting-open": item.id }, row,
+    element(document, "div", { class: "waiting-open-body" }, renderWaitingRecord(app, t, app.waitingRecord, true)));
+}
+
+function renderWaitingPanel(app, t) {
+  const document = app.root.ownerDocument;
+  const list = app.waitingList;
+  const items = list?.items ?? [];
+  const count = app.store.view?.counts?.waiting ?? list?.total ?? 0;
+  const title = cardinal(app.language, "waitingOnYou", count);
+  const sub = waitingSub(app, t, items.filter((item) => item.state !== "expired"));
+  const panel = element(document, "section", { class: "waiting-panel", "data-waiting-panel": "true", "aria-label": title });
+  panel.append(element(document, "header", { class: "cluster-heading" },
+    element(document, "span", { class: "cluster-avatar", "aria-hidden": "true" }, icon(document, "waiting")),
+    element(document, "div", {}, element(document, "h2", { text: title }), sub ? element(document, "p", { text: sub }) : null),
+    element(document, "button", { type: "button", class: "icon-button", "data-action": "waiting-close", "aria-label": t("close"), title: t("close"),
+      onclick: () => { app.waitingOpen = false; renderShell(app); } }, icon(document, "close"))));
+  const body = element(document, "div", { class: "waiting-panel-list" });
+  panel.append(body);
+  if (!list) {
+    body.append(skeletonMark(document, t("loadingList")));
+    return panel;
+  }
+  // A refresh under items already shown keeps them; the loading rows are only for an empty list.
+  if (list.status === "loading" && !items.length) body.append(skeletonMark(document, t("loadingList"), "rows", { "data-list-progress": "true" }));
+  if (list.status === "error") body.append(element(document, "p", { text: t("listError") }),
+    element(document, "button", { type: "button", class: "btn", "data-action": "retry-list", text: t("retry"), onclick: () => reloadList(list) }));
+  if (!items.length && list.status !== "loading" && list.status !== "error") {
+    body.append(element(document, "div", { class: "waiting-empty" },
+      element(document, "p", { "data-empty": "waiting", text: t("emptyWaiting") }),
+      element(document, "p", { class: "field-hint", "data-empty-next": "waiting", text: t("emptyWaitingNext") })));
+    return panel;
+  }
+  const openId = app.waitingRecord?.item?.id;
+  for (const section of waitingSections(items)) {
+    if (!section.items.length) continue;
+    body.append(element(document, "div", { class: "waiting-section" },
+      element(document, "h3", { class: "waiting-section-title", text: t(section.key) }),
+      element(document, "span", { text: String(section.items.length) })));
+    for (const item of section.items) body.append(renderWaitingRow(app, t, item, item.id === openId));
+  }
+  if (list.nextCursor) body.append(element(document, "button", { type: "button", class: "waiting-more", "data-action": "waiting-more",
+    text: startText(app.language, "more", { count: Math.max(0, (list.total ?? 0) - items.length) }),
+    onclick: () => loadNext(list).then(() => { if (!app.disposed) renderShell(app); }).catch((error) => noteAction(app, error)) }));
+  return panel;
+}
+
+// Open task: Waiting makes way for the agent the task belongs to, with the task in its inspector.
+function openWaitingTask(app, record) {
+  const unit = unitById(app, record.item?.unitId ?? record.task.toId);
+  app.waitingOpen = false;
+  app.waitingRecord = null;
+  app.openTaskId = record.task.id;
+  if (unit) openUnitFromMenu(app, unit);
+  else renderShell(app);
+}
+
 function openWaitingItem(app, item) {
   if (!item) return;
   if (item.kind === 'plan' && item.planId && app.layout !== 'phone') {
@@ -1538,7 +1877,11 @@ function openWaitingItem(app, item) {
     });
     return;
   }
-  if (item.unitId) app.store.selected.unitId = item.unitId;
+  if (item.unitId) {
+    app.store.selected.unitId = item.unitId;
+    // A cluster left selected would keep its own inspector over the agent.
+    app.store.selected.groupId = null;
+  }
   const label = text(app.language, "loadingDetails", { name: item.title || item.id });
   if (item.approvalId) {
     settle(app, `waiting:${item.id}`, label, async () => {
@@ -1555,6 +1898,8 @@ function openWaitingItem(app, item) {
     return;
   }
   if (item.chatId) {
+    // These open a conversation, which the inspector shows once Waiting is out of its way.
+    if (app.layout !== "phone") app.waitingOpen = false;
     settle(app, `waiting:${item.id}`, label, async () => {
       const result = await request(app.api, "GET", "/chats/:chatId", { params: { chatId: item.chatId } });
       app.waitingRecord = { kind: "chat", chat: result.data, item };
@@ -1573,11 +1918,13 @@ function openWaitingItem(app, item) {
   }
   app.waitingRecord = { kind: "question", item };
   if (app.layout === "phone") app.mode = "hierarchy";
+  else app.waitingOpen = false;
   if (item.unitId) openExistingDirect(app, item.unitId);
   else if (!app.disposed) renderShell(app);
 }
 
-function renderWaitingRecord(app, t, record = app.waitingRecord) {
+// `compact` is the record opened in the Waiting panel: a review there is the short card with Open task.
+function renderWaitingRecord(app, t, record = app.waitingRecord, compact = false) {
   const document = app.root.ownerDocument;
   const block = element(document, "div", { "data-waiting-record": record?.kind ?? "" });
   if (!record) return block;
@@ -1596,7 +1943,8 @@ function renderWaitingRecord(app, t, record = app.waitingRecord) {
     block.append(renderTask(document, record.task, t, (item, status, note) => status === "open" ? confirmSendBack(app, item, note) : setTaskStatus(app, item, status, note), !phone && caps.includes("task.undo") ? (item) => undoSelected(app, item) : null, noteDraft?.value ?? "", (value, start, end) => {
       inputDrafts(app).notes.set(record.task.id, { value, start: Number.isInteger(start) ? start : value.length, end: Number.isInteger(end) ? end : value.length });
       syncViewerDirty(app);
-    }, phone ? canAccept(record.task) : canSendBack(record.task), taskBusy));
+    }, phone ? canAccept(record.task) : canSendBack(record.task), taskBusy, compact ? { request: requestBrief(record.task.request), onOpen: () => openWaitingTask(app, record),
+      noteShown: noteDraft != null, onReveal: () => inputDrafts(app).notes.set(record.task.id, { value: "", start: 0, end: 0 }) } : null));
     return block;
   }
   if (record.kind === "message" && record.message) {
@@ -1624,7 +1972,7 @@ function renderCollection(app, t) {
   const list = app.tab === "chats" ? app.chatList : app.unitList;
   const block = element(document, "div", { class: "list-block" });
   if (!list) {
-    block.append(element(document, "p", { text: t("loadingList") }));
+    block.append(skeletonMark(document, t("loadingList")));
     return block;
   }
   if (app.layout === "phone") list.rowHeight = 44;
@@ -1639,10 +1987,15 @@ function renderCollection(app, t) {
       setQuery(list, event.target.value);
     },
   });
-  const status = list.status === "error" ? t("listError") : list.status === "loading" ? t("loadingList") : list.status === "empty" ? (list.query ? t("emptySearch") : emptyCollectionText(t, list.name)) : t("listTotal", { count: formatNumber(app.language, list.total ?? 0) });
-  // A ready list says its count only to assistive technology; the board shows the rows, not a count.
-  const total = element(document, "p", { class: `list-total${list.status === "ready" ? " visually-hidden" : ""}`, "data-total": String(list.total ?? ""), "data-list-status": list.status, text: status });
-  if (list.status === "loading") total.append(progressMark(document, t("loadingList"), { "data-list-progress": "true" }));
+  const rows = collectionRows(app, t, list);
+  // The list is only "loading" for the person while it has nothing to show. Rows already drawn stay, and a reload behind them says nothing.
+  const showing = rows.some((row) => row.unit || row.kind === "cluster" || row.kind === "chat");
+  const loading = list.status === "loading" || list.status === "idle", waiting = loading && !showing;
+  const status = list.status === "error" ? t("listError") : waiting ? "" : list.status === "empty" ? (list.query ? t("emptySearch") : emptyCollectionText(t, list.name)) : t("listTotal", { count: formatNumber(app.language, list.total ?? rows.length) });
+  // A list that shows rows says its count only to assistive technology; the board shows the rows, not a count.
+  const total = element(document, "p", { class: `list-total${list.status === "ready" || (loading && showing) ? " visually-hidden" : ""}`, "data-total": String(list.total ?? ""), "data-list-status": list.status, text: status });
+  // One mark carries the loading text, so the sentence is never written twice; it shows the rows to come.
+  const skeleton = waiting ? skeletonMark(document, t("loadingList"), "rows", { "data-list-progress": "true" }) : null;
   if (list.status === "error") {
     total.append(element(document, "button", {
       type: "button",
@@ -1652,11 +2005,26 @@ function renderCollection(app, t) {
       onclick: () => reloadList(list),
     }));
   }
-  const host = element(document, "div", { class: "list", role: "listbox", "aria-label": t(app.tab), "data-collection": "true" });
-  const rows = collectionRows(app, t, list);
+  const host = element(document, "div", { class: "list", role: "listbox", "aria-label": t(app.tab), "data-collection": "true", "aria-busy": list.status === "loading" ? "true" : null });
+  if (app.tab === "hierarchy") {
+    host.addEventListener("contextmenu", (event) => hierarchyMenu(app, event));
+    host.addEventListener("keydown", (event) => {
+      if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) hierarchyMenu(app, event);
+      else if (app.layout !== "phone" && (event.ctrlKey || event.metaKey) && String(event.key).toLowerCase() === "a") { event.preventDefault?.(); pickEverything(app); }
+      else if (app.layout !== "phone" && (event.key === "Delete" || event.key === "Backspace")) { event.preventDefault?.(); deletePicked(app, event.target?.closest?.("[data-id]")?.getAttribute?.("data-id")); }
+      else if (event.key === "Escape" && app.hierarchySelection?.size) { app.hierarchySelection.clear(); renderShell(app); }
+    });
+  }
   const handlers = {
     selectedId: app.tab === "chats" ? app.store.selected.chatId : app.store.selected.groupId ? `cluster:${app.store.selected.groupId}` : app.store.selected.unitId,
+    ...(app.tab === "hierarchy" && app.layout !== "phone" ? {
+      isSelected: (row) => app.hierarchySelection?.size ? app.hierarchySelection.has(row.id) : row.id === (app.store.selected.groupId ? `cluster:${app.store.selected.groupId}` : app.store.selected.unitId),
+      onPick: (row, how) => pickRow(app, row, how),
+    } : {}),
     onActivate: (row, kind) => {
+      // A plain click ends a multiple pick, and what it opens takes the inspector from Waiting.
+      if (app.hierarchySelection?.size) app.hierarchySelection.clear();
+      if (row.kind !== "heading" && row.kind !== "service" && row.kind !== "quiet") app.waitingOpen = false;
       if (row.kind === "cluster") {
         if (kind === 'single' && app.lastClusterClick?.id === row.groupId && app.api.now() - app.lastClusterClick.at < 500) kind = 'double';
         app.lastClusterClick = kind === 'single' ? { id: row.groupId, at: app.api.now() } : null;
@@ -1667,6 +2035,10 @@ function renderCollection(app, t) {
       } else if (row.kind === 'worktree') {
         selectGroup(app, row.groupId);
         if (kind === 'double') app.pendingClusterFlight = row.groupId;
+      } else if (row.kind === 'service') {
+        if (serviceSetupAllowed(app)) openStartAgent(app, null, false, { service: row.role, anchor: null });
+      } else if (row.kind === "quiet") {
+        app.quietChatsOpen = app.quietChatsOpen !== true;
       } else if (row.kind === "chat") {
         app.store.selected.chatId = row.id;
       } else if (row.unit) {
@@ -1696,7 +2068,10 @@ function renderCollection(app, t) {
   // With no cluster yet, the hint sits under the Clusters heading at the top, not at the foot of the panel.
   const noClusters = app.tab === 'hierarchy' && ![...app.store.indexes.groups.values()].some(group => !group.deleted)
     ? element(document, 'p', { class: 'start-hint empty-clusters', text: startText(app.language, 'noClusters') }) : null;
-  block.append(search, total, host);
+  // The bar floats over the foot of the list, so the rows do not move under the pointer when it appears.
+  const bar = app.tab === "hierarchy" && app.layout !== "phone" ? pickBar(app) : null;
+  if (bar) host.setAttribute("class", "list has-pick-bar");
+  block.append(search, total, ...(skeleton ? [skeleton] : []), host, ...(bar ? [bar] : []));
   if (noClusters) block.append(noClusters);
   if (app.tab === "chats" && app.layout !== "phone") {
     block.append(element(document, "button", { type: "button", class: "btn", "data-action": "archived-chats", "aria-pressed": String(Boolean(app.archivedChats)), text: t("finalArchived"), onclick: () => {
@@ -1961,7 +2336,7 @@ function boardSurface(app, document, editor, t) {
 function boardProperties(app, document, editor, t) {
   const host = element(document, "details", { class: "board-properties" });
   host.append(element(document, "summary", { "aria-label": t("finalMore"), title: t("finalMore"), text: "⋯" }));
-  const nodes = editor.authoritative.document.screens?.[0];
+  const nodes = (editor.authoritative.document ?? boardDocument(editor))?.screens?.[0];
   const tools = element(document, "div", { class: "board-property-fields" });
   const name = element(document, "input", { "data-node-name": "true", "data-keep": keepId("node", editor.resourceId) });
   name.value = draftMap(app, "nodes").get(editor.resourceId) ?? "";
@@ -2155,11 +2530,12 @@ function boardToolbar(app, document, editor, t) {
   const bar = element(document, "div", { class: "toolbar board-toolbar", role: "toolbar", "aria-label": t("boards"), "data-toolbar": "board" });
   const tools = element(document, "div", { class: "board-tools" });
   const paths = { select: "M5 3v16l4-5 4 7 3-2-4-7h7z", frame: "M4 4h16v16H4z", text: "M4 5h16M12 5v15M8 20h8", draw: "M4 20l4-1L20 7l-4-4L4 15z", comment: "M4 5h16v12H9l-5 4z" };
-  for (const tool of ["select", "frame", "text", "draw", "comment"]) {
+  // A module board is read only: it keeps selecting and commenting, and none of the tools that draw.
+  for (const tool of editor.authoritative.readOnly ? ["select", "comment"] : ["select", "frame", "text", "draw", "comment"]) {
     const label = t(`board${tool[0].toUpperCase()}${tool.slice(1)}`);
     const glyph = pathIcon(document, paths[tool]);
     tools.append(element(document, "button", { type: "button", class: "board-tool", "data-board-tool": tool, "aria-label": label, title: label,
-      "aria-pressed": String((editor.boardTool ?? "select") === tool), disabled: tool !== "select" && (!canEditResources(app) || editor.authoritative.readOnly) ? "" : null,
+      "aria-pressed": String((editor.boardTool ?? "select") === tool), disabled: tool !== "select" && !canEditResources(app) ? "" : null,
       onclick: () => {
         editor.boardTool = tool; editor.commentPopover = false;
         if (tool === "draw" && !boardDocument(editor).screens?.some((screen) => screen.root?.sketch)) {
@@ -2764,6 +3140,70 @@ function askVoidAgain(app, editor, proposal) {
   });
 }
 
+// One Escape closes the topmost open layer and nothing under it: a menu, the phone panel, Activity, the Map's help, Waiting, then a drawer.
+// It works wherever the focus is: the shell is drawn again after every change, and the focus can end up outside what is open.
+// A context menu, the Map's help and a library menu with the focus inside answer for themselves before this runs, and the help
+// yields to the panels above it.
+function onEscapeKey(app, event) {
+  if (event.key !== 'Escape' || app.layout === 'phone' || event.defaultPrevented) return;
+  if (event.target?.closest?.('[data-context-menu]') || app.root.ownerDocument.querySelector?.('dialog[open]')) return;
+  let opener = null;
+  const menu = [...(app.editors?.libraries?.values() ?? [])].find(state => state.menu);
+  if (menu) { opener = menu.menu.opener; menu.menu = null; }
+  else if (app.phonePanelOpen) { app.phonePanelOpen = false; opener = 'open-phone'; }
+  else if (app.queuePanelOpen) { app.queuePanelOpen = false; opener = 'open-notifications'; }
+  else if (app.waitingOpen) app.waitingOpen = false;
+  else if (app.inspectorOpen && app.mode === 'map' && windowAtMost(app, INSPECTOR_DRAWER_WIDTH)) { app.inspectorOpen = false; opener = 'toggle-inspector'; }
+  else if (app.catalogOpen && windowAtMost(app, SIDE_DRAWER_WIDTH)) { app.catalogOpen = false; opener = 'toggle-catalog'; }
+  else if (app.commentsOpen && app.mode !== 'map' && windowAtMost(app, SIDE_DRAWER_WIDTH)) { app.commentsOpen = false; opener = 'toggle-comments'; }
+  else return;
+  event.preventDefault?.();
+  renderShell(app);
+  if (opener === 'toggle-inspector') refitBesideDrawer(app);
+  restoreInvoker(app, opener);
+}
+
+// A click anywhere but on a panel and the button that opens it closes the phone and Activity panels.
+function closeBarPanels(app, event) {
+  if (app.layout === 'phone') return;
+  const inside = selector => Boolean(event.target?.closest?.(selector));
+  const phone = app.phonePanelOpen && !inside("[data-phone-panel], [data-action='open-phone']");
+  const queue = app.queuePanelOpen && !inside("[data-queue-panel], [data-action='open-notifications'], [data-action='open-queue']");
+  if (phone) app.phonePanelOpen = false;
+  if (queue) app.queuePanelOpen = false;
+  if (phone || queue) renderShell(app);
+}
+
+// The stylesheet turns the inspector into a drawer below this width, and the side panels below the next one.
+const INSPECTOR_DRAWER_WIDTH = 1180;
+const SIDE_DRAWER_WIDTH = 987;
+
+function windowAtMost(app, width) {
+  const view = app.root.ownerDocument.defaultView;
+  if (typeof view?.matchMedia === 'function') return view.matchMedia(`(max-width: ${width}px)`).matches;
+  return (view?.innerWidth ?? Infinity) <= width;
+}
+
+// Ctrl or Cmd+A, Delete and Escape (which ends a pick) work on the Map screen wherever the focus is, unless it is in a field or a dialog:
+// the rows are drawn again after a click, so the focus does not stay on the list.
+function onPickKey(app, event) {
+  if (app.layout === 'phone' || app.mode !== 'map' || event.defaultPrevented) return;
+  const target = event.target;
+  if (target?.closest?.('input, textarea, select, [contenteditable="true"], dialog, [data-context-menu]') || app.root.ownerDocument.querySelector?.('dialog[open]')) return;
+  if (target?.closest?.('.map-host, [data-map-host], .map') ) return;
+  if ((event.ctrlKey || event.metaKey) && String(event.key).toLowerCase() === 'a' && app.tab === 'hierarchy') {
+    event.preventDefault?.();
+    pickEverything(app);
+  } else if (event.key === 'Escape' && app.hierarchySelection?.size) {
+    app.hierarchySelection.clear();
+    renderShell(app);
+  } else if (event.key === 'Delete') {
+    if (app.hierarchySelection?.size) { event.preventDefault?.(); deletePicked(app); return; }
+    const units = [...(app.mapState?.selection ?? [])];
+    if (units.length || app.store.selected.groupId) { event.preventDefault?.(); app.mapState?.onDelete?.({ units, cluster: units.length ? null : app.store.selected.groupId }); }
+  }
+}
+
 function onFocusKey(app, event) {
   if (app.mode !== "focus" || !app.voidState) return;
   if (event.key === "Escape" && !app.root.ownerDocument.querySelector?.("dialog[open]")) {
@@ -2823,11 +3263,12 @@ function renderEditorSurfaces(app, t) {
   const watchText = !watch || watch.state === "off" ? t("watchOff") : watch.state === "watching" ? t("watching", { unit: watch.unitId }) : t("watchWaiting", { unit: watch.unitId });
   const watchStatus = watch?.state === "waiting"
     ? progressMark(document, watchText, { "data-watch": "waiting" })
-    : element(document, "p", { "data-watch": watch?.state ?? "off", text: watchText });
+    : element(document, "p", { class: "watch-status", "data-watch": watch?.state ?? "off", text: watchText });
   const catalog = renderLibrary(document, { kind, project: current?.authoritative?.project, data: editors, t, actions: libraryActions(app, kind) });
   if (app.catalogOpen) catalog.className += " is-open";
   const resource = element(document, "section", { class: "panel editor-resource", "data-editor-column": "resource" },
-    element(document, "h2", { "data-editor-title": title, "data-editor-kind": kind, text: `${t(app.mode)} ${title}` }),
+    app.layout === "phone" ? null : catalogToggle(app, t, kind === "blueprint" ? "boards" : "texts"),
+    element(document, "h2", { "data-editor-title": title, "data-editor-kind": kind, text: current ? `${t(app.mode)} ${title}` : title }),
   );
   if (app.syncConflict) {
     resource.append(element(document, "p", {
@@ -2837,16 +3278,17 @@ function renderEditorSurfaces(app, t) {
     }));
   }
   if (outcomeVisible(app) && app.actionScope === "editor") {
-    resource.append(element(document, "p", {
-      class: "action-note",
-      "data-action-note": "true",
-      "data-code": app.actionCode ?? "",
-      text: app.actionNote,
-    }));
+    // A result is a marked row: red for a failure, plain for anything else.
+    resource.append(element(document, "div", { class: `notice ${app.actionTone === "error" ? "notice-error" : "notice-info"}`, role: app.actionTone === "error" ? "alert" : "status" },
+      element(document, "p", {
+        class: "action-note",
+        "data-action-note": "true",
+        "data-code": app.actionCode ?? "",
+        text: app.actionNote,
+      })));
   }
-  const commentsColumn = element(document, "aside", { class: `panel editor-comments-column${app.commentsOpen ? " is-open" : ""}`, "data-editor-column": "comments" },
-    element(document, "h2", { text: t(current?.historyOpen ? "history" : "comments") }),
-  );
+  const commentsHead = element(document, "div", { class: "editor-comments-head" }, element(document, "h2", { text: t(current?.historyOpen ? "history" : "comments") }));
+  const commentsColumn = element(document, "aside", { class: `panel editor-comments-column${app.commentsOpen ? " is-open" : ""}`, "data-editor-column": "comments" }, commentsHead);
   const tools = element(document, "div", { class: "editor-tools", "data-editor-tools": "true" },
     watchStatus,
   );
@@ -2879,20 +3321,41 @@ function renderEditorSurfaces(app, t) {
   if (current?.kind === "void" && current.authoritative?.document) resource.append(voidSurface(app, document, current, t));
   if (current?.authoritative?.legacy?.reason === "conversion_required") {
     const path = current.authoritative.legacy.path ?? "";
-    resource.append(element(document, "p", { "data-legacy": path, text: path }));
-    resource.append(element(document, "p", { text: t("conversionRequired") }));
-    if (canEditResources(app)) {
-      resource.append(element(document, "button", {
-        type: "button", class: "btn", "data-action": "copy-json",
-        onclick: () => submitJsonCopy(app, current),
-      }, t("copyJson")));
+    const converted = legacyBoard(app, current);
+    const copyButton = () => canEditResources(app) ? element(document, "button", {
+      type: "button", class: "btn", "data-action": "copy-json",
+      onclick: () => submitJsonCopy(app, current),
+    }, t("copyJson")) : null;
+    if (converted.document) {
+      current.document = converted.document;
+      resource.append(element(document, "div", { class: "board-notice", "data-legacy": path },
+        element(document, "span", { text: t("moduleReadOnly") }), copyButton()), boardSurface(app, document, current, t));
+    } else {
+      resource.append(element(document, "p", { "data-legacy": path, text: path }));
+      // Until the module has been read there is nothing to say yet; the old message is for a module that cannot be read.
+      if (converted.error) {
+        resource.append(element(document, "p", { text: t("conversionRequired") }));
+        resource.append(element(document, "p", { class: "field-hint", "data-legacy-reason": converted.error.code ?? "", text: actionText(app.language, converted.error.code) }));
+      } else resource.append(progressMark(document, t("loading"), { "data-legacy-progress": "true" }));
+      resource.append(copyButton());
     }
   }
-  if (editors.error?.code === "corrupt_resource") resource.append(element(document, "p", { text: t("corruptResource") }));
+  if (!current) {
+    const idle = kind === "blueprint" ? ["blueprint", "pickBoardTitle", "pickBoardHint"] : ["pen", "pickTextTitle", "pickTextHint"];
+    resource.append(element(document, "div", { class: "editor-idle", "data-editor-idle": kind },
+      icon(document, idle[0]), element(document, "p", { class: "editor-idle-title", text: t(idle[1]) }), element(document, "p", { text: t(idle[2]) })));
+  }
+  if (editors.error?.code === "corrupt_resource") resource.append(element(document, "div", { class: "notice notice-error", role: "alert" }, element(document, "p", { text: t("corruptResource") })));
   const forms = resourceForms(app, document, t);
-  if (forms) catalog.append(forms);
+  // Register sits on the footer line with Refresh; without a footer it keeps its own row.
+  const footer = catalog.querySelector?.(".library-footer");
+  if (forms && footer) footer.append(...forms.children);
+  else if (forms) catalog.append(forms);
   const surfaces = { catalog, resource, comments: commentsColumn };
-  if (!current) return surfaces;
+  if (!current) {
+    commentsColumn.append(element(document, "p", { class: "editor-comments-idle", text: t(kind === "void" ? "commentsIdleText" : "commentsIdleBoard") }));
+    return surfaces;
+  }
   if (!current.authoritative.readOnly) {
     tools.append(element(document, "button", { type: "button", class: "btn", "data-action": "editor-history", text: t("history"), "aria-expanded": String(Boolean(current.historyOpen)), "aria-pressed": String(Boolean(current.historyOpen)), onclick: async () => {
       current.historyOpen = !current.historyOpen;
@@ -2968,30 +3431,44 @@ function renderEditorSurfaces(app, t) {
     if (current.boardTool !== "draw") toolbar?.append(actions);
   } else tools.append(chips, actions);
   const comments = element(document, "div", { class: "editor-comments", "data-comment-total": String(current.commentsTotal ?? current.threads?.length ?? 0) });
-  if (!(current.threads?.length)) {
+  // The list shows one group of threads at a time, the open ones first; the cap on what is drawn counts within the group.
+  const threads = current.threads ?? [];
+  const resolved = threads.filter((thread) => thread.status === "resolved"), open = threads.filter((thread) => thread.status !== "resolved");
+  const shown = current.commentFilter === "resolved" ? "resolved" : "open";
+  const group = shown === "resolved" ? resolved : open;
+  const filterChip = (name, count) => element(document, "button", {
+    type: "button", class: "comment-chip", "data-comment-filter": name, "aria-pressed": String(shown === name),
+    onclick: () => { current.commentFilter = name; current.commentWindow = 40; renderShell(app); },
+  }, t(name === "open" ? "commentsOpenCount" : "commentsResolvedCount", { count }));
+  commentsHead.append(element(document, "div", { class: "comment-chips" }, filterChip("open", open.length), filterChip("resolved", resolved.length)));
+  if (!threads.length) {
     comments.append(element(document, "p", {
       "data-empty": "comments",
       text: t(current.kind === "void" ? "emptyCommentsText" : "emptyCommentsBoard"),
     }));
-  }
-  const commentBound = Math.min(current.threads?.length ?? 0, current.commentWindow ?? 40);
-  for (const thread of (current.threads ?? []).slice(0, commentBound)) {
+  } else if (!group.length) comments.append(element(document, "p", { class: "editor-comments-none", "data-empty": shown, text: t(shown === "open" ? "commentsNoneOpen" : "commentsNoneResolved") }));
+  const commentBound = Math.min(group.length, current.commentWindow ?? 40);
+  for (const thread of group.slice(0, commentBound)) {
     const box = element(document, "article", { class: "comment-box", "data-thread": thread.id, "data-status": thread.status ?? "open" });
-    for (const message of thread.messages ?? []) {
+    const replies = Math.max(0, (thread.messages?.length ?? 0) - 1);
+    (thread.messages ?? []).forEach((message, position) => {
       const line = element(document, "p", { class: "comment-line", "data-comment-message": message.id ?? "" });
       line.append(element(document, "span", { class: "comment-author", text: commentAuthor(app, message.author ?? message.authorId) }));
       if (message.at) line.append(element(document, "time", { datetime: message.at, text: formatShortTime(app.language, message.at) }));
+      if (position === 0 && replies) line.append(element(document, "span", { class: "comment-replies", text: cardinal(app.language, "commentReplies", replies) }));
       line.append(element(document, "span", { class: "comment-text", text: message.text ?? "" }));
       if (current.kind === "void" && message.proposal && current.proposals?.some((item) => item.id === message.proposal.id)) appendProposals(app, document, box, current, t, message.proposal.id, line);
       else box.append(line);
       if (message.sendToAgent === false && message.authorId === "root:master") box.append(element(document, "p", { class: "field-hint", "data-comment-note": message.id, text: t("keptAsNote") }));
-    }
-    box.append(element(document, "button", { type: "button", class: "btn", "data-action": "reply", onclick: () => replyToThread(app, thread.id) }, t("reply")));
-    box.append(element(document, "button", { type: "button", class: "btn", "data-action": "resolve", onclick: () => resolveThread(app, thread.id) }, t("resolve")));
+    });
+    const links = element(document, "div", { class: "comment-actions" },
+      element(document, "button", { type: "button", class: "comment-action", "data-action": "reply", onclick: () => replyToThread(app, thread.id) }, t("reply")));
+    if (thread.status !== "resolved") links.append(element(document, "button", { type: "button", class: "comment-action", "data-action": "resolve", onclick: () => resolveThread(app, thread.id) }, t("resolve")));
+    box.append(links);
     comments.append(box);
   }
   if (current.kind === "void") appendProposals(app, document, comments, current, t);
-  if ((current.threads?.length ?? 0) > commentBound) {
+  if (group.length > commentBound) {
     comments.append(element(document, "button", {
       type: "button",
       class: "btn",
@@ -3064,6 +3541,8 @@ function selectEditor(app, summary) {
   app.store.selected.resourceId = summary.id;
   app.store.open.editors.set(summary.id, summary.kind);
   app.store.open.comments.add(summary.id);
+  // Opening a board again is a new try for a module that could not be converted.
+  for (const [key, entry] of editors.converted) if (entry.error && key.startsWith(`${summary.id}:`)) editors.converted.delete(key);
   const name = summary.title || summary.id;
   editorAct(app, `editor:${summary.id}`, text(app.language, "loadingDetails", { name }), async () => {
     const before = editors.error;
@@ -3287,7 +3766,7 @@ function resourceForms(app, document, t) {
   box.append(
     element(document, "button", {
       type: "button",
-      class: "btn",
+      class: "btn ghost",
       "data-action": "open-register",
       "data-kind": kind,
       text: t("registerResource"),
@@ -3359,7 +3838,7 @@ function openAttachChooser(app) {
   const paint = () => {
     const query = search.value.trim().toLowerCase();
     const units = (app.unitList?.catalog ?? []).map((unit) => ({ id: unit.id, label: unitDisplayName(unit), kind: "unit", search: `${unit.id} ${unit.unit} ${unit.alias ?? ""}` }));
-    const groups = [...app.store.indexes.groups.values()].filter((group) => !group.deleted).map((group) => ({ id: `group:${group.id}`, label: group.title, kind: "group", search: group.title }));
+    const groups = [...app.store.indexes.groups.values()].filter((group) => !group.deleted).map((group) => ({ id: `group:${group.id}`, label: displayName(group.title), kind: "group", search: group.title }));
     const entries = [...units, ...groups].filter((entry) => !query || entry.search.toLowerCase().includes(query));
     list.replaceChildren(...entries.map((unit) => element(document, "button", {
       type: "button",
@@ -3443,6 +3922,20 @@ function submitRegister(app, kind) {
   });
 }
 
+// A module board is drawn from the document its module makes. The conversion runs in memory once per revision of the board:
+// nothing is written or imported, and opening the board again reads the kept document.
+function legacyBoard(app, editor) {
+  const kept = editorsOf(app).converted, key = `${editor.resourceId}:${editor.revision}`;
+  if (kept.has(key)) return kept.get(key);
+  for (const other of kept.keys()) if (other.startsWith(`${editor.resourceId}:`)) kept.delete(other);
+  const entry = { document: null, error: null };
+  kept.set(key, entry);
+  convertLegacyBoard(app.api, editor.authoritative, (manifest) => exportLegacyDocument(app.root.ownerDocument, manifest, { maxNodes: READ_ONLY_BOARD_NODES }))
+    .then((result) => { entry.document = result.document; }, (error) => { entry.error = error; })
+    .finally(() => { if (!app.disposed) renderShell(app); });
+  return entry;
+}
+
 function submitJsonCopy(app, current) {
   const legacy = current?.authoritative?.legacy;
   if (!legacy || !canEditResources(app)) return;
@@ -3472,7 +3965,10 @@ export function legacyModuleUrls(manifest, makeUrl) {
   return Object.fromEntries(["module", "kit", "skins", "exporter", "schema", "icons", "nodes"].filter((key) => manifest[key]).map((key) => [key, build(manifest[key])]));
 }
 
-async function exportLegacyDocument(document, manifest) {
+// A drawn module board is never saved, so it may hold more nodes than a JSON board; the 3.0 board has about 21,000.
+const READ_ONLY_BOARD_NODES = 100_000;
+
+async function exportLegacyDocument(document, manifest, { maxNodes = null } = {}) {
   const env = document.defaultView;
   const dataUrl = (source) => {
     const bytes = new TextEncoder().encode(source), chunks = [];
@@ -3486,7 +3982,7 @@ async function exportLegacyDocument(document, manifest) {
     kit.useSkin?.(skin);
     ${urls.icons ? `const icons = await import(${JSON.stringify(urls.icons)}); kit.useIcons?.(icons.default ?? icons.ICONS);` : ""}
     ${urls.nodes ? `const nodes = await import(${JSON.stringify(urls.nodes)}); kit.useNodes?.(nodes.default ?? nodes.NODES);` : ""}
-    const document = exporter.exportBoard(source.default, {layout: kit.layout, normalize: schema.normalizeBoard, skin, sketch: ${JSON.stringify(manifest.sketch)}});
+    const document = exporter.exportBoard(source.default, {layout: kit.layout, normalize: ${maxNodes ? `(board, options) => schema.normalizeBoard(board, { ...options, maxNodes: ${Number(maxNodes)} })` : "schema.normalizeBoard"}, skin, sketch: ${JSON.stringify(manifest.sketch)}});
     parent.postMessage({document}, "*");
   } catch { parent.postMessage({error: "import_unavailable"}, "*"); }`;
   const iframe = document.createElement("iframe");
@@ -3507,16 +4003,22 @@ async function exportLegacyDocument(document, manifest) {
   } finally { iframe.remove(); env.URL.revokeObjectURL(url); }
 }
 
-export async function importLegacyBoard(api, source, { title, folderId = null, project = source?.project } = {}, retained = null, exportDocument = (manifest) => exportLegacyDocument(globalThis.document, manifest)) {
-  if (retained) return perform(api, null, retained);
-  if (!source?.readOnly || project !== source.project) throw new ApiError(422, "import_unavailable", "Choose a registered module in the selected project.");
+// Runs a module board in the sandbox and returns the document it draws, with the manifest it came from. Nothing is written.
+export async function convertLegacyBoard(api, source, exportDocument = (manifest) => exportLegacyDocument(globalThis.document, manifest)) {
   const manifest = (await request(api, "GET", "/blueprint/boards/:resourceId/export", { params: { resourceId: source.id } })).data;
   let document;
   try {
     document = await exportDocument(manifest);
     if (!document || typeof document !== "object" || Array.isArray(document)) throw new Error();
-    document.legacySource = manifest.sourceRevisions;
   } catch { throw new ApiError(422, "import_unavailable", "The module cannot be exported."); }
+  return { manifest, document };
+}
+
+export async function importLegacyBoard(api, source, { title, folderId = null, project = source?.project } = {}, retained = null, exportDocument = (manifest) => exportLegacyDocument(globalThis.document, manifest)) {
+  if (retained) return perform(api, null, retained);
+  if (!source?.readOnly || project !== source.project) throw new ApiError(422, "import_unavailable", "Choose a registered module in the selected project.");
+  const { manifest, document } = await convertLegacyBoard(api, source, exportDocument);
+  document.legacySource = manifest.sourceRevisions;
   return perform(api, { method: "POST", path: "/blueprint/boards/import", body: { project, path: manifest.path, title, folderId, legacyResourceId: source.id, document, expectedRevision: manifest.expectedRevision } });
 }
 
@@ -3717,13 +4219,25 @@ function confirmRemoveAddition(app, item) {
 
 function unconfirmedStartOperation(error) { return !error.status || error.status >= 500 ? error.operation ?? null : null; }
 
+// The four reports are heavy to build. Calls that arrive while they load are folded into one more load after it, instead of
+// each starting its own set: a deletion and the change it announces used to read everything twice at the same time.
 function loadStartReports(app) {
   if (app.layout === 'phone' || app.disposed) return Promise.resolve();
-  const machine = startMachine(app), ticket = (app.startReportTicket ?? 0) + 1;
-  app.startReportTicket = ticket;
-  const pending = readStartReports(app, machine, ticket);
-  app.startReportPending = pending;
-  return pending;
+  if (app.startReportFlight) { app.startReportFlight.again = true; return app.startReportFlight.promise; }
+  const flight = { again: false, promise: null };
+  flight.promise = (async () => {
+    try {
+      do {
+        flight.again = false;
+        const machine = startMachine(app), ticket = (app.startReportTicket ?? 0) + 1;
+        app.startReportTicket = ticket;
+        await readStartReports(app, machine, ticket);
+      } while (flight.again && !app.disposed);
+    } finally { if (app.startReportFlight === flight) app.startReportFlight = null; }
+  })();
+  app.startReportFlight = flight;
+  app.startReportPending = flight.promise;
+  return flight.promise;
 }
 
 async function readStartReports(app, machine, ticket) {
@@ -3734,8 +4248,7 @@ async function readStartReports(app, machine, ticket) {
       collectPages(app.api, '/clusters', { limit: 200 }),
       app.store.capabilities.includes('settings.write') ? getAdditions(app.api, machine) : Promise.resolve({ data: { items: [] } }),
     ]);
-    if (app.disposed) return;
-    if (ticket !== app.startReportTicket) return app.startReportPending;
+    if (app.disposed || ticket !== app.startReportTicket) return;
     app.startProjects = projects.data; app.startAgents = agents.data; app.startPermissionsStale = true;
     app.store.additions.report = additions.data;
     app.store.indexes.groups = new Map(clusters.items.map(cluster => [cluster.id, cluster]));
@@ -3743,8 +4256,7 @@ async function readStartReports(app, machine, ticket) {
     if (app.store.selected.groupId && !app.store.indexes.groups.has(app.store.selected.groupId)) app.store.selected.groupId = null;
     renderShell(app);
   } catch (error) {
-    if (app.disposed) return;
-    if (ticket !== app.startReportTicket) return app.startReportPending;
+    if (app.disposed || ticket !== app.startReportTicket) return;
     app.startError = error;
   }
 }
@@ -3820,15 +4332,24 @@ function openRunsPicker(app, model, onChange, anchor = null) {
   return picker;
 }
 
-async function openStartAgent(app, cluster, overseer = false) {
+// From the Map a new agent can come with its role chosen, the lead it reports to, and, when no cluster is implied, the
+// clusters to choose from.
+async function openStartAgent(app, cluster, overseer = false, options = {}) {
   if (app.startDialog || app.layout === 'phone') return;
-  if (!app.startAgents) await loadStartReports(app);
+  // The form needs only the connected agents. They are read on their own, so a folder report that is slow or failed
+  // never keeps a new agent from being created; the rest of the reports load beside it.
+  if (!app.startAgents) {
+    try { app.startAgents = (await request(app.api, 'GET', '/settings/agents', { query: { machine: startMachine(app) } })).data; }
+    catch (error) { noteAction(app, error, 'start-agents'); return; }
+    loadStartReports(app);
+  }
   if (app.disposed || app.startDialog) return;
   const clients = app.startAgents?.connectedClients ?? [], preferred = app.startAgents?.defaultRunsIn;
   const model = { language: app.language, kind: overseer ? 'overseer' : 'agent', agentKind: preferred?.client === 'lyra' ? 'local' : 'external',
-    cluster, role: 'executor', roleName: '', roleDescription: '', roleProblems: {}, clients, choice: initialRunsIn(clients, preferred, overseer ? preferred?.client === 'lyra' ? 'local' : 'external' : null), fresh: true, useAsDefault: false,
+    cluster, service: options.service ?? null, role: options.service ?? options.role ?? 'executor', roleName: '', roleDescription: '', roleProblems: {}, clients,
+    clusterChoices: options.clusterChoices ?? null, leadId: options.leadId ?? null, leadName: options.leadId ? unitDisplayName(unitById(app, options.leadId) ?? { unit: options.leadId }) : '', choice: initialRunsIn(clients, preferred, overseer ? preferred?.client === 'lyra' ? 'local' : 'external' : null), fresh: true, useAsDefault: false,
     automatic: false };
-  const anchor = app.root.querySelector('[data-action="new-agent"]');
+  const anchor = options.anchor === undefined ? app.root.querySelector('[data-action="new-agent"]') : options.anchor;
   let flow, retained = null, created = null, defaultOperation = null, granted = false, grantOperation = null;
   const cancel = () => { if (flow.busy || flow.uncertain) return; if (overseer) rememberOverseerOffer(app); flow.dialog.close(); };
   // A custom role is checked before anything is sent; the problems show under their fields and the first one takes focus.
@@ -3849,6 +4370,7 @@ async function openStartAgent(app, cluster, overseer = false) {
         if (role === 'custom') flow.dialog.querySelector('[data-custom-role]')?.scrollIntoView?.({ block: 'nearest' });
       },
       onFresh: value => { model.fresh = value; },
+      onCluster: id => { const next = model.clusterChoices?.find(group => group.id === id); if (next) { model.cluster = next; retained = null; flow.paint(); } },
       onRoleName: value => { model.roleName = value; delete model.roleProblems.roleName; },
       onRoleDescription: value => { model.roleDescription = value; delete model.roleProblems.roleDescription; },
       onPicker: () => openRunsPicker(app, model, () => { model.agentKind = model.choice?.client === 'lyra' ? 'local' : 'external'; flow.paint(); }, flow.dialog.querySelector('[data-action="open-runs-picker"]')),
@@ -3858,8 +4380,14 @@ async function openStartAgent(app, cluster, overseer = false) {
         let result;
         try {
           result = created ?? (overseer ? await startApi.createOverseer(app.api, { machine: startMachine(app), runsIn: model.choice, fresh: model.fresh, expectedRevision: null }, retained)
-            : await startApi.createClusterAgent(app.api, cluster.id, { machine: startMachine(app), role: model.role, roleName: model.roleName.trim(), roleDescription: model.roleDescription.trim(), runsIn: model.choice, useAsDefault: model.useAsDefault, expectedRevision: cluster.revision }, retained));
+            : model.service ? await startApi.createService(app.api, { machine: startMachine(app), role: model.service }, retained)
+            : await startApi.createClusterAgent(app.api, model.cluster.id, { machine: startMachine(app), role: model.role, roleName: model.roleName.trim(), roleDescription: model.roleDescription.trim(), runsIn: model.choice, useAsDefault: model.useAsDefault, leadId: model.leadId, expectedRevision: model.cluster.revision }, retained));
           created = result;
+          // The service is created first and told where it runs right after, as the unit write takes no choice of runtime.
+          if (model.service) {
+            try { result = await startApi.setRunsIn(app.api, result.data.id, { machine: startMachine(app), runsIn: model.choice, useAsDefault: model.useAsDefault, expectedRevision: result.data.revision }, defaultOperation); }
+            catch (error) { defaultOperation = unconfirmedStartOperation(error); throw error; }
+          }
           if (overseer && model.useAsDefault) {
             try { result = await startApi.setRunsIn(app.api, result.data.id, { machine: startMachine(app), runsIn: result.data.runsIn, useAsDefault: true, expectedRevision: result.data.revision }, defaultOperation); }
             catch (error) { defaultOperation = unconfirmedStartOperation(error); throw error; }
@@ -3968,16 +4496,21 @@ function removeStartLink(app, link, machine) {
   const cluster = app.store.indexes.groups.get(link.clusterId);
   if (!cluster) return;
   let retained = null;
-  showDialog(app.root.ownerDocument, { title: startText(app.language, 'removeLink') + ': ' + link.title,
+  showDialog(app.root.ownerDocument, { title: startText(app.language, 'removeLink') + ': ' + displayName(link.title),
     body: startText(app.language, 'removeHint'), confirm: startText(app.language, 'removeLink'), cancel: startText(app.language, 'cancel'), retry: startText(app.language, 'retry'),
-    onConfirm: async () => {
-      try {
-        const result = await startApi.removeClusterLink(app.api, cluster.id, { machine, expectedRevision: cluster.revision }, retained);
-        await loadStartReports(app); await loadSettingsSections(app);
-        showMapToast(app, startText(app.language, 'removeLink'), async record => {
-          await undoChange(app.api, result.data.changeId, record.operation); await loadStartReports(app); await loadSettingsSections(app);
-        }, result.data.undoUntil); renderShell(app);
-      } catch (error) { retained = error.operation ?? retained; throw error; }
+    // The dialog closes at once; removing the link runs in the background, in Activity.
+    onConfirm: () => {
+      app.queue.add({ label: text(app.language, 'jobRemoveLink', { name: displayName(link.title) }), kind: 'unlink',
+        run: async () => {
+          try { return await startApi.removeClusterLink(app.api, cluster.id, { machine, expectedRevision: cluster.revision }, retained); }
+          catch (error) { retained = error.operation ?? retained; throw error; }
+        },
+        onDone: async (result) => {
+          // Undo is offered as soon as the service confirms; the reports catch up behind it.
+          showMapToast(app, startText(app.language, 'removeLink'), () => { enqueueUndo(app, displayName(link.title), [result.data.changeId], () => loadSettingsSections(app)); });
+          renderShell(app);
+          await loadStartReports(app); await loadSettingsSections(app);
+        } });
     } });
 }
 
@@ -3994,37 +4527,264 @@ async function loadClusterFacts(app, cluster) {
   if (!app.disposed) renderShell(app);
 }
 
-function clusterInspector(app, cluster) {
+function clusterModel(app, cluster) {
   const facts = app.clusterFacts?.id === cluster.id ? app.clusterFacts : {};
-  return renderCluster(app.root.ownerDocument, { language: app.language, cluster, git: facts.git, error: facts.error?.message,
-    units: app.unitList?.catalog ?? [], link: app.startProjects?.clusterLinks?.find(item => item.clusterId === cluster.id),
-    addition: app.store.additions.report?.items.find(item => item.kind === 'repository' && item.projectId === cluster.link?.projectId) }, {
+  return { language: app.language, cluster, git: facts.git ?? app.clusterGit?.get(cluster.id)?.git, error: facts.error?.message,
+    units: app.unitList?.catalog ?? [], children: [...app.store.indexes.groups.values()].filter(group => !group.deleted && group.parentId === cluster.id),
+    link: app.startProjects?.clusterLinks?.find(item => item.clusterId === cluster.id),
+    loading: !app.startProjects && !app.startError, unreadable: Boolean(app.startError),
+    addition: app.store.additions.report?.items.find(item => item.kind === 'repository' && item.projectId === cluster.link?.projectId) };
+}
+
+function clusterActions(app, cluster) {
+  return {
     onUpdate: item => openSharedAdd(app, item),
     onNewAgent: () => openStartAgent(app, cluster), onLink: () => openClusterLink(app, cluster),
     onMore: () => removeStartCluster(app, cluster), onChanges: () => showClusterChanges(app, cluster),
+    // The plan draft opens in the chat, so the chat tab comes forward with it.
+    onChoosePlanner: () => { unitConversation(app, cluster.id).tab = 'chat'; openPlanDraft(app, cluster).catch(error => noteAction(app, error)); },
     onEditor: () => settle(app, `editor:${cluster.id}`, startText(app.language, 'openEditor'), async record => {
       const result = await startApi.openClusterEditor(app.api, cluster.id, startMachine(app), record.operation); return result;
     }),
-  });
+  };
+}
+
+function clusterInspector(app, cluster) {
+  return renderCluster(app.root.ownerDocument, clusterModel(app, cluster), clusterActions(app, cluster));
+}
+
+// ---- Picking several rows and deleting them -------------------------------------------------------------------
+// The Hierarchy keeps the picked rows by their row ids: an agent's id, or cluster:<id>. Ctrl or Cmd toggles a row, Shift picks
+// the range from the last picked row, Ctrl+A picks every agent and cluster, and Delete deletes what is picked.
+function pickable(row) { return Boolean(row && (row.unit && row.unit.role !== 'master' || row.kind === 'cluster')); }
+
+function pickRow(app, row, { toggle = false, range = false } = {}) {
+  if (!pickable(row)) return false;
+  const picked = app.hierarchySelection ??= new Set();
+  // A pick starts empty. The row that is open is only where the first Shift range begins; it is not picked by that.
+  if (!picked.size) app.hierarchyAnchor = null;
+  const open = app.store.selected.groupId ? `cluster:${app.store.selected.groupId}` : app.store.selected.unitId;
+  const anchor = app.hierarchyAnchor ?? (open && app.activeRows?.some(item => item.id === open && pickable(item)) ? open : null);
+  if (range && anchor) {
+    const rows = (app.activeRows ?? []).filter(pickable), from = rows.findIndex(item => item.id === anchor), to = rows.findIndex(item => item.id === row.id);
+    if (from >= 0 && to >= 0) for (const item of rows.slice(Math.min(from, to), Math.max(from, to) + 1)) picked.add(item.id);
+    else picked.add(row.id);
+  } else if (picked.has(row.id) && toggle) picked.delete(row.id);
+  else picked.add(row.id);
+  app.hierarchyAnchor = range ? anchor ?? row.id : row.id;
+  renderShell(app);
+  return true;
+}
+
+function pickEverything(app) {
+  const picked = app.hierarchySelection ??= new Set();
+  for (const group of app.store.indexes.groups.values()) if (!group.deleted) picked.add(`cluster:${group.id}`);
+  for (const unit of app.unitList?.catalog ?? []) if (!unit.removed && unit.role !== 'master') picked.add(unit.id);
+  renderShell(app);
+}
+
+function pickedTargets(app) {
+  const units = [], clusters = [];
+  for (const id of app.hierarchySelection ?? []) {
+    if (id.startsWith('cluster:')) { if (app.store.indexes.groups.get(id.slice(8))) clusters.push(id.slice(8)); }
+    else if (unitById(app, id)) units.push(id);
+  }
+  return { units, clusters };
+}
+
+// Delete with several rows picked asks once for all of them; with one row, it opens that row's own Delete.
+function deletePicked(app, focusedId = null) {
+  if (!app.store.capabilities?.includes('unit.create') && !app.store.capabilities?.includes('chat.manage')) return;
+  const { units, clusters } = pickedTargets(app);
+  if (units.length + clusters.length > 1) return confirmDeleteMany(app, units, clusters);
+  const only = units[0] ?? (clusters[0] ? `cluster:${clusters[0]}` : focusedId);
+  if (!only) return;
+  if (only.startsWith('cluster:')) { const cluster = app.store.indexes.groups.get(only.slice(8)); if (cluster) removeStartCluster(app, cluster); }
+  else { const unit = unitById(app, only); if (unit && unit.role !== 'master') removeSelectedUnit(app, unit); }
+}
+
+function confirmDeleteMany(app, units, clusters) {
+  const inside = new Set(clusters.flatMap(id => clusterSubtree(app, id)));
+  const count = units.length + inside.size;
+  const dialog = showDialog(app.root.ownerDocument, { title: text(app.language, 'deleteManyTitle', { count }),
+    body: text(app.language, 'deleteManyBody', { what: deletionSummary(app, units.length, inside.size) }),
+    confirm: text(app.language, 'delete'), cancel: text(app.language, 'cancel'),
+    onConfirm: () => { enqueueDeletion(app, { units, clusters }); } });
+  dialog.setAttribute('data-delete-many', String(count));
+}
+
+function deletionSummary(app, units, clusters) {
+  const parts = [units ? text(app.language, units === 1 ? 'deleteManyAgent' : 'deleteManyAgents', { count: units }) : '',
+    clusters ? text(app.language, clusters === 1 ? 'deleteManyCluster' : 'deleteManyClusters', { count: clusters }) : ''].filter(Boolean);
+  const joined = parts.length === 2 ? text(app.language, 'deleteManyAnd', { first: parts[0], second: parts[1] }) : parts[0] ?? '';
+  return joined.charAt(0).toLocaleUpperCase() + joined.slice(1);
+}
+
+// A bar over the Hierarchy says how many rows are picked and deletes them.
+function pickBar(app) {
+  const document = app.root.ownerDocument, { units, clusters } = pickedTargets(app), count = units.length + clusters.length;
+  if (count < 2) return null;
+  return element(document, 'div', { class: 'pick-bar', 'data-pick-bar': String(count) },
+    element(document, 'span', { text: text(app.language, 'finalSelection', { count }) }),
+    element(document, 'button', { type: 'button', class: 'btn danger', 'data-action': 'delete-picked', text: text(app.language, 'delete'), 'aria-label': text(app.language, 'menuDeleteSelected', { count }), onclick: () => confirmDeleteMany(app, units, clusters) }),
+    element(document, 'button', { type: 'button', class: 'btn quiet', 'data-action': 'clear-picked', 'aria-label': text(app.language, 'clearSelection'), text: '×', onclick: () => { app.hierarchySelection.clear(); renderShell(app); } }));
 }
 
 function removeStartCluster(app, cluster) {
-  let operation = null;
-  showDialog(app.root.ownerDocument, { title: text(app.language, 'delete') + ': ' + cluster.title,
-    body: startText(app.language, 'removeHint'), confirm: text(app.language, 'delete'), cancel: startText(app.language, 'cancel'),
-    onConfirm: async () => {
-      operation ??= createOperation({ method: 'DELETE', path: '/clusters/:clusterId', params: { clusterId: cluster.id }, body: { machine: startMachine(app), confirmed: true, expectedRevision: cluster.revision } });
-      const result = await request(app.api, 'DELETE', operation.path, { operation });
-      await loadStartReports(app); app.store.selected.groupId = null;
-      showMapToast(app, cluster.title, async record => { await undoChange(app.api, result.data.changeId, record.operation); await loadStartReports(app); selectGroup(app, cluster.id); }, result.data.undoUntil);
+  const tree = clusterSubtree(app, cluster.id), inside = tree.length - 1;
+  showDialog(app.root.ownerDocument, { title: text(app.language, 'delete') + ': ' + displayName(cluster.title),
+    body: inside ? text(app.language, inside === 1 ? 'deleteTreeBodyOne' : 'deleteTreeBody', { count: inside }) : startText(app.language, 'removeHint'),
+    confirm: text(app.language, 'delete'), cancel: startText(app.language, 'cancel'),
+    // The dialog closes at once; the deletion runs in the background, in Activity.
+    onConfirm: () => { enqueueDeletion(app, { units: [], clusters: [cluster.id] }); } });
+}
+
+// A cluster and every cluster inside it, the innermost first, so each one is empty when it is deleted.
+function clusterSubtree(app, id) {
+  const groups = [...app.store.indexes.groups.values()].filter(group => !group.deleted);
+  const order = [], seen = new Set();
+  const visit = (current) => {
+    if (seen.has(current)) return;
+    seen.add(current);
+    for (const child of groups.filter(group => group.parentId === current)) visit(child.id);
+    order.push(current);
+  };
+  visit(id);
+  return order;
+}
+
+// Agents first, then the clusters with the ones inside them, innermost first. Each step keeps its own operation, so a retry
+// replays a write the service may already have applied instead of sending a second one.
+function enqueueDeletion(app, { units = [], clusters = [] }) {
+  const clusterIds = [], seen = new Set();
+  for (const id of clusters) for (const inner of clusterSubtree(app, id)) if (!seen.has(inner)) { seen.add(inner); clusterIds.push(inner); }
+  // An outer cluster waits for every cluster inside it, wherever it was picked.
+  clusterIds.sort((left, right) => clusterDepth(app, right) - clusterDepth(app, left));
+  // An agent goes before its lead, so a lead is never left with reports when its turn comes.
+  const leadDepth = (id) => { let depth = 0, current = unitById(app, id); const seen = new Set(); while (current?.leadId && !seen.has(current.id)) { seen.add(current.id); depth += 1; current = unitById(app, current.leadId); } return depth; };
+  const unitIds = units.filter(id => unitById(app, id) && unitById(app, id).role !== 'master').sort((left, right) => leadDepth(right) - leadDepth(left));
+  const total = unitIds.length + clusterIds.length;
+  if (!total) return null;
+  const names = { units: unitIds.map(id => unitDisplayName(unitById(app, id))), clusters: clusterIds.map(id => displayName(app.store.indexes.groups.get(id)?.title ?? id)) };
+  const label = total === 1 ? (unitIds.length ? text(app.language, 'jobRemoveAgent', { name: names.units[0] }) : text(app.language, 'jobDeleteCluster', { name: names.clusters[0] }))
+    : clusters.length === 1 && !unitIds.length ? text(app.language, 'jobDeleteTree', { name: displayName(app.store.indexes.groups.get(clusters[0])?.title ?? ''), count: clusterIds.length - 1 })
+      : text(app.language, 'jobDeleteMany', { count: total });
+  // What is being deleted leaves the screen now; a failure brings it back from the service.
+  hideDeleted(app, unitIds, clusterIds);
+  const steps = [...unitIds.map(id => ({ kind: 'unit', id })), ...clusterIds.map(id => ({ kind: 'cluster', id }))];
+  const changes = [];
+  return app.queue.add({ label, steps: total > 1 ? total : null, kind: 'delete',
+    run: async (report) => {
+      // One item that cannot be deleted does not stop the others; the job fails at the end with the first reason, and
+      // Retry asks again only for what is left.
+      let failure = null;
+      for (const step of steps) {
+        if (step.done) continue;
+        try {
+          step.result = step.kind === 'unit' ? await deleteUnitStep(app, step) : await deleteClusterStep(app, step);
+          step.done = true;
+          if (step.result?.data?.changeId) changes.push(step.result.data.changeId);
+        } catch (error) { failure ??= error; }
+        report(steps.filter(item => item.done).length, total);
+      }
+      if (failure) {
+        // What could not be deleted comes back on screen as the service has it.
+        afterDeletion(app).catch(() => {});
+        throw failure;
+      }
+      return { changes };
+    },
+    onDone: async () => {
+      // Undo is offered as soon as the service confirms; the lists catch up behind it. Undoing one item selects it again.
+      const undoName = total === 1 ? (names.units[0] ?? names.clusters[0]) : text(app.language, 'deletedMany', { count: total });
+      const reselect = total !== 1 ? null : unitIds.length ? () => { app.store.selected.unitId = unitIds[0]; app.mapState?.onSelection([unitIds[0]]); focusUnitRow(app, unitIds[0]); }
+        : () => selectGroup(app, clusterIds[0]);
+      showMapToast(app, total === 1 && unitIds.length ? `${names.units[0]} · ${removalText(app, 'archived')}` : undoName,
+        () => { enqueueUndo(app, undoName, [...changes].reverse(), reselect); });
       renderShell(app);
+      await afterDeletion(app);
     } });
+}
+
+function clusterDepth(app, id) {
+  let depth = 0, current = app.store.indexes.groups.get(id);
+  const seen = new Set();
+  while (current?.parentId && !seen.has(current.id)) { seen.add(current.id); depth += 1; current = app.store.indexes.groups.get(current.parentId); }
+  return depth;
+}
+
+function hideDeleted(app, unitIds, clusterIds) {
+  for (const id of unitIds) {
+    for (const shown of [app.unitList?.catalog?.find(item => item.id === id), app.store.indexes.units.get(id)]) if (shown) shown.removed = true;
+    app.mapState?.selection.delete(id);
+    if (app.pendingChat?.unitId === id) app.pendingChat = null;
+    if (app.store.selected.unitId === id) app.store.selected.unitId = null;
+    if (app.thread?.chat?.kind === 'direct' && app.thread.chat.members.includes(id)) app.thread = null;
+  }
+  for (const id of clusterIds) {
+    const shown = app.store.indexes.groups.get(id);
+    if (shown) app.store.indexes.groups.set(id, { ...shown, deleted: true, deleting: true });
+    if (app.store.selected.groupId === id) app.store.selected.groupId = null;
+  }
+  app.hierarchySelection?.clear();
+  renderShell(app);
+}
+
+async function deleteUnitStep(app, step) {
+  const unit = unitById(app, step.id) ?? { id: step.id, revision: step.revision };
+  step.revision ??= unit.revision;
+  try { return await removeUnit(app.api, { id: step.id, revision: step.revision }, step.operation); }
+  catch (error) { step.operation = error.operation ?? step.operation; throw error; }
+}
+
+async function deleteClusterStep(app, step) {
+  const machine = startMachine(app);
+  if (!step.operation) {
+    const current = app.store.indexes.groups.get(step.id);
+    step.operation = createOperation({ method: 'DELETE', path: '/clusters/:clusterId', params: { clusterId: step.id }, body: { machine, confirmed: true, expectedRevision: current?.revision ?? null } });
+  }
+  try { return await request(app.api, 'DELETE', step.operation.path, { operation: step.operation }); }
+  catch (error) {
+    // The cluster changed since it was listed (the one inside it was just deleted, for one): read it again and ask once more.
+    if (['cluster_changed', 'revision_conflict'].includes(error?.code) && !step.reread) {
+      step.reread = true;
+      const fresh = (await request(app.api, 'GET', '/clusters/:clusterId', { params: { clusterId: step.id }, query: { machine } })).data;
+      step.operation = createOperation({ method: 'DELETE', path: '/clusters/:clusterId', params: { clusterId: step.id }, body: { machine, confirmed: true, expectedRevision: fresh.revision } });
+      return request(app.api, 'DELETE', step.operation.path, { operation: step.operation });
+    }
+    if (error?.code === 'cluster_not_found') return null;
+    throw error;
+  }
+}
+
+async function afterDeletion(app) {
+  await loadSnapshot(app.store, app.api).catch(() => {});
+  if (app.unitList) await reloadList(app.unitList).catch(() => {});
+  if (app.chatList) await reloadList(app.chatList).catch(() => {});
+  await loadStartReports(app);
+  if (!app.disposed) renderShell(app);
+}
+
+function enqueueUndo(app, name, changeIds, after = null) {
+  if (!changeIds.length) return;
+  const operations = new Map();
+  app.queue.add({ label: text(app.language, 'jobUndo', { name }), steps: changeIds.length > 1 ? changeIds.length : null, kind: 'undo',
+    run: async (report) => {
+      for (const [index, changeId] of changeIds.entries()) {
+        if (operations.get(changeId) === 'done') continue;
+        try { await undoChange(app.api, changeId, operations.get(changeId) ?? null); }
+        catch (error) { if (error.operation) operations.set(changeId, error.operation); throw error; }
+        operations.set(changeId, 'done');
+        report(index + 1, changeIds.length);
+      }
+    },
+    onDone: async () => { await afterDeletion(app); await after?.(); } });
 }
 
 function showClusterChanges(app, cluster) {
   settle(app, `changes:${cluster.id}`, startText(app.language, 'changes'), async () => {
     const changes = await collectPages(app.api, `/clusters/${encodeURIComponent(cluster.id)}/changes`, { query: { machine: startMachine(app) }, limit: 100 });
-    const dialog = showDialog(app.root.ownerDocument, { title: startText(app.language, 'changes') + ': ' + cluster.title, cancel: startText(app.language, 'close') });
+    const dialog = showDialog(app.root.ownerDocument, { title: startText(app.language, 'changes') + ': ' + displayName(cluster.title), cancel: startText(app.language, 'close') });
     dialog.append(renderClusterChanges(app.root.ownerDocument, changes.items));
   });
 }
@@ -4034,9 +4794,38 @@ function clusterChatPanel(app, cluster) {
   const panel = chatPanel(app, t);
   const composer = panel.querySelector('[data-composer]');
   if (composer) {
-    composer.setAttribute('aria-label', startText(app.language, 'messageCluster', { name: cluster.title }));
-    composer.setAttribute('placeholder', startText(app.language, 'messageCluster', { name: cluster.title }));
+    composer.setAttribute('aria-label', startText(app.language, 'messageCluster', { name: displayName(cluster.title) }));
+    composer.setAttribute('placeholder', startText(app.language, 'messageCluster', { name: displayName(cluster.title) }));
     const hint = panel.querySelector('.field-hint'); if (hint) hint.textContent = startText(app.language, 'goesToLead');
+  }
+  return panel;
+}
+
+// Under its header a cluster has the tabs an agent has: its chat, the work of the one who leads it, and its details.
+function clusterPanel(app, t, cluster) {
+  const document = app.root.ownerDocument;
+  const tabs = unitConversation(app, cluster.id);
+  tabs.detailsTab = true;
+  const lead = clusterLead(cluster, app.unitList?.catalog ?? []);
+  const leadView = lead ? sessionViewFor(app, sessionForUnit(app, lead.id)) : null;
+  const panel = element(document, 'section', { class: 'chat-panel agent-conversation', 'data-agent-tab': tabs.tab, 'data-cluster-panel': cluster.id });
+  panel.append(renderSessionTabs(document, tabs, app.language, tab => selectSessionTab(app, tabs, tab, leadView ?? tabs)));
+  if (tabs.tab === 'details') panel.append(renderClusterDetails(document, clusterModel(app, cluster), clusterActions(app, cluster)));
+  else if (tabs.tab === 'work' && leadView) {
+    const work = renderSessionWork(document, leadView, app.language, {
+      onRetry: async () => { await loadSessionView(app.api, leadView); if (!app.disposed) renderShell(app); },
+      onMore: async () => { await loadSessionView(app.api, leadView, { older: true }); if (!app.disposed) renderShell(app); },
+      onStop: () => stopWorkStep(app, leadView),
+    }, app.api.now());
+    work.setAttribute('id', `session-${cluster.id}-panel`); work.setAttribute('aria-labelledby', `session-${cluster.id}-work`);
+    work.scrollTop = leadView.scrollTop; work.addEventListener('scroll', () => { leadView.scrollTop = work.scrollTop; });
+    panel.append(work);
+  } else if (tabs.tab === 'work') panel.append(unitWork(document, tabs, app.language, t));
+  else {
+    const chat = clusterChatPanel(app, cluster);
+    const transcript = chat.querySelector('.transcript');
+    if (transcript) { transcript.setAttribute('id', `session-${cluster.id}-panel`); transcript.setAttribute('role', 'tabpanel'); transcript.setAttribute('aria-labelledby', `session-${cluster.id}-chat`); }
+    panel.append(...chat.children);
   }
   return panel;
 }
@@ -4098,13 +4887,14 @@ function unitWork(document, view, language, t) {
     element(document, 'p', { text: t('finalNotStarted') }));
 }
 
-async function selectSessionTab(app, view, tab) {
+// `source` is the session whose work the Work tab shows when it is not the view's own: a cluster shows the work of its lead.
+async function selectSessionTab(app, view, tab, source = view) {
   captureInputs(app); view.tab = tab;
   renderShell(app);
   app.root.querySelector(`[data-action="session-${tab}"]`)?.focus?.();
-  if (view.unitOnly) return;
-  if (tab === 'work' && (!view.workLoaded || view.workStale)) {
-    await loadSessionView(app.api, view); view.workStale = false;
+  if (source.unitOnly) return;
+  if (tab === 'work' && (!source.workLoaded || source.workStale)) {
+    await loadSessionView(app.api, source); source.workStale = false;
     if (!app.disposed) renderShell(app);
   }
   clearTimeout(app.workClock);
@@ -4134,11 +4924,26 @@ function stopWorkStep(app, view) {
   }, error => { view.stopOperation = unconfirmedStartOperation(error); finish('failed', error); });
 }
 
+// The ··· of an agent opens a menu under it, as the right-click menu does, not a dialog: the full transcript, rename,
+// pin or remove its chat from the list, and remove the agent.
 function openAgentMore(app, unit) {
-  const document = app.root.ownerDocument, session = sessionForUnit(app, unit.id);
-  const dialog = showDialog(document, { title: startText(app.language, 'moreMenu'), cancel: startText(app.language, 'close') });
-  if (session) dialog.append(mapButton(app, 'full-transcript', startText(app.language, 'transcript'), () => { dialog.close(); openSessionTranscript(app, session); }));
-  if (app.store.capabilities.includes('unit.create')) dialog.append(mapButton(app, 'agent-rename', text(app.language, 'rename'), () => { dialog.close(); beginAlias(app, unit.id); }));
+  const document = app.root.ownerDocument, session = sessionForUnit(app, unit.id), caps = app.store.capabilities ?? [];
+  const chat = app.thread?.chat?.kind === 'direct' && app.thread.chat.members?.includes(unit.id) ? app.thread.chat : null;
+  const items = [];
+  if (session) items.push({ id: 'full-transcript', label: startText(app.language, 'transcript'), run: () => openSessionTranscript(app, session) });
+  if (caps.includes('unit.create')) items.push({ id: 'agent-rename', label: text(app.language, 'rename'), run: () => beginAlias(app, unit.id) });
+  if (chat && caps.includes('chat.manage')) {
+    if (chat.pinned !== true) items.push({ id: 'pin', label: text(app.language, 'pin'), run: () => changeChat(app, { pinned: true }) });
+    if (chat.listed !== false) items.push({ id: 'unlist', label: text(app.language, 'removeFromList'), run: () => changeChat(app, { listed: false }) });
+    else items.push({ id: 'reopen', label: text(app.language, 'reopenChat'), run: () => changeChat(app, { listed: true }) });
+  }
+  // Removing an agent starts here, in the inspector, without first opening Details.
+  if (caps.includes('unit.create') && typeof unit.id === 'string' && unit.id !== 'root:master' && unit.role !== 'master') {
+    items.push({ id: 'agent-remove', label: removalText(app, 'confirm'), danger: true, run: () => removeSelectedUnit(app, unit) });
+  }
+  if (!items.length) return;
+  const box = app.root.querySelector('[data-action="agent-more"]')?.getBoundingClientRect?.();
+  openContextMenu(document, { x: box ? box.right - 220 : 0, y: box ? box.bottom + 6 : 0, items, label: startText(app.language, 'moreMenu') });
 }
 
 function openSessionTranscript(app, session) {
@@ -4289,6 +5094,314 @@ function renderPlanDraft(app) {
   return root;
 }
 
+// ---- Context menus ---------------------------------------------------------------------------------------------
+// The right-click menu of an agent or a cluster, on the Map and in the Hierarchy. Every entry runs an action the inspector already has,
+// and an entry is listed only when the current state allows it. The first entry is the primary action.
+function openItemMenu(app, target) {
+  const t = (key, values) => startText(app.language, key, values), caps = app.store.capabilities ?? [], desktop = app.layout !== 'phone';
+  // With several rows picked, the menu of one of them acts on all of them.
+  const rowId = target.kind === 'cluster' ? `cluster:${target.id}` : target.id;
+  if (desktop && target.kind !== 'map' && app.hierarchySelection?.size > 1 && app.hierarchySelection.has(rowId)) {
+    const { units, clusters } = pickedTargets(app), count = units.length + clusters.length;
+    openContextMenu(app.root.ownerDocument, { x: target.x, y: target.y, label: text(app.language, 'finalSelection', { count }), items: [
+      { id: 'delete-picked', label: text(app.language, 'menuDeleteSelected', { count }), danger: true, primary: true, run: () => confirmDeleteMany(app, units, clusters) },
+      { id: 'clear-picked', label: text(app.language, 'clearSelection'), run: () => { app.hierarchySelection.clear(); renderShell(app); } },
+    ] });
+    return;
+  }
+  const groups = [...app.store.indexes.groups.values()].filter(group => !group.deleted);
+  const items = [];
+  let name = '';
+  if (target.kind === 'map') {
+    if (!desktop) return;
+    const place = newAgentPlace(app, target.groupId ?? null, null);
+    if (caps.includes('unit.create')) {
+      if (!overseerExists(app)) items.push({ id: 'create-overseer', label: startText(app.language, 'createOverseer'), primary: true, run: () => createOverseer(app) });
+      items.push({ id: 'new-agent', label: place ? t('menuNewAgentMap') : t('menuNeedsCluster'), disabled: !place, primary: overseerExists(app),
+        run: () => place && openStartAgent(app, place.cluster, false, { clusterChoices: place.choices, anchor: null }) });
+    }
+    if (caps.includes('chat.manage')) items.push({ id: 'new-cluster', label: t('menuNewCluster'), run: () => openStartCluster(app) });
+    items.push({ id: 'fit', label: t('menuFit'), run: () => fitMapView(app) });
+    openContextMenu(app.root.ownerDocument, { x: target.x, y: target.y, items, label: t('mapMenuLabel') });
+    return;
+  }
+  if (target.kind === 'unit') {
+    const unit = unitById(app, target.id);
+    if (!unit || unit.role === 'master' || unit.removed) return;
+    name = unitDisplayName(unit);
+    const home = unitCluster(app, unit);
+    items.push({ id: 'open', label: t('menuOpenChat'), primary: true, run: () => openUnitFromMenu(app, unit) });
+    if (unit.sessionIds?.length) { if (caps.includes('session.stop')) items.push({ id: 'stop', label: text(app.language, 'stopSession'), run: () => confirmStop(app, unit.sessionIds[0], unit) }); }
+    else if (caps.includes('session.start')) items.push({ id: 'start', label: text(app.language, 'startSession'), run: () => openSessionForm(app, unit) });
+    if (desktop && caps.includes('unit.create') && unit.revision) items.push({ id: 'rename', label: t('menuRename'), run: () => beginAlias(app, unit.id) });
+    if (desktop && caps.includes('unit.connect') && leadChoices(app).some(lead => lead.id !== unit.id)) items.push({ id: 'connect', label: t('menuConnect'), run: () => chooseSelectionLead(app, [unit.id]) });
+    if (desktop && caps.includes('unit.create')) items.push({ id: 'new-report', label: t('menuNewReport'), run: () => openReportMenu(app, { source: unit.id, x: target.x, y: target.y, groupId: null }) });
+    if (desktop && caps.includes('chat.manage') && groups.some(group => group.id !== home?.id)) items.push({ id: 'move', label: t('menuMove'), run: () => openMoveAgent(app, unit) });
+    if (desktop) items.push({ id: 'details', label: text(app.language, 'details'), run: () => showUnitDetails(app, unit) });
+    if (desktop && caps.includes('chat.manage') && home) items.push({ id: 'remove', label: t('menuRemove'), run: () => detachAgent(app, unit, home) });
+    if (desktop && caps.includes('unit.create')) items.push({ id: 'delete', label: t('menuDelete'), danger: true, run: () => removeSelectedUnit(app, unit) });
+  } else {
+    const cluster = app.store.indexes.groups.get(target.id);
+    if (!cluster || cluster.deleted) return;
+    name = displayName(cluster.title);
+    const children = groups.filter(group => group.parentId === cluster.id), link = app.startProjects?.clusterLinks?.find(item => item.clusterId === cluster.id);
+    items.push({ id: 'open', label: t('menuOpen'), primary: true, run: () => openClusterFromMenu(app, cluster) });
+    if (desktop && caps.includes('unit.create')) items.push({ id: 'new-agent', label: t('menuNewAgent'), run: () => openStartAgent(app, cluster) });
+    if (desktop && caps.includes('chat.manage')) items.push({ id: 'rename', label: t('menuRename'), run: () => renameCluster(app, cluster) });
+    if (children.length || cluster.members?.length) {
+      const fromList = target.source === 'hierarchy';
+      const collapsed = fromList ? app.hierarchy.collapsed.has(`cluster:${cluster.id}`) : isCollapsed(ensureMap(app), cluster.id);
+      items.push({ id: 'collapse', label: collapsed ? t('menuExpand') : t('menuCollapse'), run: () => {
+        if (fromList) { toggleGroup(app.hierarchy, `cluster:${cluster.id}`); renderShell(app); } else toggleCollapsed(ensureMap(app), cluster.id);
+      } });
+    }
+    if (desktop && caps.includes('settings.write') && link && cluster.link?.kind !== 'none') items.push({ id: 'remove', label: t('menuRemoveLink'), run: () => removeStartLink(app, link, startMachine(app)) });
+    // A cluster with clusters inside it is deleted with them; the dialog says how many.
+    if (desktop && caps.includes('chat.manage')) items.push({ id: 'delete', label: t('menuDelete'), danger: true, run: () => removeStartCluster(app, cluster) });
+  }
+  openContextMenu(app.root.ownerDocument, { x: target.x, y: target.y, items, label: t('menuLabel', { name }) });
+}
+
+// The cluster a new agent made from the Map goes to: the one under the pointer, else the lead's own. With neither, every
+// cluster is offered in the form, the first one chosen; with no cluster at all there is nothing to create it in.
+function newAgentPlace(app, groupId, leadId) {
+  const groups = [...app.store.indexes.groups.values()].filter(group => !group.deleted);
+  const under = groupId ? groups.find(group => group.id === groupId) : null;
+  if (under) return { cluster: under, choices: null };
+  const lead = leadId ? unitById(app, leadId) : null, home = lead ? unitCluster(app, lead) : null;
+  if (home) return { cluster: home, choices: null };
+  if (!groups.length) return null;
+  // The top clusters come first, as the Hierarchy lists them; the ones inside them follow.
+  const sorted = groups.sort((left, right) => Number(Boolean(left.parentId)) - Number(Boolean(right.parentId))
+    || String(left.title).localeCompare(String(right.title), app.language));
+  return { cluster: sorted[0], choices: sorted.length > 1 ? sorted : null };
+}
+
+// A connection dropped on empty space, or the source's own menu, offers a new agent that reports to the source.
+function openReportMenu(app, { source, x, y, groupId }) {
+  const t = (key, values) => startText(app.language, key, values), lead = unitById(app, source);
+  if (!lead || app.layout === 'phone' || !app.store.capabilities?.includes('unit.create')) return;
+  const place = newAgentPlace(app, groupId, source);
+  const create = role => () => place && openStartAgent(app, place.cluster, false, { role, leadId: source, clusterChoices: place.choices, anchor: null });
+  const items = place ? [
+    { id: 'new-overlord', label: t('menuNewOverlord'), primary: true, run: create('overlord') },
+    { id: 'new-executor', label: t('menuNewExecutor'), run: create('executor') },
+    { id: 'new-custom', label: t('menuNewCustom'), run: create('custom') },
+  ] : [{ id: 'new-cluster', label: t('menuNeedsCluster'), primary: true, run: () => openStartCluster(app) }];
+  openContextMenu(app.root.ownerDocument, { x, y, items, label: t('dropMenuLabel', { name: unitDisplayName(lead) }), title: t('dropMenuLabel', { name: unitDisplayName(lead) }) });
+}
+
+function fitMapView(app) {
+  const map = ensureMap(app);
+  if (!map.host) return;
+  // A stage too small to fit leaves the view as it is.
+  try { fitMap(map); } catch (error) { if (!(error instanceof RangeError)) throw error; }
+}
+
+// An agent's Details tab, in separate sections: how it runs, the agent itself, its session, its tasks and what waits.
+// Only asks and tasks in review stay in the conversation; every other task is listed here.
+function agentDetails(app, t, agent, review, panel) {
+  const document = app.root.ownerDocument;
+  const tabId = panel.querySelector?.('[data-action="session-details"]')?.getAttribute?.('id');
+  const root = element(document, 'section', { class: 'agent-details', 'data-agent-details': agent.id, role: 'tabpanel', ...(tabId ? { 'aria-labelledby': tabId } : {}) });
+  const section = (key, ...parts) => {
+    const shown = parts.filter(Boolean);
+    if (!shown.length) return;
+    root.append(element(document, 'section', { class: 'details-section', 'data-details-section': key },
+      element(document, 'h3', { class: 'details-section-title', text: startText(app.language, key) }), ...shown));
+  };
+  section('detailsRun', actionControls(app, t, agent));
+  const facts = review.querySelector('[data-unit-facts]');
+  facts?.remove();
+  if (facts) facts.className += ' agent-facts';
+  // The card's own lines repeat the facts; only what the facts do not say is kept.
+  const shownLabels = new Set([...(facts?.children ?? [])].map(line => String(line.textContent).split(':')[0]));
+  const extra = [...(review.querySelector('.unit-metadata')?.querySelectorAll?.('p') ?? [])]
+    .filter(line => !shownLabels.has(String(line.textContent).split(':')[0]) && !String(line.textContent).endsWith(`: ${t('unknown')}`));
+  for (const line of extra) line.remove();
+  const more = extra.length ? element(document, 'div', { class: 'unit-facts agent-extra' }, ...extra) : null;
+  // Each fact reads as a muted label and its value; the text stays "Label: value".
+  for (const line of [...(facts?.children ?? []), ...extra]) {
+    const textValue = String(line.textContent ?? ''), cut = textValue.indexOf(': ');
+    if (cut < 0 || line.children?.length) continue;
+    line.className = `${line.className ?? ''} fact`.trim();
+    line.replaceChildren(element(document, 'span', { class: 'fact-label', text: textValue.slice(0, cut + 2) }), element(document, 'span', { class: 'fact-value', text: textValue.slice(cut + 2) }));
+  }
+  section('detailsAgent', facts, more);
+  const inspector = review.querySelector('.inspector-details');
+  const waiting = inspector?.querySelector('.waiting-list');
+  waiting?.remove();
+  const sessionParts = inspector ? [...inspector.children].filter(part => !part.matches?.('summary')) : [];
+  for (const part of sessionParts) part.remove();
+  const sessionShown = sessionParts.filter(part => part.children?.length || part.textContent);
+  if (sessionShown.length) {
+    const state = agentMachine(app, agent)?.answers === false ? startText(app.language, 'sessionUnavailable') : agent.sessionIds?.length ? startText(app.language, 'sessionRunning') : t('finalNotStarted');
+    root.append(trackDisclosure(app, element(document, 'details', { class: 'details-section session-disclosure', 'data-details-section': 'detailsSession' },
+      element(document, 'summary', {}, icon(document, 'chevronRight'),
+        element(document, 'span', { class: 'session-disclosure-title', text: startText(app.language, 'sessionOn', { machine: agent.machine || t('unknown') }) }),
+        element(document, 'span', { class: 'session-disclosure-state', text: state })), ...sessionShown), `agent-session:${agent.id}`));
+  }
+  const cards = review.querySelector('[data-action-cards]');
+  cards?.remove();
+  const later = [];
+  if (cards) {
+    for (const card of [...cards.children]) {
+      const id = card.getAttribute?.('data-task') ?? card.getAttribute?.('data-task-detail');
+      if (!id) continue;
+      const status = card.getAttribute?.('data-task-status') ?? cards.querySelector?.(`[data-task='${id}']`)?.getAttribute?.('data-task-status')
+        ?? later.find(item => item.getAttribute?.('data-task') === id)?.getAttribute?.('data-task-status');
+      if (status !== 'review') { card.remove(); later.push(card); }
+    }
+    const scroll = panel.querySelector('.transcript') ?? panel.querySelector('[data-session-work]') ?? panel.querySelector('[data-unit-work]');
+    const field = panel.querySelector('.field');
+    if (cards.children.length) {
+      if (scroll) scroll.append(cards);
+      else if (!(field && placeBefore(field, cards))) panel.append(cards);
+    }
+  }
+  // A task that waits for nothing is one line; its card, with what can be done and why not, opens under it.
+  const rows = [];
+  for (const card of later) {
+    const id = card.getAttribute?.('data-task');
+    if (id) rows.push(element(document, 'details', { class: 'task-row', 'data-task-row': id },
+      element(document, 'summary', { text: String(card.children?.[0]?.textContent ?? id).trim() }), card));
+    else {
+      const row = rows.at(-1);
+      if (!row) continue;
+      row.append(card);
+      // A task with no title is named by the start of its request.
+      const summary = row.querySelector('summary'), request = String(card.querySelector?.('h3')?.textContent || card.querySelector?.('p')?.textContent || '').trim();
+      if (summary && request && !/\s/.test(summary.textContent.trim())) summary.textContent = `${summary.textContent.trim()} · ${request.length > 64 ? `${request.slice(0, 63)}…` : request}`;
+    }
+  }
+  section('detailsTasks', rows.length ? element(document, 'div', { class: 'later-cards', 'data-later-cards': 'true' }, ...rows) : null);
+  section('detailsWaiting', waiting);
+  return root;
+}
+
+function unitCluster(app, unit) {
+  const groups = [...app.store.indexes.groups.values()].filter(group => !group.deleted);
+  return groups.find(group => group.id === unit.clusterId) ?? groups.find(group => group.members?.includes(unit.id)) ?? null;
+}
+
+function openUnitFromMenu(app, unit) {
+  activateUnit(app, unit, 'double');
+  if (app.layout !== 'phone') app.pendingChat = { unitId: unit.id, create: true };
+  loadInspector(app, unit.id);
+  if (app.layout === 'phone') takePendingChat(app);
+  renderShell(app);
+}
+
+function openClusterFromMenu(app, cluster) {
+  openCluster(app, cluster.id);
+  selectGroup(app, cluster.id);
+  app.pendingClusterFlight = cluster.id;
+  renderShell(app);
+}
+
+// Selects the agent and opens the Details part of its inspector.
+function showUnitDetails(app, unit) {
+  app.store.selected.unitId = unit.id;
+  app.store.selected.groupId = null;
+  if (app.mapState) { app.mapState.selectedGroupId = null; app.mapState.selection = new Set([unit.id]); }
+  loadInspector(app, unit.id);
+  // Details is the agent's third tab.
+  const tabs = sessionViewFor(app, sessionForUnit(app, unit.id)) ?? unitConversation(app, unit.id);
+  tabs.tab = 'details';
+  renderShell(app);
+}
+
+function hierarchyMenu(app, event) {
+  const node = event.target?.closest?.('[data-row]'), row = node && app.activeRows?.find(item => item.id === node.getAttribute('data-id'));
+  const target = row?.unit ? { kind: 'unit', id: row.unit.id } : row && (row.kind === 'cluster' || row.kind === 'worktree') ? { kind: 'cluster', id: row.groupId } : null;
+  if (!target || app.tab !== 'hierarchy') return;
+  event.preventDefault?.();
+  const box = node.getBoundingClientRect?.(), keyboard = event.type === 'keydown' || (!event.clientX && !event.clientY);
+  openItemMenu(app, { ...target, source: 'hierarchy', x: keyboard && box ? box.left + 24 : event.clientX, y: keyboard && box ? box.bottom - 4 : event.clientY });
+}
+
+// The members of a cluster are changed through its group route; the cluster route takes no members.
+async function setClusterMembers(app, cluster, members) {
+  const operation = createOperation({ method: 'PATCH', path: '/groups/:groupId', params: { groupId: cluster.id }, body: { members, expectedRevision: cluster.revision } });
+  return request(app.api, 'PATCH', operation.path, { operation });
+}
+
+async function refreshAfterMembership(app) {
+  await loadStartReports(app);
+  if (app.unitList) await reloadList(app.unitList);
+}
+
+function renameCluster(app, cluster) {
+  openChoiceForm(app, 'cluster-rename', startText(app.language, 'renameCluster'), form => {
+    appendInput(form.ownerDocument, form, 'title', startText(app.language, 'name'), cluster.title);
+  }, async form => {
+    const title = fieldValue(form, 'title').trim();
+    if (!title || title === cluster.title) return true;
+    const current = app.store.indexes.groups.get(cluster.id) ?? cluster;
+    const operation = createOperation({ method: 'PATCH', path: '/clusters/:clusterId', params: { clusterId: cluster.id }, body: { title, machine: startMachine(app), expectedRevision: current.revision } });
+    await request(app.api, 'PATCH', operation.path, { operation });
+    await loadStartReports(app);
+    return true;
+  }, 'rename-cluster');
+}
+
+function openMoveAgent(app, unit) {
+  openMoveAgents(app, [unit]);
+}
+
+// One destination for every agent, and one background job to move them. A cluster that already holds all of them is not offered.
+function openMoveAgents(app, units) {
+  const homes = units.map(unit => unitCluster(app, unit)?.id ?? null), shared = new Set(homes).size === 1 ? homes[0] : null;
+  const choices = [...app.store.indexes.groups.values()].filter(group => !group.deleted && group.id !== shared);
+  const ids = units.map(unit => unit.id), one = units.length === 1, name = unitDisplayName(units[0]);
+  openChoiceForm(app, 'move-agent', one ? startText(app.language, 'moveTitle', { name }) : text(app.language, 'moveManyTitle', { count: ids.length }), form => {
+    appendSelect(form.ownerDocument, form, 'clusterId', startText(app.language, 'moveTo'), choices.map(group => ({ value: group.id, label: displayName(group.title) })), choices[0]?.id ?? '');
+  }, async form => {
+    const target = app.store.indexes.groups.get(fieldValue(form, 'clusterId'));
+    if (!target) return false;
+    const cluster = displayName(target.title);
+    // The form closes at once; the move runs in the background, in Activity.
+    app.queue.add({ label: one ? text(app.language, 'jobMove', { name, cluster }) : text(app.language, 'jobMoveMany', { count: ids.length, cluster }), kind: 'move',
+      run: async () => {
+        const into = app.store.indexes.groups.get(target.id) ?? target, arriving = ids.filter(id => !into.members.includes(id));
+        if (arriving.length) await setClusterMembers(app, into, [...into.members, ...arriving]);
+        await loadStartReports(app);
+        // Each cluster the agents leave is written once, with all of the agents that were in it.
+        const leaving = new Map();
+        homes.forEach((home, index) => { if (home && home !== target.id) leaving.set(home, [...(leaving.get(home) ?? []), ids[index]]); });
+        for (const [home, gone] of leaving) {
+          const old = app.store.indexes.groups.get(home);
+          if (old?.members.some(id => gone.includes(id))) await setClusterMembers(app, old, old.members.filter(id => !gone.includes(id)));
+        }
+      },
+      onDone: () => refreshAfterMembership(app) });
+    return true;
+  }, 'move-agent');
+}
+
+// The agent stays, with its chat; it only leaves the cluster, so the Map stops drawing it until it is moved to one.
+function detachAgent(app, unit, cluster) {
+  const t = (key, values) => startText(app.language, key, values), name = unitDisplayName(unit);
+  const dialog = showDialog(app.root.ownerDocument, {
+    title: t('detachTitle', { name, cluster: displayName(cluster.title) }), body: t('detachBody'), confirm: t('detachConfirm'), cancel: text(app.language, 'cancel'), retry: text(app.language, 'retry'),
+    // The dialog closes at once; the change runs in the background, in Activity.
+    onConfirm: () => { app.queue.add({ label: text(app.language, 'jobDetach', { name, cluster: displayName(cluster.title) }), kind: 'detach',
+      run: async () => {
+        const fresh = app.store.indexes.groups.get(cluster.id) ?? cluster;
+        await setClusterMembers(app, fresh, fresh.members.filter(id => id !== unit.id));
+      },
+      onDone: async () => {
+        await refreshAfterMembership(app);
+        showMapToast(app, t('detached', { name, cluster: displayName(cluster.title) }), async () => {
+          const current = app.store.indexes.groups.get(cluster.id);
+          if (current && !current.members.includes(unit.id)) await setClusterMembers(app, current, [...current.members, unit.id]);
+          await refreshAfterMembership(app);
+        });
+      } }); },
+  });
+  dialog.setAttribute('data-form', 'detach-agent');
+}
+
 function ensureMap(app) {
   const units = app.unitList?.catalog?.length ? app.unitList.catalog : [...(app.store.indexes.units?.values?.() ?? [])];
   const saved = app.store.layout ?? { layout: { nodes: {}, groups: {} }, revision: null };
@@ -4307,8 +5420,13 @@ function ensureMap(app) {
   }
   settlePositions(app.mapState);
   app.mapState.selectedGroupId = app.store.selected.groupId;
+  // The Map marks the rows picked in the Hierarchy, by the Hierarchy's own set, so every drawing shows the pick as it is.
+  app.mapState.picked = app.hierarchySelection ??= new Set();
   app.mapState.persist = Boolean(app.store.capabilities?.includes("layout.write"));
+  // Choosing something on the Map ends a pick made in the Hierarchy.
   app.mapState.onSelect = (id) => {
+    app.hierarchySelection?.clear();
+    app.waitingOpen = false;
     app.store.selected.groupId = null;
     app.store.selected.unitId = app.mapState.selection.size === 1 ? id : null;
     if (app.store.selected.unitId) {
@@ -4318,6 +5436,8 @@ function ensureMap(app) {
     if (!app.disposed) renderShell(app);
   };
   app.mapState.onSelection = (ids) => {
+    app.hierarchySelection?.clear();
+    app.waitingOpen = false;
     app.store.selected.groupId = null;
     app.store.selected.unitId = ids.length === 1 ? ids[0] : null;
     if (ids.length === 1) {
@@ -4326,12 +5446,21 @@ function ensureMap(app) {
     } else app.thread = null;
     renderShell(app);
   };
-  app.mapState.onPersonalGroup = (id) => selectGroup(app, id);
+  app.mapState.layerAbove = () => Boolean(app.phonePanelOpen || app.queuePanelOpen);
+  app.mapState.onContextMenu = (target) => openItemMenu(app, { ...target, source: 'map' });
+  app.mapState.onPersonalGroup = (id) => { app.hierarchySelection?.clear(); selectGroup(app, id); };
   app.mapState.onOpenCluster = (id) => openCluster(app, id);
-  app.mapState.onServices = () => { navigate(app, 'settings'); };
   app.mapState.onRename = (id) => beginAlias(app, id);
   app.mapState.onConnect = (pending) => confirmConnection(app, pending.source, [pending.target]);
-  app.mapState.onGroupConnect = () => chooseSelectionLead(app);
+  app.mapState.onConnectDrop = (drop) => openReportMenu(app, drop);
+  app.mapState.onDelete = ({ units, cluster }) => {
+    if (units.length > 1) return confirmDeleteMany(app, units, []);
+    const unit = units[0] ? unitById(app, units[0]) : null;
+    if (unit && unit.role !== 'master') return removeSelectedUnit(app, unit);
+    const group = cluster ? app.store.indexes.groups.get(cluster) : null;
+    if (group && !group.deleted) removeStartCluster(app, group);
+  };
+  app.mapState.onGroupConnect = (pending, point) => chooseSelectionLead(app, null, point);
   app.mapState.onGroupMessage = (ids) => {
     settle(app, "group-chat", text(app.language, "loadingConversation"), async (record) => {
       const result = await openGroupChat(app.api, ids, undefined, record.operation);
@@ -4345,9 +5474,37 @@ function ensureMap(app) {
   return app.mapState;
 }
 
+// While the Map shows the whole graph it follows its stage: when the stage changes size the graph is fitted again, so it stays centred.
+function watchMapSize(app, host) {
+  if (app.mapWatch?.host === host) return;
+  stopWatchingMap(app);
+  const Observer = host.ownerDocument?.defaultView?.ResizeObserver;
+  if (typeof Observer !== 'function') return;
+  const sizeOf = () => { const { width, height } = host.getBoundingClientRect(); return { width, height }; };
+  // Every drawing of the shell brings a new stage, so the size is kept across them: a stage that starts at another size than the one it replaces is a change too.
+  app.mapSize ??= sizeOf();
+  const observer = new Observer(() => {
+    const now = sizeOf(), before = app.mapSize;
+    // The observer also reports the size a stage starts with, and a redraw of the Map never changes the size of its stage.
+    if (now.width === before.width && now.height === before.height) return;
+    app.mapSize = now;
+    const map = app.mapState;
+    if (app.disposed || !map?.autoFit || now.width <= 96 || now.height <= 96) return;
+    fitMap(map, host.getBoundingClientRect());
+  });
+  observer.observe(host);
+  app.mapWatch = { host, observer };
+}
+
+function stopWatchingMap(app) {
+  app.mapWatch?.observer.disconnect();
+  app.mapWatch = null;
+}
+
 function finishMap(app) {
   const host = app.root.querySelector?.(".map");
-  if (!host || !app.mapState) return;
+  if (!host || !app.mapState) { stopWatchingMap(app); return; }
+  watchMapSize(app, host);
   const rect = host.getBoundingClientRect?.() ?? { left: 0, top: 0, width: 760, height: 700 };
   if (!app.mapState.fitted && rect.width > 96 && rect.height > 96) { app.mapState.view = fitMap(app.mapState, rect); app.mapState.fitted = true; }
   if (app.pendingClusterFlight) { flyToCluster(app.mapState, app.pendingClusterFlight, rect); app.pendingClusterFlight = null; }
@@ -4362,7 +5519,6 @@ function finishMap(app) {
   app.mapState.labels = {
     messageGroup: text(app.language, "messageGroup"),
     connect: text(app.language, "connect"),
-    pan: text(app.language, "pan"),
     statusWorking: text(app.language, "statusWorking"),
     statusWaiting: text(app.language, "statusWaiting"),
     statusIdle: text(app.language, "statusIdle"),
@@ -4372,10 +5528,10 @@ function finishMap(app) {
     savingLayout: text(app.language, "savingLayout"),
     layoutError: text(app.language, "layoutError"),
     retry: text(app.language, "retry"),
-    fit: text(app.language, 'finalFit'), services: text(app.language, 'services'),
+    fit: text(app.language, 'finalFit'),
     zoomIn: text(app.language, 'finalZoomIn'), zoomOut: text(app.language, 'finalZoomOut'),
     zoom: text(app.language, 'finalZoom'), zoomReset: text(app.language, 'finalZoomReset'),
-    incubator: text(app.language, 'finalIncubator'), genesis: text(app.language, 'finalGenesis'),
+    help: text(app.language, 'mapControls'), expand: name => text(app.language, 'expandCluster', { name }),
     drag: startText(app.language, 'drag'), unread: count => startText(app.language, 'unread', { count }),
     roleName: node => unitRoleName(node, app.language),
     inside: (name, count) => startText(app.language, 'inside', { name, count }),
@@ -4420,46 +5576,52 @@ function loadVisibleClusterGit(app, host) {
     && app.clusterGit.get(row.groupId)?.revision !== row.group.revision && !app.clusterGitPending.has(row.groupId));
   if (!work.length) return;
   for (const row of work) app.clusterGitPending.add(row.groupId);
-  Promise.allSettled(work.map(async row => {
-    let git = null;
-    try { git = (await startApi.getClusterGit(app.api, row.groupId, startMachine(app))).data; }
-    finally { app.clusterGit.set(row.groupId, { revision: row.group.revision, git }); app.clusterGitPending.delete(row.groupId); }
-  })).then(() => { if (!app.disposed) renderShell(app); });
+  // Three repositories are read at a time, so the readings of a long list never crowd out what the person is doing.
+  const queue = [...work];
+  const reader = async () => {
+    while (queue.length && !app.disposed) {
+      const row = queue.shift();
+      let git = null;
+      try { git = (await startApi.getClusterGit(app.api, row.groupId, startMachine(app))).data; }
+      catch { /* The row shows no branch until the next reading. */ }
+      finally { app.clusterGit.set(row.groupId, { revision: row.group.revision, git }); app.clusterGitPending.delete(row.groupId); }
+      if (!app.disposed) renderShell(app);
+    }
+  };
+  Promise.allSettled([reader(), reader(), reader()]);
 }
 
 function collectionRows(app, t, list) {
   if (app.tab === "chats") {
+    const sent = (chat) => Date.parse(chat.lastMessage?.timestamp || chat.lastMessage?.date || "") || 0;
     const pinned = list.items.filter((chat) => chat.pinned === true);
-    const recent = list.items.filter((chat) => chat.pinned !== true);
+    const unpinned = list.items.filter((chat) => chat.pinned !== true);
+    // The newest conversation comes first; the chats nobody has written in wait together under one folded line.
+    const recent = unpinned.filter((chat) => chat.lastMessage).sort((left, right) => sent(right) - sent(left));
+    const quiet = unpinned.filter((chat) => !chat.lastMessage);
     const rows = [];
-    const pushGroup = (labelKey, chats) => {
-      if (!chats.length) return;
-      rows.push({
-        id: `heading:${labelKey}`,
-        kind: "heading",
-        depth: 0,
-        text: t(labelKey),
-        pos: rows.length + 1,
-        setsize: list.items.length,
-      });
-      for (const chat of chats) {
-        const last = chat.lastMessage;
-        const snippet = last?.body || last?.subject || "";
-        const when = formatShortTime(app.language, last?.timestamp || last?.date || "");
-        const unread = Number(chat.unread) > 0 ? t("unreadCount", { count: formatNumber(app.language, chat.unread) }) : "";
-        rows.push({
-          id: chat.id,
-          kind: "chat",
-          chat,
-          depth: 0,
-          text: [chat.title || chat.id, snippet, when, unread].filter(Boolean).join(" · "),
-          pos: rows.length + 1,
-          setsize: list.items.length,
-        });
-      }
+    const heading = (labelKey) => rows.push({ id: `heading:${labelKey}`, kind: "heading", depth: 0, text: t(labelKey), pos: rows.length + 1, setsize: list.items.length });
+    const chatRow = (chat) => {
+      const last = chat.lastMessage;
+      const body = String(last?.body || last?.subject || "").replace(/\s+/g, " ").trim();
+      const preview = !last ? t("noMessagesTitle") : body ? `${messageSender(app, last)}: ${body}` : "";
+      const when = formatRecent(app.language, last?.timestamp || last?.date || "", app.api.now());
+      const unread = Number(chat.unread) > 0 ? formatNumber(app.language, chat.unread) : "";
+      const title = displayName(chat.title) || chat.id;
+      rows.push({ id: chat.id, kind: "chat", chat, depth: 0, title, preview, when, unread,
+        text: [title, preview, unread ? t("unreadCount", { count: unread }) : when].filter(Boolean).join(", "), pos: rows.length + 1, setsize: list.items.length });
     };
-    pushGroup("pinnedChats", pinned);
-    pushGroup("recentChats", recent);
+    if (pinned.length) { heading("pinnedChats"); pinned.forEach(chatRow); }
+    if (recent.length) { heading("recentChats"); recent.forEach(chatRow); }
+    if (quiet.length) {
+      heading("quietChats");
+      const expanded = app.quietChatsOpen === true || Boolean(list.query);
+      const names = quiet.slice(0, 3).map((chat) => displayName(chat.title) || chat.id).join(", ");
+      const count = cardinal(app.language, "chatsCount", quiet.length);
+      const preview = quiet.length > 3 ? t("chatsAndMore", { names }) : names;
+      rows.push({ id: "group:quiet", kind: "quiet", depth: 0, expanded, count, preview, text: `${count}, ${preview}`, pos: rows.length + 1, setsize: list.items.length });
+      if (expanded) quiet.forEach(chatRow);
+    }
     return rows;
   }
   const currentUnits = [...new Map([...(list.catalog ?? []), ...app.store.indexes.units.values()].map(unit => [unit.id, unit])).values()];
@@ -4471,7 +5633,8 @@ function collectionRows(app, t, list) {
     cluster.worktrees = listedWorktrees(link?.localPath, offered?.worktrees ?? []);
   }
   collapseNewClusters(app.hierarchy, tree.clusters);
-  const rows = flattenVisibleHierarchy(tree, app.hierarchy, list.query);
+  // Until the units have arrived, a service that is missing from the list may just not be loaded yet.
+  const rows = flattenVisibleHierarchy(tree, app.hierarchy, list.query, { loaded: Boolean(list.catalog?.length) || list.status === "ready" || list.status === "empty" });
   const labels = new Map();
   for (const row of rows) if (row.kind === "unit") labels.set(row.label, (labels.get(row.label) ?? 0) + 1);
   for (const row of rows) {
@@ -4500,6 +5663,8 @@ function statusKey(status) {
 function settingsSurface(app, document, t) {
   const home = homeState(app);
   const state = settingsState(app);
+  // Permissions is no tab: a saved or requested one opens Agents with that disclosure open.
+  if (state.tab === "permissions") { state.tab = "agents"; (inputDrafts(app).disclosures ??= new Map()).set("settings-permissions", true); }
   if (!state.loaded && !state.loading && !state.error) loadSettingsSections(app);
   const info = state.info ?? (state.machine === state.localMachine ? app.store.settings ?? {} : { service: { machine: state.machine, state: "unknown" } });
   if (!app.settingsSync && !app.settingsSyncLoading) {
@@ -4514,7 +5679,7 @@ function settingsSurface(app, document, t) {
       app.settingsSyncLoading = false;
     });
   }
-  const issues = (app.store.view?.issues ?? app.unitList?.issues ?? []).map((issue) => ({ message: issue.message }));
+  const issues = (app.store.view?.issues ?? app.unitList?.issues ?? []).map((issue) => ({ code: issue.code, path: issue.path, message: issue.message }));
   const panel = renderSettings(document, {
     tab: state.tab,
     machine: state.machine,
@@ -4541,6 +5706,9 @@ function settingsSurface(app, document, t) {
     grant: home.grant,
     selected: home.selected ?? 0,
     issues,
+    issuesOpen: state.issuesOpen === true,
+    projectQuery: state.projectQuery ?? "",
+    projectOrder: state.projectOrder ?? "ascending",
     limits: app.settingsSync?.limits,
     syncState: app.settingsSync?.state ?? info.service?.syncState ?? app.sync ?? "",
     pendingChanges: app.settingsSync?.pendingChanges,
@@ -4576,11 +5744,16 @@ function settingsSurface(app, document, t) {
     onScan: () => settingsMutation(app, "POST", "/settings/agents/scan", { machine: state.machine }),
     onFind: (agent) => findSettingsAgent(app, agent),
     onReview: (agent, mode, target) => reviewSettingsAgent(app, agent, mode, target),
+    onReviewAll: (agents) => reviewAllSettingsAgents(app, agents),
     onDisconnect: (agent) => disconnectSettingsAgent(app, agent),
     onRevokeGrant: (item) => revokeSettingsGrant(app, item),
     onRevokePermission: (item) => settingsMutation(app, "DELETE", `/settings/permissions/${encodeURIComponent(item.id)}`, { machine: state.machine, expectedRevision: state.permissions.revision }),
     onLinkFolder: () => openClusterLink(app, null, state.machine),
     onRemoveLink: link => removeStartLink(app, link, state.machine),
+    onOpenEditor: link => openLinkEditor(app, link, state.machine),
+    onCopyPath: link => copyLinkPath(app, link),
+    onProjectView: ({ query, order }) => { state.projectQuery = query; state.projectOrder = order; },
+    onIssuesOpen: open => { state.issuesOpen = open; },
     onAdd: () => openSharedAdd(app),
     onUpdateAddition: item => openSharedAdd(app, item),
     onRemoveAddition: item => confirmRemoveAddition(app, item),
@@ -4617,6 +5790,7 @@ function settingsSurface(app, document, t) {
       app.root.querySelector("[data-action='replace-home']")?.focus();
     },
   });
+  for (const node of panel.querySelectorAll("[data-disclosure]")) trackDisclosure(app, node, node.getAttribute("data-disclosure"));
   if (outcomeVisible(app) && app.actionScope === "settings") panel.append(element(document, "p", {
     class: "settings-toast", "data-settings-toast": "true", "data-action-note": "true", text: app.actionNote,
   }));
@@ -4846,6 +6020,88 @@ function applySettingsReview(app, dialog, review, ids) {
     if (dialog.getAttribute("open") !== null) settingsDialogError(dialog, actionText(app.language, error.code));
     noteAction(app, error, `settings-apply:${review.preview.previewId}`);
   });
+}
+
+// Review all: every agent that is behind is previewed, the changes are read together, and applying them runs in Activity.
+function reviewAllSettingsAgents(app, agents) {
+  const state = settingsState(app);
+  const machine = state.machine;
+  return settle(app, "settings-preview-all", text(app.language, "settingsReviewAll"), async () => {
+    const items = [];
+    for (const agent of agents) items.push({ agent, preview: (await previewAgent(app.api, agent.id, { machine, mode: agent.mode, target: "cli", allowGit: false })).data });
+    if (app.disposed || state.machine !== machine || app.mode !== "settings") return;
+    const review = { machine, language: app.language, items };
+    const dialog = renderReviewAll(app.root.ownerDocument, review, (key, variables) => text(app.language, key, variables), {
+      onApplyAll: () => { dialog.close(); enqueueApplyAll(app, review); },
+    });
+    state.dialog?.close();
+    mountSettingsDialog(app, dialog, "settings-review-all");
+  });
+}
+
+const reviewedChanges = preview => preview.changes.filter(change => !change.optional).map(({ id, path, afterText }) => ({ id, path, afterText }));
+
+// An agent that fails is kept for its own result line and does not stop the others; Retry asks again only for what is left.
+function enqueueApplyAll(app, review) {
+  const { machine, items } = review;
+  const steps = items.map(({ agent, preview }, index) => ({ agent, preview, reviewed: JSON.stringify(reviewedChanges(preview)), fresh: index > 0, done: false, retained: null }));
+  const results = steps.map(step => ({ name: step.agent.name, state: "waiting" }));
+  return app.queue.add({ label: cardinal(app.language, "jobApplyAll", steps.length), steps: steps.length > 1 ? steps.length : null, kind: "agents",
+    run: async (report, job) => {
+      job.results = results;
+      let failure = null;
+      for (const [index, step] of steps.entries()) {
+        if (step.done) continue;
+        try {
+          await applyAgentStep(app, machine, step);
+          step.done = true;
+          results[index] = { name: step.agent.name, state: "done" };
+        } catch (error) {
+          failure ??= error;
+          results[index] = { name: step.agent.name, state: "failed", code: error?.code };
+        }
+        report(steps.filter(item => item.done).length, steps.length);
+      }
+      await loadSettingsSections(app);
+      if (failure) throw failure;
+    } });
+}
+
+// Applying one agent changes what the next one's preview was read against, so each after the first is read again just before it is applied.
+async function applyAgentStep(app, machine, step) {
+  const { agent } = step;
+  if (step.fresh && !step.retained) {
+    step.preview = (await previewAgent(app.api, agent.id, { machine, mode: agent.mode, target: "cli", allowGit: false })).data;
+    // Nothing left to write means an earlier attempt already did it.
+    if (!reviewedChanges(step.preview).length) return;
+    if (JSON.stringify(reviewedChanges(step.preview)) !== step.reviewed) throw new ApiError(409, "configuration_changed", "The reviewed configuration selection changed.");
+  }
+  const { preview } = step;
+  try {
+    await applyAgent(app.api, agent.id, { machine, previewId: preview.previewId, changeIds: preview.changes.filter(change => !change.optional).map(change => change.id), expectedRevision: preview.revision }, step.retained);
+    step.retained = null;
+  } catch (error) {
+    // A write whose answer was lost is asked again with the same preview and key; a refusal reads the configuration again.
+    step.retained = app.api.uncertain.has(error?.operation?.id) ? error.operation : null;
+    if (!step.retained) step.fresh = true;
+    throw error;
+  }
+}
+
+function openLinkEditor(app, link, machine) {
+  return settle(app, `editor:${link.clusterId}`, startText(app.language, "openEditor"), async record => {
+    const result = await startApi.openClusterEditor(app.api, link.clusterId, machine, record.operation); return result;
+  });
+}
+
+async function copyLinkPath(app, link) {
+  try {
+    await app.root.ownerDocument.defaultView.navigator.clipboard.writeText(link.localPath);
+    showMapToast(app, text(app.language, "settingsPathCopied"), null, app.api.now() + 3000);
+  } catch {
+    showOutcome(app, text(app.language, "settingsPathNotCopied"), "settings_path_not_copied", "error", "settings");
+  }
+  renderShell(app);
 }
 
 function disconnectSettingsAgent(app, agent) {
@@ -5133,22 +6389,37 @@ function waitForActivity(app, record, work, previous) {
   });
 }
 
+const LIBRARY_SEARCH_PAUSE_MS = 200;
+
 function libraryActions(app, kind) {
   const editors = editorsOf(app);
   const state = libraryState(editors, kind);
   const refresh = () => editorAct(app, `library:${kind}:${JSON.stringify([state.query, state.filters])}`, text(app.language, "loadingList"), async () => loadCatalog(app.api, editors, kind));
   return {
-    select: (item) => selectEditor(app, item), refresh,
-    query: (value) => { state.query = value; refresh(); },
+    // The row is read when it is pressed: if the catalog has changed under it and it is gone, nothing opens.
+    select: (id) => {
+      const item = editors.catalog.find((entry) => entry.id === id && entry.kind === kind);
+      if (item) selectEditor(app, item);
+    },
+    refresh,
+    // One request per pause in typing; an emptied box does not wait.
+    query: (value) => {
+      state.query = value;
+      clearTimeout(state.searchTimer);
+      if (!value) { refresh(); return; }
+      state.searchTimer = setTimeout(() => { state.searchTimer = null; if (!app.disposed) refresh(); }, LIBRARY_SEARCH_PAUSE_MS);
+      state.searchTimer.unref?.();
+    },
     filter: (key, value) => {
       if (value == null) delete state.filters[key]; else state.filters[key] = value;
       refresh();
     },
-    toggle: (key) => {
-      const collapsed = state.query || Object.keys(state.filters).length ? state.matchingCollapsed : state.collapsed;
-      if (collapsed.has(key)) collapsed.delete(key); else collapsed.add(key);
+    toggle: (key, open) => {
+      if (state.query || Object.keys(state.filters).length) state.matchingCollapsed[open ? "delete" : "add"](key);
+      else { state.opened[open ? "add" : "delete"](key); state.collapsed[open ? "delete" : "add"](key); }
       renderShell(app);
     },
+    issues: () => { state.issuesOpen = !state.issuesOpen; renderShell(app); },
     menu: (type, entry, control) => {
       const box = control.getBoundingClientRect();
       const view = app.root.ownerDocument.defaultView;
@@ -5161,6 +6432,7 @@ function libraryActions(app, kind) {
     },
     closeMenu: () => { const opener = state.menu?.opener; state.menu = null; renderShell(app); restoreInvoker(app, opener); },
     create: canEditResources(app) ? () => openResourceForm(app, kind, "create") : null,
+    register: canEditResources(app) ? () => openResourceForm(app, kind, "register") : null,
     folder: () => newLibraryFolder(app, kind),
     manage: canEditResources(app) ? (action, entry, type) => {
       state.menu = null;
@@ -5187,14 +6459,14 @@ function beginLibraryRename(app, kind, entry, type) {
     editing.read = request(app.api, "GET", kind === "blueprint" ? "/blueprint/boards/:resourceId" : "/void/texts/:resourceId", { params: { resourceId: entry.id } })
       .then((result) => { editing.record = result.data; }).catch((error) => { editing.readError = error; });
   } else {
-    state.collapsed.delete(`project:${entry.project}`);
-    state.matchingCollapsed.delete(`project:${entry.project}`);
+    // The folder being named is shown: every folder above it opens.
+    const reveal = (key) => { state.collapsed.delete(key); state.opened.add(key); state.matchingCollapsed.delete(key); };
+    reveal(`project:${entry.project}`);
     let parentId = entry.parentId;
     const parents = new Set();
     while (parentId && !parents.has(parentId)) {
       parents.add(parentId);
-      state.collapsed.delete(`${entry.project}:${parentId}`);
-      state.matchingCollapsed.delete(`${entry.project}:${parentId}`);
+      reveal(`${entry.project}:${parentId}`);
       parentId = state.folders.find((folder) => folder.id === parentId && folder.project === entry.project)?.parentId;
     }
   }
@@ -5397,6 +6669,7 @@ function newLibraryFolder(app, kind) {
       await loadCatalog(app.api, editorsOf(app), kind);
       const state = libraryState(editorsOf(app), kind);
       if (!state.folders.some((folder) => folder.id === result.data.folder.id)) state.folders.push(result.data.folder);
+      state.created.add(result.data.folder.id);
       beginLibraryRename(app, kind, result.data.folder, "folder");
       return true;
     } catch (error) { operation = error.operation ?? operation; throw error; }
@@ -5520,11 +6793,16 @@ function renderLibraryToast(app, t) {
   return node;
 }
 
-function activityMessage(app, record) {
-  const action = record?.action || record?.label || text(app.language, "actionFailed");
+// The label of an action reads as a sentence of its own ("Loading the conversation."), so its stop is dropped before the verdict.
+function activityMessage(app, records) {
+  const list = Array.isArray(records) ? records : [records];
+  const record = list[0];
   const code = record?.error?.code;
   const known = Boolean(code && Object.hasOwn(ACTION_COPY, code));
   const cause = known ? `${actionText(app.language, code, { machine: record.error?.details?.machine ?? "" })} ` : "";
+  if (list.length > 1) return text(app.language, "activityFailedMany", { count: list.length, cause });
+  const action = String(record?.action || record?.label || "").replace(/[.\s]+$/, "");
+  if (!action) return `${cause}${text(app.language, "actionFailed")}`.trim();
   return text(app.language, "activityFailed", { action, cause });
 }
 
@@ -5588,35 +6866,150 @@ function placeBefore(anchor, node) {
   return true;
 }
 
+// A finished item stays in the corner this long, then only in the bell's list.
+const QUEUE_DONE_SHOWN_MS = 4000;
+
+function queueStateText(app, item) {
+  if (item.state === 'running' && item.progress?.total) return text(app.language, 'queueProgress', { done: item.progress.done, total: item.progress.total });
+  return text(app.language, { waiting: 'queueWaiting', running: 'queueRunning', done: 'queueDone', failed: 'queueFailed' }[item.state]);
+}
+
+function queueCard(app, item) {
+  const document = app.root.ownerDocument;
+  const card = element(document, 'div', { class: `queue-item is-${item.state}`, 'data-queue-item': item.id, 'data-queue-state': item.state, role: item.state === 'failed' ? 'alert' : 'status' },
+    element(document, 'div', { class: 'queue-head' }, element(document, 'strong', { class: 'queue-label', text: item.label }), element(document, 'span', { class: 'queue-state', text: queueStateText(app, item) })));
+  if (item.state === 'running' || item.state === 'waiting') {
+    const total = item.progress?.total, done = item.progress?.done ?? 0;
+    const fill = element(document, 'span', { class: 'queue-fill' });
+    if (total) fill.style.width = `${Math.max(4, Math.round((done / total) * 100))}%`;
+    card.append(element(document, 'div', { class: `queue-bar${total && item.state === 'running' ? '' : ' is-indeterminate'}${item.state === 'waiting' ? ' is-waiting' : ''}`, role: 'progressbar', 'aria-label': item.label,
+      ...(total ? { 'aria-valuemin': '0', 'aria-valuemax': String(total), 'aria-valuenow': String(done) } : {}) }, fill));
+  }
+  // A job over several things says how each one went.
+  if (item.results?.length) {
+    card.append(element(document, 'ul', { class: 'queue-results' }, item.results.map(result => element(document, 'li', { class: `is-${result.state}`, 'data-queue-result': result.state },
+      element(document, 'span', { text: result.name }),
+      element(document, 'span', { text: result.state === 'failed' ? `${text(app.language, 'queueFailed')}: ${actionText(app.language, result.code)}`
+        : text(app.language, result.state === 'done' ? 'queueDone' : 'queueWaiting') })))));
+  }
+  if (item.state === 'failed') {
+    const partial = item.progress?.total > 1 ? `${text(app.language, 'queueProgress', { done: item.progress.done, total: item.progress.total })}. ` : '';
+    card.append(element(document, 'p', { class: 'queue-error', text: partial + actionText(app.language, item.error?.code) }),
+      element(document, 'div', { class: 'queue-actions' },
+        element(document, 'button', { type: 'button', class: 'btn primary', 'data-action': 'queue-retry', text: text(app.language, 'retry'), onclick: () => app.queue.retry(item.id) }),
+        element(document, 'button', { type: 'button', class: 'btn quiet', 'data-action': 'queue-dismiss', text: text(app.language, 'close'), onclick: () => app.queue.dismiss(item.id) })));
+  }
+  return card;
+}
+
+// The corner shows what runs, waits or failed, and what just finished; the bell opens the whole list.
+function paintQueue(app, shell) {
+  if (!app.queue || app.layout === 'phone') return;
+  const document = app.root.ownerDocument, now = app.api.now();
+  const items = app.queue.items;
+  if (app.queuePanelOpen) {
+    const panel = element(document, 'section', { class: 'queue-panel', 'data-queue-panel': 'true', role: 'dialog', 'aria-label': text(app.language, 'queueTitle') },
+      element(document, 'header', { class: 'queue-panel-head' }, element(document, 'h2', { text: text(app.language, 'queueTitle') }),
+        element(document, 'button', { type: 'button', class: 'btn quiet', 'data-action': 'close-queue', text: text(app.language, 'close'), onclick: () => { app.queuePanelOpen = false; renderShell(app); } })));
+    if (!items.length) panel.append(element(document, 'p', { class: 'queue-empty', text: text(app.language, 'queueEmpty') }));
+    for (const item of [...items].reverse()) panel.append(queueCard(app, item));
+    if (items.some(item => ['done', 'failed'].includes(item.state))) panel.append(element(document, 'button', { type: 'button', class: 'btn ghost', 'data-action': 'queue-clear', text: text(app.language, 'queueClear'), onclick: () => app.queue.clearFinished() }));
+    shell.append(panel);
+    return;
+  }
+  const shown = items.filter(item => item.state !== 'done' || now - (item.endedAt ?? now) < QUEUE_DONE_SHOWN_MS);
+  if (!shown.length) return;
+  // A finished item leaves the corner on its own.
+  const leaving = shown.filter(item => item.state === 'done').map(item => (item.endedAt ?? now) + QUEUE_DONE_SHOWN_MS - now);
+  if (leaving.length) {
+    clearTimeout(app.queueTimer);
+    app.queueTimer = setTimeout(() => { if (!app.disposed) renderShell(app); }, Math.max(50, Math.min(...leaving) + 20));
+    app.queueTimer.unref?.();
+  }
+  const stack = element(document, 'div', { class: 'queue-stack', 'data-queue-stack': 'true' });
+  const visible = shown.slice(-3);
+  for (const item of visible) stack.append(queueCard(app, item));
+  if (shown.length > visible.length) stack.prepend(element(document, 'button', { type: 'button', class: 'btn quiet queue-more', 'data-action': 'open-queue',
+    text: text(app.language, 'queueMore', { count: shown.length - visible.length }), onclick: () => { app.queuePanelOpen = true; renderShell(app); } }));
+  shell.append(stack);
+}
+
+const SLOW_NOTICE_S = 5;
+
+function deletionRunning(app) {
+  return Boolean(app.queue?.items.some(item => item.state === 'running' && ['delete', 'undo'].includes(item.kind)));
+}
+
+const TRANSIENT_CODES = new Set(['timeout', 'service_unavailable', 'request_rate_limited', 'closed']);
+function transientFailure(error) {
+  return Boolean(error) && (TRANSIENT_CODES.has(String(error.code)) || error.name === 'TypeError' || (error.status === 0 && !error.code));
+}
+function serviceDown(app) {
+  return Boolean(app.serviceStopped || app.recoveryError || ['connecting', 'reconnecting', 'error'].includes(app.store.stream?.state));
+}
+// When the live connection comes back, what failed because the service did not answer is asked again by itself.
+function retryTransient(app) {
+  // Only reads are asked again here; a write the service may have applied is replayed under its own identity by recheckTracked.
+  for (const record of [...(app.activity?.values() ?? [])]) if (record.phase === 'error' && transientFailure(record.error) && !record.operation && !record.error?.operation) record.retry?.();
+  if (app.startError && transientFailure(app.startError)) loadStartReports(app);
+}
+
 function paintActivity(app, shell) {
   const here = noteScope(app);
   const scoped = [...(app.activity?.values() ?? [])].filter((record) => (record.scope ?? here) === here);
   const records = activityNotices(scoped);
-  const pending = records.filter((record) => record.phase === "pending" && !quietActivity(record.key, scoped));
-  const failed = records.filter((record) => record.phase === "error");
+  // A request is only "taking longer than usual" once it really is: before SLOW_NOTICE_S the button's own loader says it is working.
+  const pending = records.filter((record) => record.phase === "pending" && !quietActivity(record.key, scoped) && (Number(record.elapsed) || 0) >= (app.slowNoticeAfterS ?? SLOW_NOTICE_S));
+  // While the service is unreachable its banner speaks for every request that failed for that reason; they are retried by
+  // themselves when it answers again, instead of each asking for its own Retry.
+  const failed = records.filter((record) => record.phase === "error" && !(serviceDown(app) && transientFailure(record.error)));
   if (!pending.length && !failed.length) return;
   const document = app.root.ownerDocument;
   const region = element(document, "div", { class: "activity", "data-activity-region": "true" });
   if (pending.length) shell.setAttribute("aria-busy", "true");
-  for (const record of pending) {
+  // Several slow requests are one notice: it counts from the one waiting longest and Cancel stops them all.
+  if (pending.length) {
+    const lead = pending.reduce((first, record) => ((Number(record.elapsed) || 0) > (Number(first.elapsed) || 0) ? record : first), pending[0]);
     const copy = element(document, "div", {}, element(document, "strong", { text: sendText(app, "takingLonger") }));
-    if ((Number(record.elapsed) || 0) >= 1) copy.append(element(document, "p", { text: sendText(app, "waiting", { seconds: record.elapsed }) }));
-    const notice = element(document, "div", { class: "slow-notice", "data-activity": record.key });
+    if ((Number(lead.elapsed) || 0) >= 1) copy.append(element(document, "p", { text: sendText(app, "waiting", { seconds: lead.elapsed }) }));
+    const notice = element(document, "div", { class: "slow-notice", "data-activity": pending[0].key, "data-pending-count": String(pending.length) });
     notice.append(element(document, "span", { class: "spinner", "aria-hidden": "true" }), copy, element(document, "button", {
-      type: "button", class: "btn ghost", "data-action": "cancel-activity", "data-activity": record.key, text: text(app.language, "cancel"), onclick: () => record.cancel?.(),
+      type: "button", class: "btn ghost", "data-action": "cancel-activity", "data-activity": pending[0].key, text: text(app.language, "cancel"), onclick: () => { for (const record of pending) record.cancel?.(); },
     }));
     region.append(notice);
   }
+  // One failure is one notice per cause with one Retry, however many requests failed the same way.
+  const causes = new Map();
   for (const record of failed) {
-    region.append(element(document, "p", { "data-activity": record.key, text: activityMessage(app, record) }));
-    region.append(element(document, "button", {
+    const cause = String(record.error?.code ?? "unknown");
+    causes.set(cause, [...(causes.get(cause) ?? []), record]);
+  }
+  for (const group of causes.values()) {
+    const notice = element(document, "div", { class: "notice notice-error", role: "alert", "data-activity-count": String(group.length) },
+      element(document, "p", { "data-activity": group[0].key, text: activityMessage(app, group) }));
+    notice.append(element(document, "button", {
       type: "button",
       class: "btn",
       "data-action": "retry-activity",
-      "data-activity": record.key,
+      "data-activity": group[0].key,
       text: text(app.language, "retry"),
-      onclick: () => record.retry?.(),
+      onclick: () => Promise.all([...group.map((record) => record.retry?.()), ...(app.startError && String(app.startError.code ?? "unknown") === String(group[0].error?.code ?? "unknown") ? [loadStartReports(app)] : [])]),
     }));
+    // A failure the person has seen can be closed; it never stays on screen over what is behind it.
+    notice.append(element(document, "button", {
+      type: "button",
+      class: "btn quiet notice-close",
+      "data-action": "dismiss-activity",
+      "data-activity": group[0].key,
+      "aria-label": text(app.language, "close"),
+      title: text(app.language, "close"),
+      text: "×",
+      onclick: () => {
+        for (const record of group) app.activity?.delete(record.key);
+        if (!app.disposed) renderShell(app);
+      },
+    }));
+    region.append(notice);
   }
   const field = here === "unit" ? composerField(shell) : null;
   if (field && placeBefore(field, region)) return;
@@ -5703,7 +7096,7 @@ function renderFooter(app, t) {
       element(document, "span", { class: "status-dot", "data-status": serviceState, "aria-hidden": "true" }),
       element(document, "span", { text: serviceText })),
     quietSync ? null : element(document, "span", { "data-sync": syncState ?? "", "data-pending": String(app.settingsSync?.pendingChanges ?? ""), text: t(syncKey) }),
-    element(document, "span", { text: t("lastRead", { time }) }),
+    element(document, "span", { class: "foot-read", text: t("lastRead", { time }) }),
     machines,
   );
   if (Number.isInteger(app.settingsSync?.pendingChanges)) {
@@ -5766,6 +7159,17 @@ function renderSignedOut(app) {
   document.documentElement.lang = app.language;
   document.documentElement.dataset.look = app.look;
   document.documentElement.dataset.mode = 'phone';
+  // A desktop window opened from the desktop icon that lost its session (a reload, for one) is not a phone: it is told how to
+  // open the app again instead of being asked for a phone code.
+  if (/^\/gui\/[^/]+/.test(String(app.api.location?.pathname ?? '')) && !app.api.homeKey) {
+    const gate = element(document, 'section', { class: 'gate desktop-gate', 'data-desktop-signed-out': 'true' });
+    document.title = `${t('desktopReopenTitle')} · HIVEM1ND`;
+    gate.append(element(document, 'div', { class: 'phone-gate-content' }, brand(document).querySelector('.mark'),
+      element(document, 'h1', { text: t('desktopReopenTitle') }), element(document, 'p', { role: 'status', text: t('desktopReopenBody') })));
+    app.root.replaceChildren(gate);
+    releaseBootstrapAnnouncement(app);
+    return;
+  }
   const locked = app.phoneLockDeadline > app.api.now();
   const state = app.phoneEnded ? 'ended' : locked ? 'locked' : app.phoneError === 'phoneCodeMismatch' ? 'error' : 'pair';
   const gate = element(document, "section", { class: "gate phone-gate", "data-phone-state": state });
@@ -5835,6 +7239,18 @@ async function submitCode(app, code) {
   }
 }
 
+// Nothing listening answers at once with a refused connection; a service that is up answers anything, slowly or not.
+async function probeServiceStopped(app, error) {
+  if (error instanceof ApiError && error.code !== "timeout") return false;
+  if (!(error instanceof ApiError)) return true;
+  try {
+    await app.api.fetch(`${app.api.location.origin}/`, { method: "HEAD", cache: "no-store", redirect: "manual", signal: AbortSignal.timeout(3000) });
+    return false;
+  } catch (probe) {
+    return probe?.name !== "AbortError" && probe?.name !== "TimeoutError";
+  }
+}
+
 function renderFailure(app, error) {
   if (app.layout === 'desktop' && app.store.snapshotReady && app.recovery) {
     app.recoveryError = error;
@@ -5845,6 +7261,10 @@ function renderFailure(app, error) {
   if (app.layout !== "phone" && app.api.token) {
     app.bootFailed = true;
     app.bootError = error;
+    app.bootStopped = false;
+    probeServiceStopped(app, error).then((stopped) => {
+      if (stopped && !app.disposed && app.bootFailed && app.bootError === error) { app.bootStopped = true; renderShell(app); }
+    });
     renderShell(app);
     releaseBootstrapAnnouncement(app, openingText(app, "failure"));
     return;
@@ -5877,7 +7297,7 @@ function renderFailure(app, error) {
   releaseBootstrapAnnouncement(app, message);
 }
 
-const BOOTSTRAP_ANNOUNCEMENTS = new Set(["Loading.", "Cargando.", "Reading the M1ND.", "Leyendo el M1ND."]);
+const BOOTSTRAP_ANNOUNCEMENTS = new Set(["Loading.", "Cargando.", "Reading the M1ND.", "Leyendo la M1ND."]);
 
 function renderStatus(app, key) {
   if (app.api.token && app.layout !== "phone") {
@@ -5985,7 +7405,7 @@ function brand(document) {
   two.setAttribute("class", "two");
   two.setAttribute("d", "M30 18 42 25 42 39 30 46 18 39 18 25 Z");
   svg.append(one, two);
-  return element(document, "div", { class: "brand" }, svg, "HIVEM1ND");
+  return element(document, "div", { class: "brand" }, svg, element(document, "span", { class: "brand-name", text: "HIVEM1ND" }));
 }
 
 function syncCopy(sync) {
@@ -6017,6 +7437,7 @@ const ACTION_COPY = {
   invalid_folder: "libraryInvalidFolder",
   folder_not_found: "libraryInvalidFolder",
   read_only_resource: "libraryReadOnly",
+  import_unavailable: "moduleUnreadable",
   undo_expired: "libraryUndoExpired",
   invalid_lead: "invalidLead",
   machine_unavailable: "machineDown",
@@ -6053,6 +7474,7 @@ const ACTION_COPY = {
   unsupported_media_type: "rejectedRequest",
   uri_too_long: "rejectedRequest",
   invalid_session: "sessionInvalid",
+  stop_unavailable: "stopUnavailable",
   invalid_origin: "actionForbidden",
   loopback_only: "actionForbidden",
   peer_not_allowed: "actionForbidden",
@@ -6109,30 +7531,41 @@ function taskText(language, status) {
   return text(language, TASK_COPY[status] ?? "actionFailed");
 }
 
+// The machine an agent runs on, as the inspector last read it.
+function agentMachine(app, agent) {
+  return (app.inspectorData?.unitId === agent.id ? app.inspectorData.machines?.find((item) => item.id === agent.machine) : null)
+    ?? app.store.view?.machines?.find((item) => item.id === agent.machine);
+}
+
 function actionControls(app, t, selected) {
   const document = app.root.ownerDocument;
   const row = element(document, "div", { class: "action-row" });
   const caps = app.store.capabilities ?? [];
   if (caps.includes('unit.create') && !overseerExists(app)) row.append(mapButton(app, 'create-overseer', startText(app.language, 'createOverseer'), () => createOverseer(app), { class: 'btn primary' }));
-  if (selected && caps.includes('unit.create')) row.append(mapButton(app, 'change-runs-in', startText(app.language, 'runsIn'), () => openUnitRunsIn(app, selected)));
+  // Where it runs is a choice that shows its current value; Start beside it is the action, so the two never read alike.
+  if (selected && caps.includes('unit.create')) {
+    const choice = runsInLabel(selected.runsIn, app.startAgents?.connectedClients, app.language, { brief: true }) || startText(app.language, 'runsInNone');
+    row.append(mapButton(app, 'change-runs-in', choice, () => openUnitRunsIn(app, selected),
+      { class: 'btn ghost runs-in-choice', title: startText(app.language, 'runsIn'), 'aria-label': `${startText(app.language, 'runsIn')}: ${choice}` }));
+  }
   // Claude Code and Cursor are not confined: say whether this agent asks first or works automatically. Confined clients show nothing.
   if (selected && caps.includes('unit.create') && ['claude', 'cursor'].includes(selected.runsIn?.client) && (!app.startPermissions || app.startPermissionsStale) && !(Date.now() - (app.permissionsFailedAt ?? 0) < 30000)) refreshPermissions(app);
   if (selected && app.startPermissions && ['claude', 'cursor'].includes(selected.runsIn?.client)) {
     const automatic = Boolean(automaticGrant(app.startPermissions, selected));
     row.append(element(document, 'p', { class: 'native-mode', 'data-native-mode': automatic ? 'automatic' : 'supervised', text: startText(app.language, automatic ? 'automaticNotConfined' : 'asksFirst') }));
   }
-  if (selected && caps.includes("session.start")) {
-    const machine = (app.inspectorData?.unitId === selected.id ? app.inspectorData.machines?.find((item) => item.id === selected.machine) : null)
-      ?? app.store.view?.machines?.find(item => item.id === selected.machine);
-    const offline = machine?.answers === false;
-    row.append(element(document, "button", { type: "button", class: "btn", "data-action": "start-session", text: t("startSession"), disabled: offline ? "" : null, "aria-describedby": offline ? "reason-session-machine" : null, onclick: () => openSessionForm(app, selected) }));
-    if (offline) row.append(element(document, "p", { class: "field-hint", id: "reason-session-machine", "data-disabled-reason": "machine", text: t("finalNeedsOnline", { machine: selected.machine }) }));
+  // Only the action that can happen shows: Start, Stop while a session runs, or a notice while the machine does not answer.
+  const sessionId = selected?.sessionIds?.[0];
+  if (selected && agentMachine(app, selected)?.answers === false) {
+    row.append(element(document, "div", { class: "machine-notice", role: "status", "data-machine-notice": selected.machine }, icon(document, "alert"),
+      element(document, "div", {}, element(document, "strong", { text: startText(app.language, "notAnswering", { machine: selected.machine }) }),
+        element(document, "p", { text: startText(app.language, "notAnsweringBody", { agent: unitDisplayName(selected), machine: selected.machine }) }))));
+  } else if (selected && sessionId && caps.includes("session.stop")) {
+    row.append(element(document, "button", { type: "button", class: "btn", "data-action": "stop-session", "data-session": sessionId, text: t("stopSession"), onclick: () => confirmStop(app, sessionId, selected) }));
+  } else if (selected && !sessionId && caps.includes("session.start")) {
+    row.append(element(document, "button", { type: "button", class: "btn", "data-action": "start-session", text: t("startSession"), onclick: () => openSessionForm(app, selected) }));
   }
   if (selected && caps.includes("unit.create") && app.layout !== "phone") row.append(unitMenu(app, selected));
-  const sessionId = selected?.sessionIds?.[0];
-  if (sessionId && caps.includes("session.stop")) {
-    row.append(element(document, "button", { type: "button", class: "btn", "data-action": "stop-session", "data-session": sessionId, text: t("stopSession"), onclick: () => confirmStop(app, sessionId, selected) }));
-  }
   for (const id of app.mapState?.layoutConflict?.ids ?? []) {
     row.append(element(document, "button", { type: "button", class: "btn", "data-action": "keep-local", text: t("keepLocal"), onclick: () => keepLocalPosition(app.mapState, id) }));
     row.append(element(document, "button", { type: "button", class: "btn", "data-action": "use-incoming", text: t("useIncoming"), onclick: () => useIncomingPosition(app.mapState, id) }));
@@ -6143,7 +7576,7 @@ function actionControls(app, t, selected) {
 function unitNameNode(document, unit) {
   const name = element(document, "span", { class: "unit-name" });
   if (unit.alias) name.append(element(document, "strong", { class: "unit-alias", text: unit.alias }));
-  name.append(element(document, "span", { class: "unit-original", text: unit.unit }));
+  name.append(element(document, "span", { class: "unit-original", text: displayName(unit.unit) }));
   return name;
 }
 
@@ -6160,7 +7593,7 @@ function decorateHierarchy(app, host) {
   const t = (key, variables) => text(app.language, key, variables);
   const decorate = () => {
     for (const node of host.querySelectorAll("[data-row]")) {
-      const row = app.activeRows?.find((item) => item.id === node.getAttribute("data-id"));
+      const row = app.activeRows?.find((item) => String(item.id) === node.getAttribute("data-id"));
       if (!row) continue;
       if (row.unit) {
         node.setAttribute("aria-label", row.text);
@@ -6207,6 +7640,29 @@ function decorateHierarchy(app, host) {
         const count = element(document, "span", { class: "group-count", text: row.count ? String(row.count) : "" });
         count.style.gridColumn = "5";
         node.replaceChildren(disclosure, mark, title, branch, count);
+      } else if (row.kind === "chat") {
+        // The avatar, the name with the last message under it, and at the right the unread count or the time of that message.
+        node.setAttribute("aria-label", row.text);
+        const tail = row.unread
+          ? element(document, "span", { class: "chat-unread", "aria-label": t("unreadCount", { count: row.unread }), text: row.unread })
+          : element(document, "span", { class: "chat-when", text: row.when });
+        node.replaceChildren(element(document, "span", { class: "chat-avatar", "aria-hidden": "true" }, icon(document, chatGlyph(app, row.chat))),
+          element(document, "span", { class: "chat-text" }, element(document, "span", { class: "chat-title", text: row.title }), element(document, "span", { class: "chat-preview", text: row.preview })), tail);
+      } else if (row.kind === "quiet") {
+        node.setAttribute("aria-expanded", String(row.expanded));
+        node.setAttribute("aria-label", row.text);
+        node.replaceChildren(hierarchyDisclosure(document, row.expanded), element(document, "span", { class: "chat-title", text: row.count }), element(document, "span", { class: "chat-preview", text: row.preview }));
+      } else if (row.kind === 'service') {
+        // A service nobody set up yet reads like an agent row with a muted line under its name; the row sets it up.
+        node.setAttribute('data-service-row', row.role);
+        node.setAttribute('aria-label', `${row.text}, ${t('notSetUp')}`);
+        if (!serviceSetupAllowed(app)) node.setAttribute('aria-disabled', 'true');
+        const glyph = icon(document, row.glyph);
+        glyph.style.gridColumn = '2';
+        const title = element(document, 'span', { class: 'group-title' }, element(document, 'span', { class: 'unit-name' }, element(document, 'span', { class: 'unit-original', text: row.text })),
+          element(document, 'span', { class: 'hierarchy-sub', text: t('notSetUp') }));
+        title.style.gridColumn = '3';
+        node.replaceChildren(glyph, title);
       } else if (row.kind === 'worktree') {
         node.setAttribute('data-cluster-worktree', row.worktree.id);
         const title = element(document, 'code', { class: 'hierarchy-worktree', text: row.label || pathFolder(row.worktree.path) });
@@ -6218,16 +7674,24 @@ function decorateHierarchy(app, host) {
         const mark = icon(document, 'graph');
         mark.style.gridColumn = '2';
         node.replaceChildren(mark, title, branch);
-      } else if (row.id === "section:clusters") {
-        const heading = element(document, "div", { class: "my-groups-heading", "data-my-groups": "true" }, element(document, "span", { text: startText(app.language, "clusters") }));
-        if (app.layout !== "phone" && app.store.capabilities.includes("chat.manage")) {
-          const add = mapButton(app, 'new-cluster', startText(app.language, 'newCluster'), () => openStartCluster(app), { class: 'icon-button', 'aria-label': startText(app.language, 'newCluster'), title: startText(app.language, 'newCluster') });
-          add.replaceChildren(folderIcon(document, true));
-          heading.append(add);
+      } else if (row.kind === "heading") {
+        // Every section heading of the Hierarchy and of Chats is this one element, so Clusters, Services, Pinned and Recent read alike.
+        // It keeps the row's id and its place in the keyboard order, and the list's row height so the window still adds up.
+        const heading = element(document, "div", { class: "my-groups-heading", "data-id": row.id, tabindex: app.activeList.focusId === row.id ? "0" : "-1" }, element(document, "span", { text: row.text }));
+        heading.style.height = `${app.activeList.rowHeight}px`;
+        if (row.id === "section:clusters") {
+          heading.setAttribute("data-my-groups", "true");
+          if (app.layout !== "phone" && app.store.capabilities.includes("chat.manage")) {
+            const add = mapButton(app, 'new-cluster', startText(app.language, 'newCluster'), () => openStartCluster(app), { class: 'icon-button', 'aria-label': startText(app.language, 'newCluster'), title: startText(app.language, 'newCluster') });
+            add.replaceChildren(folderIcon(document, true));
+            heading.append(add);
+          }
         }
+        const focused = document.activeElement === node;
         if (host.insertBefore) host.insertBefore(heading, node);
         else { heading.parent = host; heading.parentNode = host; host.children.splice(host.children.indexOf(node), 0, heading); }
         node.remove();
+        if (focused) heading.focus?.();
       }
     }
   };
@@ -6250,6 +7714,19 @@ function decorateHierarchy(app, host) {
     input?.setSelectionRange?.(input.value.length, input.value.length);
     app.aliasEdit.focus = false;
   }
+}
+
+// A chat wears the glyph of what it talks to: an agent's, a cluster's, or the group's.
+function chatGlyph(app, chat) {
+  const group = app.store.indexes.groups.get(chat.id);
+  if (group) return clusterGlyph(group.link?.kind);
+  const unit = chat.kind === "direct" ? unitById(app, (chat.members ?? []).find((id) => id !== "root:master")) : null;
+  return unit ? hierarchyIcon(unit) : "users";
+}
+
+// The Incubator and Genesis are set up with the same form as any new agent, so they need the same rights and a desktop window.
+function serviceSetupAllowed(app) {
+  return app.layout !== 'phone' && Boolean(app.store.capabilities?.includes('unit.create'));
 }
 
 function beginAlias(app, id, rowId = null) {
@@ -6316,7 +7793,7 @@ async function saveAlias(app, edit) {
     app.store.indexes.units.set(edit.id, result.data);
     app.aliasEdit = null;
     await reloadList(app.unitList);
-    showMapToast(app, text(app.language, "aliasSaved", { unit: result.data.unit, alias: result.data.alias || result.data.unit }), async (record) => {
+    showMapToast(app, text(app.language, "aliasSaved", { unit: displayName(result.data.unit), alias: result.data.alias || displayName(result.data.unit) }), async (record) => {
       const current = (await request(app.api, "GET", "/units/:unitId", { params: { unitId: edit.id } })).data;
       await setUnitAlias(app.api, current, edit.previous, record.operation);
       await reloadList(app.unitList);
@@ -6360,35 +7837,11 @@ function removalText(app, key, unit = "") {
 }
 
 function removeSelectedUnit(app, unit) {
-  if (app.pendingChat?.unitId === unit.id) app.pendingChat = null;
-  let operation = null;
-  const refresh = async () => {
-    await loadSnapshot(app.store, app.api);
-    if (app.unitList) await reloadList(app.unitList);
-    if (app.chatList) await reloadList(app.chatList);
-    await refreshGroups(app);
-  };
   const dialog = showDialog(app.root.ownerDocument, {
     title: removalText(app, "title", unitDisplayName(unit)), body: removalText(app, "body"),
     confirm: removalText(app, "confirm"), cancel: text(app.language, "cancel"), retry: text(app.language, "retry"),
-    onConfirm: async () => {
-      try {
-        const result = await removeUnit(app.api, unit, operation);
-        if (app.pendingChat?.unitId === unit.id) app.pendingChat = null;
-        app.mapState?.selection.delete(unit.id);
-        app.store.selected.unitId = null;
-        if (app.thread?.chat?.kind === "direct" && app.thread.chat.members.includes(unit.id)) app.thread = null;
-        await refresh();
-        showMapToast(app, `${unitDisplayName(unit)} · ${removalText(app, "archived")}`, async (record) => {
-          await undoChange(app.api, result.data.changeId, record.operation);
-          await refresh();
-          app.store.selected.unitId = unit.id;
-          app.mapState?.onSelection([unit.id]);
-          focusUnitRow(app, unit.id);
-        }, app.api.now() + Math.max(0, Date.parse(result.data.undoUntil) - Date.parse(result.meta.readAt)));
-        renderShell(app);
-      } catch (error) { operation = error.operation ?? operation; throw error; }
-    },
+    // The dialog closes at once; the removal, with any session it has to stop first, runs in the background, in Activity.
+    onConfirm: () => { enqueueDeletion(app, { units: [unit.id] }); },
   });
   dialog.setAttribute("data-remove-unit", unit.id);
   Object.assign(dialog.style, { width: "480px", maxWidth: "calc(100vw - 32px)", padding: "24px", borderRadius: "22px", background: "var(--panel)", border: "1px solid var(--line2)" });
@@ -6396,7 +7849,6 @@ function removeSelectedUnit(app, unit) {
   Object.assign(dialog.querySelector("p").style, { fontSize: "13.5px", color: "var(--mute)", margin: "0 0 18px" });
   const buttons = dialog.querySelectorAll("button");
   for (const button of buttons) Object.assign(button.style, { minWidth: "32px", minHeight: "32px" });
-  Object.assign(buttons[0].style, { background: "transparent", border: "0" });
   Object.assign(buttons[1].style, { background: "var(--error)", color: "var(--error-ink)" });
 }
 
@@ -6408,16 +7860,63 @@ function selectionInspector(app, t, units) {
   const actions = element(document, "div", { class: "selection-actions" });
   if (app.store.capabilities.includes("chat.manage")) actions.append(mapButton(app, "message-all", t("messageAll", { count: units.length }), () => app.mapState.onGroupMessage(units.map((unit) => unit.id))));
   if (app.store.capabilities.includes("unit.connect")) actions.append(mapButton(app, "connect-lead", t("connectToLead"), () => chooseSelectionLead(app)));
+  if (app.store.capabilities.includes("unit.create")) actions.append(mapButton(app, "delete-selection", text(app.language, "menuDeleteSelected", { count: units.length }), () => confirmDeleteMany(app, units.map((unit) => unit.id), []), { class: "btn danger" }));
   actions.append(mapButton(app, "clear-selection", t("clearSelection"), () => { app.mapState.selection.clear(); app.store.selected.unitId = null; app.thread = null; renderShell(app); }));
   panel.append(actions, element(document, "p", { class: "field-hint", text: t("finalGroupHint") }));
   return panel;
 }
 
-function chooseSelectionLead(app) {
-  const ids = [...app.mapState.selection].filter((id) => unitById(app, id)?.role !== "master");
+// The inspector of a pick: what was picked, and what can be done with all of it at once.
+function pickInspector(app, t, { units, clusters }) {
+  const document = app.root.ownerDocument, caps = app.store.capabilities ?? [], count = units.length + clusters.length;
+  const agents = units.map(id => unitById(app, id)), groups = clusters.map(id => app.store.indexes.groups.get(id));
+  const agentsIn = group => {
+    const held = (app.unitList?.catalog ?? []).filter(unit => !unit.removed && unit.role !== 'master' && (unit.clusterId === group.id || !unit.clusterId && group.members.includes(unit.id))).length;
+    return held === 0 ? t('pickNoAgents') : held === 1 ? t('deleteManyAgent') : t('deleteManyAgents', { count: held });
+  };
+  const parents = new Set(groups.map(group => group.parentId ?? null)), parent = parents.size === 1 ? app.store.indexes.groups.get([...parents][0]) : null;
+  const kind = !groups.length ? t('pickKindAgents') : agents.length ? t('pickKindMixed')
+    : groups.every(group => group.link?.kind === 'repository') ? parent ? t('pickKindRepositoriesIn', { name: displayName(parent.title) }) : t('pickKindRepositories') : t('pickKindClusters');
+  const clear = () => { app.hierarchySelection.clear(); renderShell(app); };
+  const item = (glyph, name, note) => element(document, 'div', { class: 'pick-item', 'data-pick-item': name },
+    icon(document, glyph), element(document, 'strong', { text: name }), element(document, 'span', { class: 'pick-note', text: note }));
+  const card = element(document, 'div', { class: 'pick-card' },
+    ...groups.map(group => item(clusterGlyph(group.link?.kind), displayName(group.title), agentsIn(group))),
+    ...agents.map(unit => item(hierarchyIcon(unit), unitDisplayName(unit), roleLabel(app.language, unit.role, unit.roleName))));
+  const actions = element(document, 'div', { class: 'pick-actions' });
+  if (agents.length && caps.includes('chat.manage')) actions.append(element(document, 'button', { type: 'button', class: 'btn primary', 'data-action': 'pick-message',
+    onclick: () => { const ids = agents.map(unit => unit.id); app.hierarchySelection.clear(); ensureMap(app).onGroupMessage(ids); } }, icon(document, 'users'), t('pickMessageGroup')));
+  if (!groups.length && caps.includes('chat.manage')) actions.append(element(document, 'button', { type: 'button', class: 'btn', 'data-action': 'pick-move',
+    onclick: () => openMoveAgents(app, agents) }, icon(document, 'folder'), t('pickMove')));
+  actions.append(element(document, 'button', { type: 'button', class: 'btn danger', 'data-action': 'pick-delete', text: t('pickDelete', { count }),
+    onclick: () => confirmDeleteMany(app, units, clusters) }));
+  return element(document, 'section', { class: 'pick-inspector', 'data-pick-inspector': String(count) },
+    element(document, 'header', { class: 'agent-heading' }, element(document, 'span', { class: 'agent-avatar', 'aria-hidden': 'true' }, icon(document, 'users')),
+      element(document, 'div', {}, element(document, 'h2', { text: t('finalSelection', { count }) }), element(document, 'p', { class: 'agent-status', text: kind })),
+      element(document, 'button', { type: 'button', class: 'icon-button', 'data-action': 'clear-pick', 'aria-label': t('clearSelection'), title: t('clearSelection'), onclick: clear }, icon(document, 'close'))),
+    card, actions);
+}
+
+function chooseSelectionLead(app, picked = null, point = null) {
+  const ids = (picked ?? [...app.mapState.selection]).filter((id) => unitById(app, id)?.role !== "master");
+  const choices = leadChoices(app).filter((unit) => !ids.includes(unit.id) && unit.role !== "master");
+  if (!ids.length) return;
+  // With nothing to connect to, an empty list is never shown: one agent gets the menu that creates a report for it, and a
+  // selection is told why there is no lead.
+  if (!choices.length) {
+    if (ids.length === 1 && app.store.capabilities?.includes("unit.create")) {
+      const box = app.root.ownerDocument.querySelector?.(`[data-unit-id="${ids[0]}"]`)?.getBoundingClientRect?.();
+      openReportMenu(app, { source: ids[0], x: point?.x ?? (box ? box.left + box.width / 2 : 0), y: point?.y ?? (box ? box.bottom : 0), groupId: null });
+      return;
+    }
+    const names = ids.map((id) => unitDisplayName(unitById(app, id) ?? { unit: id })).join(", ");
+    const dialog = showDialog(app.root.ownerDocument, { title: startText(app.language, "noLeadTitle"), body: startText(app.language, "noLeadBody", { name: names }), cancel: text(app.language, "close") });
+    dialog.setAttribute("data-form", "no-lead");
+    return;
+  }
   let leadId;
   openChoiceForm(app, "selection-lead", text(app.language, "connectToLead"), (form) => {
-    appendSelect(form.ownerDocument, form, "leadId", text(app.language, "finalReportsTo"), leadChoices(app).filter((unit) => !ids.includes(unit.id)).map((unit) => ({ value: unit.id, label: unitDisplayName(unit) })), "");
+    appendSelect(form.ownerDocument, form, "leadId", text(app.language, "finalReportsTo"), choices.map((unit) => ({ value: unit.id, label: unitDisplayName(unit) })), choices[0].id);
   }, async (form) => { leadId = fieldValue(form, "leadId"); if (!leadId) return false; return true; }, "connect-lead");
   const dialog = app.root.ownerDocument.querySelector("[data-form='selection-lead']");
   dialog?.addEventListener("close", () => { if (leadId) confirmConnection(app, leadId, ids); });
@@ -6444,6 +7943,7 @@ function openCluster(app, id) {
 function selectGroup(app, id) {
   const group = app.store.indexes.groups.get(id);
   if (!group || group.deleted) return;
+  app.waitingOpen = false;
   app.store.selected.groupId = id;
   app.store.selected.unitId = null;
   app.store.selected.chatId = group.chatId;
@@ -6622,16 +8122,25 @@ function createOverseer(app) { return openStartAgent(app, null, true); }
 
 function openSessionForm(app, unit) {
   openChoiceForm(app, 'session', text(app.language, 'startSession'), (form, confirm) => {
-    form.append(element(form.ownerDocument, 'p', { class: 'start-hint', text: startText(app.language, 'runsIn') + ': ' + runsInLabel(unit.runsIn, app.startAgents?.connectedClients, app.language) }));
-    if (!unit.runsIn) { confirm.disabled = true; form.append(element(form.ownerDocument, 'p', { text: startText(app.language, 'unavailable') })); }
-    const segment = element(form.ownerDocument, 'fieldset', { class: 'start-segment' }, element(form.ownerDocument, 'legend', { text: text(app.language, 'runsAs') }));
-    for (const [value, key] of [['task', 'runTask'], ['chat', 'runChat']]) {
-      const input = element(form.ownerDocument, 'input', { type: 'radio', name: 'runMode', value });
-      input.value = value; input.checked = value === (unit.role === 'executor' ? 'task' : 'chat');
-      segment.append(element(form.ownerDocument, 'label', { class: 'segment' }, input, text(app.language, key)));
+    const document = form.ownerDocument, label = runsInLabel(unit.runsIn, app.startAgents?.connectedClients, app.language);
+    // Where it runs is a row of its own: the choice made so far, or the plain fact that none is made, with the way to make it.
+    const where = element(document, 'div', { class: 'start-where', 'data-start-where': label ? 'chosen' : 'none' },
+      element(document, 'span', { class: 'start-where-label', text: startText(app.language, 'runsIn') }),
+      element(document, 'strong', { class: 'start-where-value', text: label || startText(app.language, 'runsInNone') }));
+    form.append(where);
+    if (!unit.runsIn) {
+      const reason = element(document, 'p', { id: 'reason-start-runs-in', class: 'field-hint', 'data-disabled-reason': 'runs-in', text: startText(app.language, 'startNeedsRunsIn') });
+      where.append(reason, mapButton(app, 'choose-runs-in', startText(app.language, 'chooseRunsIn'), () => { form.closest('dialog')?.close(); return openUnitRunsIn(app, unit); }));
+      confirm.disabled = true; confirm.setAttribute('aria-describedby', 'reason-start-runs-in'); confirm.title = startText(app.language, 'startNeedsRunsIn');
     }
-    form.append(segment);
-    appendInput(form.ownerDocument, form, 'prompt', text(app.language, 'taskOrMessage'), '');
+    const modes = element(document, 'fieldset', { class: 'start-modes' }, element(document, 'legend', { text: text(app.language, 'runsAs') }));
+    for (const [value, key] of [['task', 'runTask'], ['chat', 'runChat']]) {
+      const input = element(document, 'input', { type: 'radio', name: 'runMode', value });
+      input.value = value; input.checked = value === (unit.role === 'executor' ? 'task' : 'chat');
+      modes.append(element(document, 'label', { class: 'start-mode' }, input, element(document, 'span', { text: text(app.language, key) })));
+    }
+    form.append(modes);
+    appendInput(document, form, 'prompt', text(app.language, 'taskOrMessage'), '');
     form.problems = () => fieldValue(form, 'runMode') === 'task' && !fieldValue(form, 'prompt').trim() ? [{ name: 'prompt', message: text(app.language, 'taskRequired') }] : [];
   }, async form => {
     const prompt = fieldValue(form, 'prompt').trim() || null, mode = { runMode: fieldValue(form, 'runMode'), taskId: null };
@@ -6821,8 +8330,12 @@ function noteSession(app, data) {
 function noteSessionRequest(app, data) {
   const state = data?.state;
   if (!state || !SESSION_COPY[state]) return;
+  // Loading the inspector checks the tracked request again; acting only on a change keeps that check from reloading the
+  // inspector, which checked again, without end.
+  const previous = app.sessionRequest && app.sessionRequest.requestId === data.requestId ? app.sessionRequest.state : null;
   if (data.requestId) app.sessionRequestId = data.requestId;
   app.sessionRequest = data;
+  if (previous === state) return;
   showOutcome(app, text(app.language, data.error?.code === 'launch_ambiguous' ? 'launchAmbiguous' : SESSION_COPY[state]), state);
   if (state === 'started' && data.unitId && !app.disposed) loadInspector(app, data.unitId);
 }
@@ -6854,6 +8367,7 @@ function frameAgentTabs(app, panel, subject) {
   const document = app.root.ownerDocument;
   const sessionView = sessionViewFor(app, sessionForUnit(app, subject.id));
   const agentTabs = sessionView ?? unitConversation(app, subject.id);
+  agentTabs.detailsTab = app.layout !== 'phone';
   panel.className += ' agent-conversation';
   panel.setAttribute('data-agent-tab', agentTabs.tab);
   panel.append(renderSessionTabs(document, agentTabs, app.language, tab => selectSessionTab(app, agentTabs, tab)));
@@ -6885,13 +8399,14 @@ function chatPanel(app, t) {
   }
   const members = thread.chat.members ?? [];
   const heading = element(document, "header", { class: "chat-heading" },
-    element(document, "h2", { class: "chat-title", "data-chat-title": thread.chat.id, text: thread.chat.title || thread.chat.id }),
+    element(document, "h2", { class: "chat-title", "data-chat-title": thread.chat.id, text: displayName(thread.chat.title) || thread.chat.id }),
   );
   const group = app.store.indexes.groups.get(thread.chat.id);
   const directUnit = thread.chat.kind === "direct" ? unitById(app, members.find((id) => id !== "root:master")) : null;
   const subject = inspectorAgent(app) ?? (directUnit && app.layout !== 'phone' ? directUnit : null);
   const sessionView = subject ? sessionViewFor(app, sessionForUnit(app, subject.id)) : null;
   const agentTabs = subject ? (sessionView ?? unitConversation(app, subject.id)) : null;
+  if (agentTabs) agentTabs.detailsTab = app.layout !== 'phone';
   let contextNotice = null;
   if (directUnit) heading.querySelector("h2").replaceChildren(unitNameNode(document, directUnit));
   if (members.length > 2) {
@@ -6934,8 +8449,17 @@ function chatPanel(app, t) {
   const cards = planCards(app, thread.chat); let plansMounted = false;
   if (cards.length) panel.className += ' has-plans';
   if (!windowed.items.length) {
-    const canPost = (app.store.capabilities ?? []).includes("chat.post");
-    transcript.append(element(document, "p", { "data-empty": "chat", text: t(canPost ? "emptyChat" : "emptyChatRead") }));
+    // An empty list is only "no messages" once the messages were read; while they load, or when reading failed, it says so.
+    const reading = app.activity?.get(`chat-load:${thread.chat.id}`);
+    if (reading?.phase === "pending") transcript.append(skeletonMark(document, t("loadingConversation"), "chat", { "data-loading": "chat" }));
+    else if (reading?.phase === "error") transcript.append(element(document, "p", { "data-empty": "unread", text: t("chatNotRead") }));
+    else {
+      const canPost = (app.store.capabilities ?? []).includes("chat.post");
+      // An agent's empty chat says what happens to a first message; a cluster or a group keeps its own line.
+      if (canPost && agentTabs) transcript.append(element(document, "div", { class: "empty-chat", "data-empty": "chat" }, icon(document, "chats"),
+        element(document, "strong", { text: t("noMessagesTitle") }), element(document, "p", { text: t("noMessagesHint") })));
+      else transcript.append(element(document, "p", { "data-empty": "chat", text: t(canPost ? "emptyChat" : "emptyChatRead") }));
+    }
   }
   for (const message of windowed.items) {
     const own = message.fromId === "root:master" || unitById(app, message.fromId)?.role === "master";
@@ -6980,7 +8504,7 @@ function chatPanel(app, t) {
         "data-action": "retry-message",
         "data-operation": message.operationId,
         title: sendText(app, "retryHint"),
-        style: "font-size:12px;font-weight:700;color:var(--accent);min-height:32px",
+        style: "font-size:12px;font-weight:700;min-height:32px",
         text: t("retry"),
         onclick: () => {
           const task = retryMessage(app.api, thread, message.operationId);
@@ -7027,7 +8551,8 @@ function chatPanel(app, t) {
   });
   const row = element(document, "div", { class: "action-row" });
   const caps = app.store.capabilities ?? [];
-  if (caps.includes("chat.manage") && !group) {
+  // An agent's conversation keeps Pin and Remove from the list in its ··· menu, not between the messages and the composer.
+  if (caps.includes("chat.manage") && !group && !agentTabs) {
     const managing = activityPending(app, `chat-manage:${thread.chat.id}`);
     const manageButton = (action, label, change) => element(document, "button", {
       type: "button",
@@ -7063,6 +8588,12 @@ function chatPanel(app, t) {
       thread.composer = draft.value;
       syncViewerDirty(app);
     });
+    // Enter sends, as in any chat; a composition in progress (an accent or an IME) is left to finish first.
+    composer.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+      event.preventDefault?.();
+      submitComposer(app, composer);
+    });
     // The board's composer: the field names who it goes to, with Send inside it and the hint below.
     const send = element(document, "button", {
       type: "button",
@@ -7072,7 +8603,7 @@ function chatPanel(app, t) {
       title: t("send"),
       onclick: () => submitComposer(app, composer),
     }, icon(document, "send"));
-    const name = group ? t("messageTheGroup") : directUnit ? t("messageUnit", { unit: directUnit.alias || directUnit.unit }) : t("composerLabel");
+    const name = group ? t("messageTheGroup") : directUnit ? t("messageUnit", { unit: directUnit.alias || displayName(directUnit.unit) }) : t("composerLabel");
     const hint = group ? startText(app.language, 'goesToLead') : directUnit ? startText(app.language, 'readsNext') : t("composerHint");
     composer.setAttribute("aria-label", name);
     composer.setAttribute("placeholder", name);
@@ -7338,7 +8869,7 @@ function revealAbove(thread, messageId) {
 
 function firstMessageComposer(app, t, unit) {
   const document = app.root.ownerDocument;
-  const name = t("messageUnit", { unit: unit.alias || unit.unit });
+  const name = t("messageUnit", { unit: unit.alias || displayName(unit.unit) });
   const hint = startText(app.language, 'readsNext');
   const key = `first:${unit.id}`;
   // Not data-composer: that marks an open conversation, which this agent does not have yet.
@@ -7425,8 +8956,12 @@ function renderInspector(app, t, selected) {
     const runs = !selected.sessionIds?.length ? t("finalNotStarted") : session?.launchKind === "manual-app" ? t("runsApp", { client: namedClient }) : session?.launchKind === "cli" ? t("runsCli", { client: namedClient }) : namedClient || t("unknown");
     const facts = element(document, "div", { class: "unit-facts", "data-unit-facts": "true" });
     const checkout = checkoutSession(app, selected);
-    const where = checkoutFacts(t, app.language, { session: checkout, local: startMachine(app), entry: checkout && app.checkouts?.get(checkout.id) });
-    for (const [key, value, title] of [["machine", selected.machine], ["finalRunsIn", runs], ...where, ["model", selected.model ?? t("finalDefaultModel")], ["finalReportsTo", selected.leadId ? unitDisplayName(unitById(app, selected.leadId)) : t("finalNoLead")]]) facts.append(element(document, "p", { text: `${t(key)}: ${value ?? t("unknown")}`, ...(title ? { title } : {}) }));
+    const where = checkoutFacts(t, app.language, { session: checkout, local: startMachine(app), entry: checkout && app.checkouts?.get(checkout.id), root: selected.scope?.kind === "root" });
+    const catalog = (app.startAgents?.connectedClients ?? []).find((item) => item.id === selected.runsIn?.client);
+    const model = selected.model ? catalogLabel(catalog?.models?.find((item) => item.id === selected.model)?.title, selected.model, app.language) : t("finalDefaultModel");
+    // The Overseer reports to no one, so its facts carry no such line.
+    const reportsTo = selected.role === "overseer" ? [] : [["finalReportsTo", selected.leadId ? unitDisplayName(unitById(app, selected.leadId)) : t("finalNoLead")]];
+    for (const [key, value, title] of [["machine", selected.machine], ["finalRunsIn", runs], ...where, ["model", model], ...reportsTo]) facts.append(element(document, "p", { text: `${t(key)}: ${value ?? t("unknown")}`, ...(title ? { title } : {}) }));
     card.append(facts, extra);
     if (app.connectionSaving?.targets.includes(selected.id)) card.append(progressMark(document, `${t("savingLayout")} ${t("finalReportsTo")}: ${unitDisplayName(unitById(app, app.connectionSaving.leadId))}`));
     const folded = card.querySelector?.("details");
@@ -7459,7 +8994,7 @@ function renderInspector(app, t, selected) {
   }
   if (!data || data.unitId !== selected?.id) {
     if (selected && activityPending(app, `inspector:${selected.id}`)) {
-      panel.append(progressMark(document, t("loadingDetails", { name: selected.unit || selected.id }), { "data-inspector-progress": selected.id }));
+      panel.append(skeletonMark(document, t("loadingDetails", { name: displayName(selected.unit || selected.id) }), "details", { "data-inspector-progress": selected.id }));
     }
     return panel;
   }
@@ -7467,7 +9002,11 @@ function renderInspector(app, t, selected) {
   details.append(element(document, "summary", { text: t("details") }));
   const machine = (data.machines ?? []).find((item) => item.id === selected?.machine);
   if (machine) details.append(renderMachine(document, machine, t));
-  for (const session of data.sessions ?? []) details.append(renderSession(document, session, t));
+  // Only the latest session is listed, the running one first, so old sessions do not pile up here.
+  const latest = (list) => list.slice().sort((left, right) => String(right.registeredAt ?? "").localeCompare(String(left.registeredAt ?? ""))).slice(0, 1);
+  const running = (data.sessions ?? []).filter((session) => session.state !== "stopped");
+  const listed = latest(running.length ? running : data.sessions ?? []);
+  for (const session of listed) details.append(renderSession(document, session, t));
   const caps = app.store.capabilities ?? [];
   if (caps.includes("grant.revoke")) {
     const busyGrant = [...(app.activity?.entries() ?? [])].find(([key, record]) => key.startsWith("grant:") && record.phase === "pending")?.[0]?.slice(6) ?? null;

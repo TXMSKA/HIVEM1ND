@@ -5,7 +5,7 @@ import { CoreError, ROLES, canonicalJson, hashBytes, inboxDirectory, parseUnitId
 import { publishDomainEvents } from './events.mjs';
 import { customRoleText, readUnitState, stateCustomRole } from './state.mjs';
 import { admitMessage } from '../sync/limits.mjs';
-import { commitTransaction, readBytes, revisionOf, withLocalChanges } from './store.mjs';
+import { commitTransaction, readBytes, revisionOf, withLocalChanges, withoutLocalChanges } from './store.mjs';
 import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
 import { ASSET_MAX_BYTES, ASSET_NAME, ASSET_TYPES, MESSAGE_ASSETS, messagePart } from './message-parts.mjs';
 
@@ -362,7 +362,7 @@ async function deliverNotificationsLocked(context, messageId) {
 }
 
 async function attemptNotice(context, notice) {
-  if (typeof context.wake?.notify !== 'function') return { state: 'pending', error: 'transport_unavailable' };
+  if (typeof context.wake?.notify !== 'function') return builtInNotice(context, notice);
   try {
     const outcome = await context.wake.notify(notice);
     if (outcome?.state === 'submitted' || outcome?.state === 'ambiguous' || outcome?.state === 'failed' || outcome?.state === 'pending') {
@@ -372,6 +372,63 @@ async function attemptNotice(context, notice) {
   } catch (error) {
     return { state: 'ambiguous', error: error?.code || 'delivery_failed' };
   }
+}
+
+// With no wake transport composed, the service delivers a chat message itself: it writes it into the agent's inbox, where
+// list_inbox, read_inbox and the wake of a running session find it, and it starts the agent's session when the agent has a
+// Runs in choice and no session open, so a message is what starts it.
+async function builtInNotice(context, notice) {
+  if (context.chatDelivery === false || !context.paths?.mind || notice.unitId === 'root:master') return { state: 'pending', error: 'transport_unavailable' };
+  try {
+    const { readDetail } = await import('./projection.mjs');
+    const message = await readDetail(context, 'messages', notice.resourceId);
+    const chatId = message?.toId?.startsWith('chat:') ? message.toId.slice(5) : null;
+    if (!chatId) return { state: 'pending', error: 'transport_unavailable' };
+    const chat = await loadChat(context, chatId);
+    const { queueChatNotice } = await import('../relay/store.mjs');
+    const outcome = await queueChatNotice(context, {
+      recipientId: notice.unitId, chatId, chatTitle: chat.title, messageId: message.id,
+      fromUnit: parseUnitId(message.fromId ?? 'root:master').unit, subject: message.subject ?? '', body: message.body ?? '',
+      attachments: message.attachments ?? [], priority: message.priority, at: message.timestamp ?? stamp(context),
+    });
+    // Only a person's direct chat with an agent starts the agent; a group or a plan's chat is served by the sessions already open.
+    // Starting the session runs behind the answer, so sending a message never waits for an agent to start.
+    if (chat.kind === 'direct' && context.chatAutoStart !== false) setTimeout(() => {
+      withoutLocalChanges(() => startOnMessage({ ...context, receipt: null }, notice.unitId))
+        .catch((error) => { process.stderr.write(`HIVEM1ND: ${notice.unitId} did not start on its message: ${error?.code ?? 'error'} ${error?.message ?? ''}\n`); });
+    }, 0).unref?.();
+    return { state: outcome?.state ?? 'submitted', error: null };
+  } catch (error) {
+    return { state: 'ambiguous', error: error?.code || 'delivery_failed' };
+  }
+}
+
+// One start at a time per agent: several messages in a row start one session, not one each.
+const startingUnits = new Map();
+const START_WINDOW_MS = 120000;
+
+async function startOnMessage(context, unitId) {
+  const unit = parseUnitId(unitId);
+  const state = (await readUnitState(context, unit))?.bytes;
+  if (!state) return;
+  const header = state.toString('utf8').split(/\r?\n\r?\n/, 1)[0];
+  if (!/^runs-in:/m.test(header) || /^removed:\s*true\s*$/m.test(header)) return;
+  const now = typeof context.now === 'function' ? context.now() : Date.now();
+  if (now - (startingUnits.get(unitId) ?? -Infinity) < START_WINDOW_MS) return;
+  const { readCollection } = await import('./projection.mjs');
+  const sessions = (await readCollection(context, 'sessions', { unitId }))?.items ?? [];
+  // A command-line session is a child of this service, so one registered before the service started ended with the
+  // previous service and does not count as open.
+  const live = (session) => session.unitId === unitId && session.state !== 'stopped'
+    && !(session.launchKind === 'cli' && Date.parse(session.registeredAt ?? '') < performance.timeOrigin);
+  if (sessions.some(live)) return;
+  startingUnits.set(unitId, now);
+  const { consumeStart, enqueueStart, projectSessionRequest } = await import('./adapters.mjs');
+  const queued = await enqueueStart({ ...context, receipt: null }, { unitId, stateRevision: hashBytes(state), runMode: 'chat', queueOnly: true });
+  // A queued request on this machine is launched here, as the start route does; another machine launches its own.
+  if (queued.request.targetMachine !== context.paths.machine) return;
+  const outcome = await consumeStart(context, queued.request.id);
+  context.bus?.emit({ name: 'session.request.changed', unitId, data: projectSessionRequest(outcome) });
 }
 
 async function rememberNotice(context, notice) {

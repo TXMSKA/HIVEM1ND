@@ -3,7 +3,7 @@
 import { until } from '../chrome.mjs';
 import { openPairing, openPhoneAccess, pairWithCode, presentLikeViewer, seedPhoneWorld, typeCode, wrongCode } from '../phone-helpers.mjs';
 
-const PAIRING = { en: 'Open your M1ND', es: 'Abrir el M1ND' };
+const PAIRING = { en: 'Open your M1ND', es: 'Abrir la M1ND' };
 
 function maskCode(ctx) {
   ctx.mask('[data-home-code]', '.phone-code-cell');

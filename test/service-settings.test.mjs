@@ -4,7 +4,7 @@ import path from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { createSettingsOwner, findAgent, mutateMachineSettings, processSettingsRequests, publishMachineSettings, readContent, readMachineSettings, readPublishedSettings, scanAgents, writeContent } from '../engine/service/settings.mjs';
-import { createStore } from '../engine/service/store.mjs';
+import { createProjectionCache, createStore, noteProjectionChange } from '../engine/service/store.mjs';
 import { createEventBus } from '../engine/service/events.mjs';
 import { servicePaths } from '../engine/service/paths.mjs';
 import { composeCore, writeBeat } from '../engine/service/service.mjs';
@@ -584,4 +584,39 @@ test('the GUI fixture lists a scoped permission, revokes it once and Disconnect 
   const disconnected = await call('DELETE', '/settings/agents/cursor', { machine: 'DESKTOP', confirmed: true, expectedRevision: applied.json.data.revision });
   assert.equal(disconnected.status, 200);
   assert.deepEqual((await call('GET', '/settings/permissions')).json.data.agentPermissions, []);
+});
+
+test('a running service answers a read of its own report from the last report and rebuilds only after a change', async t => {
+  const { fixture, owner, domain } = await setup(t);
+  fixture.store.projectionCache = createProjectionCache();
+  const cache = fixture.store.projectionCache;
+  owner.startedAt = new Date(fixture.clock.now).toISOString();
+  // The first report does not wait for the walk that looks for repositories; the offer joins the report once it is saved.
+  assert.equal((await publishMachineSettings(owner)).discoveryOffer, null);
+  await owner.discoverySaved;
+  const first = await publishMachineSettings(owner);
+  assert.notEqual(first.discoveryOffer, null);
+  const builds = cache.builds;
+  const file = machineSettingsPath(fixture.paths.mind, fixture.machine);
+  const written = await readFile(file, 'utf8');
+  for (let index = 0; index < 5; index += 1) assert.equal((await readMachineSettings(domain)).reportedAt, first.reportedAt);
+  assert.equal(cache.builds, builds, 'a read must not read the whole M1ND again');
+  // Something changed in the M1ND: the next read builds the report once more, finds it unchanged and writes nothing.
+  noteProjectionChange(fixture.store);
+  fixture.clock.now += 1000;
+  assert.equal((await readMachineSettings(domain)).reportedAt, first.reportedAt);
+  assert.equal(cache.builds, builds + 1);
+  assert.equal(await readFile(file, 'utf8'), written);
+  for (let index = 0; index < 3; index += 1) await readMachineSettings(domain, fixture.machine, 'permissions');
+  assert.equal(cache.builds, builds + 1);
+  // A report older than five minutes is written again so its time stays meaningful.
+  noteProjectionChange(fixture.store);
+  fixture.clock.now += 6 * 60000;
+  const later = await readMachineSettings(domain);
+  assert.equal(later.reportedAt, new Date(fixture.clock.now).toISOString());
+  assert.notEqual(await readFile(file, 'utf8'), written);
+  // The report a previous run left answers the first read of a new one while its own is built.
+  const restarted = createSettingsOwner({ ...owner, key: null, lastReport: null, refreshing: null });
+  const answer = await readMachineSettings({ ...restarted, settingsOwner: restarted });
+  assert.equal(answer.reportedAt, later.reportedAt);
 });

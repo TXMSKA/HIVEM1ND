@@ -198,11 +198,11 @@ export async function relayPolicy(options, input) {
 
 function nativeOperations(options, env) {
   let connected = null;
-  const tools = { register: 'register', send: 'send_message', inbox: 'list_inbox', read: 'read_inbox', history: 'history', threads: 'threads', status: 'status', overview: 'status', events: 'events', reminder: 'reminder', delivery: 'delivery_status' };
+  const tools = { register: 'register', send: 'send_message', link: 'link', inbox: 'list_inbox', read: 'read_inbox', history: 'history', threads: 'threads', status: 'status', overview: 'status', events: 'events', reminder: 'reminder', delivery: 'delivery_status' };
   return Object.fromEntries(Object.entries(tools).map(([operation, name]) => [operation, async (args = {}) => {
     connected ??= await connectNativeService({ env, client: options.client, nativeSessionId: options.nativeSessionId });
     if (operation === 'send' && connected.runId) throw new CoreError(403, 'plan_message_required', 'Use the bound plan_send tool for authored plan messages.');
-    const forwarded = ['register', 'send', 'read'].includes(operation) ? { ...args, requestId: args.requestId ?? randomUUID() } : args;
+    const forwarded = ['register', 'send', 'link', 'read'].includes(operation) ? { ...args, requestId: args.requestId ?? randomUUID() } : args;
     const received = await connected.callTool(name, forwarded);
     const body = JSON.parse(received.content?.find((item) => item.type === 'text')?.text ?? '{}');
     if (received.isError) throw new CoreError(403, body.error?.code ?? 'service_unavailable', body.error?.message ?? 'The service rejected the command.');
@@ -296,7 +296,9 @@ export async function connectNativeService({ env = process.env, nativeSessionId 
     async callTool(name, args) {
       const response = await request(connection, {
         path: '/mcp',
-        timeoutMs: name === 'native_permission' ? 125000 : 3000,
+        // A tool that writes waits for the M1ND's own commit, which takes seconds on a large M1ND in a synced folder. Three
+        // seconds made the agent give up on a call that then landed, and its retry sent the same message twice.
+        timeoutMs: name === 'native_permission' ? 125000 : TOOL_TIMEOUT_MS,
         body: { jsonrpc: '2.0', id: args.requestId ?? randomUUID(), method: 'tools/call', params: { name, arguments: args } },
       });
       if (response.status !== 200 || !response.json?.result) {
@@ -308,6 +310,8 @@ export async function connectNativeService({ env = process.env, nativeSessionId 
     close() { connection.closed = true; },
   };
 }
+
+const TOOL_TIMEOUT_MS = 60000;
 
 export function nativeHook({ env = process.env, nativeSessionId, client, event, evidence = null }) {
   return dispatchNative(env.HIVEM1ND_SERVICE_BRIDGE, env.HIVEM1ND_SERVICE_GRANT, 'hook', { nativeSessionId, client, event, ...(evidence ? { evidence } : {}) });

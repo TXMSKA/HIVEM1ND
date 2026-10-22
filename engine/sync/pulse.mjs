@@ -4,7 +4,12 @@ import { readBytes } from '../service/store.mjs';
 import { chargeMetadata, claimLimitNotice, limitsFor, reservePublication, retryAtFor, SYNC_BYTES_MAX, MESSAGE_MAX } from './limits.mjs';
 import { countLogicalMessages, decodePack, encodePack, MAX_AGGREGATE_BYTES, MAX_INDEX_ITEMS, packFileName, resolveDependencies, validateHead } from './pack.mjs';
 import { listMachineNames, prepareServiceBeat, publishBeat, publishPack, readHead, readOriginPack, writeDurable } from './origin.mjs';
-import { ackPublished, clearSyncFailure, listStaged, readObject, recordSyncFailure } from './store.mjs';
+import { ackPublished, clearSyncFailure, listStaged, readStagedObject, recordSyncFailure } from './store.mjs';
+
+// A pack of a large first publication takes the event loop for a while: after this many milliseconds of work the pulse
+// lets the service answer the requests that are waiting before it goes on.
+const WORK_SLICE_MS = 20;
+const breathe = () => new Promise((resolve) => setImmediate(resolve));
 
 export function nextDue(now, first, last, limits) {
   if (first === null) return null;
@@ -20,11 +25,17 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
   let first = null;
   let last = null;
   let pending = [];
+  // A published pack never changes, so the hashes it carries and a dependency check that passed are kept by its digest.
+  // Decoding every earlier pack again for each publication made a large first publish slower with every pack.
+  const packIndex = new Map();
   let timer = null;
   let flushing = null;
   let holdUntil = null;
+  // Staged changes the last pack left over although nothing but its own size kept them out: they follow at once.
+  let backlog = false;
   let closed = false;
   let scheduleToken = 0;
+  let finishedJournal = null;
   const skipped = new Set();
 
   function clearTimer() {
@@ -38,7 +49,7 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
     if (closed || pending.length === 0 || first === null) return;
     const limits = await currentLimits();
     if (token !== scheduleToken || closed) return;
-    const due = nextDue(now(), first, last, limits);
+    const due = backlog && limits.state === 'normal' ? now() : nextDue(now(), first, last, limits);
     if (due === null || !Number.isFinite(due)) return;
     timer = setTimeout(() => flush(), Math.max(0, due - now()));
   }
@@ -68,28 +79,44 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
     scheduleToken += 1;
     clearTimer();
     holdUntil = null;
+    backlog = false;
     await loadSkipped();
     const recovered = await finishJournal();
-    const batch = pending;
+    const batch = new Set(pending);
     pending = [];
-    const staged = (await listStaged(sync)).filter((change) => batch.includes(change.id) && !skipped.has(change.id));
+    const staged = (await listStaged(sync)).filter((change) => batch.has(change.id) && !skipped.has(change.id));
     staged.sort((left, right) => left.at.localeCompare(right.at) || left.id.localeCompare(right.id));
     if (staged.length === 0) {
       if (pending.length === 0) { first = null; last = null; }
       return { published: recovered.published, packs: recovered.published ? 1 : 0, ids: recovered.ids, issues: [] };
     }
+    // The objects of a group are read when the group is looked at, not all at once: a first publication of a large M1ND
+    // stages hundreds of megabytes, of which one pack takes at most 64 MB. A staged object is already compressed on disk
+    // in the form a pack carries, so it is kept as it is and never compressed again.
     const objects = new Map();
-    for (const change of staged) {
-      if (change.operation === 'put') objects.set(change.hash, await readObject(sync, change.hash));
-    }
+    const compressed = new Map();
+    const wanted = new Set();
+    for (const change of staged) if (change.operation === 'put') wanted.add(change.hash);
+    let sliceStart = performance.now();
+    const load = async (group) => {
+      for (const change of group) {
+        if (change.operation !== 'put' || objects.has(change.hash)) continue;
+        const stored = await readStagedObject(sync, change.hash);
+        objects.set(change.hash, stored.raw);
+        compressed.set(change.hash, stored.compressed);
+      }
+      if (performance.now() - sliceStart >= WORK_SLICE_MS) {
+        await breathe();
+        sliceStart = performance.now();
+      }
+    };
     const limits = await limitsFor(ledger, 'publication');
     const remainingMessages = MESSAGE_MAX - limits.messages.used;
     const remainingBytes = SYNC_BYTES_MAX - limits.syncBytes.used;
     const head = await machineHead();
     const sequence = await nextPreparedSequence(head);
-    const committed = await committedObjects(head, objects);
+    const committed = await committedObjects(head, wanted);
     const groups = groupChanges(staged);
-    const compressed = new Map();
     const chosen = [];
     const issues = [];
     let deferredIndex = groups.length;
@@ -103,6 +130,7 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
     const chosenHashes = new Set();
     for (let index = 0; index < groups.length; index += 1) {
       const group = groups[index];
+      await load(group);
       const count = logical(group, objects);
       let alone;
       try {
@@ -137,7 +165,10 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
     const deferred = groups.slice(deferredIndex).filter((group) => !issues.includes(group));
     if (chosen.length === 0) {
       pending = [...deferred.flat().map((change) => change.id), ...pending];
-      if (deferred.length > 0) holdUntil = await holdFor(deferred[0], objects, sequence, head, committed);
+      if (deferred.length > 0) {
+        await load(deferred[0]);
+        holdUntil = await holdFor(deferred[0], objects, sequence, head, committed, compressed, false);
+      }
       if (pending.length === 0) { first = null; last = null; }
       else if (first === null) first = now();
       return { published: recovered.published, packs: recovered.published ? 1 : 0, ids: recovered.ids, issues: issues.flat().map((change) => change.id) };
@@ -152,12 +183,15 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
       await sendPack(packed.body);
     } catch (error) {
       pending = [...chosen.flat().map((change) => change.id), ...deferred.flat().map((change) => change.id), ...pending];
-      holdUntil = now() + 2000;
+      // A full window names the moment it frees room: retrying every 2 seconds until then packed the same objects again.
+      const named = typeof error?.retryAt === 'string' ? Date.parse(error.retryAt) : NaN;
+      holdUntil = Number.isFinite(named) && named > now() ? named : now() + 2000;
       await failOnce(error);
       return { published: false, packs: 0, error: error.code, ids: [], issues: issues.flat().map((change) => change.id) };
     }
     const ids = chosen.flat().map((change) => change.id);
     await ackPublished(sync, ids);
+    finishedJournal = packed.hash;
     await clearSyncFailure(sync);
     if (deferred.length > 0) pending = [...deferred.flat().map((change) => change.id), ...pending];
     if (pending.length === 0) {
@@ -166,7 +200,9 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
     } else if (deferred.length > 0) {
       if (first === null) first = now();
       last = now();
-      holdUntil = await holdFor(deferred[0], objects, sequence, head, committed);
+      await load(deferred[0]);
+      holdUntil = await holdFor(deferred[0], objects, sequence, head, committed, compressed, true);
+      backlog = holdUntil <= now();
     } else {
       first = now();
       last = now();
@@ -221,6 +257,7 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
     return readHead(origin, origin.machine);
   }
 
+  // `objects` is the set of hashes the staged changes carry; only their names are needed here.
   async function committedObjects(head, objects) {
     const committed = new Map();
     if (objects.size === 0) return committed;
@@ -240,15 +277,27 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
         throw error;
       }
       for (const entry of [...published.packs].reverse()) {
-        const bytes = await provider.readPack(machine, entry.sequence);
-        if (!bytes || bytes.length !== entry.bytes) continue;
+        const key = `${machine}:${entry.sequence}:${entry.hash}`;
+        let known = packIndex.get(key);
+        let bytes = null;
         try {
-          const decoded = decodePack(bytes, { expectedHash: entry.hash, machine });
-          if (decoded.header.sequence !== entry.sequence) continue;
-          const hashes = [...decoded.objects.keys()].filter((hash) => objects.has(hash) && !committed.has(hash));
+          if (!known) {
+            bytes = await provider.readPack(machine, entry.sequence);
+            if (!bytes || bytes.length !== entry.bytes) continue;
+            const decoded = decodePack(bytes, { expectedHash: entry.hash, machine });
+            if (decoded.header.sequence !== entry.sequence) continue;
+            known = { hashes: [...decoded.objects.keys()], ready: false };
+            packIndex.set(key, known);
+          }
+          const hashes = known.hashes.filter((hash) => objects.has(hash) && !committed.has(hash));
           if (hashes.length === 0) continue;
-          const resolved = await resolveDependencies(bytes, provider);
-          if (resolved.status !== 'ready') continue;
+          if (!known.ready) {
+            bytes ??= await provider.readPack(machine, entry.sequence);
+            if (!bytes || bytes.length !== entry.bytes) continue;
+            const resolved = await resolveDependencies(bytes, provider);
+            if (resolved.status !== 'ready') continue;
+            known.ready = true;
+          }
           for (const hash of hashes) committed.set(hash, { hash, machine, sequence: entry.sequence, packHash: entry.hash });
           if (committed.size === objects.size) return committed;
         } catch (error) {
@@ -278,6 +327,9 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
   async function finishJournal() {
     const journal = await readPublication();
     if (!journal?.sequence || !journal.packHash) return { ids: [], published: false };
+    // A committed pack whose changes were acknowledged stays the journal until the next publication: reading and decoding
+    // it again before every flush cost a 50 MB pack each time.
+    if (journal.phase === 'committed' && finishedJournal === journal.packHash) return { ids: [], published: false };
     const packed = await readOriginPack(origin, origin.machine, journal.sequence);
     if (!packed || hashBytes(packed) !== journal.packHash) return { ids: [], published: false };
     let published = false;
@@ -290,21 +342,25 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
     const ids = decoded.changes.map((change) => change.id).filter((id) => live.has(id));
     if (ids.length > 0) await ackPublished(sync, ids);
     pending = pending.filter((id) => !ids.includes(id));
+    if (journal.phase === 'committed' || published) finishedJournal = journal.packHash;
     return { ids, published };
   }
 
-  async function holdFor(group, objects, sequence, head, committed) {
+  // When the next group may go out. The ledger names the moment its window frees enough room. It names none when the group
+  // fits already: the last pack was full by its own limits (64 MB of objects, 10000 changes), not by the quota, so there
+  // is nothing to wait for. A flat minute here left a large first publication idle for a minute after every pack.
+  async function holdFor(group, objects, sequence, head, committed, compressed, progressed) {
     if (!group) return now() + 60000;
     const count = logical(group, objects);
     let bytes = 1;
     try {
-      bytes = packFor([group], sequence, head, objects, committed).bytes;
+      bytes = packFor([group], sequence, head, objects, committed, compressed).bytes;
     } catch {
       bytes = 1;
     }
     const charges = await outgoingCharges();
     const retry = retryAtFor(now(), charges, { messages: Math.min(count, MESSAGE_MAX), bytes: Math.min(bytes, SYNC_BYTES_MAX) });
-    return retry ?? now() + 60000;
+    return retry ?? (progressed ? now() : now() + 5000);
   }
 
   async function readPublication() {

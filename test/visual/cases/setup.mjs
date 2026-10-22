@@ -87,7 +87,7 @@ export const cases = {
       deferPageStop(ctx);
       await openWizard(ctx, server);
       await startSetup(ctx);
-      await ctx.page.click('#change-folder');
+      await ctx.page.click('#browse-folder');
       await ctx.page.fill('#mind-path', sandbox.joinPath);
       await ctx.page.press('Tab');
       await ctx.visible('#join-mind');
@@ -168,7 +168,7 @@ export const cases = {
       await ctx.visible('.shell[data-boot="reading"] .workspace-opening .opening-stage .spinner');
       await ctx.page.waitFor(() => document.querySelectorAll('.opening-skeletons .opening-skeleton').length === 14, { message: 'the 9 left and 5 right skeleton blocks' });
       await ctx.visible('.foot');
-      await requireLocalized(ctx, '.opening-content h2', ['Reading the M1ND', 'Leyendo el M1ND']);
+      await requireLocalized(ctx, '.opening-content h2', ['Reading the M1ND', 'Leyendo la M1ND']);
     },
   },
 
@@ -185,7 +185,7 @@ export const cases = {
       await ctx.visible('.opening-failure [data-opening-cause]', { timeout: 60000 });
       await ctx.visible('[data-action="retry-boot"]');
       await ctx.visible('[data-action="choose-folder"]');
-      await requireLocalized(ctx, '.opening-failure h2', ['The M1ND cannot be read', 'No se puede leer el M1ND']);
+      await requireLocalized(ctx, '.opening-failure h2', ['The M1ND cannot be read', 'No se puede leer la M1ND']);
     },
   },
 

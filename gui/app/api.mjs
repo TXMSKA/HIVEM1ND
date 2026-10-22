@@ -21,9 +21,9 @@ export function operationId() {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-export function createApi({ location, history, fetch: fetchImpl, clock, createObjectURL, revokeObjectURL } = {}) {
+export function createApi({ location, history, fetch: fetchImpl, clock, createObjectURL, revokeObjectURL, storage = null } = {}) {
   if (!location?.origin) throw new ApiError(0, "invalid_url", "The application origin is missing.");
-  const credentials = readFragment(location, history);
+  const credentials = readFragment(location, history, storage);
   const api = {
     location,
     fetch: (fetchImpl ?? globalThis.fetch).bind(globalThis),
@@ -32,6 +32,8 @@ export function createApi({ location, history, fetch: fetchImpl, clock, createOb
     revokeObjectURL: revokeObjectURL ?? globalThis.URL?.revokeObjectURL?.bind(globalThis.URL),
     token: credentials.token,
     homeKey: credentials.homeKey,
+    storage,
+    storageKey: credentials.storageKey,
     deadlineMs: REQUEST_DEADLINE_MS,
     uncertain: new Map(),
     controllers: new Set(),
@@ -112,11 +114,11 @@ export async function request(api, method, path, options = {}) {
       try {
         json = JSON.parse(text);
       } catch {
-        if (response.status === 401) clearCredentials(api);
+        if (response.status === 401) forgetSession(api);
         throw new ApiError(response.status, "invalid_response", "The response was not JSON.", {}, null, retryAfter);
       }
     }
-    if (response.status === 401 || json?.error?.code === "home_expired") clearCredentials(api);
+    if (response.status === 401 || json?.error?.code === "home_expired") forgetSession(api);
     if (response.ok) {
       if (json?.contract !== "hivem1nd-gui-v3" || !json.meta?.requestId || !json.meta.readAt || json.meta.eventCursor == null || !["local", "pending", "published"].includes(json.meta?.sync)) {
         throw new ApiError(response.status, "invalid_response", "The response envelope is not valid.", {}, null, retryAfter);
@@ -195,6 +197,13 @@ export function clearCredentials(api) {
   api.homeKey = null;
 }
 
+// A session the service refused is also dropped from the tab, so the next reload does not offer it again.
+export function forgetSession(api) {
+  clearCredentials(api);
+  if (!api.storageKey) return;
+  try { api.storage?.removeItem(api.storageKey); } catch { /* The tab keeps nothing it cannot write. */ }
+}
+
 export function apiUrl(origin, suffix) {
   assertSuffix(suffix);
   return `${origin}/api/v1${suffix}`;
@@ -221,10 +230,18 @@ export function encodeRoute(path, params = {}) {
   return encoded + query;
 }
 
-function readFragment(location, history) {
+// A desktop viewer (/gui/<viewer>/) keeps its session in the tab's own storage, which lives as long as the tab and is never
+// shared with another tab, so a reload reads it back instead of signing the window out. The phone keeps nothing.
+function readFragment(location, history, storage) {
   const params = new URLSearchParams(String(location.hash ?? "").replace(/^#/, ""));
-  const token = params.get("session");
+  const viewer = /^\/gui\/([^/]+)\//.exec(String(location.pathname ?? ""))?.[1] ?? null;
+  const storageKey = viewer ? `hivem1nd.viewer.${viewer}` : null;
+  let token = params.get("session");
   const homeKey = params.get("home");
+  try {
+    if (storageKey && token !== null) storage?.setItem(storageKey, token);
+    else if (storageKey && homeKey === null) token = storage?.getItem(storageKey) ?? null;
+  } catch { /* Without storage a reload signs the window out, as before. */ }
   if (token !== null || homeKey !== null) {
     params.delete("session");
     params.delete("home");
@@ -233,7 +250,7 @@ function readFragment(location, history) {
     if (!history?.replaceState) throw new ApiError(0, "invalid_url", "The view cannot clear its fragment.");
     history.replaceState(history.state ?? null, "", next);
   }
-  return { token, homeKey };
+  return { token, homeKey, storageKey };
 }
 
 function assertSuffix(path) {

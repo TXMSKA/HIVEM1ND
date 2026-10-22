@@ -28,10 +28,16 @@ export function createClusterAgent(api,clusterId,input,retained=null){
   const{machine,role,runsIn,useAsDefault,expectedRevision}=input;
   // Only a custom role carries a name and a description; the service refuses them on any other role.
   const custom=role==='custom'?{roleName:input.roleName,roleDescription:input.roleDescription}:{};
-  return write(api,'/clusters/:clusterId/agents',{machine,role,runsIn,useAsDefault,expectedRevision,...custom},{clusterId},retained);
+  // A lead is sent only when one was chosen on the Map; without it the service takes the cluster's own.
+  const lead=input.leadId?{leadId:input.leadId}:{};
+  return write(api,'/clusters/:clusterId/agents',{machine,role,runsIn,useAsDefault,expectedRevision,...custom,...lead},{clusterId},retained);
 }
 export function createOverseer(api,input,retained=null){
   const{machine,runsIn,fresh,expectedRevision}=input;return write(api,'/overseer',{machine,runsIn,fresh,expectedRevision},undefined,retained);
+}
+// A service such as the Incubator or Genesis is a unit of the root scope, named after its role. Where it runs is chosen right after, with setRunsIn.
+export function createService(api,input,retained=null){
+  const{machine,role}=input;return write(api,'/units',{unit:role,role,scope:{kind:'root'},machine},undefined,retained);
 }
 export function setRunsIn(api,unitId,input,retained=null){
   const{machine,runsIn,useAsDefault,expectedRevision}=input;return patch(api,'/units/:unitId/runs-in',{machine,runsIn,useAsDefault,expectedRevision},{unitId},retained);
