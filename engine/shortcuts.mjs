@@ -36,14 +36,15 @@ function queryDesktopFolder(env) {
 
 // Pure: what each shortcut is. The target is the Script Host, the arguments carry the runtime, the CLI of the mind, the
 // mind and the sentence to show if the app cannot start.
-export function shortcutPlan({ platform = process.platform, mindPath, nodePath = process.execPath, cosmicPath = '', folders, message, description, env = process.env }) {
+// `kitPath` is the installed kit the shortcut starts; a joined M1ND may hold an older kit copy without the launcher.
+export function shortcutPlan({ platform = process.platform, mindPath, kitPath = mindPath, nodePath = process.execPath, cosmicPath = '', folders, message, description, env = process.env }) {
   if (platform !== 'win32') return [];
-  const launcher = path.join(mindPath, 'gui', 'launch.vbs');
+  const launcher = path.join(kitPath, 'gui', 'launch.vbs');
   const common = {
     target: path.join(system32(env), 'wscript.exe'),
-    args: [launcher, nodePath, path.join(mindPath, 'cli', 'index.mjs'), mindPath, message, cosmicPath],
-    workingDirectory: mindPath,
-    icon: `${path.join(mindPath, 'assets', 'installer.ico')},0`,
+    args: [launcher, nodePath, path.join(kitPath, 'cli', 'index.mjs'), mindPath, message, cosmicPath],
+    workingDirectory: kitPath,
+    icon: `${path.join(kitPath, 'assets', 'installer.ico')},0`,
     description,
   };
   return [folders?.desktop, folders?.startMenu].filter(Boolean).map(folder => ({ file: path.join(folder, NAME), ...common }));

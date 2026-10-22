@@ -126,7 +126,9 @@ test('setup makes the desktop and Start menu shortcuts of a new M1ND, records th
   const fixture = await installedMind(context);
   const files = [path.join(fixture.desktop, 'HIVEM1ND.lnk'), path.join(fixture.startMenu, 'HIVEM1ND.lnk')];
   assert.deepEqual(fixture.runs.map(item => item.file), files);
-  assert.equal(fixture.runs[0].args[0], path.join(fixture.mindPath, 'gui', 'launch.vbs'));
+  // The shortcut starts the installed kit, which always has the launcher, and passes the M1ND as an argument.
+  assert.equal(fixture.runs[0].args[0], path.join(fixture.options.kitPath, 'gui', 'launch.vbs'));
+  assert.equal(fixture.runs[0].args[2], path.join(fixture.options.kitPath, 'cli', 'index.mjs'));
   assert.equal(fixture.runs[0].args[3], fixture.mindPath);
   assert.equal(fixture.runs[0].args[4], 'HIVEM1ND could not start. Open it again, or run hivem1nd init if the problem stays.');
   const { record } = await readMachineRecord(fixture.mindPath, 'TESTBOX');

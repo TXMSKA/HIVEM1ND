@@ -145,6 +145,7 @@ test('an empty Git marker is not imported and an unsupported real repository fai
   const found = await discoverProjects([fixture.home]);
   assert.equal(found.some(item => item.path === marker), false);
   await assert.rejects(discoverProjects([directory], { gitRunner: async () => ({ code: 129, stdout: '' }) }), { code: 'git_unavailable' });
+  assert.deepEqual(await discoverProjects([directory], { gitRunner: async () => ({ code: 128, stdout: '' }), skipUnreadable: true }), []);
 });
 
 test('changed paths behind a junction cannot start a patch read outside the linked repository', async t => {

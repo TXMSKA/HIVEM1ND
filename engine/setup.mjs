@@ -1303,12 +1303,17 @@ class SetupSession {
     if (this.shortcuts !== true || this.serviceDryRun !== false || platform !== 'win32') return [];
     try {
       const mind = this.mindPath;
-      for (const file of [['gui', 'launch.vbs'], ['cli', 'index.mjs']]) if (!await lstat(path.join(mind, ...file)).then(state => state.isFile(), () => false)) return [];
+      const hasLauncher = async (root) => {
+        for (const file of [['gui', 'launch.vbs'], ['cli', 'index.mjs']]) if (!await lstat(path.join(root, ...file)).then(state => state.isFile(), () => false)) return false;
+        return true;
+      };
+      const kit = this.kitPath && await hasLauncher(this.kitPath) ? this.kitPath : await hasLauncher(mind) ? mind : null;
+      if (!kit) return [];
       const language = this.answers.language;
       const folders = this.shortcutFolders ?? await windowsShortcutFolders({ env: this.env, home: this.homeDir });
       const desktop = this.desktopShortcut !== false;
       const managed = this.machineRecord?.managedFiles ?? {};
-      const plan = shortcutPlan({ platform, mindPath: mind, nodePath: this.nodePath ?? process.execPath, cosmicPath: this.cosmicPath ?? '',
+      const plan = shortcutPlan({ platform, mindPath: mind, kitPath: kit, nodePath: this.nodePath ?? process.execPath, cosmicPath: this.cosmicPath ?? '',
         folders: desktop ? folders : { startMenu: folders.startMenu },
         message: text(language, 'launchFailed'), description: text(language, 'shortcutDescription'), env: this.env });
       const applied = await applyShortcuts(plan, { managed, run: this.shortcutRunner ?? undefined, env: this.env });
