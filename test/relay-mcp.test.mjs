@@ -163,10 +163,10 @@ test('stdio advertises protocol 3.0.0 and editor tools, and a caller flag is not
     { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'blueprint_open', arguments: { resourceId: 'board-1' } } },
     { jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'blueprint_open', arguments: { resourceId: 'board-1' } } },
   ]);
-  assert.equal(lines[0].result.serverInfo.version, '3.0.0');
+  assert.equal(lines[0].result.serverInfo.version, '3.1.1');
   assert.equal(lines[0].result.protocolVersion, '2025-03-26');
   const names = lines[1].result.tools.map((tool) => tool.name);
-  for (const name of ['register', 'send_message', 'blueprint_open', 'blueprint_add_node', 'blueprint_update_node', 'blueprint_remove_node', 'blueprint_reply_comment', 'void_open', 'void_replace_range', 'void_reply_comment']) {
+  for (const name of ['register', 'send_message', 'link', 'blueprint_open', 'blueprint_add_node', 'blueprint_update_node', 'blueprint_remove_node', 'blueprint_reply_comment', 'void_open', 'void_replace_range', 'void_reply_comment']) {
     assert.equal(names.includes(name), true, name);
   }
   assert.equal(lines[2].result.isError, true);
@@ -274,4 +274,50 @@ test('status answers with counts, the caller and the units waiting by default, a
   assert.deepEqual(lines[7].result.structuredContent.attention.map((item) => item.unit), ['executor-app']);
   assert.equal(lines[7].result.structuredContent.self, null, 'the caller is shown only when its unit is selected');
   assert.equal(lines[8].result.isError, true);
+});
+
+test('the link tool makes a code, a second session joins with it, and send_message reaches the whole link', async (context) => {
+  const mindPath = await fixture(context);
+  await writeFile(path.join(mindPath, 'user', 'state', 'executor-app.md'), 'unit: executor-app\nstate: in\nmachine: RELAYTEST\n\nWorking.\n');
+  const call = (id, name, args = {}) => ({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } });
+  const first = await run(mindPath, [
+    { jsonrpc: '2.0', id: 1, method: 'tools/list' },
+    call(2, 'register', { unit: 'overseer', nativeSessionId: 'native-1', client: 'codex' }),
+    call(3, 'link'),
+    call(4, 'link', { code: 'A'.repeat(17) }),
+    call(5, 'link', { code: 'ABCDE', extra: true }),
+  ]);
+  const tools = first.lines[0].result.tools;
+  const link = tools.find((tool) => tool.name === 'link');
+  assert.equal(link.inputSchema.properties.code.maxLength, 16);
+  assert.deepEqual(link.inputSchema.required, []);
+  assert.match(tools.find((tool) => tool.name === 'send_message').inputSchema.properties.to.description, /link:<linkId>/);
+  const made = first.lines[2].result.structuredContent;
+  assert.match(made.code, /^[2-9A-HJ-NP-Z]{5}$/);
+  assert.deepEqual(made.members, ['overseer']);
+  for (const line of first.lines.slice(3)) {
+    assert.equal(line.result.isError, true);
+    assert.equal(line.result.structuredContent.code, 'INVALID_ARGUMENTS');
+  }
+
+  const second = await run(mindPath, [
+    call(1, 'register', { unit: 'executor-app', nativeSessionId: 'native-2', client: 'codex' }),
+    call(2, 'link', { code: made.code.toLowerCase() }),
+    call(3, 'send_message', { to: `link:${made.linkId}`, subject: 'Hello', body: 'From the second session' }),
+    call(4, 'link', { code: 'AAAAA' }),
+  ]);
+  const joined = second.lines[1].result.structuredContent;
+  assert.equal(joined.joined, true);
+  assert.deepEqual(joined.members, ['overseer', 'executor-app']);
+  const sent = second.lines[2].result.structuredContent;
+  assert.deepEqual(sent.recipients, ['overseer']);
+  assert.equal(sent.threadId, made.threadId);
+  assert.equal(second.lines[3].result.isError, true);
+  assert.equal(second.lines[3].result.structuredContent.code, 'LINK_NOT_FOUND');
+
+  const overseer = await createRelay({ mindPath, hostname: 'RELAYTEST', sessionId: 'direct', client: 'codex' });
+  await overseer.register({ unit: 'overseer', nativeSessionId: 'native-1' });
+  const { messages } = await overseer.read();
+  assert.deepEqual(messages.map((message) => message.subject).sort(), ['Hello', 'Linked']);
+  assert.equal(messages.every((message) => message.threadId === made.threadId), true);
 });

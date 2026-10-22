@@ -390,7 +390,7 @@ test('the real wizard retries only service startup and opens its authenticated v
   assert.equal(commands.length, registered);
   assert.equal((await stat(path.join(mind, 'rules.md'))).mtimeMs, before.mtimeMs);
   assert.equal((await stat(configFile)).mtimeMs, configBefore.mtimeMs);
-  assert.equal(await readFile(path.join(mind, 'user', 'VERSION'), 'utf8'), '3.0.0\n');
+  assert.equal(await readFile(path.join(mind, 'user', 'VERSION'), 'utf8'), '3.1.1\n');
   const progressFile = path.join(mind, '.migration', 'migration-3.0.0.json');
   const progress = await readFile(progressFile).catch(error => { if (error?.code === 'ENOENT') return null; throw error; });
   await mkdir(path.dirname(progressFile), { recursive: true });

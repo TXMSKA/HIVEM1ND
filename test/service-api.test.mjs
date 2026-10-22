@@ -2182,7 +2182,7 @@ function fakeStream() {
 
 test('the package exports the GUI host from the root and from ./gui', async () => {
   const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
-  assert.equal(pkg.version, '3.0.0');
+  assert.equal(pkg.version, '3.1.1');
   assert.equal(pkg.main, 'gui/index.mjs');
   assert.equal(pkg.exports['.'], './gui/index.mjs');
   assert.equal(pkg.exports['./gui'], './gui/index.mjs');
