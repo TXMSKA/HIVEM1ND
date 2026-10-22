@@ -701,6 +701,20 @@ test('person aliases, waiting ids, lead approval and task requirements stay cano
   assert.equal(question.title, 'the registry name');
 });
 
+test('a task without a title line is titled from its file name and a written title is kept', async (t) => {
+  const fixture = await mind(t);
+  const root = fixture.paths.mind;
+  const fields = { status: 'review', 'from-id': 'root:master', 'to-id': 'root:master', date: '2026-10-10' };
+  await writeFile(path.join(root, 'user', 'tasks', '027-media-to-disk-and-webp.md'), stateFile({ id: 'root:027', ...fields }, '## Request\nMove them.\n'));
+  await writeFile(path.join(root, 'user', 'tasks', '028-written_title.md'), stateFile({ id: 'root:028', title: 'As written', ...fields }, '## Request\nKeep it.\n'));
+  await writeFile(path.join(root, 'user', 'tasks', '029.md'), stateFile({ id: 'root:029', ...fields }, '## Request\nNo name.\n'));
+  const view = await readProjection({ paths: fixture.paths, now: () => NOW });
+  assert.equal(view.tasks.find((item) => item.id === 'root:027').title, 'Media to disk and webp');
+  assert.equal(view.tasks.find((item) => item.id === 'root:028').title, 'As written');
+  assert.equal(view.tasks.find((item) => item.id === 'root:029').title, '');
+  assert.equal(view.waiting.find((item) => item.id === 'review:root:027')?.title, 'Media to disk and webp');
+});
+
 test('chat destinations stay on the message and the last message', async (t) => {
   const fixture = await mind(t);
   const root = fixture.paths.mind;

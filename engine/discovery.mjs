@@ -71,7 +71,7 @@ export function resolveAdapterPaths(adapter, { homeDir, env = process.env } = {}
   return { skillsRoot, skillsBase, rulesPath, rulesBase };
 }
 
-export async function discoverProjects(projectRoots, { maxDepth = 4, skip = () => false, gitRunner } = {}) {
+export async function discoverProjects(projectRoots, { maxDepth = 4, skip = () => false, gitRunner, skipUnreadable = false } = {}) {
   if (!Array.isArray(projectRoots)) throw new Error('projectRoots must be an array');
   maxDepth = Math.min(4, maxDepth);
   const projects = [];
@@ -97,6 +97,9 @@ export async function discoverProjects(projectRoots, { maxDepth = 4, skip = () =
       catch (error) {
         // A marker without Git metadata is not a repository; unsupported Git on a real one remains an error.
         if (error.code === 'git_unavailable' && await isDirectory(path.join(directory, '.git')) && !await pathExists(path.join(directory, '.git', 'HEAD'))) return;
+        // A scan of the whole home folder meets repositories it may not read, such as one owned by a sandbox user;
+        // that one is not offered, and the rest of setup goes on.
+        if (error.code === 'git_unavailable' && skipUnreadable) return;
         throw error;
       }
       if (repositories.has(identity.id)) return;
@@ -125,6 +128,7 @@ export async function discoverHomeProjects(homeDir, { maxDepth = 4, gitRunner } 
   return discoverProjects([homeDir], {
     maxDepth,
     gitRunner,
+    skipUnreadable: true,
     skip: (name) => name.startsWith('.') || HOME_SKIP_DIRECTORIES.has(name),
   });
 }

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { lstat, readFile } from 'node:fs/promises';
+import { lstat, readFile, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hashContent } from './records.mjs';
@@ -36,14 +36,15 @@ function queryDesktopFolder(env) {
 
 // Pure: what each shortcut is. The target is the Script Host, the arguments carry the runtime, the CLI of the mind, the
 // mind and the sentence to show if the app cannot start.
-export function shortcutPlan({ platform = process.platform, mindPath, nodePath = process.execPath, cosmicPath = '', folders, message, description, env = process.env }) {
+// `kitPath` is the installed kit the shortcut starts; a joined M1ND may hold an older kit copy without the launcher.
+export function shortcutPlan({ platform = process.platform, mindPath, kitPath = mindPath, nodePath = process.execPath, cosmicPath = '', folders, message, description, env = process.env }) {
   if (platform !== 'win32') return [];
-  const launcher = path.join(mindPath, 'gui', 'launch.vbs');
+  const launcher = path.join(kitPath, 'gui', 'launch.vbs');
   const common = {
     target: path.join(system32(env), 'wscript.exe'),
-    args: [launcher, nodePath, path.join(mindPath, 'cli', 'index.mjs'), mindPath, message, cosmicPath],
-    workingDirectory: mindPath,
-    icon: `${path.join(mindPath, 'assets', 'installer.ico')},0`,
+    args: [launcher, nodePath, path.join(kitPath, 'cli', 'index.mjs'), mindPath, message, cosmicPath],
+    workingDirectory: kitPath,
+    icon: `${path.join(kitPath, 'assets', 'installer.ico')},0`,
     description,
   };
   return [folders?.desktop, folders?.startMenu].filter(Boolean).map(folder => ({ file: path.join(folder, NAME), ...common }));
@@ -80,6 +81,22 @@ export async function applyShortcuts(plan, { managed = {}, run = runMaker, env =
     const written = await bytesOf(item.file);
     if (!written) throw new Error(`The shortcut was not created: ${item.file}`);
     results.push({ file: item.file, status: 'applied', created: existing === null, hash: hashContent(written) });
+  }
+  return results;
+}
+
+// A shortcut setup made and the person has not changed is taken away, the way uninstall does; any other file with that
+// name is the person's and stays. Only a shortcut in the record is ever touched.
+export async function removeOwnedShortcuts(folders, { managed = {} } = {}) {
+  const results = [];
+  for (const folder of folders.filter(Boolean)) {
+    const file = path.join(folder, NAME);
+    if (!Object.hasOwn(managed, file)) continue;
+    const existing = await bytesOf(file);
+    if (existing === null) { results.push({ file, status: 'missing' }); continue; }
+    if (existing === undefined || hashContent(existing) !== managed[file]) { results.push({ file, status: 'kept', reason: 'not-ours' }); continue; }
+    await unlink(file).catch(error => { if (error.code !== 'ENOENT') throw error; });
+    results.push({ file, status: 'removed' });
   }
   return results;
 }

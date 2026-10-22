@@ -30,6 +30,8 @@ export const cases = {
     async reach(ctx) {
       await openDesktop(ctx);
       await openSettings(ctx, 'general');
+      // Phone on the home network is a disclosure, closed until the person opens it.
+      await ctx.page.click('[data-disclosure="settings-phone"] > summary');
       await ctx.visible('[data-home="open"] [data-phone-count]');
       await ctx.visible('[data-action="close-home"]');
     },
@@ -73,7 +75,7 @@ export const cases = {
     },
   },
   '6.5': {
-    // Select Permissions: two standing approvals (Always for this unit) and one agent permission (Cursor, git).
+    // Open Permissions, folded at the end of Agents: two standing approvals (Always for this unit) and one agent permission (Cursor, git).
     boot: settingsBoot(),
     entry: 'none',
     async seed(ctx) {
@@ -85,9 +87,10 @@ export const cases = {
     },
     async reach(ctx) {
       await openDesktop(ctx);
-      await openSettings(ctx, 'permissions');
+      await openSettings(ctx, 'agents');
+      await ctx.page.click('[data-disclosure="settings-permissions"] > summary');
       await ctx.visible('[data-permission]');
-      await ctx.page.waitFor(() => document.querySelectorAll('[data-settings-page="permissions"] [data-permission]').length === 3, { message: 'two standing approvals and one agent permission' });
+      await ctx.page.waitFor(() => document.querySelectorAll('[data-disclosure="settings-permissions"] [data-permission]').length === 3, { message: 'two standing approvals and one agent permission' });
     },
   },
   '6.8': {
@@ -110,6 +113,7 @@ export const cases = {
     async reach(ctx) {
       await openDesktop(ctx);
       await openSettings(ctx, 'general');
+      await ctx.page.click('[data-disclosure="settings-phone"] > summary');
       await ctx.page.click('[data-action="open-home"]');
       await ctx.visible('dialog[data-phone-dialog] svg[data-qr]', { timeout: 30000 });
       ctx.mask('dialog[data-phone-dialog] p[data-code]', 'dialog[data-phone-dialog] p[data-secret]');

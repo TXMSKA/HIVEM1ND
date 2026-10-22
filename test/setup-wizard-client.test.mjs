@@ -194,6 +194,37 @@ test("the Relay+ offer reads as unavailable: disabled, marked Coming soon, and n
   assert.equal(migrate.parent.className.includes("relay-plus"), false);
 });
 
+test("on Windows the install step offers the desktop shortcut, ticked, and its value goes with the setup request", async () => {
+  const shortcutStep = { ...locationStep, fields: [...locationStep.fields, { id: "desktopShortcut", type: "boolean", label: "Add a shortcut to the desktop", required: false }],
+    values: { ...locationStep.values, desktopShortcut: true }, shortcut: { title: "Add a shortcut to the desktop" } };
+  const answers = [];
+  const { document, calls } = await openWizard(shortcutStep, { answer: async (options) => { answers.push(JSON.parse(options.body).values); return { data: shortcutStep }; },
+    browse: async () => ({ data: { path: "C:/chosen" } }) });
+  const checkbox = document.getElementById("desktop-shortcut");
+  assert.ok(checkbox, "the box is on the step");
+  assert.equal(checkbox.type, "checkbox");
+  assert.equal(checkbox.checked, true, "ticked by default");
+  assert.equal(checkbox.disabled, false);
+  assert.equal(checkbox.parent.className, "setup-offer", "it uses the markup of the other offers");
+  assert.equal(checkbox.parent.querySelector("strong").textContent, "Add a shortcut to the desktop");
+  assert.equal(checkbox.parent.querySelector(".offer-body"), null);
+  const submit = () => document.getElementById("step-form").listeners.get("submit")[0]({ preventDefault() {} });
+  await submit();
+  document.getElementById("desktop-shortcut").checked = false;
+  await submit();
+  document.getElementById("desktop-shortcut").checked = false;
+  // A new folder redraws the step, so the choice travels with that request too.
+  await document.getElementById("browse-folder").listeners.get("click")[0]();
+  assert.deepEqual(answers.map((values) => values.desktopShortcut), [true, false, false]);
+  assert.equal(answers[2].changeFolder, true);
+  assert.equal(calls.filter((call) => call.route === "answer").length, 3);
+
+  const elsewhere = await openWizard(locationStep, { answer: async (options) => { answers.push(JSON.parse(options.body).values); return { data: locationStep }; } });
+  assert.equal(elsewhere.document.getElementById("desktop-shortcut"), null, "the step offers no shortcut where setup makes none");
+  await elsewhere.document.getElementById("step-form").listeners.get("submit")[0]({ preventDefault() {} });
+  assert.equal(Object.hasOwn(answers.at(-1), "desktopShortcut"), false);
+});
+
 test("the starting step shows a progress bar and a sentence while the first sync runs", async () => {
   const service = { ...locationStep, id: "service", number: 3, preview: { conflicts: [] }, fields: [],
     failure: { headline: "Paused", body: "Retry." },

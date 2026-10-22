@@ -63,6 +63,10 @@ test("the trusted exporter freezes actual nested layout pages styles links and s
     assert.throws(() => exportBoard({ screens: [] }, { layout: kit.layout, normalize: normalizeBoard }), /import_unavailable/);
     assert.throws(() => exportBoard({ ...source, screens: [{ ...source.screens[0], root: { t: "unsupported" } }] }, { layout: kit.layout, normalize: normalizeBoard }), /Unknown node/);
     assert.throws(() => exportBoard({ ...source, future: "x".repeat(16_000_000) }, { layout: kit.layout, normalize: normalizeBoard, skin: skins.design }), /import_unavailable/);
+    const large = board({ id: "large", title: "Large", screens: [{ id: "many", title: "Many", root: kit.col({}, ...Array.from({ length: 10_500 }, (_, index) => kit.text(`Node ${index}`))) }] });
+    assert.throws(() => exportBoard(large, { layout: kit.layout, normalize: normalizeBoard, skin: skins.design }), /10000 nodes/);
+    const drawn = exportBoard(large, { layout: kit.layout, normalize: (value, options) => normalizeBoard(value, { ...options, maxNodes: 100_000 }), skin: skins.design });
+    assert.equal(drawn.screens[0].root.kids.length, 10_500);
   } finally { if (prior === undefined) delete globalThis.document; else globalThis.document = prior; }
 });
 

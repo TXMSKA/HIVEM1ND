@@ -5,7 +5,7 @@ import {
   canConnect, createMap, flushLayout, hitClusterHeader, isCollapsed, keyDown, paintNodes, personalZones, pointerDown, pointerMove, pointerUp,
   queueLayoutPatch, renderMap, retrySavedLayout, toggleCollapsed,
 } from '../gui/app/map.mjs';
-import { openContextMenu } from '../gui/app/hierarchy.mjs';
+import { buildHierarchy, flattenVisibleHierarchy, openContextMenu } from '../gui/app/hierarchy.mjs';
 import { toScreen } from '../gui/app/map-geometry.mjs';
 
 const unit = (id, name, role = 'executor', clusterId = null, leadId = null) => ({ id, unit: name, role, scope: { kind: 'root' }, clusterId, leadId, status: 'idle' });
@@ -165,18 +165,104 @@ test('the real mind of 92 units in 26 groups has no overlap between boxes, units
   }
 });
 
-test('a cluster collapses to one chip that counts the agents inside, and expands again', () => {
+test('a cluster collapses to one chip that counts what the Hierarchy counts, and expands again', () => {
   const { units, groups } = realMind();
   const map = createMap({ units, groups, saved: { nodes: {}, groups: {} } });
   assert.equal(paintNodes(map).length, 92);
   assert.equal(toggleCollapsed(map, 'folder-web'), true);
   assert.equal(isCollapsed(map, 'folder-web'), true);
   const chip = personalZones(map).find(frame => frame.group.id === 'folder-web');
-  assert.ok(chip.compact && chip.collapsed && chip.count === 60 && chip.bounds.h < 50);
+  assert.ok(chip.compact && chip.collapsed && chip.count === 16 && chip.bounds.h < 50, 'a folder says how many clusters it holds');
   assert.equal(personalZones(map).some(frame => frame.group.id === 'repo-Nebula'), false);
   assert.equal(paintNodes(map).length, 32, 'the Web agents are hidden; Unity, ntk.solutions, the Overseer and the agents outside any group stay');
+  // A repository cluster says how many agents it holds; both numbers are the ones the Hierarchy shows.
+  assert.equal(toggleCollapsed(map, 'repo-Quark'), true);
+  const rows = flattenVisibleHierarchy(buildHierarchy(units, [], groups), { shown: new Map(), collapsed: new Set() });
+  for (const id of ['folder-web', 'repo-Quark']) assert.equal(personalZones(map).find(frame => frame.group.id === id).count, rows.find(row => row.groupId === id).count, id);
+  assert.equal(personalZones(map).find(frame => frame.group.id === 'repo-Quark').count, 3);
+  assert.equal(toggleCollapsed(map, 'repo-Quark'), false);
   assert.equal(toggleCollapsed(map, 'folder-web'), false);
   assert.equal(paintNodes(map).length, 92);
+});
+
+test('a folded chip shows its glyph, its title, its count in a badge and a button that unfolds it', () => {
+  const { units, groups } = realMind();
+  const map = createMap({ units, groups, saved: { nodes: {}, groups: {} } }), surface = host();
+  toggleCollapsed(map, 'folder-web');
+  const labels = { expand: name => `Expand ${name}` };
+  renderMap(surface.ownerDocument, surface, map, labels);
+  const chips = layer(surface).children.filter(child => child.className === 'map-chip');
+  assert.equal(chips.length, 1, 'only the folded cluster is a chip');
+  const [title, badge, expand] = chips[0].children;
+  assert.equal(title.getAttribute('data-group-id'), 'folder-web');
+  assert.equal(title.children[0].children[1].textContent, 'Web', 'the title carries no count; the badge does');
+  assert.ok(title.children[0].children[0].tagName, 'the glyph is drawn');
+  assert.equal(badge.className, 'map-group-badge');
+  assert.equal(badge.textContent, '16');
+  assert.equal(expand.getAttribute('data-action'), 'expand-cluster');
+  assert.equal(expand.getAttribute('aria-label'), 'Expand Web');
+  const frame = personalZones(map).find(item => item.group.id === 'folder-web');
+  assert.ok(frame.bounds.w >= 30 + 'Web'.length * 7.2 + 20 + 30, 'the chip is wide enough for the badge and the button');
+  expand.listeners.get('click')[0]();
+  assert.equal(isCollapsed(map, 'folder-web'), false, 'the button unfolds the cluster');
+  assert.equal(layer(surface).children.some(child => child.className === 'map-chip'), false);
+  assert.ok(titleOf(surface, 'folder-web'), 'the unfolded cluster has its title again');
+  assert.equal(titleOf(surface, 'folder-web').children[0].children[1].textContent, 'Web, 16', 'an open frame keeps its label');
+});
+
+test('a name is never cut: at every zoom a folded chip, a compact box and a frame title hold their whole label', () => {
+  const px = value => Number.parseFloat(value) || 0;
+  const captionWidth = (label, measure) => {
+    const caption = label.children[0], [glyph, title] = caption.children, across = caption.style.padding.split(' ')[1];
+    return px(across) * 2 + (glyph.style.display === 'none' ? 0 : px(glyph.style.width) + px(caption.style.gap)) + measure(title.textContent) * px(label.style.fontSize) / 11.5;
+  };
+  const chipOf = (surface, id) => layer(surface).children.find(child => child.className === 'map-chip' && child.children[0].getAttribute('data-group-id') === id);
+  // One measure close to the layout's own estimate, one for names made of wide letters.
+  for (const measure of [text => text.length * 6.6, text => text.length * 10]) {
+    const { units, groups } = realMind();
+    const map = createMap({ units, groups, saved: { nodes: {}, groups: {} } }), surface = host();
+    map.measureLabel = measure;
+    toggleCollapsed(map, 'folder-web'); toggleCollapsed(map, 'repo-Quark');
+    for (const zoom of [0.25, 0.66, 1, 2.5]) {
+      map.view = { x: 0, y: 0, zoom };
+      renderMap(surface.ownerDocument, surface, map, {});
+      const near = layer(surface).getAttribute('data-detail') === 'near', seen = new Set();
+      for (const zone of personalZones(map)) {
+        const id = zone.group.id, name = `${zone.group.title} at ${zoom}`;
+        const box = find(surface.children.find(child => child.getAttribute('class') === 'map-edges'), `[data-group-zone=${id}]`)[0];
+        const width = px(box.getAttribute('width'));
+        assert.ok(width >= zone.bounds.w * zoom - 0.001, `${name}: the box is never narrower than its frame`);
+        // Every part scales with the name, so where the layout's own estimate holds the name it holds it at every readable zoom.
+        if (zone.compact && zoom >= 0.66 && measure('x') === 6.6) assert.ok(Math.abs(width - zone.bounds.w * zoom) < 0.001, `${name}: the layout's box already holds the name`);
+        if (zone.collapsed) {
+          const chip = chipOf(surface, id), [label, ...rest] = chip.children, parts = [captionWidth(label, measure)];
+          const badge = rest.find(child => child.className === 'map-group-badge'), expand = rest.find(child => child.className === 'map-chip-expand');
+          if (near && badge) parts.push(measure(badge.textContent) * px(badge.style.fontSize) / 11.5 + px(badge.style.padding.split(' ')[1]) * 2);
+          if (near) parts.push(px(expand.style.width));
+          const content = parts.reduce((sum, part) => sum + part, 0) + px(chip.style.gap) * (parts.length - 1) + px(chip.style.paddingLeft) * 2;
+          assert.ok(content <= px(chip.style.width) + 0.001, `${name}: the folded chip holds its glyph, name, count and button (${content} in ${chip.style.width})`);
+          assert.equal(px(chip.style.width), width, `${name}: the chip and its box are one width`);
+          seen.add('chip');
+        } else {
+          const label = titleOf(surface, id), caption = captionWidth(label, measure);
+          if (zone.compact) {
+            assert.ok(caption + 6 * zoom <= width + 0.001 && px(label.style.maxWidth) >= caption, `${name}: the compact box holds its name`);
+            seen.add('compact');
+          } else {
+            assert.ok(px(label.style.maxWidth) >= caption, `${name}: the frame title is not cut`);
+            seen.add('title');
+          }
+        }
+      }
+      assert.deepEqual([...seen].sort(), ['chip', 'compact', 'title'], `every kind of label is checked at ${zoom}`);
+    }
+    // Where the layout's own estimate is enough, the chip is the width the layout gave it.
+    if (measure('x') === 6.6) {
+      map.view = { x: 0, y: 0, zoom: 1 };
+      renderMap(surface.ownerDocument, surface, map, {});
+      assert.equal(px(chipOf(surface, 'folder-web').style.width), personalZones(map).find(zone => zone.group.id === 'folder-web').bounds.w);
+    }
+  }
 });
 
 test('dragging a cluster title moves the cluster, what is inside it and the places saved for its units, and saves them in one request', async () => {
@@ -270,7 +356,7 @@ test('a cluster is also picked up by its header strip, and a unit dropped outsid
   assert.deepEqual(calls[0].body.nodes.a1, { x: at.x + 20, y: at.y + 5 });
 });
 
-test('a save that fails is tried again quietly before the person is told, and has its own slot beside the hint', async () => {
+test('a save that fails is tried again quietly before the person is told, and has its own slot at the top', async () => {
   const groups = [cluster('a', 'alpha', null, ['a1'])], units = [unit('a1', 'a-one', 'executor', 'a')];
   const map = createMap({ units, groups, saved: { layout: { nodes: {}, groups: {} }, revision: 'r0' } });
   map.persist = true;
@@ -294,22 +380,28 @@ test('a save that fails is tried again quietly before the person is told, and ha
 
   const surface = host(), retries = [];
   map.onRetryLayout = () => retries.push(true);
-  renderMap(surface.ownerDocument, surface, map, { drag: 'Drag the map', layoutError: 'The map was not saved.', retry: 'Retry' });
+  const labels = { drag: 'Drag the map', inside: (name, count) => `Zoomed in on ${name}, ${count}`, layoutError: 'The map was not saved.', retry: 'Retry' };
+  renderMap(surface.ownerDocument, surface, map, labels);
   const top = surface.children.at(-1);
   assert.equal(top.className, 'map-top');
-  assert.deepEqual(top.children.map(child => child.className), ['map-hint', 'map-save'], 'the hint and the notice are separate siblings');
-  assert.equal(top.children[0].textContent, 'Drag the map');
-  const [message, retry] = top.children[1].children;
+  assert.deepEqual(top.children.map(child => child.className), ['map-save'], 'the general hint is not drawn at the top; it is behind the help button');
+  const [message, retry] = top.children[0].children;
   assert.equal(message.textContent, 'The map was not saved.');
   retry.listeners.get('click')[0]();
   assert.equal(retries.length, 1);
+  // Zoomed into a folder, the hint that says so and the notice are separate siblings.
+  map.focusedFolder = 'a';
+  renderMap(surface.ownerDocument, surface, map, labels);
+  assert.deepEqual(surface.children.at(-1).children.map(child => child.className), ['map-hint', 'map-save'], 'the hint and the notice are separate siblings');
+  assert.equal(surface.children.at(-1).children[0].textContent, 'Zoomed in on Alpha, 0');
+  map.focusedFolder = null;
   failures = 0;
   await retrySavedLayout(map);
   assert.equal(map.persistState, 'saved');
   assert.equal(map.pending.size, 0);
   map.persistState = 'retrying';
   renderMap(surface.ownerDocument, surface, map, {});
-  assert.deepEqual(surface.children.at(-1).children.map(child => child.className), ['map-hint'], 'a quiet retry draws nothing');
+  assert.deepEqual(surface.children.at(-1).children.map(child => child.className), [], 'a quiet retry draws nothing');
 });
 
 test('dragging from one unit to another connects them, with a line, a marked drop target and the same dialog as the keyboard, at every zoom and with touch', () => {
@@ -487,4 +579,82 @@ test('a cluster whose agents are gone shrinks to its empty size once the unit li
   const known = clusterFrames(groups, {}, null, [])[0].bounds;
   assert.ok(known.h < waiting.h && known.w <= waiting.w, 'an empty loaded list does not keep room for the 39 archived agents');
   assert.ok(known.h < CELL_H * 2, 'the empty box is a small chip-sized frame');
+});
+
+const apart = (left, right) => Math.hypot(left.x - right.x, left.y - right.y);
+
+test('no agent outside a box stands under another; a saved place that is clear stays and one that is not moves to a free cell', () => {
+  const { units: members, groups } = box(2);
+  const overseer = unit('root:overseer', 'overseer', 'overseer');
+  const free = ['p', 'q', 'r', 's'].map(name => unit(`root:${name}`, name, 'agent'));
+  const all = [...members, overseer, ...free];
+  const frames = clusterFrames(groups, {}, null, all);
+  const outside = ids => ids.map(id => placed.positions[id]);
+  const stand = { x: 9000, y: -9000 };
+  // Two agents saved at the same point: the first keeps it, the second moves; a third saved clear of both stays.
+  let placed = placeUnits(all, { nodes: { 'root:p': stand, 'root:q': stand, 'root:r': { x: 9400, y: -9000 } }, groups: {} }, groups);
+  assert.deepEqual(placed.positions['root:p'], stand);
+  assert.deepEqual(placed.positions['root:r'], { x: 9400, y: -9000 });
+  const ids = [overseer.id, ...free.map(item => item.id)];
+  for (const [index, point] of outside(ids).entries()) for (const other of outside(ids).slice(index + 1)) assert.ok(apart(point, other) >= 96, 'every pair outside a box is at least 96 apart');
+  assert.ok(apart(placed.positions['root:q'], stand) >= 96);
+  for (const id of ids) for (const frame of frames) assert.equal(overlaps(cellOf(placed.positions[id]), frame.bounds), false, `${id} clears ${frame.group.title}`);
+  // A saved place equal to the Overseer's moves.
+  const home = placeUnits(all, { nodes: {}, groups: {} }, groups).positions[overseer.id];
+  placed = placeUnits(all, { nodes: { 'root:p': { ...home } }, groups: {} }, groups);
+  assert.deepEqual(placed.positions[overseer.id], home);
+  assert.ok(apart(placed.positions['root:p'], home) >= 96, 'a saved agent on the Overseer moves off it');
+  // The row is anchored on the Overseer where it stands, and no new cell is one a kept place already holds.
+  const kept = { x: 5000, y: 5000 };
+  placed = placeUnits(all, { nodes: { [overseer.id]: kept, 'root:s': { x: kept.x + CELL_W, y: kept.y } }, groups: {} }, groups);
+  assert.deepEqual(placed.positions[overseer.id], kept, 'a saved Overseer that clears every box is kept');
+  assert.deepEqual(placed.positions['root:s'], { x: kept.x + CELL_W, y: kept.y }, 'a saved place that is clear stays');
+  assert.deepEqual(placed.positions['root:p'], { x: kept.x + CELL_W * 2, y: kept.y }, 'the row starts beside the kept Overseer and skips the cell a kept place holds');
+  for (const [index, point] of outside(ids).entries()) for (const other of outside(ids).slice(index + 1)) assert.ok(apart(point, other) >= 96);
+});
+
+test('the Map marks what is picked in the Hierarchy: a frame or chip, a tick in place of the glyph, the ring of a selected unit', () => {
+  const groups = [cluster('a', 'alpha', null, ['a1']), cluster('b', 'beta', null, ['b1']), cluster('empty', 'empty')];
+  const units = [unit('a1', 'a-one', 'executor', 'a'), unit('b1', 'b-one', 'executor', 'b')];
+  const map = createMap({ units, groups, saved: { nodes: {}, groups: {} } }), surface = host();
+  const zone = id => surface.children[0].children.find(child => child.getAttribute('data-group-zone') === id).getAttribute('class');
+  const glyph = id => titleOf(surface, id).children[0].children[0].children[0].getAttribute('d');
+  const node = id => nodeButtons(surface).find(button => button.getAttribute('data-unit-id') === id).className;
+  renderMap(surface.ownerDocument, surface, map, {});
+  const plain = glyph('a');
+  assert.ok(!zone('a').includes('is-picked') && !node('a1').includes('is-picked'), 'nothing is picked by default');
+  map.picked = new Set(['cluster:a', 'cluster:empty', 'a1']);
+  renderMap(surface.ownerDocument, surface, map, {});
+  assert.ok(zone('a').includes('is-picked') && zone('empty').includes('is-picked') && zone('empty').includes('is-mini'), 'a frame and a chip are marked');
+  assert.ok(!zone('b').includes('is-picked'));
+  assert.equal(glyph('a'), 'M5 12.5l4.5 4.5L19 7', 'a picked cluster shows a tick in place of its glyph');
+  assert.equal(glyph('empty'), 'M5 12.5l4.5 4.5L19 7');
+  assert.equal(glyph('b'), plain);
+  assert.ok(node('a1').includes('is-picked') && !node('a1').includes('is-selected'), 'a picked unit has its own mark');
+  assert.ok(!node('b1').includes('is-picked'));
+  map.picked = new Set();
+  renderMap(surface.ownerDocument, surface, map, {});
+  assert.ok(!zone('a').includes('is-picked') && glyph('a') === plain);
+});
+
+test('a frame the person placed on top of another is drawn clear of it, with what it holds; its stored place is not rewritten', () => {
+  const a = cluster('a', 'alpha', null, ['a1']), b = cluster('b', 'beta', null, ['b1']), inner = cluster('bb', 'beta-inner', 'b', ['b2']);
+  const units = [unit('a1', 'a-one', 'executor', 'a'), unit('b1', 'b-one', 'executor', 'b'), unit('b2', 'b-two', 'executor', 'bb')];
+  const frameOf = (frames, id) => frames.find(frame => frame.group.id === id);
+  const grow = rect => ({ x: rect.x - 28, y: rect.y - 28, w: rect.w + 56, h: rect.h + 56 });
+  const stored = { nodes: {}, groups: { 'cluster:a': { x: 100, y: 100 }, 'cluster:b': { x: 140, y: 150 }, 'cluster:bb': { x: 170, y: 260 } } };
+  const before = structuredClone(stored);
+  const frames = layoutClusters([a, b, inner], stored, null, units).frames;
+  const first = frameOf(frames, 'a'), second = frameOf(frames, 'b'), child = frameOf(frames, 'bb');
+  assert.deepEqual(first.anchor, { x: 100, y: 100 }, 'the first frame in the order keeps its stored place');
+  assert.equal(overlaps(grow(first.bounds), second.bounds), false, 'the later frame is drawn clear of it');
+  assert.equal(second.anchor.x, 140, 'it is pushed down, not sideways');
+  assert.deepEqual(stored, before, 'the stored places are not rewritten');
+  assert.deepEqual({ x: child.anchor.x - second.anchor.x, y: child.anchor.y - second.anchor.y }, { x: 30, y: 110 }, 'a frame stored inside it keeps its place inside it');
+  const placed = placeUnits(units, stored, [a, b, inner]);
+  assert.ok(frameHolds(placed.positions.b2, 21, child.bounds), 'what the frame holds is drawn with it');
+  // A frame that does not stand on another keeps its stored place.
+  const apartFrames = layoutClusters([a, b, inner], { nodes: {}, groups: { ...stored.groups, 'cluster:b': { x: 5000, y: 150 }, 'cluster:bb': { x: 5030, y: 260 } } }, null, units).frames;
+  assert.deepEqual(frameOf(apartFrames, 'b').anchor, { x: 5000, y: 150 });
+  assert.deepEqual(frameOf(apartFrames, 'bb').anchor, { x: 5030, y: 260 });
 });

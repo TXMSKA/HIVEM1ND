@@ -486,3 +486,37 @@ test("Browse names the missing picker in the session language and opens one dial
   release();
   assert.deepEqual((await (await first).json()).data, { path: "/tmp/late" });
 });
+
+test("the location step offers the desktop shortcut only where setup makes shortcuts, and takes only a boolean for it", async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "hivem1nd-shortcut-offer-"));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const homeDir = path.join(root, "home");
+  const mindPath = path.join(root, "mind");
+  await mkdir(homeDir);
+  const kitPath = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+  const open = async (extra) => {
+    const server = await createWizardServer({ sessionOptions: { kitPath, mindPath, homeDir, hostname: "INTERFACE-TEST", language: "es", env: {}, resume: false, aclRunner: stubAclRunner(), ...extra } });
+    context.after(() => server.close());
+    const headers = { Authorization: "Bearer " + server.token, Origin: server.origin, "Content-Type": "application/json" };
+    const post = (values) => fetch(server.origin + "/api/v1/answer", { method: "POST", headers, body: JSON.stringify({ values }) });
+    await post({});
+    return { post, step: async () => (await (await fetch(server.origin + "/api/v1/step", { headers })).json()).data };
+  };
+
+  const windows = await open({ shortcuts: true, folderIconPlatform: "win32" });
+  const offered = await windows.step();
+  assert.equal(offered.id, "location");
+  assert.deepEqual(offered.shortcut, { title: "Agregar un acceso directo en el escritorio" });
+  assert.equal(offered.values.desktopShortcut, true);
+  assert.ok(offered.fields.some((item) => item.id === "desktopShortcut" && item.type === "boolean"));
+  assert.equal((await windows.post({ mindPath, desktopShortcut: "no" })).status, 400);
+  assert.equal((await windows.post({ mindPath, changeFolder: true, desktopShortcut: false })).status, 200);
+  assert.equal((await windows.step()).values.desktopShortcut, false, "the unticked box stays unticked when the step is drawn again");
+
+  assert.equal((await (await open({ shortcuts: true, folderIconPlatform: "win32", desktopShortcut: false })).step()).values.desktopShortcut, false, "the session option sets the default");
+  for (const extra of [{ shortcuts: true, folderIconPlatform: "linux" }, { folderIconPlatform: "win32" }]) {
+    const quiet = await open(extra);
+    assert.equal((await quiet.step()).shortcut, undefined, JSON.stringify(extra));
+    assert.equal((await quiet.post({ mindPath, desktopShortcut: true })).status, 400, JSON.stringify(extra));
+  }
+});

@@ -23,13 +23,17 @@ export function createEditors() {
     viewerPatch: null,
     error: null,
     libraries: new Map(),
+    converted: new Map(),
     sendToAgent: true,
   };
 }
 
+// Folders start folded: `opened` and `collapsed` hold what the person chose, and the path to the open item is open until they say otherwise.
+// `created` holds the folders made in this session, which stay listed while they are empty.
 export function libraryState(editors, kind) {
   if (!editors.libraries.has(kind)) editors.libraries.set(kind, {
-    query: "", filters: {}, collapsed: new Set(), matchingCollapsed: new Set(), folders: [], projects: [], menu: null, rename: null, scrollTop: 0,
+    query: "", filters: {}, collapsed: new Set(), opened: new Set(), matchingCollapsed: new Set(), created: new Set(), issuesOpen: false,
+    folders: [], projects: [], menu: null, rename: null, scrollTop: 0,
   });
   return editors.libraries.get(kind);
 }
@@ -82,6 +86,9 @@ export function renderLibrary(document, { kind, project = null, data, actions, t
   const state = libraryState(data, kind);
   const items = data.catalog.filter((item) => item.kind === kind);
   const filtered = Boolean(state.query || Object.keys(state.filters).length);
+  const selected = data.current?.kind === kind ? items.find((item) => item.id === data.current.resourceId) ?? null : null;
+  // A search opens every match; otherwise a folder is open when the person opened it, or when it holds the open item and they have not closed it.
+  const expanded = (key, holdsSelected) => filtered ? !state.matchingCollapsed.has(key) : state.opened.has(key) || holdsSelected && !state.collapsed.has(key);
   const panel = element(document, "aside", { class: "panel editor-catalog shared-library", "data-editor-column": "catalog", "data-library": kind, "data-project": project });
   const button = (action, label, handler, attributes = {}, glyph = null) => element(document, "button", {
     type: "button", class: "library-control", "data-action": action.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`), "aria-label": label, title: label, onclick: handler, ...attributes,
@@ -126,17 +133,20 @@ export function renderLibrary(document, { kind, project = null, data, actions, t
     if (state.rename?.id === item.id && state.rename.type === "item") return rename(item, "item");
     const row = element(document, "div", { class: "library-item", "data-library-item": item.id });
     row.style?.setProperty?.("--folder-depth", String(depth));
-    row.append(button("select-editor", item.title, () => actions.select(item), { class: "library-item-select", "data-id": item.id, "data-keep": `library|${kind}|item|${item.id}`, "aria-pressed": String(data.current?.resourceId === item.id) }, kind === "blueprint" ? "board" : "text"));
-    row.children[0].append(element(document, "span", { class: "library-item-title", text: item.title }));
+    // The catalog can change under a row the person is about to press, so the press reads the row it landed on, not the item drawn at render.
+    const select = button("select-editor", item.title, () => { if (select.isConnected !== false) actions.select(select.getAttribute("data-resource-id")); }, { class: "library-item-select", "data-id": item.id, "data-resource-id": item.id, "data-keep": `library|${kind}|item|${item.id}`, "aria-pressed": String(data.current?.resourceId === item.id) }, kind === "blueprint" ? "board" : "text");
+    row.append(select);
+    select.append(element(document, "span", { class: "library-item-title", text: item.title }));
     if (item.openThreads) row.append(element(document, "span", { class: "library-count", text: item.openThreads }));
     if (actions.manage) row.append(button(`more-item-${item.id}`, t("finalMore"), (event) => actions.menu("item", item, event.currentTarget ?? event.target.closest("button")), { "data-library-more": item.id, "aria-haspopup": "menu", "aria-expanded": String(state.menu?.entry?.id === item.id) }, "more"));
     return row;
   };
   for (const group of groupCatalog(items, state.folders, state.projects).filter((entry) => !state.filters.project || entry.project === state.filters.project || state.rename?.project === entry.project)) {
-    if (filtered && !group.items.length && state.rename?.project !== group.project) continue;
+    // A project with nothing in it stays out of the list, unless the person just made a folder in it.
+    if (!group.items.length && state.rename?.project !== group.project && !group.folders.some((folder) => state.created.has(folder.id))) continue;
     const rootKey = `project:${group.project}`;
-    const open = !(filtered ? state.matchingCollapsed : state.collapsed).has(rootKey);
-    const heading = button(`folder-${rootKey}`, group.project, () => actions.toggle(rootKey), { class: "library-folder", "aria-expanded": String(open), "data-library-project": group.project, "data-keep": `library|${kind}|project|${encodeURIComponent(group.project)}` }, "folder");
+    const open = expanded(rootKey, selected?.project === group.project);
+    const heading = button(`folder-${rootKey}`, group.project, () => actions.toggle(rootKey, !open), { class: "library-folder", "aria-expanded": String(open), "data-library-project": group.project, "data-keep": `library|${kind}|project|${encodeURIComponent(group.project)}` }, "folder");
     heading.append(element(document, "span", { class: "library-disclosure", "aria-hidden": "true" }, icon(document, open ? "chevron" : "chevronRight")), element(document, "span", { text: group.project }), element(document, "span", { class: "library-count", text: group.items.length }));
     list.append(heading);
     if (!open) continue;
@@ -145,39 +155,56 @@ export function renderLibrary(document, { kind, project = null, data, actions, t
         const descendants = new Set([folder.id]);
         for (let index = 0; index < group.folders.length; index += 1) for (const entry of group.folders) if (descendants.has(entry.parentId)) descendants.add(entry.id);
         const count = group.items.filter((entry) => descendants.has(entry.folderId)).length;
-        if (filtered && !count && !descendants.has(state.rename?.id)) continue;
+        if (!(filtered ? count : folder.count) && !descendants.has(state.rename?.id) && ![...descendants].some((id) => state.created.has(id))) continue;
         const key = `${group.project}:${folder.id}`;
-        const expanded = !(filtered ? state.matchingCollapsed : state.collapsed).has(key);
+        const folderOpen = expanded(key, descendants.has(selected?.folderId));
         const row = element(document, "div", { class: "library-folder-row", "data-library-folder": folder.id });
         row.style?.setProperty?.("--folder-depth", String(depth));
         if (state.rename?.id === folder.id && state.rename.type === "folder") row.append(rename(folder, "folder"));
         else {
-          const control = button(`folder-${folder.id}`, folder.title, () => actions.toggle(key), { class: "library-folder", "aria-expanded": String(expanded) }, "folder");
-          control.append(element(document, "span", { class: "library-disclosure", "aria-hidden": "true" }, icon(document, expanded ? "chevron" : "chevronRight")), element(document, "span", { text: folder.title }), element(document, "span", { class: "library-count", text: filtered ? count : folder.count }));
+          const control = button(`folder-${folder.id}`, folder.title, () => actions.toggle(key, !folderOpen), { class: "library-folder", "aria-expanded": String(folderOpen) }, "folder");
+          control.append(element(document, "span", { class: "library-disclosure", "aria-hidden": "true" }, icon(document, folderOpen ? "chevron" : "chevronRight")), element(document, "span", { text: folder.title }), element(document, "span", { class: "library-count", text: filtered ? count : folder.count }));
           row.append(control);
           if (actions.manage) row.append(button(`more-folder-${folder.id}`, t("finalMore"), (event) => actions.menu("folder", folder, event.currentTarget ?? event.target.closest("button")), { "data-library-more": folder.id, "aria-haspopup": "menu" }, "more"));
         }
         list.append(row);
-        if (expanded) branch(folder.id, depth + 1);
+        if (folderOpen) branch(folder.id, depth + 1);
       }
       for (const item of group.items.filter((entry) => (entry.folderId ?? null) === parentId)) list.append(itemRow(item, depth));
     };
     branch(null, 0);
   }
-  if (!items.length && !data.catalogLoading) list.append(element(document, "p", { "data-empty": filtered ? "search" : kind, text: t(filtered ? "emptySearch" : kind === "blueprint" ? actions.create ? "emptyBoards" : "emptyBoardsRead" : actions.create ? "emptyTexts" : "emptyTextsRead") }));
+  const nothing = !items.length && !data.catalogLoading;
+  // With no text at all the library says what a text is and offers the two ways to have one, ahead of everything else.
+  if (nothing && !filtered && kind === "void" && actions.create) {
+    const linked = state.projects.length;
+    const empty = element(document, "div", { class: "library-empty", "data-empty": kind },
+      element(document, "h3", { text: t("noTextsYet") }),
+      element(document, "p", { text: t(linked === 1 ? "noTextsHintOne" : "noTextsHintOther", { count: linked }) }),
+      element(document, "div", { class: "library-empty-actions" },
+        element(document, "button", { type: "button", class: "btn primary", "data-action": "library-empty-create", onclick: () => actions.create() }, libraryIcon(document, "plus"), t("newText")),
+        actions.register ? element(document, "button", { type: "button", class: "btn ghost", "data-action": "library-empty-register", onclick: () => actions.register() }, t("openFile")) : null));
+    panel.append(empty);
+  } else if (nothing) list.append(element(document, "p", { "data-empty": filtered ? "search" : kind, text: t(filtered ? "emptySearch" : kind === "blueprint" ? actions.create ? "emptyBoards" : "emptyBoardsRead" : "emptyTextsRead") }));
   panel.append(list);
-  // A project that cannot be read is a marked row of its own, one per project, never a line of red text inside the list.
-  const issues = data.catalogIssues ?? [];
-  if (issues.length) {
-    const rows = element(document, "div", { class: "library-issues", "data-library-issues": String(issues.length) });
-    for (const issue of issues) rows.append(element(document, "div", { class: "notice notice-warning library-issue", "data-library-issue": issue.project, role: "status" },
-      icon(document, "alert"), element(document, "p", { text: t("libraryUnavailable", { project: issue.project }) })));
+  // Projects that cannot be read are one row at the bottom, folded to a count and opened to their names.
+  const missing = [...new Set((data.catalogIssues ?? []).map((issue) => issue.project))];
+  if (missing.length) {
+    const opened = state.issuesOpen === true;
+    const rows = element(document, "div", { class: "library-issues", "data-library-issues": String(missing.length) });
+    rows.append(element(document, "button", { type: "button", class: "library-issues-toggle", "data-action": "library-issues", "aria-expanded": String(opened), onclick: () => actions.issues?.() },
+      icon(document, "alert"), element(document, "span", { text: t(missing.length === 1 ? "libraryMissingOne" : "libraryMissingOther", { count: missing.length }) }), icon(document, opened ? "chevron" : "chevronRight")));
+    if (opened) {
+      const names = element(document, "ul", { class: "library-issue-names" });
+      for (const name of missing) names.append(element(document, "li", { "data-library-issue": name, text: name }));
+      rows.append(names);
+    }
     panel.append(rows);
   }
   // Refresh, Register and the loading mark share one line below the list.
   if (data.catalogLoading) panel.append(progressMark(document, t("loadingList"), { "data-catalog-progress": "true", class: "progress library-loading" }));
   const footer = element(document, "div", { class: "library-footer", "data-library-footer": kind });
-  footer.append(button("refresh-catalog", t("refreshList"), actions.refresh, { class: "btn library-refresh" }));
+  footer.append(button("refresh-catalog", t("refreshList"), actions.refresh, { class: "btn ghost library-refresh" }));
   panel.append(footer);
   if (state.menu) {
     const menu = element(document, "div", { class: `library-menu${state.menu.type === "filters" ? " library-filter-menu" : ""}`, role: "menu", "data-library-menu": state.menu.type });

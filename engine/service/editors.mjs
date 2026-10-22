@@ -453,26 +453,22 @@ export async function registerResource(context, input) {
   return created;
 }
 
-export function editorSearchText(editor) {
-  const values = [editor.title, editor.path, editor.id];
-  for (const screen of editor.document?.screens ?? []) {
-    values.push(screen.title);
-    const walk = (node) => {
-      if (!node) return;
-      values.push(node.name, node.value);
-      for (const child of node.kids ?? []) walk(child);
-    };
-    walk(screen.root);
+// The library search reads names: the title, the file, the folders above it. A document's body never takes part.
+export function editorSearchText(editor, folders = '') {
+  return [editor.title, editor.path, editor.id, folders].filter((value) => typeof value === 'string').join('\n').toLowerCase();
+}
+
+function folderTitles(library, folderId) {
+  const titles = [];
+  const seen = new Set();
+  for (let current = folderId; current && !seen.has(current);) {
+    seen.add(current);
+    const folder = library.value.folders.find((item) => item.id === current);
+    if (!folder) break;
+    titles.unshift(folder.title);
+    current = folder.parentId;
   }
-  for (const page of editor.document?.pages ?? []) {
-    for (const [key, value] of Object.entries(page)) {
-      if (key !== 'k' && typeof value === 'string') values.push(value);
-    }
-  }
-  for (const thread of editor.threads ?? []) {
-    for (const message of thread.messages ?? []) values.push(message.text);
-  }
-  return values.filter((value) => typeof value === 'string').join('\n').toLowerCase();
+  return titles.join('/');
 }
 
 export async function list(context, query = {}) {
@@ -480,15 +476,23 @@ export async function list(context, query = {}) {
   const names = query.project ? [query.project] : (context.projects ?? []).map((item) => item.name);
   if (!query.kind || query.kind === 'blueprint') await registerFound(context, names).catch(() => 0);
   const catalog = await readCatalog(context);
+  const needle = query.q == null || query.q === '' ? '' : String(query.q).toLowerCase();
   const editors = [];
   const issues = [];
   for (const name of names) {
-    let project;
-    try { project = (await loadLibrary(context, name)).project; }
+    let library;
+    try { library = await loadLibrary(context, name); }
     catch (error) { issues.push({ project: name, code: error.code ?? 'project_unavailable', message: 'The project library is not available.' }); continue; }
+    const project = library.project;
     for (const entry of catalog.value.resources) {
       if (entry.project !== project.name) continue;
       if (query.kind && entry.kind !== query.kind) continue;
+      const item = library.value.items[entry.id];
+      const folders = needle ? folderTitles(library, item?.folderId) : '';
+      const named = (title) => editorSearchText({ title, path: entry.path, id: entry.id }, folders).includes(needle);
+      // The title the library keeps for a resource decides without opening its document. A resource with none is named by its
+      // document, so only that one is read before the search can tell.
+      if (needle && typeof item?.title === 'string' && !named(item.title)) continue;
       try {
         const file = inside(project.localPath, entry.path);
         const loaded = await loadBytes(file, context.store);
@@ -501,6 +505,7 @@ export async function list(context, query = {}) {
           }
         }
         if (!loaded.bytes) issues.push({ project: name, resourceId: entry.id, code: 'corrupt_resource', message: 'The library document is not available.' });
+        if (needle && !named(item?.title ?? document?.title ?? entry.title ?? entry.legacyId ?? '')) continue;
         editors.push(await projectEditor(context, entry, document, loaded.revision));
       } catch (error) {
         issues.push({ project: name, resourceId: entry.id, code: error.code ?? 'corrupt_resource', message: 'The library item is not available.' });
@@ -508,10 +513,7 @@ export async function list(context, query = {}) {
     }
   }
   editors.sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
-  const needle = query.q == null || query.q === '' ? '' : String(query.q).toLowerCase();
-  let matched = needle
-    ? editors.filter((item) => editorSearchText(item).includes(needle))
-    : editors;
+  let matched = editors;
   if (query.folderId !== undefined) {
     if (!isUuid(query.folderId)) fail(422, 'invalid_query', 'The folder id must be a UUID.');
     matched = matched.filter((item) => item.folderId === query.folderId);
@@ -1845,7 +1847,8 @@ function validateAnchor(found, document, anchor) {
     if (rendered.slice(anchor.start, anchor.end) !== anchor.quote) fail(409, 'anchor_changed', 'The anchor no longer matches the text.');
     return createAnchor(rendered, anchor.start, anchor.end, anchor.lang, anchor.k);
   }
-  if (anchor.screen) {
+  // A module board is code the service never runs, so its anchors are kept as the viewer drew them.
+  if (anchor.screen && document) {
     const screen = (document.screens ?? []).find((item) => item.id === anchor.screen);
     if (!screen) fail(409, 'anchor_changed', 'The anchor no longer matches the board.');
     if (anchor.element && !findNode(document, anchor.element)) fail(409, 'anchor_changed', 'The anchor no longer matches the board.');
@@ -1858,7 +1861,8 @@ export async function createComment(context, id, input) {
   const found = await resourceOf(context, id);
   await requireAttachment(context, found.entry.id);
   const text = commentText(input.text);
-  const document = found.entry.kind === 'void' ? (await textBundle(context, id)).document : (await boardFile(context, id)).document;
+  const moduleBoard = found.entry.kind === 'blueprint' && found.entry.path.endsWith('.mjs');
+  const document = found.entry.kind === 'void' ? (await textBundle(context, id)).document : moduleBoard ? null : (await boardFile(context, id)).document;
   const fileRevision = found.entry.kind === 'void'
     ? (await loadBytes(inside(found.project.localPath, found.entry.path))).revision
     : (await loadBytes(inside(found.project.localPath, found.entry.path))).revision;

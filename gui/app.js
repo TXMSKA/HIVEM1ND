@@ -97,7 +97,8 @@ function offer(title, body, { id, checked = false, disabled = false, badge = nul
   const heading = el('span', 'offer-heading');
   heading.append(el('strong', '', title));
   if (badge) heading.append(el('span', 'offer-badge', badge));
-  copy.append(heading, el('span', 'offer-body', body));
+  copy.append(heading);
+  if (body) copy.append(el('span', 'offer-body', body));
   label.append(checkbox, copy);
   return label;
 }
@@ -108,7 +109,13 @@ function collectValues() {
   const join = document.getElementById('join-mind');
   if (legacy) values.migrateLegacy = legacy.checked;
   if (join) values.attach = join.checked;
+  Object.assign(values, shortcutValue());
   return values;
+}
+// The desktop shortcut box exists only where setup makes shortcuts; without it nothing is sent.
+function shortcutValue() {
+  const shortcut = document.getElementById('desktop-shortcut');
+  return shortcut ? { desktopShortcut: shortcut.checked } : {};
 }
 function renderLocation(step) {
   const field = el('div', 'folder-field');
@@ -123,10 +130,11 @@ function renderLocation(step) {
   path.append(icon('folder'), input, browse); field.append(label, path); elements.fields.append(field);
   if (step.join) elements.fields.append(offer(step.join.title, step.join.body, { id: 'join-mind', checked: step.values.attach }));
   else if (step.legacy) elements.fields.append(offer(step.legacy.title, step.legacy.body, { id: 'migrate-legacy', checked: step.values.migrateLegacy }));
+  if (step.shortcut) elements.fields.append(offer(step.shortcut.title, '', { id: 'desktop-shortcut', checked: step.values.desktopShortcut }));
   elements.fields.append(offer(step.relayPlus.title, step.relayPlus.body, { id: 'relay-plus', disabled: true, badge: step.relayPlus.badge }));
 }
 async function reviewFolder() {
-  render(await api('answer', { method: 'POST', body: { values: { mindPath: document.getElementById('mind-path').value.trim(), changeFolder: true } } }));
+  render(await api('answer', { method: 'POST', body: { values: { mindPath: document.getElementById('mind-path').value.trim(), changeFolder: true, ...shortcutValue() } } }));
 }
 async function changeFolder(button) {
   if (busy) return;

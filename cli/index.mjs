@@ -83,6 +83,7 @@ ${Object.values(WAKE_ADAPTERS).flatMap((adapter) => adapter.helpLines).map((line
 Init options:
   --gui                 Open the local browser wizard
   --resume              Continue the saved setup session
+  --no-desktop-shortcut Do not add a shortcut to the desktop on Windows (the Start menu one stays)
   --language <en|es>    Start in English or Spanish
 
 Evolve options:
@@ -141,6 +142,7 @@ const VALUE_FLAGS = new Map([
 const BOOLEAN_FLAGS = new Map([
   ["--gui", ["gui", true]],
   ["--resume", ["resume", true]],
+  ["--no-desktop-shortcut", ["desktopShortcut", false]],
   ["--check-only", ["checkOnly", true]],
   ["--ai-files", ["aiFiles", true]],
   ["--no-ai-files", ["aiFiles", false]],
@@ -152,7 +154,7 @@ const BOOLEAN_FLAGS = new Map([
 ]);
 
 const ALLOWED_FLAGS = {
-  init: new Set(["gui", "resume", "language", "kitPath", "mindPath", "homeDir", "hostname", "originKind", "originPath", "cosmicPath"]),
+  init: new Set(["gui", "resume", "desktopShortcut", "language", "kitPath", "mindPath", "homeDir", "hostname", "originKind", "originPath", "cosmicPath"]),
   evolve: new Set(["checkOnly", "conflicts", "json", "kitPath", "mindPath", "homeDir", "hostname", "originKind", "originPath", "cosmicPath", "dryRun"]),
   pylon: new Set(["state", "aiFiles", "aiTrailers", "environment", "json", "kitPath", "mindPath", "homeDir", "hostname"]),
   check: new Set(["json", "kitPath", "mindPath", "homeDir", "hostname"]),
@@ -575,6 +577,7 @@ function setupOptions(options, { env = process.env, lifecycle = false, serviceRu
     serviceSetup: true,
     serviceDryRun: options.dryRun === true,
     ...(!lifecycle && options.dryRun !== true ? { shortcuts: true } : {}),
+    ...(options.desktopShortcut === false ? { desktopShortcut: false } : {}),
     ...(options.dryRun === true ? {} : { serviceRunner: serviceRunner ?? runRegistrationCommand, serviceStart: serviceStart ?? (config => startUserService(config, serviceOptions)) }),
     ...(serviceQuery ? { serviceQuery } : {}),
     ...(serviceAclRunner ? { aclRunner: serviceAclRunner } : {}),

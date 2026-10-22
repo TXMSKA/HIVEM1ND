@@ -71,22 +71,22 @@ import {
   startWatch,
   stopWatch,
 } from "./editors.mjs";
-import { activateUnit, buildHierarchy, collapseNewClusters, displayName, flattenVisibleHierarchy, hierarchyDisclosure, hierarchyIcon, listedWorktrees, openContextMenu, pathFolder, readableIdentity, revealGroup, toggleGroup, unitDisplayName, unitRoleName, unitsForTree } from "./hierarchy.mjs";
-import { checkoutFacts, openTaskDetail, renderApproval, renderGrants, renderMachine, renderSession, renderTask, renderUnit, renderWaiting } from "./inspector.mjs";
-import { cardinal, formatClock, formatNumber, formatShortTime, text } from "./i18n.mjs";
+import { activateUnit, buildHierarchy, collapseNewClusters, displayName, flattenVisibleHierarchy, hierarchyDisclosure, hierarchyIcon, listedWorktrees, openContextMenu, pathFolder, readableIdentity, revealGroup, toggleGroup, unitDisplayName, unitRoleName, unitsForTree, upperFirst } from "./hierarchy.mjs";
+import { checkoutFacts, openTaskDetail, renderApproval, renderGrants, renderMachine, renderSession, renderTask, renderUnit, renderWaiting, requestBrief, waitingSections } from "./inspector.mjs";
+import { cardinal, formatClock, formatNumber, formatRecent, formatShortDate, formatShortTime, text } from "./i18n.mjs";
 import { collectPages, createPagedList, loadAll, loadNext, reloadList, renderWindow, setQuery } from "./lists.mjs";
 import { adoptInitialLayout, applyRemoteLayout, centerUnit, createMap, keepLocalPosition, renderMap, retrySavedLayout, settlePositions, useIncomingPosition } from "./map.mjs";
 import { dispose as disposeEmbed, publishDirty, publishReady, startEmbedChannel } from "./embed.mjs";
 import { PHONE_NAV, exchangeCode, exchangeHomeFragment, logout, renderCodeEntry, renderPhone } from "./phone.mjs";
-import { applyIssueChange, applyServiceBeat, applySettingsRead, applySyncSnapshot, armExpiry, clearGrant, closeHome, LOOK_IDS, noteHomeChange, openHome, renderClientReview, renderSettings, saveSettings, takeGrant } from "./settings.mjs";
+import { applyAgent, applyIssueChange, applyServiceBeat, applySettingsRead, applySyncSnapshot, armExpiry, clearGrant, closeHome, LOOK_IDS, noteHomeChange, openHome, previewAgent, renderClientReview, renderReviewAll, renderSettings, saveSettings, takeGrant } from "./settings.mjs";
 import { acceptStreamEvent, createStore, loadSnapshot } from "./state.mjs";
 import { answerProposal, captureTextSelection, createTextFinder, documentSaver, draftSnapshot, editProposal, enterFocus, formatSelection, highlightFind, leaveFocus, loadProposals, moveFocus, noteProposal, proposalComment, proposalPassage, proposalStale, rememberTextDraft, renderDocument, renderProposal, replaceMatches, undoReplace, replaceVisible, restoreTextSelection, selectedPlainRange, showTools, TEXT_FORMATS, textAnchor, textDraft, textDraftKey } from "./void.mjs";
 import { assetIdentity, plainCaretFromSource, plainOffsets, plainText, sourceBoundary, tokenizeMarkup, validUtf16Boundary } from "./markup.mjs";
 import { close as closeStream, resetCredentials, synchronize } from "./stream.mjs";
 import * as startApi from './start-api.mjs';
-import { startText } from './start-copy.mjs';
-import { acceptedRepositoryCluster, clientLabel, clusterLead, customRoleProblems, initialRunsIn, repositorySelection, renderAgentForm, renderClusterForm, renderRepositoryOffer, renderRunsInPicker, runsInLabel, startDialog, supervisedClient } from './clusters.mjs';
-import { renderAgentHeader, renderCluster, renderClusterChanges } from './inspector.mjs';
+import { roleLabel, startText } from './start-copy.mjs';
+import { acceptedRepositoryCluster, catalogLabel, clientLabel, clusterLead, customRoleProblems, initialRunsIn, repositorySelection, renderAgentForm, renderClusterForm, renderRepositoryOffer, renderRunsInPicker, runsInLabel, startDialog, supervisedClient } from './clusters.mjs';
+import { renderAgentHeader, renderCluster, renderClusterChanges, renderClusterDetails } from './inspector.mjs';
 import { fitMap, flyToCluster, isCollapsed, toggleCollapsed } from './map.mjs';
 import { changeContext, createSessionView, loadSessionView, loadTranscriptPage, renderContext, renderSessionTabs, renderSessionWork, renderStartedWith } from './session-work.mjs';
 import { PLAN_TASK_LIMIT, controlPlan, createPlanController, loadChatPlans, planBranch, refreshPlan, renderControlledPlan, runPlan, savePlanDraft, tasksFromVoidText } from './plan-controller.mjs';
@@ -94,6 +94,9 @@ import { createAddController, openAdd, disposeAdd } from './add-controller.mjs';
 import { addButton, addText } from './add-view.mjs';
 import { getAdditions, removeAddition } from './add-api.mjs';
 import { createQueue } from './queue.mjs';
+import { encodeHomeQr } from './qr.mjs';
+import { renderQr } from './qr-render.mjs';
+import { updateExpiry } from './settings.mjs';
 
 const DESKTOP_MODES = ["map", "blueprint", "document", "focus"];
 const BAR_MODES = ["map", "blueprint", "document"];
@@ -303,7 +306,9 @@ export async function mount(root, env = globalThis) {
   } });
   const view = root.ownerDocument.defaultView;
   view?.addEventListener?.("keydown", (event) => onFocusKey(app, event));
+  view?.addEventListener?.("keydown", (event) => onEscapeKey(app, event));
   view?.addEventListener?.("keydown", (event) => onPickKey(app, event));
+  root.addEventListener("click", (event) => closeBarPanels(app, event));
   root.addEventListener("keydown", (event) => {
     if (event.key !== "F2" || app.layout === "phone" || event.target?.closest?.("input, textarea")) return;
     const row = app.activeRows?.find((item) => item.id === event.target?.closest?.("[data-id]")?.getAttribute("data-id"));
@@ -512,7 +517,11 @@ export function navigate(app, mode) {
     app.tab = mode;
     if (app.mode === "settings") app.mode = "map";
   }
-  else app.mode = mode;
+  else {
+    app.mode = mode;
+    // Waiting lives beside the Map, so any mode, the Map included, takes its panel away.
+    app.waitingOpen = false;
+  }
   if (mode !== "settings" && app.homeState?.grant) clearGrant(app.homeState);
   if (mode === "focus" && app.voidState) enterFocus(app.voidState);
   renderShell(app);
@@ -595,6 +604,7 @@ function paintShell(app) {
   syncLiveRegions(app);
   paintActivity(app, shell);
   paintQueue(app, shell);
+  paintPhonePanel(app, shell);
   paintServiceBanner(app, shell);
   restoreInputFocus(app);
   app.editors?.current?.restoreSelection?.();
@@ -815,6 +825,7 @@ function trackDisclosure(app, node, key) {
 export function dispose(app) {
   if (app?.addController) disposeAdd(app.addController);
   if (app.mapState) { app.mapState.disposed = true; app.mapState.flight = null; }
+  stopWatchingMap(app);
   app.startDialog?.dialog?.close();
   if (!app || app.disposed) return;
   app.disposed = true;
@@ -1170,8 +1181,10 @@ export function renderBar(app, t, counts) {
     class: "pill",
     "data-action": "waiting",
     "aria-pressed": String(app.mode === "map" && app.waitingOpen === true || app.mode === "waiting"),
+    "aria-label": cardinal(app.language, "waitingOnYou", counts.waiting ?? 0),
     onclick: () => openWaiting(app),
-  }, icon(document, "waiting"), cardinal(app.language, "waitingOnYou", counts.waiting ?? 0));
+  }, icon(document, "waiting"), element(document, "span", { class: "pill-count", "aria-hidden": "true", text: formatNumber(app.language, counts.waiting ?? 0) }),
+  element(document, "span", { class: "pill-label", text: cardinal(app.language, "waitingOnYou", counts.waiting ?? 0) }));
   const settings = element(document, "button", {
     type: "button",
     class: "icon-button",
@@ -1185,15 +1198,17 @@ export function renderBar(app, t, counts) {
     class: "icon-button",
     "data-action": "toggle-inspector",
     "aria-label": t(app.inspectorOpen ? "closeInspector" : "openInspector"),
-    onclick: () => {
-      app.inspectorOpen = !app.inspectorOpen;
-      renderShell(app);
-    },
+    onclick: () => toggleInspector(app),
   }, icon(document, "inspector"));
   const phone = element(document, "button", {
-    type: "button", class: "icon-button", "data-action": "open-phone",
-    "aria-label": t("settingsOpenPhone"), onclick: () => openPhoneSettings(app),
+    type: "button", class: "icon-button", "data-action": "open-phone", "aria-pressed": String(app.phonePanelOpen === true),
+    "aria-label": t("settingsOpenPhone"), onclick: () => openPhonePanel(app),
   }, icon(document, "phone"));
+  // Below 1180 px Activity, the phone and Settings leave the bar for this menu, and below 987 px so does Details.
+  const more = element(document, "button", {
+    type: "button", class: "icon-button bar-more", "data-action": "bar-more", "aria-haspopup": "menu",
+    "aria-label": t("finalMore"), title: t("finalMore"), onclick: (event) => openBarMenu(app, event.currentTarget ?? event.target?.closest?.("button")),
+  }, icon(document, "more"));
   // The bell lists the background work: what waits, what runs, what failed and what finished.
   const openJobs = app.queue?.open.length ?? 0;
   const notifications = element(document, "button", {
@@ -1202,17 +1217,6 @@ export function renderBar(app, t, counts) {
     onclick: () => { app.queuePanelOpen = app.queuePanelOpen !== true; renderShell(app); },
   }, icon(document, "bell"));
   if (openJobs) notifications.append(element(document, "span", { class: "queue-badge", "aria-hidden": "true", text: String(openJobs) }));
-  const catalogToggle = element(document, "button", {
-    type: "button",
-    class: "btn panel-toggle",
-    "data-action": "toggle-catalog",
-    "aria-pressed": String(app.catalogOpen === true),
-    text: t(app.catalogOpen ? "hideCatalog" : "showCatalog"),
-    onclick: () => {
-      app.catalogOpen = app.catalogOpen !== true;
-      renderShell(app);
-    },
-  });
   const commentsToggle = element(document, "button", {
     type: "button",
     class: "btn panel-toggle",
@@ -1231,11 +1235,53 @@ export function renderBar(app, t, counts) {
   }
   if (counts.waiting) bar.append(waiting);
   if (app.layout !== "phone") {
-    bar.append(catalogToggle);
     if (app.mode === "blueprint" || app.mode === "document") bar.append(commentsToggle);
-    bar.append(phone, notifications, inspector, settings);
+    bar.append(phone, notifications, inspector, settings, more);
   }
   return bar;
+}
+
+// The side panel opens as a drawer from a button on the stage, which each mode draws in its own stage.
+function catalogToggle(app, t, name) {
+  const document = app.root.ownerDocument;
+  return element(document, "button", {
+    type: "button",
+    class: "btn panel-toggle stage-toggle",
+    "data-action": "toggle-catalog",
+    "aria-pressed": String(app.catalogOpen === true),
+    onclick: () => {
+      app.catalogOpen = app.catalogOpen !== true;
+      renderShell(app);
+    },
+  }, icon(document, { hierarchy: "hierarchy", boards: "blueprint", texts: "pen" }[name]), t(name));
+}
+
+function openBarMenu(app, anchor) {
+  const t = (key) => text(app.language, key);
+  const box = anchor?.getBoundingClientRect?.() ?? { right: 0, bottom: 0 };
+  const items = [
+    { id: "details", glyph: "inspector", label: t("details"), show: windowAtMost(app, SIDE_DRAWER_WIDTH), run: () => toggleInspector(app, true) },
+    { id: "activity", glyph: "bell", label: t("queueTitle"), run: () => { app.phonePanelOpen = false; app.queuePanelOpen = true; renderShell(app); } },
+    { id: "phone", glyph: "phone", label: t("settingsOpenPhone"), run: () => openPhonePanel(app, true) },
+    { id: "settings", glyph: "settings", label: t("settings"), run: () => navigate(app, "settings") },
+  ].filter((item) => item.show !== false);
+  openContextMenu(app.root.ownerDocument, { x: box.right - 220, y: box.bottom + 6, items, label: t("finalMore") });
+}
+
+function toggleInspector(app, open = !app.inspectorOpen) {
+  app.inspectorOpen = open;
+  renderShell(app);
+  refitBesideDrawer(app);
+}
+
+// A drawer over the Map covers part of it. While the view is still the fitted one, the graph is fitted again to what stays in sight.
+function refitBesideDrawer(app) {
+  const map = app.mapState, host = app.root.querySelector?.(".map");
+  if (app.mode !== "map" || !map?.autoFit || !host || !windowAtMost(app, INSPECTOR_DRAWER_WIDTH)) return;
+  const rect = host.getBoundingClientRect();
+  const covered = app.inspectorOpen ? app.root.querySelector(".inspector")?.getBoundingClientRect().width ?? 0 : 0;
+  // A drawer that covers the whole Map leaves nothing to fit to.
+  if (rect.width - covered > 96 && rect.height > 96) fitMap(map, { left: rect.left, top: rect.top, width: rect.width - covered, height: rect.height });
 }
 
 function renderWorkspace(app, t, view, counts) {
@@ -1288,11 +1334,9 @@ function renderWorkspace(app, t, view, counts) {
   );
   if (app.mode === "settings") {
     stage.append(settingsSurface(app, document, t));
-  } else if (app.layout !== "phone" && app.waitingOpen) {
-    stage.append(renderWaitingSurface(app, t));
   } else if (app.mode === "map") {
     ensureMap(app);
-    stage.append(element(document, "div", { class: "map" }));
+    stage.append(element(document, "div", { class: "map" }), catalogToggle(app, t, "hierarchy"));
   } else if (app.mode === "blueprint" || app.mode === "document" || app.mode === "focus") {
     stage.append(renderEditor(app, t));
   } else if (app.layout === "phone" && app.mode === "waiting") {
@@ -1338,8 +1382,15 @@ function renderWorkspace(app, t, view, counts) {
       text: t("syncConflict", { path: app.syncConflict.copyPath || t("unknown") }),
     }));
   }
-  if (app.layout !== "phone" && group && !group.deleted) {
-    inspectorBody.append(clusterInspector(app, group), clusterChatPanel(app, group));
+  // Rows picked in the Hierarchy are the inspector's subject, instead of the agent or cluster that was open before the pick.
+  const pick = app.layout !== "phone" ? pickedTargets(app) : null;
+  if (app.layout !== "phone" && app.waitingOpen) {
+    inspectorBody.append(renderWaitingPanel(app, t));
+  } else if (pick && pick.units.length + pick.clusters.length > 1) {
+    inspectorBody.append(pickInspector(app, t, pick));
+  } else if (app.layout !== "phone" && group && !group.deleted) {
+    inspectorBody.className += ' agent-inspector';
+    inspectorBody.append(clusterInspector(app, group), clusterPanel(app, t, group));
   } else if (app.layout !== "phone" && selection.length > 1) {
     inspectorBody.append(selectionInspector(app, t, selection));
   } else {
@@ -1382,9 +1433,12 @@ function renderWorkspace(app, t, view, counts) {
     element(document, 'p', { text: startErrorText(app) }),
     mapButton(app, 'retry-start-reports', startText(app.language, 'retry'), async () => { await loadStartReports(app); maybeStartDiscovery(app); })));
   dropRepeatedNotices(inspectorBody);
+  // As a drawer the inspector has a header of its own with the way to close it; beside the Map the stylesheet hides that header.
   const inspector = element(document, "aside", {
     class: `panel inspector${app.inspectorOpen ? " is-open" : ""}`,
-  }, inspectorBody);
+  }, app.layout === "phone" ? null : element(document, "header", { class: "inspector-drawer-head" },
+    element(document, "h2", { text: t(app.waitingOpen ? "waiting" : "details") }),
+    element(document, "button", { type: "button", class: "icon-button", "data-action": "close-inspector", "aria-label": t("closeInspector"), title: t("closeInspector"), onclick: () => toggleInspector(app, false) }, icon(document, "close"))), inspectorBody);
   const phoneHierarchy = app.layout === "phone" && app.mode !== "waiting" && app.tab !== "chats";
   const showSide = app.layout !== "phone" || app.mode !== "waiting";
   return element(document, "div", { class: "workspace" }, showSide ? side : null, phoneHierarchy ? null : stage, inspector);
@@ -1557,7 +1611,7 @@ function retryPresentation(app, attempt) {
 
 function createLists(app) {
   app.unitList = createPagedList({ api: app.api, store: app.store, name: "units", route: "/units" });
-  app.chatList = createPagedList({ api: app.api, store: app.store, name: "chats", route: "/chats", filters: { listed: "true" } });
+  app.chatList = createPagedList({ api: app.api, store: app.store, name: "chats", route: "/chats", filters: { listed: "true" }, rowHeight: 48 });
   app.waitingList = createPagedList({ api: app.api, store: app.store, name: "waiting", route: "/waiting" });
   const refresh = () => {
     if (!app.disposed && app.layout !== "unknown") renderShell(app);
@@ -1592,17 +1646,53 @@ function openWaiting(app) {
     return;
   }
   app.waitingOpen = !(app.mode === "map" && app.waitingOpen === true);
-  if (app.waitingOpen) app.mode = "map";
+  if (app.waitingOpen) { app.mode = "map"; app.waitingRecord = null; }
   if (app.waitingOpen && app.waitingList) reloadList(app.waitingList);
+  // Where the inspector is a drawer, Waiting lives in it, so it opens with it.
+  if (app.waitingOpen && windowAtMost(app, INSPECTOR_DRAWER_WIDTH)) app.inspectorOpen = true;
   if (!app.disposed) renderShell(app);
 }
 
-function openPhoneSettings(app) {
-  settingsState(app).tab = 'general';
-  navigate(app, 'settings');
-  const section = app.root.querySelector('[data-home]');
-  section?.scrollIntoView?.({ block: 'nearest' });
-  (section?.querySelector('[data-action="open-home"], [data-action="replace-home"], [data-addresses]') ?? section)?.focus?.();
+function openPhonePanel(app, open = app.phonePanelOpen !== true) {
+  app.phonePanelOpen = open;
+  if (open) app.queuePanelOpen = false;
+  renderShell(app);
+  if (open) app.root.querySelector("[data-phone-panel] button")?.focus?.();
+}
+
+// The panel under the bar's phone button: the code to scan while home access is open, how long it stays open, and the switch for it.
+function paintPhonePanel(app, shell) {
+  if (!app.phonePanelOpen || app.layout === "phone") return;
+  const document = app.root.ownerDocument, t = (key, values) => text(app.language, key, values);
+  const home = homeState(app);
+  const open = Boolean(home.home?.enabled) && !updateExpiry(home.home, Date.now()).expired;
+  const grant = open ? home.grant : null;
+  const index = home.selected ?? 0;
+  const panel = element(document, "section", { class: "phone-panel", "data-phone-panel": "true", role: "dialog", "aria-label": t("settingsOpenPhone") },
+    element(document, "header", { class: "phone-panel-head" }, element(document, "h2", { text: t("settingsOpenPhone") }), element(document, "span", { class: "phone-panel-esc", text: t("escCloses") })));
+  if (grant?.qrPayloads?.[index]) {
+    const link = grant.links?.[index];
+    const copy = element(document, "button", { type: "button", class: "btn ghost", "data-action": "phone-copy-link", text: t("phoneCopyLink") });
+    copy.addEventListener("click", async () => {
+      const clipboard = document.defaultView?.navigator?.clipboard;
+      if (!link || !clipboard?.writeText) return;
+      try { await clipboard.writeText(link); copy.textContent = t("phoneLinkCopied"); } catch { /* The link stays on the Settings page when the browser refuses the clipboard. */ }
+    });
+    panel.append(element(document, "div", { class: "phone-panel-grant", "data-secret": "true" },
+      element(document, "div", { class: "phone-panel-code" }, renderQr(document, encodeHomeQr(grant.qrPayloads[index]), t("qrTitle")),
+        element(document, "p", { "data-code": grant.shortCode, text: grant.shortCode })),
+      element(document, "div", { class: "phone-panel-scan" }, element(document, "p", { text: t("phoneScan") }), element(document, "p", { class: "phone-panel-fine", text: t("phoneAccessCloses") }), copy)));
+  } else panel.append(element(document, "p", { class: "phone-panel-note", text: t(open ? "noGrantSecret" : "finalPhoneHint") }));
+  const foot = element(document, "div", { class: "phone-panel-foot" },
+    element(document, "span", { class: "status-dot", "data-status": open ? "working" : "idle", "aria-hidden": "true" }),
+    element(document, "span", { class: "phone-panel-state", "data-phone-state": open ? "open" : "closed", text: open ? t("phoneOpenUntil", { time: formatShortTime(app.language, home.home.expiresAt) }) : t("phoneAccessClosed") }));
+  if (app.store.capabilities.includes("home.manage")) {
+    foot.append(open
+      ? element(document, "button", { type: "button", class: "btn ghost", "data-action": "phone-close-home", text: t("settingsCloseAccess"), onclick: () => endHome(app) })
+      : element(document, "button", { type: "button", class: "btn primary", "data-action": "phone-open-home", text: t("phoneOpenTwelve"), onclick: () => beginHome(app, "", false) }));
+  }
+  panel.append(foot);
+  shell.append(panel);
 }
 
 function renderWaitingSurface(app, t) {
@@ -1621,10 +1711,6 @@ function renderWaitingSurface(app, t) {
     if (list) setQuery(list, search.value);
   });
   const total = list?.total ?? 0;
-  // Waiting takes the stage for a while: a way back to the Map, then the search.
-  if (app.layout !== "phone") surface.append(element(document, "div", { class: "waiting-head" },
-    element(document, "button", { type: "button", class: "btn quiet", "data-action": "waiting-back", onclick: () => { app.waitingOpen = false; app.mode = "map"; renderShell(app); } },
-      icon(document, "map"), t("showMap"))));
   surface.append(search, element(document, "p", {
     "data-waiting-total": String(total),
     text: cardinal(app.language, "waitingCount", total),
@@ -1660,6 +1746,125 @@ function renderWaitingSurface(app, t) {
   return surface;
 }
 
+// Waiting opens in the inspector's column, so the Map stays in view. Each row is one thing that waits on the person, and one row opens in place.
+const WAITING_GLYPH = { review: "document", approval: "waiting", message: "send", question: "chats", plan: "blueprint" };
+
+// The project an item belongs to, named as the Hierarchy names its cluster.
+function waitingProject(app, item) {
+  const [kind, name] = String(item.taskId ?? "").split(":");
+  const scope = unitById(app, item.unitId)?.scope;
+  const project = kind === "project" || kind === "env" ? name : scope?.kind === "project" || scope?.kind === "environment" ? scope.name : "";
+  if (!project) return "";
+  const cluster = [...app.store.indexes.groups.values()].find((group) => !group.deleted && group.link?.projectId === project);
+  return displayName(cluster?.title ?? project);
+}
+
+function waitingTitle(t, item) {
+  return item.title || (item.taskId ? upperFirst(t("waitingTask", { number: String(item.taskId).split(":").at(-1) })) : t("unknown"));
+}
+
+// "Project, task 027, Oct 19" for a review, "Agent, Oct 19" for anything else. An open review also says who delivered it.
+function waitingMeta(app, t, item, delivered = false) {
+  const date = formatShortDate(app.language, item.since);
+  const unit = unitById(app, item.unitId);
+  const who = unit ? unitDisplayName(unit) : item.unitId ? readableIdentity(item.unitId, t("person")) : "";
+  const when = delivered && date && who ? t("waitingDelivered", { date, unit: who }) : date;
+  const parts = item.taskId ? [waitingProject(app, item), t("waitingTask", { number: String(item.taskId).split(":").at(-1) }), when] : [who, when];
+  if (item.state === "expired") parts.push(t("expiredAsk"));
+  return upperFirst(parts.filter(Boolean).join(", "));
+}
+
+// The projects behind what waits, three at most: "Reviews from Coffee cat page, TXMSKA and Guest or ghost".
+function waitingSub(app, t, items) {
+  const names = [...new Set(items.map((item) => waitingProject(app, item)).filter(Boolean))];
+  if (!names.length) return "";
+  const list = names.length > 3 ? t("listMore", { head: names.slice(0, 3).join(", "), count: names.length - 3 })
+    : names.length > 1 ? t("listAnd", { head: names.slice(0, -1).join(", "), last: names.at(-1) }) : names[0];
+  return t(items.every((item) => item.kind === "review") ? "waitingReviewsFrom" : "waitingFrom", { names: list });
+}
+
+function renderWaitingRow(app, t, item, open) {
+  const document = app.root.ownerDocument;
+  const row = element(document, "button", {
+    type: "button",
+    class: "waiting-row",
+    "aria-expanded": String(open),
+    "data-waiting-item": item.id,
+    "data-kind": item.kind ?? "",
+    "data-state": item.state ?? "pending",
+    "data-approval": item.approvalId ?? "",
+    "data-task": item.taskId ?? "",
+    "data-chat": item.chatId ?? "",
+    "data-message": item.messageId ?? "",
+    "data-unit": item.unitId ?? "",
+    onclick: () => {
+      if (!open) { openWaitingItem(app, item); return; }
+      app.waitingRecord = null;
+      renderShell(app);
+    },
+  }, icon(document, WAITING_GLYPH[item.kind] ?? "waiting"),
+  element(document, "span", { class: "waiting-row-text" },
+    element(document, "span", { class: "waiting-row-title", text: waitingTitle(t, item) }),
+    element(document, "span", { class: "waiting-row-meta", text: waitingMeta(app, t, item, open) })),
+  icon(document, open ? "chevron" : "chevronRight"));
+  if (!open) return row;
+  return element(document, "div", { class: "waiting-open", "data-waiting-open": item.id }, row,
+    element(document, "div", { class: "waiting-open-body" }, renderWaitingRecord(app, t, app.waitingRecord, true)));
+}
+
+function renderWaitingPanel(app, t) {
+  const document = app.root.ownerDocument;
+  const list = app.waitingList;
+  const items = list?.items ?? [];
+  const count = app.store.view?.counts?.waiting ?? list?.total ?? 0;
+  const title = cardinal(app.language, "waitingOnYou", count);
+  const sub = waitingSub(app, t, items.filter((item) => item.state !== "expired"));
+  const panel = element(document, "section", { class: "waiting-panel", "data-waiting-panel": "true", "aria-label": title });
+  panel.append(element(document, "header", { class: "cluster-heading" },
+    element(document, "span", { class: "cluster-avatar", "aria-hidden": "true" }, icon(document, "waiting")),
+    element(document, "div", {}, element(document, "h2", { text: title }), sub ? element(document, "p", { text: sub }) : null),
+    element(document, "button", { type: "button", class: "icon-button", "data-action": "waiting-close", "aria-label": t("close"), title: t("close"),
+      onclick: () => { app.waitingOpen = false; renderShell(app); } }, icon(document, "close"))));
+  const body = element(document, "div", { class: "waiting-panel-list" });
+  panel.append(body);
+  if (!list) {
+    body.append(skeletonMark(document, t("loadingList")));
+    return panel;
+  }
+  // A refresh under items already shown keeps them; the loading rows are only for an empty list.
+  if (list.status === "loading" && !items.length) body.append(skeletonMark(document, t("loadingList"), "rows", { "data-list-progress": "true" }));
+  if (list.status === "error") body.append(element(document, "p", { text: t("listError") }),
+    element(document, "button", { type: "button", class: "btn", "data-action": "retry-list", text: t("retry"), onclick: () => reloadList(list) }));
+  if (!items.length && list.status !== "loading" && list.status !== "error") {
+    body.append(element(document, "div", { class: "waiting-empty" },
+      element(document, "p", { "data-empty": "waiting", text: t("emptyWaiting") }),
+      element(document, "p", { class: "field-hint", "data-empty-next": "waiting", text: t("emptyWaitingNext") })));
+    return panel;
+  }
+  const openId = app.waitingRecord?.item?.id;
+  for (const section of waitingSections(items)) {
+    if (!section.items.length) continue;
+    body.append(element(document, "div", { class: "waiting-section" },
+      element(document, "h3", { class: "waiting-section-title", text: t(section.key) }),
+      element(document, "span", { text: String(section.items.length) })));
+    for (const item of section.items) body.append(renderWaitingRow(app, t, item, item.id === openId));
+  }
+  if (list.nextCursor) body.append(element(document, "button", { type: "button", class: "waiting-more", "data-action": "waiting-more",
+    text: startText(app.language, "more", { count: Math.max(0, (list.total ?? 0) - items.length) }),
+    onclick: () => loadNext(list).then(() => { if (!app.disposed) renderShell(app); }).catch((error) => noteAction(app, error)) }));
+  return panel;
+}
+
+// Open task: Waiting makes way for the agent the task belongs to, with the task in its inspector.
+function openWaitingTask(app, record) {
+  const unit = unitById(app, record.item?.unitId ?? record.task.toId);
+  app.waitingOpen = false;
+  app.waitingRecord = null;
+  app.openTaskId = record.task.id;
+  if (unit) openUnitFromMenu(app, unit);
+  else renderShell(app);
+}
+
 function openWaitingItem(app, item) {
   if (!item) return;
   if (item.kind === 'plan' && item.planId && app.layout !== 'phone') {
@@ -1672,7 +1877,11 @@ function openWaitingItem(app, item) {
     });
     return;
   }
-  if (item.unitId) app.store.selected.unitId = item.unitId;
+  if (item.unitId) {
+    app.store.selected.unitId = item.unitId;
+    // A cluster left selected would keep its own inspector over the agent.
+    app.store.selected.groupId = null;
+  }
   const label = text(app.language, "loadingDetails", { name: item.title || item.id });
   if (item.approvalId) {
     settle(app, `waiting:${item.id}`, label, async () => {
@@ -1689,6 +1898,8 @@ function openWaitingItem(app, item) {
     return;
   }
   if (item.chatId) {
+    // These open a conversation, which the inspector shows once Waiting is out of its way.
+    if (app.layout !== "phone") app.waitingOpen = false;
     settle(app, `waiting:${item.id}`, label, async () => {
       const result = await request(app.api, "GET", "/chats/:chatId", { params: { chatId: item.chatId } });
       app.waitingRecord = { kind: "chat", chat: result.data, item };
@@ -1707,11 +1918,13 @@ function openWaitingItem(app, item) {
   }
   app.waitingRecord = { kind: "question", item };
   if (app.layout === "phone") app.mode = "hierarchy";
+  else app.waitingOpen = false;
   if (item.unitId) openExistingDirect(app, item.unitId);
   else if (!app.disposed) renderShell(app);
 }
 
-function renderWaitingRecord(app, t, record = app.waitingRecord) {
+// `compact` is the record opened in the Waiting panel: a review there is the short card with Open task.
+function renderWaitingRecord(app, t, record = app.waitingRecord, compact = false) {
   const document = app.root.ownerDocument;
   const block = element(document, "div", { "data-waiting-record": record?.kind ?? "" });
   if (!record) return block;
@@ -1730,7 +1943,8 @@ function renderWaitingRecord(app, t, record = app.waitingRecord) {
     block.append(renderTask(document, record.task, t, (item, status, note) => status === "open" ? confirmSendBack(app, item, note) : setTaskStatus(app, item, status, note), !phone && caps.includes("task.undo") ? (item) => undoSelected(app, item) : null, noteDraft?.value ?? "", (value, start, end) => {
       inputDrafts(app).notes.set(record.task.id, { value, start: Number.isInteger(start) ? start : value.length, end: Number.isInteger(end) ? end : value.length });
       syncViewerDirty(app);
-    }, phone ? canAccept(record.task) : canSendBack(record.task), taskBusy));
+    }, phone ? canAccept(record.task) : canSendBack(record.task), taskBusy, compact ? { request: requestBrief(record.task.request), onOpen: () => openWaitingTask(app, record),
+      noteShown: noteDraft != null, onReveal: () => inputDrafts(app).notes.set(record.task.id, { value: "", start: 0, end: 0 }) } : null));
     return block;
   }
   if (record.kind === "message" && record.message) {
@@ -1808,8 +2022,9 @@ function renderCollection(app, t) {
       onPick: (row, how) => pickRow(app, row, how),
     } : {}),
     onActivate: (row, kind) => {
-      // A plain click ends a multiple pick.
+      // A plain click ends a multiple pick, and what it opens takes the inspector from Waiting.
       if (app.hierarchySelection?.size) app.hierarchySelection.clear();
+      if (row.kind !== "heading" && row.kind !== "service" && row.kind !== "quiet") app.waitingOpen = false;
       if (row.kind === "cluster") {
         if (kind === 'single' && app.lastClusterClick?.id === row.groupId && app.api.now() - app.lastClusterClick.at < 500) kind = 'double';
         app.lastClusterClick = kind === 'single' ? { id: row.groupId, at: app.api.now() } : null;
@@ -1820,6 +2035,10 @@ function renderCollection(app, t) {
       } else if (row.kind === 'worktree') {
         selectGroup(app, row.groupId);
         if (kind === 'double') app.pendingClusterFlight = row.groupId;
+      } else if (row.kind === 'service') {
+        if (serviceSetupAllowed(app)) openStartAgent(app, null, false, { service: row.role, anchor: null });
+      } else if (row.kind === "quiet") {
+        app.quietChatsOpen = app.quietChatsOpen !== true;
       } else if (row.kind === "chat") {
         app.store.selected.chatId = row.id;
       } else if (row.unit) {
@@ -2117,7 +2336,7 @@ function boardSurface(app, document, editor, t) {
 function boardProperties(app, document, editor, t) {
   const host = element(document, "details", { class: "board-properties" });
   host.append(element(document, "summary", { "aria-label": t("finalMore"), title: t("finalMore"), text: "⋯" }));
-  const nodes = editor.authoritative.document.screens?.[0];
+  const nodes = (editor.authoritative.document ?? boardDocument(editor))?.screens?.[0];
   const tools = element(document, "div", { class: "board-property-fields" });
   const name = element(document, "input", { "data-node-name": "true", "data-keep": keepId("node", editor.resourceId) });
   name.value = draftMap(app, "nodes").get(editor.resourceId) ?? "";
@@ -2311,11 +2530,12 @@ function boardToolbar(app, document, editor, t) {
   const bar = element(document, "div", { class: "toolbar board-toolbar", role: "toolbar", "aria-label": t("boards"), "data-toolbar": "board" });
   const tools = element(document, "div", { class: "board-tools" });
   const paths = { select: "M5 3v16l4-5 4 7 3-2-4-7h7z", frame: "M4 4h16v16H4z", text: "M4 5h16M12 5v15M8 20h8", draw: "M4 20l4-1L20 7l-4-4L4 15z", comment: "M4 5h16v12H9l-5 4z" };
-  for (const tool of ["select", "frame", "text", "draw", "comment"]) {
+  // A module board is read only: it keeps selecting and commenting, and none of the tools that draw.
+  for (const tool of editor.authoritative.readOnly ? ["select", "comment"] : ["select", "frame", "text", "draw", "comment"]) {
     const label = t(`board${tool[0].toUpperCase()}${tool.slice(1)}`);
     const glyph = pathIcon(document, paths[tool]);
     tools.append(element(document, "button", { type: "button", class: "board-tool", "data-board-tool": tool, "aria-label": label, title: label,
-      "aria-pressed": String((editor.boardTool ?? "select") === tool), disabled: tool !== "select" && (!canEditResources(app) || editor.authoritative.readOnly) ? "" : null,
+      "aria-pressed": String((editor.boardTool ?? "select") === tool), disabled: tool !== "select" && !canEditResources(app) ? "" : null,
       onclick: () => {
         editor.boardTool = tool; editor.commentPopover = false;
         if (tool === "draw" && !boardDocument(editor).screens?.some((screen) => screen.root?.sketch)) {
@@ -2920,8 +3140,52 @@ function askVoidAgain(app, editor, proposal) {
   });
 }
 
-// Ctrl or Cmd+A and Delete work on the Map screen wherever the focus is, unless it is in a field or a dialog: the rows
-// are drawn again after a click, so the focus does not stay on the list.
+// One Escape closes the topmost open layer and nothing under it: a menu, the phone panel, Activity, the Map's help, Waiting, then a drawer.
+// It works wherever the focus is: the shell is drawn again after every change, and the focus can end up outside what is open.
+// A context menu, the Map's help and a library menu with the focus inside answer for themselves before this runs, and the help
+// yields to the panels above it.
+function onEscapeKey(app, event) {
+  if (event.key !== 'Escape' || app.layout === 'phone' || event.defaultPrevented) return;
+  if (event.target?.closest?.('[data-context-menu]') || app.root.ownerDocument.querySelector?.('dialog[open]')) return;
+  let opener = null;
+  const menu = [...(app.editors?.libraries?.values() ?? [])].find(state => state.menu);
+  if (menu) { opener = menu.menu.opener; menu.menu = null; }
+  else if (app.phonePanelOpen) { app.phonePanelOpen = false; opener = 'open-phone'; }
+  else if (app.queuePanelOpen) { app.queuePanelOpen = false; opener = 'open-notifications'; }
+  else if (app.waitingOpen) app.waitingOpen = false;
+  else if (app.inspectorOpen && app.mode === 'map' && windowAtMost(app, INSPECTOR_DRAWER_WIDTH)) { app.inspectorOpen = false; opener = 'toggle-inspector'; }
+  else if (app.catalogOpen && windowAtMost(app, SIDE_DRAWER_WIDTH)) { app.catalogOpen = false; opener = 'toggle-catalog'; }
+  else if (app.commentsOpen && app.mode !== 'map' && windowAtMost(app, SIDE_DRAWER_WIDTH)) { app.commentsOpen = false; opener = 'toggle-comments'; }
+  else return;
+  event.preventDefault?.();
+  renderShell(app);
+  if (opener === 'toggle-inspector') refitBesideDrawer(app);
+  restoreInvoker(app, opener);
+}
+
+// A click anywhere but on a panel and the button that opens it closes the phone and Activity panels.
+function closeBarPanels(app, event) {
+  if (app.layout === 'phone') return;
+  const inside = selector => Boolean(event.target?.closest?.(selector));
+  const phone = app.phonePanelOpen && !inside("[data-phone-panel], [data-action='open-phone']");
+  const queue = app.queuePanelOpen && !inside("[data-queue-panel], [data-action='open-notifications'], [data-action='open-queue']");
+  if (phone) app.phonePanelOpen = false;
+  if (queue) app.queuePanelOpen = false;
+  if (phone || queue) renderShell(app);
+}
+
+// The stylesheet turns the inspector into a drawer below this width, and the side panels below the next one.
+const INSPECTOR_DRAWER_WIDTH = 1180;
+const SIDE_DRAWER_WIDTH = 987;
+
+function windowAtMost(app, width) {
+  const view = app.root.ownerDocument.defaultView;
+  if (typeof view?.matchMedia === 'function') return view.matchMedia(`(max-width: ${width}px)`).matches;
+  return (view?.innerWidth ?? Infinity) <= width;
+}
+
+// Ctrl or Cmd+A, Delete and Escape (which ends a pick) work on the Map screen wherever the focus is, unless it is in a field or a dialog:
+// the rows are drawn again after a click, so the focus does not stay on the list.
 function onPickKey(app, event) {
   if (app.layout === 'phone' || app.mode !== 'map' || event.defaultPrevented) return;
   const target = event.target;
@@ -2930,6 +3194,9 @@ function onPickKey(app, event) {
   if ((event.ctrlKey || event.metaKey) && String(event.key).toLowerCase() === 'a' && app.tab === 'hierarchy') {
     event.preventDefault?.();
     pickEverything(app);
+  } else if (event.key === 'Escape' && app.hierarchySelection?.size) {
+    app.hierarchySelection.clear();
+    renderShell(app);
   } else if (event.key === 'Delete') {
     if (app.hierarchySelection?.size) { event.preventDefault?.(); deletePicked(app); return; }
     const units = [...(app.mapState?.selection ?? [])];
@@ -3000,6 +3267,7 @@ function renderEditorSurfaces(app, t) {
   const catalog = renderLibrary(document, { kind, project: current?.authoritative?.project, data: editors, t, actions: libraryActions(app, kind) });
   if (app.catalogOpen) catalog.className += " is-open";
   const resource = element(document, "section", { class: "panel editor-resource", "data-editor-column": "resource" },
+    app.layout === "phone" ? null : catalogToggle(app, t, kind === "blueprint" ? "boards" : "texts"),
     element(document, "h2", { "data-editor-title": title, "data-editor-kind": kind, text: current ? `${t(app.mode)} ${title}` : title }),
   );
   if (app.syncConflict) {
@@ -3019,9 +3287,8 @@ function renderEditorSurfaces(app, t) {
         text: app.actionNote,
       })));
   }
-  const commentsColumn = element(document, "aside", { class: `panel editor-comments-column${app.commentsOpen ? " is-open" : ""}`, "data-editor-column": "comments" },
-    element(document, "h2", { text: t(current?.historyOpen ? "history" : "comments") }),
-  );
+  const commentsHead = element(document, "div", { class: "editor-comments-head" }, element(document, "h2", { text: t(current?.historyOpen ? "history" : "comments") }));
+  const commentsColumn = element(document, "aside", { class: `panel editor-comments-column${app.commentsOpen ? " is-open" : ""}`, "data-editor-column": "comments" }, commentsHead);
   const tools = element(document, "div", { class: "editor-tools", "data-editor-tools": "true" },
     watchStatus,
   );
@@ -3054,14 +3321,29 @@ function renderEditorSurfaces(app, t) {
   if (current?.kind === "void" && current.authoritative?.document) resource.append(voidSurface(app, document, current, t));
   if (current?.authoritative?.legacy?.reason === "conversion_required") {
     const path = current.authoritative.legacy.path ?? "";
-    resource.append(element(document, "p", { "data-legacy": path, text: path }));
-    resource.append(element(document, "p", { text: t("conversionRequired") }));
-    if (canEditResources(app)) {
-      resource.append(element(document, "button", {
-        type: "button", class: "btn", "data-action": "copy-json",
-        onclick: () => submitJsonCopy(app, current),
-      }, t("copyJson")));
+    const converted = legacyBoard(app, current);
+    const copyButton = () => canEditResources(app) ? element(document, "button", {
+      type: "button", class: "btn", "data-action": "copy-json",
+      onclick: () => submitJsonCopy(app, current),
+    }, t("copyJson")) : null;
+    if (converted.document) {
+      current.document = converted.document;
+      resource.append(element(document, "div", { class: "board-notice", "data-legacy": path },
+        element(document, "span", { text: t("moduleReadOnly") }), copyButton()), boardSurface(app, document, current, t));
+    } else {
+      resource.append(element(document, "p", { "data-legacy": path, text: path }));
+      // Until the module has been read there is nothing to say yet; the old message is for a module that cannot be read.
+      if (converted.error) {
+        resource.append(element(document, "p", { text: t("conversionRequired") }));
+        resource.append(element(document, "p", { class: "field-hint", "data-legacy-reason": converted.error.code ?? "", text: actionText(app.language, converted.error.code) }));
+      } else resource.append(progressMark(document, t("loading"), { "data-legacy-progress": "true" }));
+      resource.append(copyButton());
     }
+  }
+  if (!current) {
+    const idle = kind === "blueprint" ? ["blueprint", "pickBoardTitle", "pickBoardHint"] : ["pen", "pickTextTitle", "pickTextHint"];
+    resource.append(element(document, "div", { class: "editor-idle", "data-editor-idle": kind },
+      icon(document, idle[0]), element(document, "p", { class: "editor-idle-title", text: t(idle[1]) }), element(document, "p", { text: t(idle[2]) })));
   }
   if (editors.error?.code === "corrupt_resource") resource.append(element(document, "div", { class: "notice notice-error", role: "alert" }, element(document, "p", { text: t("corruptResource") })));
   const forms = resourceForms(app, document, t);
@@ -3070,7 +3352,10 @@ function renderEditorSurfaces(app, t) {
   if (forms && footer) footer.append(...forms.children);
   else if (forms) catalog.append(forms);
   const surfaces = { catalog, resource, comments: commentsColumn };
-  if (!current) return surfaces;
+  if (!current) {
+    commentsColumn.append(element(document, "p", { class: "editor-comments-idle", text: t(kind === "void" ? "commentsIdleText" : "commentsIdleBoard") }));
+    return surfaces;
+  }
   if (!current.authoritative.readOnly) {
     tools.append(element(document, "button", { type: "button", class: "btn", "data-action": "editor-history", text: t("history"), "aria-expanded": String(Boolean(current.historyOpen)), "aria-pressed": String(Boolean(current.historyOpen)), onclick: async () => {
       current.historyOpen = !current.historyOpen;
@@ -3146,30 +3431,44 @@ function renderEditorSurfaces(app, t) {
     if (current.boardTool !== "draw") toolbar?.append(actions);
   } else tools.append(chips, actions);
   const comments = element(document, "div", { class: "editor-comments", "data-comment-total": String(current.commentsTotal ?? current.threads?.length ?? 0) });
-  if (!(current.threads?.length)) {
+  // The list shows one group of threads at a time, the open ones first; the cap on what is drawn counts within the group.
+  const threads = current.threads ?? [];
+  const resolved = threads.filter((thread) => thread.status === "resolved"), open = threads.filter((thread) => thread.status !== "resolved");
+  const shown = current.commentFilter === "resolved" ? "resolved" : "open";
+  const group = shown === "resolved" ? resolved : open;
+  const filterChip = (name, count) => element(document, "button", {
+    type: "button", class: "comment-chip", "data-comment-filter": name, "aria-pressed": String(shown === name),
+    onclick: () => { current.commentFilter = name; current.commentWindow = 40; renderShell(app); },
+  }, t(name === "open" ? "commentsOpenCount" : "commentsResolvedCount", { count }));
+  commentsHead.append(element(document, "div", { class: "comment-chips" }, filterChip("open", open.length), filterChip("resolved", resolved.length)));
+  if (!threads.length) {
     comments.append(element(document, "p", {
       "data-empty": "comments",
       text: t(current.kind === "void" ? "emptyCommentsText" : "emptyCommentsBoard"),
     }));
-  }
-  const commentBound = Math.min(current.threads?.length ?? 0, current.commentWindow ?? 40);
-  for (const thread of (current.threads ?? []).slice(0, commentBound)) {
+  } else if (!group.length) comments.append(element(document, "p", { class: "editor-comments-none", "data-empty": shown, text: t(shown === "open" ? "commentsNoneOpen" : "commentsNoneResolved") }));
+  const commentBound = Math.min(group.length, current.commentWindow ?? 40);
+  for (const thread of group.slice(0, commentBound)) {
     const box = element(document, "article", { class: "comment-box", "data-thread": thread.id, "data-status": thread.status ?? "open" });
-    for (const message of thread.messages ?? []) {
+    const replies = Math.max(0, (thread.messages?.length ?? 0) - 1);
+    (thread.messages ?? []).forEach((message, position) => {
       const line = element(document, "p", { class: "comment-line", "data-comment-message": message.id ?? "" });
       line.append(element(document, "span", { class: "comment-author", text: commentAuthor(app, message.author ?? message.authorId) }));
       if (message.at) line.append(element(document, "time", { datetime: message.at, text: formatShortTime(app.language, message.at) }));
+      if (position === 0 && replies) line.append(element(document, "span", { class: "comment-replies", text: cardinal(app.language, "commentReplies", replies) }));
       line.append(element(document, "span", { class: "comment-text", text: message.text ?? "" }));
       if (current.kind === "void" && message.proposal && current.proposals?.some((item) => item.id === message.proposal.id)) appendProposals(app, document, box, current, t, message.proposal.id, line);
       else box.append(line);
       if (message.sendToAgent === false && message.authorId === "root:master") box.append(element(document, "p", { class: "field-hint", "data-comment-note": message.id, text: t("keptAsNote") }));
-    }
-    box.append(element(document, "button", { type: "button", class: "btn", "data-action": "reply", onclick: () => replyToThread(app, thread.id) }, t("reply")));
-    box.append(element(document, "button", { type: "button", class: "btn", "data-action": "resolve", onclick: () => resolveThread(app, thread.id) }, t("resolve")));
+    });
+    const links = element(document, "div", { class: "comment-actions" },
+      element(document, "button", { type: "button", class: "comment-action", "data-action": "reply", onclick: () => replyToThread(app, thread.id) }, t("reply")));
+    if (thread.status !== "resolved") links.append(element(document, "button", { type: "button", class: "comment-action", "data-action": "resolve", onclick: () => resolveThread(app, thread.id) }, t("resolve")));
+    box.append(links);
     comments.append(box);
   }
   if (current.kind === "void") appendProposals(app, document, comments, current, t);
-  if ((current.threads?.length ?? 0) > commentBound) {
+  if (group.length > commentBound) {
     comments.append(element(document, "button", {
       type: "button",
       class: "btn",
@@ -3242,6 +3541,8 @@ function selectEditor(app, summary) {
   app.store.selected.resourceId = summary.id;
   app.store.open.editors.set(summary.id, summary.kind);
   app.store.open.comments.add(summary.id);
+  // Opening a board again is a new try for a module that could not be converted.
+  for (const [key, entry] of editors.converted) if (entry.error && key.startsWith(`${summary.id}:`)) editors.converted.delete(key);
   const name = summary.title || summary.id;
   editorAct(app, `editor:${summary.id}`, text(app.language, "loadingDetails", { name }), async () => {
     const before = editors.error;
@@ -3465,7 +3766,7 @@ function resourceForms(app, document, t) {
   box.append(
     element(document, "button", {
       type: "button",
-      class: "btn",
+      class: "btn ghost",
       "data-action": "open-register",
       "data-kind": kind,
       text: t("registerResource"),
@@ -3621,6 +3922,20 @@ function submitRegister(app, kind) {
   });
 }
 
+// A module board is drawn from the document its module makes. The conversion runs in memory once per revision of the board:
+// nothing is written or imported, and opening the board again reads the kept document.
+function legacyBoard(app, editor) {
+  const kept = editorsOf(app).converted, key = `${editor.resourceId}:${editor.revision}`;
+  if (kept.has(key)) return kept.get(key);
+  for (const other of kept.keys()) if (other.startsWith(`${editor.resourceId}:`)) kept.delete(other);
+  const entry = { document: null, error: null };
+  kept.set(key, entry);
+  convertLegacyBoard(app.api, editor.authoritative, (manifest) => exportLegacyDocument(app.root.ownerDocument, manifest, { maxNodes: READ_ONLY_BOARD_NODES }))
+    .then((result) => { entry.document = result.document; }, (error) => { entry.error = error; })
+    .finally(() => { if (!app.disposed) renderShell(app); });
+  return entry;
+}
+
 function submitJsonCopy(app, current) {
   const legacy = current?.authoritative?.legacy;
   if (!legacy || !canEditResources(app)) return;
@@ -3650,7 +3965,10 @@ export function legacyModuleUrls(manifest, makeUrl) {
   return Object.fromEntries(["module", "kit", "skins", "exporter", "schema", "icons", "nodes"].filter((key) => manifest[key]).map((key) => [key, build(manifest[key])]));
 }
 
-async function exportLegacyDocument(document, manifest) {
+// A drawn module board is never saved, so it may hold more nodes than a JSON board; the 3.0 board has about 21,000.
+const READ_ONLY_BOARD_NODES = 100_000;
+
+async function exportLegacyDocument(document, manifest, { maxNodes = null } = {}) {
   const env = document.defaultView;
   const dataUrl = (source) => {
     const bytes = new TextEncoder().encode(source), chunks = [];
@@ -3664,7 +3982,7 @@ async function exportLegacyDocument(document, manifest) {
     kit.useSkin?.(skin);
     ${urls.icons ? `const icons = await import(${JSON.stringify(urls.icons)}); kit.useIcons?.(icons.default ?? icons.ICONS);` : ""}
     ${urls.nodes ? `const nodes = await import(${JSON.stringify(urls.nodes)}); kit.useNodes?.(nodes.default ?? nodes.NODES);` : ""}
-    const document = exporter.exportBoard(source.default, {layout: kit.layout, normalize: schema.normalizeBoard, skin, sketch: ${JSON.stringify(manifest.sketch)}});
+    const document = exporter.exportBoard(source.default, {layout: kit.layout, normalize: ${maxNodes ? `(board, options) => schema.normalizeBoard(board, { ...options, maxNodes: ${Number(maxNodes)} })` : "schema.normalizeBoard"}, skin, sketch: ${JSON.stringify(manifest.sketch)}});
     parent.postMessage({document}, "*");
   } catch { parent.postMessage({error: "import_unavailable"}, "*"); }`;
   const iframe = document.createElement("iframe");
@@ -3685,16 +4003,22 @@ async function exportLegacyDocument(document, manifest) {
   } finally { iframe.remove(); env.URL.revokeObjectURL(url); }
 }
 
-export async function importLegacyBoard(api, source, { title, folderId = null, project = source?.project } = {}, retained = null, exportDocument = (manifest) => exportLegacyDocument(globalThis.document, manifest)) {
-  if (retained) return perform(api, null, retained);
-  if (!source?.readOnly || project !== source.project) throw new ApiError(422, "import_unavailable", "Choose a registered module in the selected project.");
+// Runs a module board in the sandbox and returns the document it draws, with the manifest it came from. Nothing is written.
+export async function convertLegacyBoard(api, source, exportDocument = (manifest) => exportLegacyDocument(globalThis.document, manifest)) {
   const manifest = (await request(api, "GET", "/blueprint/boards/:resourceId/export", { params: { resourceId: source.id } })).data;
   let document;
   try {
     document = await exportDocument(manifest);
     if (!document || typeof document !== "object" || Array.isArray(document)) throw new Error();
-    document.legacySource = manifest.sourceRevisions;
   } catch { throw new ApiError(422, "import_unavailable", "The module cannot be exported."); }
+  return { manifest, document };
+}
+
+export async function importLegacyBoard(api, source, { title, folderId = null, project = source?.project } = {}, retained = null, exportDocument = (manifest) => exportLegacyDocument(globalThis.document, manifest)) {
+  if (retained) return perform(api, null, retained);
+  if (!source?.readOnly || project !== source.project) throw new ApiError(422, "import_unavailable", "Choose a registered module in the selected project.");
+  const { manifest, document } = await convertLegacyBoard(api, source, exportDocument);
+  document.legacySource = manifest.sourceRevisions;
   return perform(api, { method: "POST", path: "/blueprint/boards/import", body: { project, path: manifest.path, title, folderId, legacyResourceId: source.id, document, expectedRevision: manifest.expectedRevision } });
 }
 
@@ -4022,7 +4346,7 @@ async function openStartAgent(app, cluster, overseer = false, options = {}) {
   if (app.disposed || app.startDialog) return;
   const clients = app.startAgents?.connectedClients ?? [], preferred = app.startAgents?.defaultRunsIn;
   const model = { language: app.language, kind: overseer ? 'overseer' : 'agent', agentKind: preferred?.client === 'lyra' ? 'local' : 'external',
-    cluster, role: options.role ?? 'executor', roleName: '', roleDescription: '', roleProblems: {}, clients,
+    cluster, service: options.service ?? null, role: options.service ?? options.role ?? 'executor', roleName: '', roleDescription: '', roleProblems: {}, clients,
     clusterChoices: options.clusterChoices ?? null, leadId: options.leadId ?? null, leadName: options.leadId ? unitDisplayName(unitById(app, options.leadId) ?? { unit: options.leadId }) : '', choice: initialRunsIn(clients, preferred, overseer ? preferred?.client === 'lyra' ? 'local' : 'external' : null), fresh: true, useAsDefault: false,
     automatic: false };
   const anchor = options.anchor === undefined ? app.root.querySelector('[data-action="new-agent"]') : options.anchor;
@@ -4056,8 +4380,14 @@ async function openStartAgent(app, cluster, overseer = false, options = {}) {
         let result;
         try {
           result = created ?? (overseer ? await startApi.createOverseer(app.api, { machine: startMachine(app), runsIn: model.choice, fresh: model.fresh, expectedRevision: null }, retained)
+            : model.service ? await startApi.createService(app.api, { machine: startMachine(app), role: model.service }, retained)
             : await startApi.createClusterAgent(app.api, model.cluster.id, { machine: startMachine(app), role: model.role, roleName: model.roleName.trim(), roleDescription: model.roleDescription.trim(), runsIn: model.choice, useAsDefault: model.useAsDefault, leadId: model.leadId, expectedRevision: model.cluster.revision }, retained));
           created = result;
+          // The service is created first and told where it runs right after, as the unit write takes no choice of runtime.
+          if (model.service) {
+            try { result = await startApi.setRunsIn(app.api, result.data.id, { machine: startMachine(app), runsIn: model.choice, useAsDefault: model.useAsDefault, expectedRevision: result.data.revision }, defaultOperation); }
+            catch (error) { defaultOperation = unconfirmedStartOperation(error); throw error; }
+          }
           if (overseer && model.useAsDefault) {
             try { result = await startApi.setRunsIn(app.api, result.data.id, { machine: startMachine(app), runsIn: result.data.runsIn, useAsDefault: true, expectedRevision: result.data.revision }, defaultOperation); }
             catch (error) { defaultOperation = unconfirmedStartOperation(error); throw error; }
@@ -4197,19 +4527,30 @@ async function loadClusterFacts(app, cluster) {
   if (!app.disposed) renderShell(app);
 }
 
-function clusterInspector(app, cluster) {
+function clusterModel(app, cluster) {
   const facts = app.clusterFacts?.id === cluster.id ? app.clusterFacts : {};
-  return renderCluster(app.root.ownerDocument, { language: app.language, cluster, git: facts.git, error: facts.error?.message,
-    units: app.unitList?.catalog ?? [], link: app.startProjects?.clusterLinks?.find(item => item.clusterId === cluster.id),
+  return { language: app.language, cluster, git: facts.git ?? app.clusterGit?.get(cluster.id)?.git, error: facts.error?.message,
+    units: app.unitList?.catalog ?? [], children: [...app.store.indexes.groups.values()].filter(group => !group.deleted && group.parentId === cluster.id),
+    link: app.startProjects?.clusterLinks?.find(item => item.clusterId === cluster.id),
     loading: !app.startProjects && !app.startError, unreadable: Boolean(app.startError),
-    addition: app.store.additions.report?.items.find(item => item.kind === 'repository' && item.projectId === cluster.link?.projectId) }, {
+    addition: app.store.additions.report?.items.find(item => item.kind === 'repository' && item.projectId === cluster.link?.projectId) };
+}
+
+function clusterActions(app, cluster) {
+  return {
     onUpdate: item => openSharedAdd(app, item),
     onNewAgent: () => openStartAgent(app, cluster), onLink: () => openClusterLink(app, cluster),
     onMore: () => removeStartCluster(app, cluster), onChanges: () => showClusterChanges(app, cluster),
+    // The plan draft opens in the chat, so the chat tab comes forward with it.
+    onChoosePlanner: () => { unitConversation(app, cluster.id).tab = 'chat'; openPlanDraft(app, cluster).catch(error => noteAction(app, error)); },
     onEditor: () => settle(app, `editor:${cluster.id}`, startText(app.language, 'openEditor'), async record => {
       const result = await startApi.openClusterEditor(app.api, cluster.id, startMachine(app), record.operation); return result;
     }),
-  });
+  };
+}
+
+function clusterInspector(app, cluster) {
+  return renderCluster(app.root.ownerDocument, clusterModel(app, cluster), clusterActions(app, cluster));
 }
 
 // ---- Picking several rows and deleting them -------------------------------------------------------------------
@@ -4220,18 +4561,17 @@ function pickable(row) { return Boolean(row && (row.unit && row.unit.role !== 'm
 function pickRow(app, row, { toggle = false, range = false } = {}) {
   if (!pickable(row)) return false;
   const picked = app.hierarchySelection ??= new Set();
-  // The row open before the pick starts it.
-  if (!picked.size) {
-    const current = app.store.selected.groupId ? `cluster:${app.store.selected.groupId}` : app.store.selected.unitId;
-    if (current && app.activeRows?.some(item => item.id === current && pickable(item))) { picked.add(current); app.hierarchyAnchor = current; }
-  }
-  if (range && app.hierarchyAnchor) {
-    const rows = (app.activeRows ?? []).filter(pickable), from = rows.findIndex(item => item.id === app.hierarchyAnchor), to = rows.findIndex(item => item.id === row.id);
+  // A pick starts empty. The row that is open is only where the first Shift range begins; it is not picked by that.
+  if (!picked.size) app.hierarchyAnchor = null;
+  const open = app.store.selected.groupId ? `cluster:${app.store.selected.groupId}` : app.store.selected.unitId;
+  const anchor = app.hierarchyAnchor ?? (open && app.activeRows?.some(item => item.id === open && pickable(item)) ? open : null);
+  if (range && anchor) {
+    const rows = (app.activeRows ?? []).filter(pickable), from = rows.findIndex(item => item.id === anchor), to = rows.findIndex(item => item.id === row.id);
     if (from >= 0 && to >= 0) for (const item of rows.slice(Math.min(from, to), Math.max(from, to) + 1)) picked.add(item.id);
     else picked.add(row.id);
   } else if (picked.has(row.id) && toggle) picked.delete(row.id);
   else picked.add(row.id);
-  if (!range) app.hierarchyAnchor = row.id;
+  app.hierarchyAnchor = range ? anchor ?? row.id : row.id;
   renderShell(app);
   return true;
 }
@@ -4461,6 +4801,35 @@ function clusterChatPanel(app, cluster) {
   return panel;
 }
 
+// Under its header a cluster has the tabs an agent has: its chat, the work of the one who leads it, and its details.
+function clusterPanel(app, t, cluster) {
+  const document = app.root.ownerDocument;
+  const tabs = unitConversation(app, cluster.id);
+  tabs.detailsTab = true;
+  const lead = clusterLead(cluster, app.unitList?.catalog ?? []);
+  const leadView = lead ? sessionViewFor(app, sessionForUnit(app, lead.id)) : null;
+  const panel = element(document, 'section', { class: 'chat-panel agent-conversation', 'data-agent-tab': tabs.tab, 'data-cluster-panel': cluster.id });
+  panel.append(renderSessionTabs(document, tabs, app.language, tab => selectSessionTab(app, tabs, tab, leadView ?? tabs)));
+  if (tabs.tab === 'details') panel.append(renderClusterDetails(document, clusterModel(app, cluster), clusterActions(app, cluster)));
+  else if (tabs.tab === 'work' && leadView) {
+    const work = renderSessionWork(document, leadView, app.language, {
+      onRetry: async () => { await loadSessionView(app.api, leadView); if (!app.disposed) renderShell(app); },
+      onMore: async () => { await loadSessionView(app.api, leadView, { older: true }); if (!app.disposed) renderShell(app); },
+      onStop: () => stopWorkStep(app, leadView),
+    }, app.api.now());
+    work.setAttribute('id', `session-${cluster.id}-panel`); work.setAttribute('aria-labelledby', `session-${cluster.id}-work`);
+    work.scrollTop = leadView.scrollTop; work.addEventListener('scroll', () => { leadView.scrollTop = work.scrollTop; });
+    panel.append(work);
+  } else if (tabs.tab === 'work') panel.append(unitWork(document, tabs, app.language, t));
+  else {
+    const chat = clusterChatPanel(app, cluster);
+    const transcript = chat.querySelector('.transcript');
+    if (transcript) { transcript.setAttribute('id', `session-${cluster.id}-panel`); transcript.setAttribute('role', 'tabpanel'); transcript.setAttribute('aria-labelledby', `session-${cluster.id}-chat`); }
+    panel.append(...chat.children);
+  }
+  return panel;
+}
+
 function plansForApp(app) {
   if (!app.planController) {
     app.planController = createPlanController(app.api, () => { if (!app.disposed) renderShell(app); });
@@ -4518,13 +4887,14 @@ function unitWork(document, view, language, t) {
     element(document, 'p', { text: t('finalNotStarted') }));
 }
 
-async function selectSessionTab(app, view, tab) {
+// `source` is the session whose work the Work tab shows when it is not the view's own: a cluster shows the work of its lead.
+async function selectSessionTab(app, view, tab, source = view) {
   captureInputs(app); view.tab = tab;
   renderShell(app);
   app.root.querySelector(`[data-action="session-${tab}"]`)?.focus?.();
-  if (view.unitOnly) return;
-  if (tab === 'work' && (!view.workLoaded || view.workStale)) {
-    await loadSessionView(app.api, view); view.workStale = false;
+  if (source.unitOnly) return;
+  if (tab === 'work' && (!source.workLoaded || source.workStale)) {
+    await loadSessionView(app.api, source); source.workStale = false;
     if (!app.disposed) renderShell(app);
   }
   clearTimeout(app.workClock);
@@ -4823,7 +5193,9 @@ function openReportMenu(app, { source, x, y, groupId }) {
 
 function fitMapView(app) {
   const map = ensureMap(app);
-  if (map.host) fitMap(map);
+  if (!map.host) return;
+  // A stage too small to fit leaves the view as it is.
+  try { fitMap(map); } catch (error) { if (!(error instanceof RangeError)) throw error; }
 }
 
 // An agent's Details tab, in separate sections: how it runs, the agent itself, its session, its tasks and what waits.
@@ -4861,7 +5233,14 @@ function agentDetails(app, t, agent, review, panel) {
   waiting?.remove();
   const sessionParts = inspector ? [...inspector.children].filter(part => !part.matches?.('summary')) : [];
   for (const part of sessionParts) part.remove();
-  section('detailsSession', ...sessionParts.filter(part => part.children?.length || part.textContent));
+  const sessionShown = sessionParts.filter(part => part.children?.length || part.textContent);
+  if (sessionShown.length) {
+    const state = agentMachine(app, agent)?.answers === false ? startText(app.language, 'sessionUnavailable') : agent.sessionIds?.length ? startText(app.language, 'sessionRunning') : t('finalNotStarted');
+    root.append(trackDisclosure(app, element(document, 'details', { class: 'details-section session-disclosure', 'data-details-section': 'detailsSession' },
+      element(document, 'summary', {}, icon(document, 'chevronRight'),
+        element(document, 'span', { class: 'session-disclosure-title', text: startText(app.language, 'sessionOn', { machine: agent.machine || t('unknown') }) }),
+        element(document, 'span', { class: 'session-disclosure-state', text: state })), ...sessionShown), `agent-session:${agent.id}`));
+  }
   const cards = review.querySelector('[data-action-cards]');
   cards?.remove();
   const later = [];
@@ -4941,8 +5320,9 @@ function hierarchyMenu(app, event) {
   openItemMenu(app, { ...target, source: 'hierarchy', x: keyboard && box ? box.left + 24 : event.clientX, y: keyboard && box ? box.bottom - 4 : event.clientY });
 }
 
+// The members of a cluster are changed through its group route; the cluster route takes no members.
 async function setClusterMembers(app, cluster, members) {
-  const operation = createOperation({ method: 'PATCH', path: '/clusters/:clusterId', params: { clusterId: cluster.id }, body: { members, machine: startMachine(app), expectedRevision: cluster.revision } });
+  const operation = createOperation({ method: 'PATCH', path: '/groups/:groupId', params: { groupId: cluster.id }, body: { members, expectedRevision: cluster.revision } });
   return request(app.api, 'PATCH', operation.path, { operation });
 }
 
@@ -4966,21 +5346,33 @@ function renameCluster(app, cluster) {
 }
 
 function openMoveAgent(app, unit) {
-  const home = unitCluster(app, unit);
-  const choices = [...app.store.indexes.groups.values()].filter(group => !group.deleted && group.id !== home?.id);
-  openChoiceForm(app, 'move-agent', startText(app.language, 'moveTitle', { name: unitDisplayName(unit) }), form => {
+  openMoveAgents(app, [unit]);
+}
+
+// One destination for every agent, and one background job to move them. A cluster that already holds all of them is not offered.
+function openMoveAgents(app, units) {
+  const homes = units.map(unit => unitCluster(app, unit)?.id ?? null), shared = new Set(homes).size === 1 ? homes[0] : null;
+  const choices = [...app.store.indexes.groups.values()].filter(group => !group.deleted && group.id !== shared);
+  const ids = units.map(unit => unit.id), one = units.length === 1, name = unitDisplayName(units[0]);
+  openChoiceForm(app, 'move-agent', one ? startText(app.language, 'moveTitle', { name }) : text(app.language, 'moveManyTitle', { count: ids.length }), form => {
     appendSelect(form.ownerDocument, form, 'clusterId', startText(app.language, 'moveTo'), choices.map(group => ({ value: group.id, label: displayName(group.title) })), choices[0]?.id ?? '');
   }, async form => {
     const target = app.store.indexes.groups.get(fieldValue(form, 'clusterId'));
     if (!target) return false;
+    const cluster = displayName(target.title);
     // The form closes at once; the move runs in the background, in Activity.
-    app.queue.add({ label: text(app.language, 'jobMove', { name: unitDisplayName(unit), cluster: displayName(target.title) }), kind: 'move',
+    app.queue.add({ label: one ? text(app.language, 'jobMove', { name, cluster }) : text(app.language, 'jobMoveMany', { count: ids.length, cluster }), kind: 'move',
       run: async () => {
-        const into = app.store.indexes.groups.get(target.id) ?? target;
-        if (!into.members.includes(unit.id)) await setClusterMembers(app, into, [...into.members, unit.id]);
+        const into = app.store.indexes.groups.get(target.id) ?? target, arriving = ids.filter(id => !into.members.includes(id));
+        if (arriving.length) await setClusterMembers(app, into, [...into.members, ...arriving]);
         await loadStartReports(app);
-        const old = home && app.store.indexes.groups.get(home.id);
-        if (old?.members.includes(unit.id)) await setClusterMembers(app, old, old.members.filter(id => id !== unit.id));
+        // Each cluster the agents leave is written once, with all of the agents that were in it.
+        const leaving = new Map();
+        homes.forEach((home, index) => { if (home && home !== target.id) leaving.set(home, [...(leaving.get(home) ?? []), ids[index]]); });
+        for (const [home, gone] of leaving) {
+          const old = app.store.indexes.groups.get(home);
+          if (old?.members.some(id => gone.includes(id))) await setClusterMembers(app, old, old.members.filter(id => !gone.includes(id)));
+        }
       },
       onDone: () => refreshAfterMembership(app) });
     return true;
@@ -5028,8 +5420,13 @@ function ensureMap(app) {
   }
   settlePositions(app.mapState);
   app.mapState.selectedGroupId = app.store.selected.groupId;
+  // The Map marks the rows picked in the Hierarchy, by the Hierarchy's own set, so every drawing shows the pick as it is.
+  app.mapState.picked = app.hierarchySelection ??= new Set();
   app.mapState.persist = Boolean(app.store.capabilities?.includes("layout.write"));
+  // Choosing something on the Map ends a pick made in the Hierarchy.
   app.mapState.onSelect = (id) => {
+    app.hierarchySelection?.clear();
+    app.waitingOpen = false;
     app.store.selected.groupId = null;
     app.store.selected.unitId = app.mapState.selection.size === 1 ? id : null;
     if (app.store.selected.unitId) {
@@ -5039,6 +5436,8 @@ function ensureMap(app) {
     if (!app.disposed) renderShell(app);
   };
   app.mapState.onSelection = (ids) => {
+    app.hierarchySelection?.clear();
+    app.waitingOpen = false;
     app.store.selected.groupId = null;
     app.store.selected.unitId = ids.length === 1 ? ids[0] : null;
     if (ids.length === 1) {
@@ -5047,10 +5446,10 @@ function ensureMap(app) {
     } else app.thread = null;
     renderShell(app);
   };
+  app.mapState.layerAbove = () => Boolean(app.phonePanelOpen || app.queuePanelOpen);
   app.mapState.onContextMenu = (target) => openItemMenu(app, { ...target, source: 'map' });
-  app.mapState.onPersonalGroup = (id) => selectGroup(app, id);
+  app.mapState.onPersonalGroup = (id) => { app.hierarchySelection?.clear(); selectGroup(app, id); };
   app.mapState.onOpenCluster = (id) => openCluster(app, id);
-  app.mapState.onServices = () => { navigate(app, 'settings'); };
   app.mapState.onRename = (id) => beginAlias(app, id);
   app.mapState.onConnect = (pending) => confirmConnection(app, pending.source, [pending.target]);
   app.mapState.onConnectDrop = (drop) => openReportMenu(app, drop);
@@ -5075,9 +5474,37 @@ function ensureMap(app) {
   return app.mapState;
 }
 
+// While the Map shows the whole graph it follows its stage: when the stage changes size the graph is fitted again, so it stays centred.
+function watchMapSize(app, host) {
+  if (app.mapWatch?.host === host) return;
+  stopWatchingMap(app);
+  const Observer = host.ownerDocument?.defaultView?.ResizeObserver;
+  if (typeof Observer !== 'function') return;
+  const sizeOf = () => { const { width, height } = host.getBoundingClientRect(); return { width, height }; };
+  // Every drawing of the shell brings a new stage, so the size is kept across them: a stage that starts at another size than the one it replaces is a change too.
+  app.mapSize ??= sizeOf();
+  const observer = new Observer(() => {
+    const now = sizeOf(), before = app.mapSize;
+    // The observer also reports the size a stage starts with, and a redraw of the Map never changes the size of its stage.
+    if (now.width === before.width && now.height === before.height) return;
+    app.mapSize = now;
+    const map = app.mapState;
+    if (app.disposed || !map?.autoFit || now.width <= 96 || now.height <= 96) return;
+    fitMap(map, host.getBoundingClientRect());
+  });
+  observer.observe(host);
+  app.mapWatch = { host, observer };
+}
+
+function stopWatchingMap(app) {
+  app.mapWatch?.observer.disconnect();
+  app.mapWatch = null;
+}
+
 function finishMap(app) {
   const host = app.root.querySelector?.(".map");
-  if (!host || !app.mapState) return;
+  if (!host || !app.mapState) { stopWatchingMap(app); return; }
+  watchMapSize(app, host);
   const rect = host.getBoundingClientRect?.() ?? { left: 0, top: 0, width: 760, height: 700 };
   if (!app.mapState.fitted && rect.width > 96 && rect.height > 96) { app.mapState.view = fitMap(app.mapState, rect); app.mapState.fitted = true; }
   if (app.pendingClusterFlight) { flyToCluster(app.mapState, app.pendingClusterFlight, rect); app.pendingClusterFlight = null; }
@@ -5092,7 +5519,6 @@ function finishMap(app) {
   app.mapState.labels = {
     messageGroup: text(app.language, "messageGroup"),
     connect: text(app.language, "connect"),
-    pan: text(app.language, "pan"),
     statusWorking: text(app.language, "statusWorking"),
     statusWaiting: text(app.language, "statusWaiting"),
     statusIdle: text(app.language, "statusIdle"),
@@ -5102,10 +5528,10 @@ function finishMap(app) {
     savingLayout: text(app.language, "savingLayout"),
     layoutError: text(app.language, "layoutError"),
     retry: text(app.language, "retry"),
-    fit: text(app.language, 'finalFit'), services: text(app.language, 'services'),
+    fit: text(app.language, 'finalFit'),
     zoomIn: text(app.language, 'finalZoomIn'), zoomOut: text(app.language, 'finalZoomOut'),
     zoom: text(app.language, 'finalZoom'), zoomReset: text(app.language, 'finalZoomReset'),
-    incubator: text(app.language, 'finalIncubator'), genesis: text(app.language, 'finalGenesis'),
+    help: text(app.language, 'mapControls'), expand: name => text(app.language, 'expandCluster', { name }),
     drag: startText(app.language, 'drag'), unread: count => startText(app.language, 'unread', { count }),
     roleName: node => unitRoleName(node, app.language),
     inside: (name, count) => startText(app.language, 'inside', { name, count }),
@@ -5167,37 +5593,35 @@ function loadVisibleClusterGit(app, host) {
 
 function collectionRows(app, t, list) {
   if (app.tab === "chats") {
+    const sent = (chat) => Date.parse(chat.lastMessage?.timestamp || chat.lastMessage?.date || "") || 0;
     const pinned = list.items.filter((chat) => chat.pinned === true);
-    const recent = list.items.filter((chat) => chat.pinned !== true);
+    const unpinned = list.items.filter((chat) => chat.pinned !== true);
+    // The newest conversation comes first; the chats nobody has written in wait together under one folded line.
+    const recent = unpinned.filter((chat) => chat.lastMessage).sort((left, right) => sent(right) - sent(left));
+    const quiet = unpinned.filter((chat) => !chat.lastMessage);
     const rows = [];
-    const pushGroup = (labelKey, chats) => {
-      if (!chats.length) return;
-      rows.push({
-        id: `heading:${labelKey}`,
-        kind: "heading",
-        depth: 0,
-        text: t(labelKey),
-        pos: rows.length + 1,
-        setsize: list.items.length,
-      });
-      for (const chat of chats) {
-        const last = chat.lastMessage;
-        const snippet = last?.body || last?.subject || "";
-        const when = formatShortTime(app.language, last?.timestamp || last?.date || "");
-        const unread = Number(chat.unread) > 0 ? t("unreadCount", { count: formatNumber(app.language, chat.unread) }) : "";
-        rows.push({
-          id: chat.id,
-          kind: "chat",
-          chat,
-          depth: 0,
-          text: [displayName(chat.title) || chat.id, snippet, when, unread].filter(Boolean).join(" · "),
-          pos: rows.length + 1,
-          setsize: list.items.length,
-        });
-      }
+    const heading = (labelKey) => rows.push({ id: `heading:${labelKey}`, kind: "heading", depth: 0, text: t(labelKey), pos: rows.length + 1, setsize: list.items.length });
+    const chatRow = (chat) => {
+      const last = chat.lastMessage;
+      const body = String(last?.body || last?.subject || "").replace(/\s+/g, " ").trim();
+      const preview = !last ? t("noMessagesTitle") : body ? `${messageSender(app, last)}: ${body}` : "";
+      const when = formatRecent(app.language, last?.timestamp || last?.date || "", app.api.now());
+      const unread = Number(chat.unread) > 0 ? formatNumber(app.language, chat.unread) : "";
+      const title = displayName(chat.title) || chat.id;
+      rows.push({ id: chat.id, kind: "chat", chat, depth: 0, title, preview, when, unread,
+        text: [title, preview, unread ? t("unreadCount", { count: unread }) : when].filter(Boolean).join(", "), pos: rows.length + 1, setsize: list.items.length });
     };
-    pushGroup("pinnedChats", pinned);
-    pushGroup("recentChats", recent);
+    if (pinned.length) { heading("pinnedChats"); pinned.forEach(chatRow); }
+    if (recent.length) { heading("recentChats"); recent.forEach(chatRow); }
+    if (quiet.length) {
+      heading("quietChats");
+      const expanded = app.quietChatsOpen === true || Boolean(list.query);
+      const names = quiet.slice(0, 3).map((chat) => displayName(chat.title) || chat.id).join(", ");
+      const count = cardinal(app.language, "chatsCount", quiet.length);
+      const preview = quiet.length > 3 ? t("chatsAndMore", { names }) : names;
+      rows.push({ id: "group:quiet", kind: "quiet", depth: 0, expanded, count, preview, text: `${count}, ${preview}`, pos: rows.length + 1, setsize: list.items.length });
+      if (expanded) quiet.forEach(chatRow);
+    }
     return rows;
   }
   const currentUnits = [...new Map([...(list.catalog ?? []), ...app.store.indexes.units.values()].map(unit => [unit.id, unit])).values()];
@@ -5209,7 +5633,8 @@ function collectionRows(app, t, list) {
     cluster.worktrees = listedWorktrees(link?.localPath, offered?.worktrees ?? []);
   }
   collapseNewClusters(app.hierarchy, tree.clusters);
-  const rows = flattenVisibleHierarchy(tree, app.hierarchy, list.query);
+  // Until the units have arrived, a service that is missing from the list may just not be loaded yet.
+  const rows = flattenVisibleHierarchy(tree, app.hierarchy, list.query, { loaded: Boolean(list.catalog?.length) || list.status === "ready" || list.status === "empty" });
   const labels = new Map();
   for (const row of rows) if (row.kind === "unit") labels.set(row.label, (labels.get(row.label) ?? 0) + 1);
   for (const row of rows) {
@@ -5238,6 +5663,8 @@ function statusKey(status) {
 function settingsSurface(app, document, t) {
   const home = homeState(app);
   const state = settingsState(app);
+  // Permissions is no tab: a saved or requested one opens Agents with that disclosure open.
+  if (state.tab === "permissions") { state.tab = "agents"; (inputDrafts(app).disclosures ??= new Map()).set("settings-permissions", true); }
   if (!state.loaded && !state.loading && !state.error) loadSettingsSections(app);
   const info = state.info ?? (state.machine === state.localMachine ? app.store.settings ?? {} : { service: { machine: state.machine, state: "unknown" } });
   if (!app.settingsSync && !app.settingsSyncLoading) {
@@ -5252,7 +5679,7 @@ function settingsSurface(app, document, t) {
       app.settingsSyncLoading = false;
     });
   }
-  const issues = (app.store.view?.issues ?? app.unitList?.issues ?? []).map((issue) => ({ message: issue.message }));
+  const issues = (app.store.view?.issues ?? app.unitList?.issues ?? []).map((issue) => ({ code: issue.code, path: issue.path, message: issue.message }));
   const panel = renderSettings(document, {
     tab: state.tab,
     machine: state.machine,
@@ -5279,6 +5706,9 @@ function settingsSurface(app, document, t) {
     grant: home.grant,
     selected: home.selected ?? 0,
     issues,
+    issuesOpen: state.issuesOpen === true,
+    projectQuery: state.projectQuery ?? "",
+    projectOrder: state.projectOrder ?? "ascending",
     limits: app.settingsSync?.limits,
     syncState: app.settingsSync?.state ?? info.service?.syncState ?? app.sync ?? "",
     pendingChanges: app.settingsSync?.pendingChanges,
@@ -5314,11 +5744,16 @@ function settingsSurface(app, document, t) {
     onScan: () => settingsMutation(app, "POST", "/settings/agents/scan", { machine: state.machine }),
     onFind: (agent) => findSettingsAgent(app, agent),
     onReview: (agent, mode, target) => reviewSettingsAgent(app, agent, mode, target),
+    onReviewAll: (agents) => reviewAllSettingsAgents(app, agents),
     onDisconnect: (agent) => disconnectSettingsAgent(app, agent),
     onRevokeGrant: (item) => revokeSettingsGrant(app, item),
     onRevokePermission: (item) => settingsMutation(app, "DELETE", `/settings/permissions/${encodeURIComponent(item.id)}`, { machine: state.machine, expectedRevision: state.permissions.revision }),
     onLinkFolder: () => openClusterLink(app, null, state.machine),
     onRemoveLink: link => removeStartLink(app, link, state.machine),
+    onOpenEditor: link => openLinkEditor(app, link, state.machine),
+    onCopyPath: link => copyLinkPath(app, link),
+    onProjectView: ({ query, order }) => { state.projectQuery = query; state.projectOrder = order; },
+    onIssuesOpen: open => { state.issuesOpen = open; },
     onAdd: () => openSharedAdd(app),
     onUpdateAddition: item => openSharedAdd(app, item),
     onRemoveAddition: item => confirmRemoveAddition(app, item),
@@ -5355,6 +5790,7 @@ function settingsSurface(app, document, t) {
       app.root.querySelector("[data-action='replace-home']")?.focus();
     },
   });
+  for (const node of panel.querySelectorAll("[data-disclosure]")) trackDisclosure(app, node, node.getAttribute("data-disclosure"));
   if (outcomeVisible(app) && app.actionScope === "settings") panel.append(element(document, "p", {
     class: "settings-toast", "data-settings-toast": "true", "data-action-note": "true", text: app.actionNote,
   }));
@@ -5584,6 +6020,88 @@ function applySettingsReview(app, dialog, review, ids) {
     if (dialog.getAttribute("open") !== null) settingsDialogError(dialog, actionText(app.language, error.code));
     noteAction(app, error, `settings-apply:${review.preview.previewId}`);
   });
+}
+
+// Review all: every agent that is behind is previewed, the changes are read together, and applying them runs in Activity.
+function reviewAllSettingsAgents(app, agents) {
+  const state = settingsState(app);
+  const machine = state.machine;
+  return settle(app, "settings-preview-all", text(app.language, "settingsReviewAll"), async () => {
+    const items = [];
+    for (const agent of agents) items.push({ agent, preview: (await previewAgent(app.api, agent.id, { machine, mode: agent.mode, target: "cli", allowGit: false })).data });
+    if (app.disposed || state.machine !== machine || app.mode !== "settings") return;
+    const review = { machine, language: app.language, items };
+    const dialog = renderReviewAll(app.root.ownerDocument, review, (key, variables) => text(app.language, key, variables), {
+      onApplyAll: () => { dialog.close(); enqueueApplyAll(app, review); },
+    });
+    state.dialog?.close();
+    mountSettingsDialog(app, dialog, "settings-review-all");
+  });
+}
+
+const reviewedChanges = preview => preview.changes.filter(change => !change.optional).map(({ id, path, afterText }) => ({ id, path, afterText }));
+
+// An agent that fails is kept for its own result line and does not stop the others; Retry asks again only for what is left.
+function enqueueApplyAll(app, review) {
+  const { machine, items } = review;
+  const steps = items.map(({ agent, preview }, index) => ({ agent, preview, reviewed: JSON.stringify(reviewedChanges(preview)), fresh: index > 0, done: false, retained: null }));
+  const results = steps.map(step => ({ name: step.agent.name, state: "waiting" }));
+  return app.queue.add({ label: cardinal(app.language, "jobApplyAll", steps.length), steps: steps.length > 1 ? steps.length : null, kind: "agents",
+    run: async (report, job) => {
+      job.results = results;
+      let failure = null;
+      for (const [index, step] of steps.entries()) {
+        if (step.done) continue;
+        try {
+          await applyAgentStep(app, machine, step);
+          step.done = true;
+          results[index] = { name: step.agent.name, state: "done" };
+        } catch (error) {
+          failure ??= error;
+          results[index] = { name: step.agent.name, state: "failed", code: error?.code };
+        }
+        report(steps.filter(item => item.done).length, steps.length);
+      }
+      await loadSettingsSections(app);
+      if (failure) throw failure;
+    } });
+}
+
+// Applying one agent changes what the next one's preview was read against, so each after the first is read again just before it is applied.
+async function applyAgentStep(app, machine, step) {
+  const { agent } = step;
+  if (step.fresh && !step.retained) {
+    step.preview = (await previewAgent(app.api, agent.id, { machine, mode: agent.mode, target: "cli", allowGit: false })).data;
+    // Nothing left to write means an earlier attempt already did it.
+    if (!reviewedChanges(step.preview).length) return;
+    if (JSON.stringify(reviewedChanges(step.preview)) !== step.reviewed) throw new ApiError(409, "configuration_changed", "The reviewed configuration selection changed.");
+  }
+  const { preview } = step;
+  try {
+    await applyAgent(app.api, agent.id, { machine, previewId: preview.previewId, changeIds: preview.changes.filter(change => !change.optional).map(change => change.id), expectedRevision: preview.revision }, step.retained);
+    step.retained = null;
+  } catch (error) {
+    // A write whose answer was lost is asked again with the same preview and key; a refusal reads the configuration again.
+    step.retained = app.api.uncertain.has(error?.operation?.id) ? error.operation : null;
+    if (!step.retained) step.fresh = true;
+    throw error;
+  }
+}
+
+function openLinkEditor(app, link, machine) {
+  return settle(app, `editor:${link.clusterId}`, startText(app.language, "openEditor"), async record => {
+    const result = await startApi.openClusterEditor(app.api, link.clusterId, machine, record.operation); return result;
+  });
+}
+
+async function copyLinkPath(app, link) {
+  try {
+    await app.root.ownerDocument.defaultView.navigator.clipboard.writeText(link.localPath);
+    showMapToast(app, text(app.language, "settingsPathCopied"), null, app.api.now() + 3000);
+  } catch {
+    showOutcome(app, text(app.language, "settingsPathNotCopied"), "settings_path_not_copied", "error", "settings");
+  }
+  renderShell(app);
 }
 
 function disconnectSettingsAgent(app, agent) {
@@ -5871,22 +6389,37 @@ function waitForActivity(app, record, work, previous) {
   });
 }
 
+const LIBRARY_SEARCH_PAUSE_MS = 200;
+
 function libraryActions(app, kind) {
   const editors = editorsOf(app);
   const state = libraryState(editors, kind);
   const refresh = () => editorAct(app, `library:${kind}:${JSON.stringify([state.query, state.filters])}`, text(app.language, "loadingList"), async () => loadCatalog(app.api, editors, kind));
   return {
-    select: (item) => selectEditor(app, item), refresh,
-    query: (value) => { state.query = value; refresh(); },
+    // The row is read when it is pressed: if the catalog has changed under it and it is gone, nothing opens.
+    select: (id) => {
+      const item = editors.catalog.find((entry) => entry.id === id && entry.kind === kind);
+      if (item) selectEditor(app, item);
+    },
+    refresh,
+    // One request per pause in typing; an emptied box does not wait.
+    query: (value) => {
+      state.query = value;
+      clearTimeout(state.searchTimer);
+      if (!value) { refresh(); return; }
+      state.searchTimer = setTimeout(() => { state.searchTimer = null; if (!app.disposed) refresh(); }, LIBRARY_SEARCH_PAUSE_MS);
+      state.searchTimer.unref?.();
+    },
     filter: (key, value) => {
       if (value == null) delete state.filters[key]; else state.filters[key] = value;
       refresh();
     },
-    toggle: (key) => {
-      const collapsed = state.query || Object.keys(state.filters).length ? state.matchingCollapsed : state.collapsed;
-      if (collapsed.has(key)) collapsed.delete(key); else collapsed.add(key);
+    toggle: (key, open) => {
+      if (state.query || Object.keys(state.filters).length) state.matchingCollapsed[open ? "delete" : "add"](key);
+      else { state.opened[open ? "add" : "delete"](key); state.collapsed[open ? "delete" : "add"](key); }
       renderShell(app);
     },
+    issues: () => { state.issuesOpen = !state.issuesOpen; renderShell(app); },
     menu: (type, entry, control) => {
       const box = control.getBoundingClientRect();
       const view = app.root.ownerDocument.defaultView;
@@ -5899,6 +6432,7 @@ function libraryActions(app, kind) {
     },
     closeMenu: () => { const opener = state.menu?.opener; state.menu = null; renderShell(app); restoreInvoker(app, opener); },
     create: canEditResources(app) ? () => openResourceForm(app, kind, "create") : null,
+    register: canEditResources(app) ? () => openResourceForm(app, kind, "register") : null,
     folder: () => newLibraryFolder(app, kind),
     manage: canEditResources(app) ? (action, entry, type) => {
       state.menu = null;
@@ -5925,14 +6459,14 @@ function beginLibraryRename(app, kind, entry, type) {
     editing.read = request(app.api, "GET", kind === "blueprint" ? "/blueprint/boards/:resourceId" : "/void/texts/:resourceId", { params: { resourceId: entry.id } })
       .then((result) => { editing.record = result.data; }).catch((error) => { editing.readError = error; });
   } else {
-    state.collapsed.delete(`project:${entry.project}`);
-    state.matchingCollapsed.delete(`project:${entry.project}`);
+    // The folder being named is shown: every folder above it opens.
+    const reveal = (key) => { state.collapsed.delete(key); state.opened.add(key); state.matchingCollapsed.delete(key); };
+    reveal(`project:${entry.project}`);
     let parentId = entry.parentId;
     const parents = new Set();
     while (parentId && !parents.has(parentId)) {
       parents.add(parentId);
-      state.collapsed.delete(`${entry.project}:${parentId}`);
-      state.matchingCollapsed.delete(`${entry.project}:${parentId}`);
+      reveal(`${entry.project}:${parentId}`);
       parentId = state.folders.find((folder) => folder.id === parentId && folder.project === entry.project)?.parentId;
     }
   }
@@ -6135,6 +6669,7 @@ function newLibraryFolder(app, kind) {
       await loadCatalog(app.api, editorsOf(app), kind);
       const state = libraryState(editorsOf(app), kind);
       if (!state.folders.some((folder) => folder.id === result.data.folder.id)) state.folders.push(result.data.folder);
+      state.created.add(result.data.folder.id);
       beginLibraryRename(app, kind, result.data.folder, "folder");
       return true;
     } catch (error) { operation = error.operation ?? operation; throw error; }
@@ -6350,6 +6885,13 @@ function queueCard(app, item) {
     card.append(element(document, 'div', { class: `queue-bar${total && item.state === 'running' ? '' : ' is-indeterminate'}${item.state === 'waiting' ? ' is-waiting' : ''}`, role: 'progressbar', 'aria-label': item.label,
       ...(total ? { 'aria-valuemin': '0', 'aria-valuemax': String(total), 'aria-valuenow': String(done) } : {}) }, fill));
   }
+  // A job over several things says how each one went.
+  if (item.results?.length) {
+    card.append(element(document, 'ul', { class: 'queue-results' }, item.results.map(result => element(document, 'li', { class: `is-${result.state}`, 'data-queue-result': result.state },
+      element(document, 'span', { text: result.name }),
+      element(document, 'span', { text: result.state === 'failed' ? `${text(app.language, 'queueFailed')}: ${actionText(app.language, result.code)}`
+        : text(app.language, result.state === 'done' ? 'queueDone' : 'queueWaiting') })))));
+  }
   if (item.state === 'failed') {
     const partial = item.progress?.total > 1 ? `${text(app.language, 'queueProgress', { done: item.progress.done, total: item.progress.total })}. ` : '';
     card.append(element(document, 'p', { class: 'queue-error', text: partial + actionText(app.language, item.error?.code) }),
@@ -6554,7 +7096,7 @@ function renderFooter(app, t) {
       element(document, "span", { class: "status-dot", "data-status": serviceState, "aria-hidden": "true" }),
       element(document, "span", { text: serviceText })),
     quietSync ? null : element(document, "span", { "data-sync": syncState ?? "", "data-pending": String(app.settingsSync?.pendingChanges ?? ""), text: t(syncKey) }),
-    element(document, "span", { text: t("lastRead", { time }) }),
+    element(document, "span", { class: "foot-read", text: t("lastRead", { time }) }),
     machines,
   );
   if (Number.isInteger(app.settingsSync?.pendingChanges)) {
@@ -6863,7 +7405,7 @@ function brand(document) {
   two.setAttribute("class", "two");
   two.setAttribute("d", "M30 18 42 25 42 39 30 46 18 39 18 25 Z");
   svg.append(one, two);
-  return element(document, "div", { class: "brand" }, svg, "HIVEM1ND");
+  return element(document, "div", { class: "brand" }, svg, element(document, "span", { class: "brand-name", text: "HIVEM1ND" }));
 }
 
 function syncCopy(sync) {
@@ -6895,6 +7437,7 @@ const ACTION_COPY = {
   invalid_folder: "libraryInvalidFolder",
   folder_not_found: "libraryInvalidFolder",
   read_only_resource: "libraryReadOnly",
+  import_unavailable: "moduleUnreadable",
   undo_expired: "libraryUndoExpired",
   invalid_lead: "invalidLead",
   machine_unavailable: "machineDown",
@@ -6988,33 +7531,41 @@ function taskText(language, status) {
   return text(language, TASK_COPY[status] ?? "actionFailed");
 }
 
+// The machine an agent runs on, as the inspector last read it.
+function agentMachine(app, agent) {
+  return (app.inspectorData?.unitId === agent.id ? app.inspectorData.machines?.find((item) => item.id === agent.machine) : null)
+    ?? app.store.view?.machines?.find((item) => item.id === agent.machine);
+}
+
 function actionControls(app, t, selected) {
   const document = app.root.ownerDocument;
   const row = element(document, "div", { class: "action-row" });
   const caps = app.store.capabilities ?? [];
   if (caps.includes('unit.create') && !overseerExists(app)) row.append(mapButton(app, 'create-overseer', startText(app.language, 'createOverseer'), () => createOverseer(app), { class: 'btn primary' }));
   // Where it runs is a choice that shows its current value; Start beside it is the action, so the two never read alike.
-  if (selected && caps.includes('unit.create')) row.append(mapButton(app, 'change-runs-in',
-    `${startText(app.language, 'runsIn')}: ${runsInLabel(selected.runsIn, app.startAgents?.connectedClients, app.language) || startText(app.language, 'runsInNone')}`,
-    () => openUnitRunsIn(app, selected), { class: 'btn ghost runs-in-choice', title: startText(app.language, 'runsIn') }));
+  if (selected && caps.includes('unit.create')) {
+    const choice = runsInLabel(selected.runsIn, app.startAgents?.connectedClients, app.language, { brief: true }) || startText(app.language, 'runsInNone');
+    row.append(mapButton(app, 'change-runs-in', choice, () => openUnitRunsIn(app, selected),
+      { class: 'btn ghost runs-in-choice', title: startText(app.language, 'runsIn'), 'aria-label': `${startText(app.language, 'runsIn')}: ${choice}` }));
+  }
   // Claude Code and Cursor are not confined: say whether this agent asks first or works automatically. Confined clients show nothing.
   if (selected && caps.includes('unit.create') && ['claude', 'cursor'].includes(selected.runsIn?.client) && (!app.startPermissions || app.startPermissionsStale) && !(Date.now() - (app.permissionsFailedAt ?? 0) < 30000)) refreshPermissions(app);
   if (selected && app.startPermissions && ['claude', 'cursor'].includes(selected.runsIn?.client)) {
     const automatic = Boolean(automaticGrant(app.startPermissions, selected));
     row.append(element(document, 'p', { class: 'native-mode', 'data-native-mode': automatic ? 'automatic' : 'supervised', text: startText(app.language, automatic ? 'automaticNotConfined' : 'asksFirst') }));
   }
-  if (selected && caps.includes("session.start")) {
-    const machine = (app.inspectorData?.unitId === selected.id ? app.inspectorData.machines?.find((item) => item.id === selected.machine) : null)
-      ?? app.store.view?.machines?.find(item => item.id === selected.machine);
-    const offline = machine?.answers === false;
-    row.append(element(document, "button", { type: "button", class: "btn", "data-action": "start-session", text: t("startSession"), disabled: offline ? "" : null, "aria-describedby": offline ? "reason-session-machine" : null, onclick: () => openSessionForm(app, selected) }));
-    if (offline) row.append(element(document, "p", { class: "field-hint", id: "reason-session-machine", "data-disabled-reason": "machine", text: t("finalNeedsOnline", { machine: selected.machine }) }));
+  // Only the action that can happen shows: Start, Stop while a session runs, or a notice while the machine does not answer.
+  const sessionId = selected?.sessionIds?.[0];
+  if (selected && agentMachine(app, selected)?.answers === false) {
+    row.append(element(document, "div", { class: "machine-notice", role: "status", "data-machine-notice": selected.machine }, icon(document, "alert"),
+      element(document, "div", {}, element(document, "strong", { text: startText(app.language, "notAnswering", { machine: selected.machine }) }),
+        element(document, "p", { text: startText(app.language, "notAnsweringBody", { agent: unitDisplayName(selected), machine: selected.machine }) }))));
+  } else if (selected && sessionId && caps.includes("session.stop")) {
+    row.append(element(document, "button", { type: "button", class: "btn", "data-action": "stop-session", "data-session": sessionId, text: t("stopSession"), onclick: () => confirmStop(app, sessionId, selected) }));
+  } else if (selected && !sessionId && caps.includes("session.start")) {
+    row.append(element(document, "button", { type: "button", class: "btn", "data-action": "start-session", text: t("startSession"), onclick: () => openSessionForm(app, selected) }));
   }
   if (selected && caps.includes("unit.create") && app.layout !== "phone") row.append(unitMenu(app, selected));
-  const sessionId = selected?.sessionIds?.[0];
-  if (sessionId && caps.includes("session.stop")) {
-    row.append(element(document, "button", { type: "button", class: "btn", "data-action": "stop-session", "data-session": sessionId, text: t("stopSession"), onclick: () => confirmStop(app, sessionId, selected) }));
-  }
   for (const id of app.mapState?.layoutConflict?.ids ?? []) {
     row.append(element(document, "button", { type: "button", class: "btn", "data-action": "keep-local", text: t("keepLocal"), onclick: () => keepLocalPosition(app.mapState, id) }));
     row.append(element(document, "button", { type: "button", class: "btn", "data-action": "use-incoming", text: t("useIncoming"), onclick: () => useIncomingPosition(app.mapState, id) }));
@@ -7089,6 +7640,29 @@ function decorateHierarchy(app, host) {
         const count = element(document, "span", { class: "group-count", text: row.count ? String(row.count) : "" });
         count.style.gridColumn = "5";
         node.replaceChildren(disclosure, mark, title, branch, count);
+      } else if (row.kind === "chat") {
+        // The avatar, the name with the last message under it, and at the right the unread count or the time of that message.
+        node.setAttribute("aria-label", row.text);
+        const tail = row.unread
+          ? element(document, "span", { class: "chat-unread", "aria-label": t("unreadCount", { count: row.unread }), text: row.unread })
+          : element(document, "span", { class: "chat-when", text: row.when });
+        node.replaceChildren(element(document, "span", { class: "chat-avatar", "aria-hidden": "true" }, icon(document, chatGlyph(app, row.chat))),
+          element(document, "span", { class: "chat-text" }, element(document, "span", { class: "chat-title", text: row.title }), element(document, "span", { class: "chat-preview", text: row.preview })), tail);
+      } else if (row.kind === "quiet") {
+        node.setAttribute("aria-expanded", String(row.expanded));
+        node.setAttribute("aria-label", row.text);
+        node.replaceChildren(hierarchyDisclosure(document, row.expanded), element(document, "span", { class: "chat-title", text: row.count }), element(document, "span", { class: "chat-preview", text: row.preview }));
+      } else if (row.kind === 'service') {
+        // A service nobody set up yet reads like an agent row with a muted line under its name; the row sets it up.
+        node.setAttribute('data-service-row', row.role);
+        node.setAttribute('aria-label', `${row.text}, ${t('notSetUp')}`);
+        if (!serviceSetupAllowed(app)) node.setAttribute('aria-disabled', 'true');
+        const glyph = icon(document, row.glyph);
+        glyph.style.gridColumn = '2';
+        const title = element(document, 'span', { class: 'group-title' }, element(document, 'span', { class: 'unit-name' }, element(document, 'span', { class: 'unit-original', text: row.text })),
+          element(document, 'span', { class: 'hierarchy-sub', text: t('notSetUp') }));
+        title.style.gridColumn = '3';
+        node.replaceChildren(glyph, title);
       } else if (row.kind === 'worktree') {
         node.setAttribute('data-cluster-worktree', row.worktree.id);
         const title = element(document, 'code', { class: 'hierarchy-worktree', text: row.label || pathFolder(row.worktree.path) });
@@ -7100,16 +7674,24 @@ function decorateHierarchy(app, host) {
         const mark = icon(document, 'graph');
         mark.style.gridColumn = '2';
         node.replaceChildren(mark, title, branch);
-      } else if (row.id === "section:clusters") {
-        const heading = element(document, "div", { class: "my-groups-heading", "data-my-groups": "true" }, element(document, "span", { text: startText(app.language, "clusters") }));
-        if (app.layout !== "phone" && app.store.capabilities.includes("chat.manage")) {
-          const add = mapButton(app, 'new-cluster', startText(app.language, 'newCluster'), () => openStartCluster(app), { class: 'icon-button', 'aria-label': startText(app.language, 'newCluster'), title: startText(app.language, 'newCluster') });
-          add.replaceChildren(folderIcon(document, true));
-          heading.append(add);
+      } else if (row.kind === "heading") {
+        // Every section heading of the Hierarchy and of Chats is this one element, so Clusters, Services, Pinned and Recent read alike.
+        // It keeps the row's id and its place in the keyboard order, and the list's row height so the window still adds up.
+        const heading = element(document, "div", { class: "my-groups-heading", "data-id": row.id, tabindex: app.activeList.focusId === row.id ? "0" : "-1" }, element(document, "span", { text: row.text }));
+        heading.style.height = `${app.activeList.rowHeight}px`;
+        if (row.id === "section:clusters") {
+          heading.setAttribute("data-my-groups", "true");
+          if (app.layout !== "phone" && app.store.capabilities.includes("chat.manage")) {
+            const add = mapButton(app, 'new-cluster', startText(app.language, 'newCluster'), () => openStartCluster(app), { class: 'icon-button', 'aria-label': startText(app.language, 'newCluster'), title: startText(app.language, 'newCluster') });
+            add.replaceChildren(folderIcon(document, true));
+            heading.append(add);
+          }
         }
+        const focused = document.activeElement === node;
         if (host.insertBefore) host.insertBefore(heading, node);
         else { heading.parent = host; heading.parentNode = host; host.children.splice(host.children.indexOf(node), 0, heading); }
         node.remove();
+        if (focused) heading.focus?.();
       }
     }
   };
@@ -7132,6 +7714,19 @@ function decorateHierarchy(app, host) {
     input?.setSelectionRange?.(input.value.length, input.value.length);
     app.aliasEdit.focus = false;
   }
+}
+
+// A chat wears the glyph of what it talks to: an agent's, a cluster's, or the group's.
+function chatGlyph(app, chat) {
+  const group = app.store.indexes.groups.get(chat.id);
+  if (group) return clusterGlyph(group.link?.kind);
+  const unit = chat.kind === "direct" ? unitById(app, (chat.members ?? []).find((id) => id !== "root:master")) : null;
+  return unit ? hierarchyIcon(unit) : "users";
+}
+
+// The Incubator and Genesis are set up with the same form as any new agent, so they need the same rights and a desktop window.
+function serviceSetupAllowed(app) {
+  return app.layout !== 'phone' && Boolean(app.store.capabilities?.includes('unit.create'));
 }
 
 function beginAlias(app, id, rowId = null) {
@@ -7271,6 +7866,37 @@ function selectionInspector(app, t, units) {
   return panel;
 }
 
+// The inspector of a pick: what was picked, and what can be done with all of it at once.
+function pickInspector(app, t, { units, clusters }) {
+  const document = app.root.ownerDocument, caps = app.store.capabilities ?? [], count = units.length + clusters.length;
+  const agents = units.map(id => unitById(app, id)), groups = clusters.map(id => app.store.indexes.groups.get(id));
+  const agentsIn = group => {
+    const held = (app.unitList?.catalog ?? []).filter(unit => !unit.removed && unit.role !== 'master' && (unit.clusterId === group.id || !unit.clusterId && group.members.includes(unit.id))).length;
+    return held === 0 ? t('pickNoAgents') : held === 1 ? t('deleteManyAgent') : t('deleteManyAgents', { count: held });
+  };
+  const parents = new Set(groups.map(group => group.parentId ?? null)), parent = parents.size === 1 ? app.store.indexes.groups.get([...parents][0]) : null;
+  const kind = !groups.length ? t('pickKindAgents') : agents.length ? t('pickKindMixed')
+    : groups.every(group => group.link?.kind === 'repository') ? parent ? t('pickKindRepositoriesIn', { name: displayName(parent.title) }) : t('pickKindRepositories') : t('pickKindClusters');
+  const clear = () => { app.hierarchySelection.clear(); renderShell(app); };
+  const item = (glyph, name, note) => element(document, 'div', { class: 'pick-item', 'data-pick-item': name },
+    icon(document, glyph), element(document, 'strong', { text: name }), element(document, 'span', { class: 'pick-note', text: note }));
+  const card = element(document, 'div', { class: 'pick-card' },
+    ...groups.map(group => item(clusterGlyph(group.link?.kind), displayName(group.title), agentsIn(group))),
+    ...agents.map(unit => item(hierarchyIcon(unit), unitDisplayName(unit), roleLabel(app.language, unit.role, unit.roleName))));
+  const actions = element(document, 'div', { class: 'pick-actions' });
+  if (agents.length && caps.includes('chat.manage')) actions.append(element(document, 'button', { type: 'button', class: 'btn primary', 'data-action': 'pick-message',
+    onclick: () => { const ids = agents.map(unit => unit.id); app.hierarchySelection.clear(); ensureMap(app).onGroupMessage(ids); } }, icon(document, 'users'), t('pickMessageGroup')));
+  if (!groups.length && caps.includes('chat.manage')) actions.append(element(document, 'button', { type: 'button', class: 'btn', 'data-action': 'pick-move',
+    onclick: () => openMoveAgents(app, agents) }, icon(document, 'folder'), t('pickMove')));
+  actions.append(element(document, 'button', { type: 'button', class: 'btn danger', 'data-action': 'pick-delete', text: t('pickDelete', { count }),
+    onclick: () => confirmDeleteMany(app, units, clusters) }));
+  return element(document, 'section', { class: 'pick-inspector', 'data-pick-inspector': String(count) },
+    element(document, 'header', { class: 'agent-heading' }, element(document, 'span', { class: 'agent-avatar', 'aria-hidden': 'true' }, icon(document, 'users')),
+      element(document, 'div', {}, element(document, 'h2', { text: t('finalSelection', { count }) }), element(document, 'p', { class: 'agent-status', text: kind })),
+      element(document, 'button', { type: 'button', class: 'icon-button', 'data-action': 'clear-pick', 'aria-label': t('clearSelection'), title: t('clearSelection'), onclick: clear }, icon(document, 'close'))),
+    card, actions);
+}
+
 function chooseSelectionLead(app, picked = null, point = null) {
   const ids = (picked ?? [...app.mapState.selection]).filter((id) => unitById(app, id)?.role !== "master");
   const choices = leadChoices(app).filter((unit) => !ids.includes(unit.id) && unit.role !== "master");
@@ -7317,6 +7943,7 @@ function openCluster(app, id) {
 function selectGroup(app, id) {
   const group = app.store.indexes.groups.get(id);
   if (!group || group.deleted) return;
+  app.waitingOpen = false;
   app.store.selected.groupId = id;
   app.store.selected.unitId = null;
   app.store.selected.chatId = group.chatId;
@@ -7828,7 +8455,10 @@ function chatPanel(app, t) {
     else if (reading?.phase === "error") transcript.append(element(document, "p", { "data-empty": "unread", text: t("chatNotRead") }));
     else {
       const canPost = (app.store.capabilities ?? []).includes("chat.post");
-      transcript.append(element(document, "p", { "data-empty": "chat", text: t(canPost ? "emptyChat" : "emptyChatRead") }));
+      // An agent's empty chat says what happens to a first message; a cluster or a group keeps its own line.
+      if (canPost && agentTabs) transcript.append(element(document, "div", { class: "empty-chat", "data-empty": "chat" }, icon(document, "chats"),
+        element(document, "strong", { text: t("noMessagesTitle") }), element(document, "p", { text: t("noMessagesHint") })));
+      else transcript.append(element(document, "p", { "data-empty": "chat", text: t(canPost ? "emptyChat" : "emptyChatRead") }));
     }
   }
   for (const message of windowed.items) {
@@ -8326,8 +8956,12 @@ function renderInspector(app, t, selected) {
     const runs = !selected.sessionIds?.length ? t("finalNotStarted") : session?.launchKind === "manual-app" ? t("runsApp", { client: namedClient }) : session?.launchKind === "cli" ? t("runsCli", { client: namedClient }) : namedClient || t("unknown");
     const facts = element(document, "div", { class: "unit-facts", "data-unit-facts": "true" });
     const checkout = checkoutSession(app, selected);
-    const where = checkoutFacts(t, app.language, { session: checkout, local: startMachine(app), entry: checkout && app.checkouts?.get(checkout.id) });
-    for (const [key, value, title] of [["machine", selected.machine], ["finalRunsIn", runs], ...where, ["model", selected.model ?? t("finalDefaultModel")], ["finalReportsTo", selected.leadId ? unitDisplayName(unitById(app, selected.leadId)) : t("finalNoLead")]]) facts.append(element(document, "p", { text: `${t(key)}: ${value ?? t("unknown")}`, ...(title ? { title } : {}) }));
+    const where = checkoutFacts(t, app.language, { session: checkout, local: startMachine(app), entry: checkout && app.checkouts?.get(checkout.id), root: selected.scope?.kind === "root" });
+    const catalog = (app.startAgents?.connectedClients ?? []).find((item) => item.id === selected.runsIn?.client);
+    const model = selected.model ? catalogLabel(catalog?.models?.find((item) => item.id === selected.model)?.title, selected.model, app.language) : t("finalDefaultModel");
+    // The Overseer reports to no one, so its facts carry no such line.
+    const reportsTo = selected.role === "overseer" ? [] : [["finalReportsTo", selected.leadId ? unitDisplayName(unitById(app, selected.leadId)) : t("finalNoLead")]];
+    for (const [key, value, title] of [["machine", selected.machine], ["finalRunsIn", runs], ...where, ["model", model], ...reportsTo]) facts.append(element(document, "p", { text: `${t(key)}: ${value ?? t("unknown")}`, ...(title ? { title } : {}) }));
     card.append(facts, extra);
     if (app.connectionSaving?.targets.includes(selected.id)) card.append(progressMark(document, `${t("savingLayout")} ${t("finalReportsTo")}: ${unitDisplayName(unitById(app, app.connectionSaving.leadId))}`));
     const folded = card.querySelector?.("details");
