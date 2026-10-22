@@ -1158,3 +1158,227 @@ test('delivery status tells the sender whether the recipient can be woken now', 
   await policy(new Date(Date.now() + 3600000).toISOString(), { pausedReason: 'handoff-budget-exhausted' });
   assert.deepEqual((await alice.delivery({ ids: [sent.id] })).deliveries[0].wake, { live: false, reason: 'handoff-budget-exhausted' });
 });
+
+const LINK_CODE = /^[2-9A-HJ-NP-Z]{5}$/;
+const LINK_PARTY = ['executor-alpha', 'executor-beta', 'overseer'];
+
+function linksFolder(mind) {
+  return path.join(mind, 'user', 'relay', 'links');
+}
+
+async function linkRecord(mind, linkId) {
+  return JSON.parse(await readFile(path.join(linksFolder(mind), `${linkId}.json`), 'utf8'));
+}
+
+// A fourth unit that never joins the link.
+async function outsider(mind) {
+  await writeFile(path.join(mind, 'user', 'projects', 'alpha', 'state', 'executor-gamma.md'), 'unit: executor-gamma\nstate: in\nmachine: TESTBOX\ndate: 2026-10-05 10:00\n\nWorking on alpha.\n');
+  return bind(mind, 'executor-gamma', 'link-gamma');
+}
+
+// Three sessions in one link: the first made the code and the other two joined with it.
+async function linkedParty(context) {
+  const { mind } = await fixture(context);
+  const alice = await bind(mind, 'executor-alpha', 'link-alpha');
+  const bob = await bind(mind, 'executor-beta', 'link-beta');
+  const carol = await bind(mind, 'overseer', 'link-carol');
+  const made = await alice.link();
+  await bob.link({ code: made.code });
+  await carol.link({ code: made.code });
+  return { mind, alice, bob, carol, made };
+}
+
+test('a link makes a short code and joining with it puts both parties in one thread', async (context) => {
+  const { mind } = await fixture(context);
+  const alice = await bind(mind, 'executor-alpha', 'link-alpha');
+  const bob = await bind(mind, 'executor-beta', 'link-beta');
+  const made = await alice.link();
+  assert.match(made.code, LINK_CODE);
+  assert.match(made.linkId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  assert.equal(made.threadId, `link-${made.linkId}`);
+  assert.deepEqual(made.members, ['executor-alpha']);
+  const lifetime = Date.parse(made.expiresAt) - Date.now();
+  assert.ok(lifetime > 9 * 60_000 && lifetime <= 10 * 60_000, `lives about ten minutes, got ${lifetime} ms`);
+  const record = await linkRecord(mind, made.linkId);
+  assert.equal(record.format, 'hivem1nd-relay-link-v1');
+  assert.equal(record.createdBy, 'executor-alpha');
+  assert.equal(record.code, made.code);
+  assert.equal((await alice.inbox()).unread, 0);
+
+  const joined = await bob.link({ code: ` ${made.code.toLowerCase()} ` });
+  assert.equal(joined.joined, true);
+  assert.equal(joined.threadId, made.threadId);
+  assert.deepEqual(joined.members, ['executor-alpha', 'executor-beta']);
+  assert.deepEqual((await linkRecord(mind, made.linkId)).members, ['executor-alpha', 'executor-beta']);
+  const [notice] = (await alice.read()).messages;
+  assert.equal(notice.subject, 'Linked');
+  assert.equal(notice.body, 'executor-beta joined this link.');
+  assert.equal(notice.from, 'executor-beta');
+  assert.equal(notice.threadId, made.threadId);
+  assert.equal((await bob.inbox()).unread, 0);
+
+  const again = await bob.link({ code: made.code });
+  assert.equal(again.joined, undefined);
+  assert.deepEqual(again.members, ['executor-alpha', 'executor-beta']);
+  assert.equal((await alice.inbox()).unread, 0, 'a member that uses the code again tells nobody');
+});
+
+test('a third party that uses the code before it expires makes it a group thread', async (context) => {
+  const { alice, bob, carol, made } = await linkedParty(context);
+  for (const [member, others] of [[alice, ['executor-beta', 'overseer']], [bob, ['overseer']]]) {
+    const notices = (await member.read()).messages.filter((message) => message.subject === 'Linked');
+    assert.deepEqual(notices.map((message) => message.from).sort(), others);
+    assert.equal(notices.every((message) => message.threadId === made.threadId), true);
+  }
+  assert.equal((await carol.inbox()).unread, 0);
+  for (const member of [alice, bob, carol]) {
+    const { threads } = await member.threads();
+    assert.equal(threads.length, 1);
+    assert.equal(threads[0].threadId, made.threadId);
+    assert.deepEqual(threads[0].participants, LINK_PARTY);
+  }
+});
+
+test('parties that join with the same code at once all end up in the link', async (context) => {
+  const { mind } = await fixture(context);
+  const alice = await bind(mind, 'executor-alpha', 'link-alpha');
+  const joiners = [await bind(mind, 'executor-beta', 'link-beta'), await bind(mind, 'overseer', 'link-carol'), await outsider(mind)];
+  const made = await alice.link();
+  await Promise.all(joiners.map((joiner) => joiner.link({ code: made.code })));
+  assert.deepEqual((await linkRecord(mind, made.linkId)).members.sort(), ['executor-alpha', 'executor-beta', 'executor-gamma', 'overseer']);
+  assert.equal((await alice.inbox()).unread, 3);
+});
+
+test('the sixth wrong code in ten minutes is locked until the oldest attempt is ten minutes old', async (context) => {
+  const { mind } = await fixture(context);
+  const alice = await bind(mind, 'executor-alpha', 'link-alpha');
+  const bob = await bind(mind, 'executor-beta', 'link-beta');
+  const carol = await bind(mind, 'overseer', 'link-carol');
+  const made = await alice.link();
+  for (let attempt = 0; attempt < 5; attempt += 1) await assert.rejects(bob.link({ code: 'AAAAA' }), code('LINK_NOT_FOUND'));
+  await assert.rejects(bob.link({ code: 'AAAAA' }), (error) => error.code === 'LINK_LOCKED' && /Try again after \d{4}-\d{2}-\d{2}T/.test(error.message));
+  await assert.rejects(bob.link({ code: made.code }), code('LINK_LOCKED'), 'the right code is refused while locked');
+  const attemptsFile = path.join(linksFolder(mind), 'attempts.json');
+  const attempts = JSON.parse(await readFile(attemptsFile, 'utf8'));
+  assert.equal(attempts['executor-beta'].length, 5, 'a refused sixth attempt is not counted');
+  assert.equal((await carol.link({ code: made.code })).joined, true, 'another unit is not locked');
+
+  attempts['executor-beta'][0] = new Date(Date.now() - 10 * 60_000 - 1000).toISOString();
+  await writeFile(attemptsFile, JSON.stringify(attempts));
+  assert.equal((await bob.link({ code: made.code })).joined, true);
+  await assert.rejects(alice.link({ code: 'BBBBB' }), code('LINK_NOT_FOUND'));
+  const pruned = JSON.parse(await readFile(attemptsFile, 'utf8'));
+  assert.equal(pruned['executor-beta'].length, 4, 'a write drops the attempts that no longer count');
+  assert.equal(pruned['executor-alpha'].length, 1);
+});
+
+test('an expired code is refused while the link and its thread keep working', async (context) => {
+  const { mind, alice, bob, made } = await linkedParty(context);
+  const late = await outsider(mind);
+  const record = await linkRecord(mind, made.linkId);
+  await writeFile(path.join(linksFolder(mind), `${made.linkId}.json`), JSON.stringify({ ...record, expiresAt: new Date(Date.now() - 1000).toISOString() }));
+  await assert.rejects(late.link({ code: made.code }), (error) => error.code === 'LINK_NOT_FOUND' && error.message === 'The code is not valid or has expired.');
+  assert.equal((await linkRecord(mind, made.linkId)).members.includes('executor-gamma'), false);
+  const sent = await alice.send({ to: `link:${made.linkId}`, subject: 'Still here', body: 'The code ended, the thread did not.' });
+  assert.equal(sent.ids.length, 2);
+  const reply = await bob.send({ to: 'executor-alpha', subject: 'By name', body: 'Same thread', threadId: made.threadId });
+  assert.equal(reply.threadId, made.threadId);
+  assert.equal((await alice.threads()).threads[0].messageCount, 4);
+  const fresh = await alice.link();
+  assert.notEqual(fresh.linkId, made.linkId);
+});
+
+test('a link send writes one message per other member, with the same thread and fan-out id', async (context) => {
+  const { mind, alice, bob, carol, made } = await linkedParty(context);
+  const sent = await alice.send({ to: `link:${made.linkId}`, subject: 'To all', body: 'Hello everyone', priority: 'urgent', replyRequested: true });
+  assert.deepEqual(sent.recipients, ['executor-beta', 'overseer']);
+  assert.equal(sent.ids.length, 2);
+  assert.equal(new Set(sent.ids).size, 2);
+  assert.equal(sent.threadId, made.threadId);
+  assert.match(sent.fanoutId, /^[0-9a-f-]{36}$/);
+
+  const inbox = path.join(mind, 'user', 'projects', 'beta', 'inbox', 'executor-beta');
+  const files = await Promise.all((await readdir(inbox)).map((name) => readFile(path.join(inbox, name), 'utf8')));
+  assert.equal(files.some((text) => text.includes(`\nfanout-id: ${sent.fanoutId}\n`) && text.includes(`\nthread-id: ${made.threadId}\n`)), true, 'the header is written');
+  for (const [member, id] of [[bob, sent.ids[0]], [carol, sent.ids[1]]]) {
+    const [message] = (await member.read()).messages.filter((item) => item.subject === 'To all');
+    assert.equal(message.id, id);
+    assert.equal(message.threadId, made.threadId);
+    assert.equal(message.fanoutId, sent.fanoutId);
+    assert.equal(message.from, 'executor-alpha');
+    assert.equal(message.priority, 'urgent');
+    assert.equal(message.replyRequested, true);
+    assert.equal(message.body, 'Hello everyone');
+  }
+  assert.equal((await alice.inbox()).unread, 2, 'the sender gets no copy, only the Linked notices of the joins');
+  assert.equal((await alice.events()).events.filter((event) => event.fanoutId === sent.fanoutId).length, 2);
+
+  const answer = await bob.send({ to: 'executor-alpha', subject: 'Answer', body: 'Heard', replyTo: sent.ids[0] });
+  assert.equal(answer.threadId, made.threadId, 'a reply to a link message stays in the thread');
+  assert.equal((await alice.threads()).threads[0].pendingReplies.length, 1);
+  await assert.rejects(bob.send({ to: `link:${made.linkId}`, subject: 'Answer', body: 'No', replyTo: sent.ids[0] }), code('INVALID_REPLY'));
+  await assert.rejects(bob.send({ to: `link:${made.linkId}`, subject: 'Elsewhere', body: 'No', threadId: 'another-thread' }), code('INVALID_THREAD'));
+});
+
+test('only a member sends to a link, and a link nobody else joined has no one to send to', async (context) => {
+  const { mind } = await fixture(context);
+  const alice = await bind(mind, 'executor-alpha', 'link-alpha');
+  const bob = await bind(mind, 'executor-beta', 'link-beta');
+  const made = await alice.link();
+  await assert.rejects(alice.send({ to: `link:${made.linkId}`, subject: 'Alone', body: 'x' }), code('LINK_EMPTY'));
+  await assert.rejects(bob.send({ to: `link:${made.linkId}`, subject: 'Outsider', body: 'x' }), code('NOT_LINK_MEMBER'));
+  await assert.rejects(bob.send({ to: 'link:00000000-0000-4000-8000-000000000000', subject: 'Nothing', body: 'x' }), code('NOT_LINK_MEMBER'));
+  await assert.rejects(bob.send({ to: 'link:not-an-id', subject: 'Malformed', body: 'x' }), code('INVALID_UNIT'));
+  assert.equal((await alice.inbox()).unread, 0);
+  assert.deepEqual(await readdir(path.join(mind, 'user', 'relay', 'events')).catch(() => []), []);
+});
+
+test('members write to each other by name in the link thread even when none of its messages is left', async (context) => {
+  const { mind, alice, bob, carol, made } = await linkedParty(context);
+  for (const directory of [['projects', 'alpha', 'inbox', 'executor-alpha'], ['projects', 'beta', 'inbox', 'executor-beta']]) {
+    const folder = path.join(mind, 'user', ...directory);
+    for (const name of await readdir(folder)) await rm(path.join(folder, name));
+  }
+  assert.deepEqual((await alice.threads()).threads, []);
+  const sent = await bob.send({ to: 'executor-alpha', subject: 'By name', body: 'x', threadId: made.threadId });
+  assert.equal(sent.threadId, made.threadId);
+  await assert.rejects(carol.send({ to: 'executor-alpha', subject: 'Not linked', body: 'x', threadId: `link-${'0'.repeat(8)}-0000-4000-8000-${'0'.repeat(12)}` }), code('UNKNOWN_THREAD'));
+  const apart = await alice.link();
+  await assert.rejects((await outsider(mind)).send({ to: 'executor-alpha', subject: 'Not a member', body: 'x', threadId: apart.threadId }), code('UNKNOWN_THREAD'));
+});
+
+test('a sender sees a fan-out once, with every recipient in its to, and a recipient sees only its own copy', async (context) => {
+  const { alice, bob, made } = await linkedParty(context);
+  const sent = await alice.send({ to: `link:${made.linkId}`, subject: 'To all', body: 'Hello everyone', replyRequested: true });
+  const fanout = (messages) => messages.filter((message) => message.subject === 'To all');
+  const mine = fanout((await alice.history({ threadId: made.threadId })).messages);
+  assert.equal(mine.length, 1);
+  assert.deepEqual(mine[0].to, ['executor-beta', 'overseer']);
+  assert.ok(sent.ids.includes(mine[0].id));
+  assert.equal(mine[0].fanoutId, sent.fanoutId);
+  assert.equal(mine[0].body, 'Hello everyone');
+  const theirs = fanout((await bob.history({ threadId: made.threadId })).messages);
+  assert.equal(theirs.length, 1);
+  assert.equal(theirs[0].to, 'executor-beta');
+
+  const { threads } = await alice.threads();
+  assert.equal(threads.length, 1);
+  assert.deepEqual(threads[0].participants, LINK_PARTY);
+  assert.equal(threads[0].messageCount, 3, 'two Linked notices and the fan-out once');
+  assert.deepEqual(fanout(threads[0].messages).map((message) => message.to), [['executor-beta', 'overseer']]);
+  assert.deepEqual(threads[0].pendingReplies.map((request) => request.to).sort(), ['executor-beta', 'overseer']);
+  assert.equal((await alice.history({ ids: [sent.ids[1]] })).messages.length, 1, 'a copy is found by its own id');
+  assert.equal((await alice.history({ limit: 2 })).messages.length, 2, 'the limit counts the entries that are shown');
+});
+
+test('link input is validated and a link needs a registered session', async (context) => {
+  const { mind } = await fixture(context);
+  const alice = await bind(mind, 'executor-alpha', 'link-alpha');
+  for (const bad of ['', '   ', 'A'.repeat(17), 'AB\nCD', 5]) await assert.rejects(alice.link({ code: bad }), code('INVALID_METADATA'));
+  await assert.rejects(alice.link({ unit: 'executor-beta' }), code('INVALID_INPUT'));
+  assert.deepEqual(await readdir(linksFolder(mind)).catch(() => []), [], 'invalid input writes nothing and counts no attempt');
+  const stranger = await createRelay({ mindPath: mind, hostname: 'TESTBOX', sessionId: 'link-stranger', client: 'codex' });
+  await assert.rejects(stranger.link(), code('NOT_REGISTERED'));
+  await assert.rejects(alice.link({ code: 'AAAAA' }), code('LINK_NOT_FOUND'));
+  assert.deepEqual(Object.keys(JSON.parse(await readFile(path.join(linksFolder(mind), 'attempts.json'), 'utf8'))), ['executor-alpha'], 'a wrong code is counted even when no link exists');
+});

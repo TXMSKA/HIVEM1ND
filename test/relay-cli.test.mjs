@@ -413,3 +413,61 @@ test('wake attach and enable take a daily wake cap within its bounds and pass it
   assert.equal(result.code, 0, result.stderr);
   assert.deepEqual(enabled, [{ unit: 'overseer', nativeSessionId: 'native-daily', client: 'claude', machine: os.hostname(), maxHandoffs: 30, maxDailyHandoffs: 50 }]);
 });
+
+test('relay link prints a code, joins with a code, and takes a positional code only on link', async (context) => {
+  const { mind } = await fixture(context);
+  await writeFile(path.join(mind, 'user', 'state', 'executor-app.md'), 'unit: executor-app\nstate: in\nmachine: RELAYTEST\ndate: 2026-10-05 10:00\n\nTesting Relay.\n');
+  const first = ['--mind-path', mind, '--session-id', 'instance-1', '--native-session-id', 'native-1', '--client', 'codex'];
+  const second = ['--mind-path', mind, '--session-id', 'instance-2', '--native-session-id', 'native-2', '--client', 'codex'];
+  assert.equal((await cli(['relay', 'register', ...first, '--unit', 'overseer'])).code, 0);
+  assert.equal((await cli(['relay', 'register', ...second, '--unit', 'executor-app'])).code, 0);
+
+  const made = await cli(['relay', 'link', ...first]);
+  assert.equal(made.code, 0, made.stderr);
+  const printed = /^Code ([2-9A-HJ-NP-Z]{5}), valid until \d{2}:\d{2}\. Share it; whoever runs \/link \1 joins this thread\.\n$/.exec(made.stdout);
+  assert.ok(printed, made.stdout);
+  const complete = await cli(['relay', 'link', '--json', ...first]);
+  assert.equal(complete.code, 0, complete.stderr);
+  const result = JSON.parse(complete.stdout);
+  assert.deepEqual(Object.keys(result), ['linkId', 'code', 'threadId', 'expiresAt', 'members']);
+
+  const joined = await cli(['relay', 'link', printed[1].toLowerCase(), ...second]);
+  assert.equal(joined.code, 0, joined.stderr);
+  assert.match(joined.stdout, /^Linked with overseer, executor-app\. Thread link-[0-9a-f-]{36}\.\n$/);
+  const byFlag = await cli(['relay', 'link', '--code', result.code, '--json', ...second]);
+  assert.equal(byFlag.code, 0, byFlag.stderr);
+  assert.deepEqual(JSON.parse(byFlag.stdout).members, ['overseer', 'executor-app']);
+
+  const sent = await cli(['relay', 'send', ...second, '--to', `link:${result.linkId}`, '--subject', 'Hello', '--body', 'Over the link']);
+  assert.equal(sent.code, 0, sent.stderr);
+  assert.deepEqual(JSON.parse(sent.stdout).recipients, ['overseer']);
+
+  const wrong = await cli(['relay', 'link', 'AAAAA', ...second]);
+  assert.equal(wrong.code, 1);
+  assert.match(wrong.stderr, /The code is not valid or has expired\./);
+});
+
+test('relay link refuses a second code, a positional on another action and a link option elsewhere', async (context) => {
+  const { mind } = await fixture(context);
+  const common = ['--mind-path', mind, '--session-id', 'instance-1', '--native-session-id', 'native-1', '--client', 'codex'];
+  assert.equal((await cli(['relay', 'register', ...common, '--unit', 'overseer'])).code, 0);
+  for (const [argv, message] of [
+    [['relay', 'link', 'ABCDE', 'FGHJK', ...common], /relay link takes at most one code/],
+    [['relay', 'link', 'ABCDE', '--code', 'FGHJK', ...common], /--code was provided more than once/],
+    [['relay', 'link', '--code', 'FGHJK', 'ABCDE', ...common], /relay link takes at most one code/],
+    [['relay', 'link', '--json', '--json', ...common], /--json was provided more than once/],
+    [['relay', 'link', '-x', ...common], /Unknown Relay option: -x/],
+    [['relay', 'send', 'ABCDE', ...common], /Unknown Relay option: ABCDE/],
+    [['relay', 'inbox', '--code', 'ABCDE', ...common], /--code is only valid with relay link/],
+    [['relay', 'inbox', '--json', ...common], /--json is only valid with relay link/],
+    [['relay', 'link', '--mind-path', mind], /--session-id/],
+  ]) {
+    const refused = await cli(argv);
+    assert.equal(refused.code, 2, argv.join(' '));
+    assert.match(refused.stderr, message);
+  }
+  assert.equal(parseArgs(['relay', 'link', 'ABCDE']).options.code, 'ABCDE');
+  assert.equal(parseArgs(['relay', 'link', '--code', 'ABCDE']).options.code, 'ABCDE');
+  assert.equal(parseArgs(['relay', 'link']).options.code, undefined);
+  assert.match((await cli(['relay', '--help'])).stdout, /relay <[^\n]*send\|link\|inbox/);
+});

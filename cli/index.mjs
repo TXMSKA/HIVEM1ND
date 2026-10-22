@@ -36,7 +36,7 @@ Usage:
   hivem1nd pylon <repo> [--state branch|main] [options]
   hivem1nd swarm [options]
   hivem1nd view [--project <name>] [options]
-  hivem1nd relay <in|register|send|inbox|read|history|threads|status|events|reminder|delivery|mcp|hook|wake|configure|unconfigure|diagnose> [options]
+  hivem1nd relay <in|register|send|link|inbox|read|history|threads|status|events|reminder|delivery|mcp|hook|wake|configure|unconfigure|diagnose> [options]
   hivem1nd uninstall [--dry-run] [--remove-mind] [options]
   hivem1nd service <install|uninstall|status|run|launch> [--dry-run] [options]
   hivem1nd task status <project> <id> <status> [--note <text>]
@@ -49,7 +49,7 @@ Commands:
   pylon      Attach a repository to the shared M1ND
   swarm      Show units, tasks and unread messages
   view       Show chats, squads, what waits on the person, tasks, inbox and products
-  relay     Send and read messages, register sessions, or configure Relay clients
+  relay     Send and read messages, link sessions in one thread, register sessions, or configure Relay clients
   uninstall  Remove what HIVEM1ND wrote on this machine
   service    Plan the user login service, or print its status
   task       Change a task status or undo the last change through the service
@@ -69,6 +69,8 @@ Relay options:
   --priority <normal|urgent> --attachment <path> (repeatable)
   --id <message-id> (repeatable) --limit <count>
   relay delivery --id <message-id> [--id ...] shows how far messages sent by the registered unit have come (at most 100)
+  relay link [<code>|--code <code>] [--json] makes a code valid for 10 minutes, or joins the message thread of a code
+  --to link:<linkId> sends one message to every member of a link
 
 Relay wake actions:
   relay wake attach --client <${Object.keys(WAKE_ADAPTERS).join('|')}> --unit <name> [--native-session-id <id>] [--hours <n>] [--extended] [--max-daily-handoffs <1-1000>] [--mind-path <path>]
@@ -329,11 +331,11 @@ const RELAY_VALUE_FLAGS = new Map([
   ["--session-id", "sessionId"], ["--native-session-id", "nativeSessionId"], ["--client", "client"], ["--unit", "unit"],
   ["--event", "event"], ["--to", "to"], ["--subject", "subject"], ["--body", "body"], ["--priority", "priority"],
   ["--reply-to", "replyTo"], ["--thread-id", "threadId"], ["--limit", "limit"], ["--activity", "activity"], ["--quota", "quota"],
-  ["--attachment", "attachments"], ["--id", "ids"],
+  ["--attachment", "attachments"], ["--id", "ids"], ["--code", "code"],
   ["--hours", "hours"],
   ["--max-handoffs", "maxHandoffs"], ["--max-daily-handoffs", "maxDailyHandoffs"], ["--machine", "machine"],
 ]);
-const RELAY_ACTIONS = new Set(["in", "register", "send", "inbox", "read", "history", "threads", "status", "events", "reminder", "delivery", "mcp", "hook", "wake", "configure", "unconfigure", "diagnose"]);
+const RELAY_ACTIONS = new Set(["in", "register", "send", "link", "inbox", "read", "history", "threads", "status", "events", "reminder", "delivery", "mcp", "hook", "wake", "configure", "unconfigure", "diagnose"]);
 
 function parseRelayArgs(tokens) {
   let [action, ...rest] = tokens;
@@ -355,6 +357,17 @@ function parseRelayArgs(tokens) {
     if (token === "--extended") { if (options.extended) throw new CliUsageError("--extended was provided more than once."); options.extended = true; continue; }
     if (token === "--unlimited") { if (options.unlimited) throw new CliUsageError("--unlimited was provided more than once."); options.unlimited = true; continue; }
     if (token === "--manual-consent") { if (options.manualConsent) throw new CliUsageError("--manual-consent was provided more than once."); options.manualConsent = true; continue; }
+    if (token === "--json") {
+      if (action !== "link") throw new CliUsageError("--json is only valid with relay link.");
+      if (options.json) throw new CliUsageError("--json was provided more than once.");
+      options.json = true;
+      continue;
+    }
+    if (action === "link" && !token.startsWith("-")) {
+      if (Object.hasOwn(options, "code")) throw new CliUsageError("relay link takes at most one code.");
+      options.code = token;
+      continue;
+    }
     const key = RELAY_VALUE_FLAGS.get(token);
     if (!key) throw new CliUsageError(`Unknown Relay option: ${token}`);
     const value = rest[index + 1];
@@ -366,6 +379,7 @@ function parseRelayArgs(tokens) {
   }
   if (options.limit !== undefined && (!/^\d+$/.test(options.limit) || Number(options.limit) < 1 || Number(options.limit) > 500)) throw new CliUsageError("--limit must be between 1 and 500.");
   if (options.machine !== undefined && wakeAction !== "status") throw new CliUsageError("--machine is only valid with relay wake status.");
+  if (options.code !== undefined && action !== "link") throw new CliUsageError("--code is only valid with relay link.");
   if (options.priority !== undefined && !["normal", "urgent"].includes(options.priority)) throw new CliUsageError("--priority must be normal or urgent.");
   if (options.hours !== undefined && !["4", "5", "6", "7", "8", "12", "24"].includes(options.hours)) throw new CliUsageError("--hours must be 4 through 8, 12 or 24.");
   if (options.maxHandoffs !== undefined && (!/^\d+$/.test(options.maxHandoffs) || Number(options.maxHandoffs) < 1 || Number(options.maxHandoffs) > 100)) throw new CliUsageError("--max-handoffs must be between 1 and 100.");
@@ -388,6 +402,13 @@ function formatResult(result) {
 
 function firstLine(value) {
   return String(value ?? "").split(/\r?\n/, 1)[0];
+}
+
+function formatLink(result, joining) {
+  if (joining) return `Linked with ${result.members.join(", ")}. Thread ${result.threadId}.`;
+  const until = new Date(result.expiresAt);
+  const time = `${String(until.getHours()).padStart(2, "0")}:${String(until.getMinutes()).padStart(2, "0")}`;
+  return `Code ${result.code}, valid until ${time}. Share it; whoever runs /link ${result.code} joins this thread.`;
 }
 
 function formatCheck(result) {
@@ -1525,6 +1546,8 @@ async function runRelay(options, dependencies, output) {
     args = { unit: options.unit, nativeSessionId: options.nativeSessionId, client: options.client };
   } else if (action === "delivery") {
     args = { ids: options.ids };
+  } else if (action === "link" && options.code !== undefined) {
+    args = { code: options.code };
   }
   const method = action === "register" ? "register"
     : action === "send" ? "send"
@@ -1532,7 +1555,7 @@ async function runRelay(options, dependencies, output) {
         : action === "read" ? "read"
           : action;
   const result = await relay[method](args);
-  output.write(`${formatResult(result)}\n`);
+  output.write(`${action === "link" && !options.json ? formatLink(result, options.code !== undefined) : formatResult(result)}\n`);
   return 0;
 }
 

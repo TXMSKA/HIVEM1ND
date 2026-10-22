@@ -123,6 +123,7 @@ Every role is a command, and a few more operate the system. Every command also w
 | `/evolve` | Updates the mind base, applies private migrations in order and reinstalls the included commands for this machine. |
 | `/task` | Creates a task file with the next id for a unit and leaves it a message that the task is ready. |
 | `/msg` | Sends a message to a unit through Relay, or writes it into the unit's inbox when Relay is not available. |
+| `/link` | Gives a short code that joins another session into one message thread with this one, or joins the thread of a code. |
 | `/absorb` | Stores a piece of feedback as a preference, for the current project or globally, with the date and the reason. |
 | `/migrate` | Absorbs a structure a person already has, the rules and memories of their agents and repositories, into the mind, without touching the original. |
 | `/pylon` | Adds shared team state to a repository without switching or changing its code branch. |
