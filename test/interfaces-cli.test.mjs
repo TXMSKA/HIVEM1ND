@@ -434,6 +434,20 @@ test("init gives the setup session the Relay setup option, in the terminal and i
   assert.equal(sessionOptions.relaySetup, true);
 });
 
+test("init makes both shortcuts unless --no-desktop-shortcut is given, which only init accepts", async () => {
+  assert.equal(parseArgs(["init"]).options.desktopShortcut, undefined);
+  assert.equal(parseArgs(["init", "--no-desktop-shortcut"]).options.desktopShortcut, false);
+  assert.throws(() => parseArgs(["init", "--no-desktop-shortcut", "--no-desktop-shortcut"]), /Conflicting or repeated/);
+  assert.throws(() => parseArgs(["evolve", "--no-desktop-shortcut"]), /not valid for evolve/);
+  assert.match(await helpText(), /--no-desktop-shortcut/);
+  const received = [];
+  for (const argv of [["init", "--gui"], ["init", "--gui", "--no-desktop-shortcut"]]) {
+    const wizard = { async createWizardServer({ sessionOptions }) { received.push(sessionOptions); return { url: "http://127.0.0.1" }; } };
+    assert.equal(await runCli(argv, { stdout: sink().stream, stderr: sink().stream, wizard, openUrl: async () => {}, waitForServer: async () => {} }), 0);
+  }
+  assert.deepEqual(received.map((options) => [options.shortcuts, options.desktopShortcut]), [[true, undefined], [true, false]]);
+});
+
 test("ordinary evolve enables the real service phases and preserves injected registration boundaries", async () => {
   let received;
   const serviceRunner = async () => {};

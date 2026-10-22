@@ -6,7 +6,7 @@ import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { readMachineRecord } from '../engine/records.mjs';
 import { createSetupSession } from '../engine/setup.mjs';
-import { applyShortcuts, shortcutPlan, windowsShortcutFolders } from '../engine/shortcuts.mjs';
+import { applyShortcuts, removeOwnedShortcuts, shortcutPlan, windowsShortcutFolders } from '../engine/shortcuts.mjs';
 import { stubAclRunner } from '../engine/service/security.mjs';
 import { uninstall } from '../engine/uninstall.mjs';
 
@@ -63,6 +63,30 @@ test('a shortcut is written once, refreshed while it is the one setup made, and 
   const folderMissing = await applyShortcuts(plan({ desktop: path.join(root, 'nope'), startMenu: null }), { run });
   assert.equal(folderMissing[0].status, 'skipped');
   assert.equal(runs.length, 2);
+});
+
+test('a shortcut setup made and left unchanged is removed, and one of the person or not in the record stays', async context => {
+  const root = await temporary(context);
+  const desktop = path.join(root, 'Desktop');
+  const menu = path.join(root, 'Programs');
+  await Promise.all([desktop, menu].map(folder => mkdir(folder)));
+  const items = plan({ desktop, startMenu: menu });
+  const run = async item => { await writeFile(item.file, `link to ${item.file}`); };
+  const [owned, other] = await applyShortcuts(items, { run });
+  const managed = { [owned.file]: owned.hash };
+  assert.deepEqual(await removeOwnedShortcuts([desktop, menu, null], { managed }), [{ file: owned.file, status: 'removed' }]);
+  await assert.rejects(stat(owned.file), { code: 'ENOENT' });
+  assert.equal(await readFile(other.file, 'utf8'), `link to ${other.file}`, 'a shortcut that is not in the record is not touched');
+  assert.deepEqual(await removeOwnedShortcuts([desktop], { managed }), [{ file: owned.file, status: 'missing' }]);
+  await writeFile(owned.file, 'a shortcut the person made');
+  assert.deepEqual(await removeOwnedShortcuts([desktop], { managed }), [{ file: owned.file, status: 'kept', reason: 'not-ours' }]);
+  assert.equal(await readFile(owned.file, 'utf8'), 'a shortcut the person made');
+});
+
+test('without the desktop folder only the Start menu shortcut is planned, and both are planned by default', () => {
+  const startMenu = 'C:/Users/t/Start Menu/Programs';
+  assert.deepEqual(plan({ startMenu }).map(item => item.file), [path.join(startMenu, 'HIVEM1ND.lnk')]);
+  assert.equal(plan({ desktop: 'C:/Users/t/Desktop', startMenu }).length, 2);
 });
 
 async function installedMind(context, extra = {}) {
@@ -128,4 +152,49 @@ test('setup leaves a shortcut of the person alone and writes nothing outside a r
     const quiet = await installedMind(context, extra);
     assert.equal(quiet.runs.length, 0, JSON.stringify(extra));
   }
+});
+
+const shortcutOf = folder => path.join(folder, 'HIVEM1ND.lnk');
+
+// A later run of setup over the M1ND the first run made: this machine joins it after a first look at the folder.
+async function setupAgain(fixture, extra) {
+  const session = await createSetupSession({ ...fixture.options, ...extra });
+  await session.answer({});
+  await session.answer({ mindPath: fixture.mindPath });
+  await session.answer({ mindPath: fixture.mindPath });
+  await session.answer({ confirm: true });
+  const result = await session.install();
+  assert.equal(result.completed, true, JSON.stringify(session.checkpoint?.error));
+  return readMachineRecord(fixture.mindPath, 'TESTBOX').then(({ record }) => record.managedFiles);
+}
+
+test('with the desktop shortcut off setup makes and records only the Start menu shortcut', async context => {
+  const off = await installedMind(context, { desktopShortcut: false });
+  assert.deepEqual(off.runs.map(item => item.file), [shortcutOf(off.startMenu)]);
+  await assert.rejects(stat(shortcutOf(off.desktop)), { code: 'ENOENT' });
+  const { record } = await readMachineRecord(off.mindPath, 'TESTBOX');
+  assert.equal(Object.hasOwn(record.managedFiles, shortcutOf(off.desktop)), false);
+  assert.equal(Object.hasOwn(record.managedFiles, shortcutOf(off.startMenu)), true);
+  const on = await installedMind(context, { desktopShortcut: true });
+  assert.deepEqual(on.runs.map(item => item.file), [shortcutOf(on.desktop), shortcutOf(on.startMenu)]);
+});
+
+test('unticking the desktop shortcut on a later run removes the one setup made, keeps one the person changed, and ticking brings it back', async context => {
+  const first = await installedMind(context);
+  const desktop = shortcutOf(first.desktop);
+  const menu = shortcutOf(first.startMenu);
+  assert.equal(Object.hasOwn((await readMachineRecord(first.mindPath, 'TESTBOX')).record.managedFiles, desktop), true);
+  const without = await setupAgain(first, { desktopShortcut: false });
+  await assert.rejects(stat(desktop), { code: 'ENOENT' });
+  assert.equal(Object.hasOwn(without, desktop), false, 'a removed shortcut leaves the record');
+  assert.equal(Object.hasOwn(without, menu), true);
+  assert.ok((await stat(menu)).isFile(), 'the Start menu shortcut stays');
+  await setupAgain(first, { desktopShortcut: true });
+  assert.ok((await stat(desktop)).isFile(), 'ticking the box again makes it again');
+
+  const changed = await installedMind(context);
+  await writeFile(shortcutOf(changed.desktop), 'edited by the person');
+  const kept = await setupAgain(changed, { desktopShortcut: false });
+  assert.equal(await readFile(shortcutOf(changed.desktop), 'utf8'), 'edited by the person');
+  assert.equal(Object.hasOwn(kept, shortcutOf(changed.desktop)), false, 'a file the person changed is never claimed');
 });

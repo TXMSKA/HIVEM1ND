@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { lstat, readFile } from 'node:fs/promises';
+import { lstat, readFile, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hashContent } from './records.mjs';
@@ -80,6 +80,22 @@ export async function applyShortcuts(plan, { managed = {}, run = runMaker, env =
     const written = await bytesOf(item.file);
     if (!written) throw new Error(`The shortcut was not created: ${item.file}`);
     results.push({ file: item.file, status: 'applied', created: existing === null, hash: hashContent(written) });
+  }
+  return results;
+}
+
+// A shortcut setup made and the person has not changed is taken away, the way uninstall does; any other file with that
+// name is the person's and stays. Only a shortcut in the record is ever touched.
+export async function removeOwnedShortcuts(folders, { managed = {} } = {}) {
+  const results = [];
+  for (const folder of folders.filter(Boolean)) {
+    const file = path.join(folder, NAME);
+    if (!Object.hasOwn(managed, file)) continue;
+    const existing = await bytesOf(file);
+    if (existing === null) { results.push({ file, status: 'missing' }); continue; }
+    if (existing === undefined || hashContent(existing) !== managed[file]) { results.push({ file, status: 'kept', reason: 'not-ours' }); continue; }
+    await unlink(file).catch(error => { if (error.code !== 'ENOENT') throw error; });
+    results.push({ file, status: 'removed' });
   }
   return results;
 }

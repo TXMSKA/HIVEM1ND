@@ -254,7 +254,7 @@ export async function createWizardServer({
           }
           if (step.id === "service") { allowedFields.add("confirm"); allowedFields.add("conflicts"); }
           requireExactKeys(body.values, allowedFields);
-          for (const key of ["changeFolder", "closeLegacy", "attach", "migrateLegacy", "confirm"]) {
+          for (const key of ["changeFolder", "closeLegacy", "attach", "migrateLegacy", "desktopShortcut", "confirm"]) {
             if (Object.hasOwn(body.values, key) && typeof body.values[key] !== "boolean") throw new HttpError(400, "invalid_values", `${key} must be a boolean.`);
           }
           return activeSession.answer(body.values);
