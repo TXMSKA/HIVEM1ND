@@ -79,7 +79,12 @@ const COPY = {
   duplicateTitle: ["{title} copy", "Copia de {title}"],
   sourceBoard: ["Source item", "Elemento de origen"],
   chooseBoard: ["Choose an item to copy", "Elegir un elemento para copiar"],
-  libraryUnavailable: ["{project}: the repository is unavailable. Other projects remain accessible.", "{project}: el repositorio no está disponible. Los demás proyectos siguen accesibles."],
+  libraryMissingOne: ["{count} repository is not on this machine", "{count} repositorio no está en esta máquina"],
+  libraryMissingOther: ["{count} repositories are not on this machine", "{count} repositorios no están en esta máquina"],
+  noTextsYet: ["No texts yet", "Todavía no hay textos"],
+  noTextsHintOne: ["A text is a Markdown file in the linked repository.", "Un texto es un archivo Markdown del repositorio vinculado."],
+  noTextsHintOther: ["A text is a Markdown file in one of the {count} linked repositories.", "Un texto es un archivo Markdown en uno de los {count} repositorios vinculados."],
+  openFile: ["Open a file", "Abrir un archivo"],
   deleteBoard: ["Delete board", "Eliminar tablero"],
   deleteText: ["Delete text", "Eliminar texto"],
   deleteFolder: ["Delete folder", "Eliminar carpeta"],
@@ -145,6 +150,20 @@ const COPY = {
   deleteTreeBody: ["It also deletes the {count} clusters inside it. The links leave the list; files and work stay. It runs in the background, in Activity.", "También se eliminan los {count} clústeres de adentro. Los vínculos salen de la lista; los archivos y el trabajo quedan. Se hace en segundo plano, en Actividad."],
   menuDeleteSelected: ["Delete {count} selected", "Eliminar {count} seleccionados"],
   deletedMany: ["{count} items deleted", "{count} elementos eliminados"],
+  mapControls: ["Map controls", "Controles del mapa"],
+  expandCluster: ["Expand {name}", "Expandir {name}"],
+  notSetUp: ["Not set up", "Sin configurar"],
+  pickKindRepositoriesIn: ["Repository clusters in {name}", "Clústeres de repositorio en {name}"],
+  pickKindRepositories: ["Repository clusters", "Clústeres de repositorio"],
+  pickKindClusters: ["Clusters", "Clústeres"],
+  pickKindAgents: ["Agents", "Agentes"],
+  pickKindMixed: ["Clusters and agents", "Clústeres y agentes"],
+  pickNoAgents: ["no agents", "sin agentes"],
+  pickMessageGroup: ["Message as group", "Enviar como grupo"],
+  pickMove: ["Move to cluster", "Mover a un clúster"],
+  pickDelete: ["Delete {count}", "Eliminar {count}"],
+  moveManyTitle: ["Move {count} agents", "Mover {count} agentes"],
+  jobMoveMany: ["Move {count} agents to {cluster}", "Mover {count} agentes a {cluster}"],
   stopUnavailable: ["Its running session could not be stopped safely. Stop it first, then try again.", "No se pudo detener con seguridad la sesión en ejecución. Detenerla primero y volver a intentar."],
   retry: ["Retry", "Reintentar"],
   showMore: ["Show {count} more", "Mostrar {count} más"],
@@ -168,11 +187,22 @@ const COPY = {
   emptyIssues: ["No issues to review. Refresh to check again.", "No hay incidencias para revisar. Actualizar para comprobar de nuevo."],
   emptyBoards: ["No boards yet. Create or register one.", "Todavía no hay tableros. Crear o registrar uno."],
   emptyBoardsRead: ["No boards are registered yet. Refresh to check again.", "Todavía no hay tableros registrados. Actualizar para comprobar de nuevo."],
-  emptyTexts: ["No texts yet. Create or register one.", "Todavía no hay textos. Crear o registrar uno."],
   emptyTextsRead: ["No texts are registered yet. Refresh to check again.", "Todavía no hay textos registrados. Actualizar para comprobar de nuevo."],
   emptyCollection: ["This list is empty. Refresh it.", "Esta lista está vacía. Actualizarla."],
   emptyCommentsBoard: ["No comments yet. Choose a screen or node, then write one.", "Todavía no hay comentarios. Elegir una pantalla o un nodo y escribir uno."],
   emptyCommentsText: ["No comments yet. Select text, then write one.", "Todavía no hay comentarios. Seleccionar texto y escribir uno."],
+  commentsNoneOpen: ["No open comments.", "No hay comentarios abiertos."],
+  commentsNoneResolved: ["No resolved comments.", "No hay comentarios resueltos."],
+  commentsIdleBoard: ["Comments on the open board show here.", "Aquí se muestran los comentarios del tablero abierto."],
+  commentsIdleText: ["Comments on the open text show here.", "Aquí se muestran los comentarios del texto abierto."],
+  commentsOpenCount: ["Open {count}", "Abiertos {count}"],
+  commentsResolvedCount: ["Resolved {count}", "Resueltos {count}"],
+  commentRepliesOne: ["{count} reply", "{count} respuesta"],
+  commentRepliesOther: ["{count} replies", "{count} respuestas"],
+  pickBoardTitle: ["Pick a board or start a new one", "Elegir un tablero o empezar uno nuevo"],
+  pickBoardHint: ["Boards open here with their comments beside them.", "Los tableros se abren aquí con sus comentarios al lado."],
+  pickTextTitle: ["Pick a text or start a new one", "Elegir un texto o empezar uno nuevo"],
+  pickTextHint: ["Texts open here with their comments beside them.", "Los textos se abren aquí con sus comentarios al lado."],
   refreshList: ["Refresh", "Actualizar"],
   showMap: ["Show the map", "Mostrar el mapa"],
   emptySearch: ["Nothing matches that search. Clear it to see the full list.", "Nada coincide con esa búsqueda. Borrarla para ver la lista completa."],
@@ -201,6 +231,13 @@ const COPY = {
   waitingOnYouOne: ["{count} waiting on you", "{count} pendiente de respuesta"],
   waitingOnYouOther: ["{count} waiting on you", "{count} pendientes de respuesta"],
   unreadCount: ["{count} unread", "{count} sin leer"],
+  waitingReviewsFrom: ["Reviews from {names}", "Revisiones de {names}"],
+  waitingFrom: ["From {names}", "De {names}"],
+  waitingTask: ["task {number}", "tarea {number}"],
+  waitingDelivered: ["delivered {date} by {unit}", "entregada el {date} por {unit}"],
+  waitingOpenTask: ["Open task", "Abrir la tarea"],
+  listAnd: ["{head} and {last}", "{head} y {last}"],
+  listMore: ["{head} and {count} more", "{head} y {count} más"],
   issueCountOne: ["{count} issue", "{count} incidencia"],
   issueCountOther: ["{count} issues", "{count} incidencias"],
   lastRead: ["M1ND read at {time}", "M1ND leída a las {time}"],
@@ -216,10 +253,16 @@ const COPY = {
   serviceRunning: ["Relay service running on {machine}", "Servicio Relay en ejecución en {machine}"],
   openInspector: ["Open details", "Abrir detalles"],
   closeInspector: ["Close details", "Cerrar detalles"],
-  showCatalog: ["Show catalog", "Mostrar catálogo"],
-  hideCatalog: ["Hide catalog", "Ocultar catálogo"],
   showComments: ["Show comments", "Mostrar comentarios"],
   hideComments: ["Hide comments", "Ocultar comentarios"],
+  escCloses: ["Esc closes", "Esc cierra"],
+  phoneScan: ["Scan with the phone on the same network.", "Escanear con el teléfono en la misma red."],
+  phoneAccessCloses: ["Access closes after 12 hours.", "El acceso se cierra después de 12 horas."],
+  phoneCopyLink: ["Copy the link", "Copiar el enlace"],
+  phoneLinkCopied: ["Link copied", "Enlace copiado"],
+  phoneAccessClosed: ["Home access is closed", "El acceso desde casa está cerrado"],
+  phoneOpenUntil: ["Open until {time}", "Abierto hasta las {time}"],
+  phoneOpenTwelve: ["Open for 12 hours", "Abrir por 12 horas"],
   issuesTitle: ["Issues", "Incidencias"],
   search: ["Search", "Buscar"],
   services: ["Services", "Servicios"],
@@ -246,7 +289,6 @@ const COPY = {
   nothingSelected: ["Nothing selected", "Nada seleccionado"],
   runsApp: ["{client} app, started by hand", "Aplicación {client}, iniciada manualmente"],
   runsCli: ["{client}, command line", "{client}, línea de comandos"],
-  pan: ["Pan", "Desplazar"],
   startSession: ["Start", "Iniciar"],
   stopSession: ["Stop", "Detener"],
   stopSessionTitle: ["Stop the session of {name}?", "¿Detener la sesión de {name}?"],
@@ -330,7 +372,6 @@ const COPY = {
   nothingToUndo: ["No task change to undo.", "No hay un cambio de tarea para deshacer."],
   undoConflict: ["The task changed elsewhere.", "La tarea cambió en otro lugar."],
   role: ["Role", "Rol"],
-  scope: ["Scope", "Ámbito"],
   lead: ["Lead", "Líder"],
   job: ["Job", "Trabajo"],
   model: ["Model", "Modelo"],
@@ -363,6 +404,8 @@ const COPY = {
   chatNotRead: ["The messages could not be read.", "No se pudieron leer los mensajes."],
   emptyChat: ["No messages yet. Write one below.", "Todavía no hay mensajes. Escribir uno abajo."],
   emptyChatRead: ["No messages yet. Choose another conversation.", "Todavía no hay mensajes. Elegir otra conversación."],
+  noMessagesTitle: ["No messages yet", "Todavía no hay mensajes"],
+  noMessagesHint: ["A message reaches the agent at its next step.", "Un mensaje llega al agente en su siguiente paso."],
   unknown: ["Unknown", "Desconocido"],
   revoke: ["Revoke", "Revocar"],
   undo: ["Undo", "Deshacer"],
@@ -387,6 +430,8 @@ const COPY = {
   replyOnText: ["Reply on the text", "Responder en el texto"],
   corruptResource: ["The comments could not be read.", "No se pudieron leer los comentarios."],
   conversionRequired: ["This module needs a JSON copy.", "Este módulo necesita una copia JSON."],
+  moduleReadOnly: ["Module board, read only. A JSON copy can be edited.", "Tablero de módulo, solo lectura. Una copia JSON se puede editar."],
+  moduleUnreadable: ["The module could not be read.", "No se pudo leer el módulo."],
   registerResource: ["Register", "Registrar"],
   createResource: ["Create", "Crear"],
   copyJson: ["Create JSON copy", "Crear copia JSON"],
@@ -495,6 +540,10 @@ const COPY = {
   fieldHint: ["Fill in this field.", "Completar este campo."],
   pinnedChats: ["Pinned", "Fijadas"],
   recentChats: ["Recent", "Recientes"],
+  quietChats: ["No messages yet", "Sin mensajes"],
+  chatsCountOne: ["{count} chat", "{count} chat"],
+  chatsCountOther: ["{count} chats", "{count} chats"],
+  chatsAndMore: ["{names} and more", "{names} y más"],
   registerForm: ["Register a resource", "Registrar un recurso"],
   createForm: ["Create a resource", "Crear un recurso"],
   details: ["Details", "Detalles"],
@@ -514,8 +563,11 @@ const COPY = {
   english: ["English", "English"],
   spanish: ["Español", "Español"],
   limitsNormal: ["Limits are normal.", "Los límites están normales."],
-  limitsSlowing: ["Publishing is slowing until {time}.", "La publicación se frena hasta {time}."],
+  limitsSlowing: ["Publishing slows down until {time}", "La publicación se ralentiza hasta las {time}"],
+  limitsSlowingNoTime: ["Publishing slows down", "La publicación se ralentiza"],
   limitsPaused: ["Publishing is paused until {time}.", "La publicación está en pausa hasta {time}."],
+  limitsPausedNoTime: ["Publishing is paused", "La publicación está en pausa"],
+  limitsSyncUsed: ["{used} of {max} of sync used in this window. Messages still go out.", "{used} de {max} de sincronización usados en esta ventana. Los mensajes siguen saliendo."],
   limitsError: ["Limit status is unavailable.", "El estado de los límites no está disponible."],
   limitsUsageOneOne: ["{messages} of {max} message and {bytes} of {byteMax} sync byte.", "{messages} de {max} mensaje y {bytes} de {byteMax} byte de sincronización."],
   limitsUsageOneOther: ["{messages} of {max} message and {bytes} of {byteMax} sync bytes.", "{messages} de {max} mensaje y {bytes} de {byteMax} bytes de sincronización."],
@@ -545,7 +597,6 @@ const COPY = {
   machineSeen: ['{machine} {time}', '{machine} {time}'],
   machineNotAnswering: ['{machine} not answering', '{machine} no responde'],
   finalFit: ['Fit', 'Ajustar'],
-  finalNeedsOnline: ['Needs {machine} online', 'Se necesita {machine} conectada'],
   finalRunsIn: ['Runs in', 'Se ejecuta en'],
   worksIn: ['Works in', 'Trabaja en'],
   worktree: ['Worktree', 'Worktree'],
@@ -642,6 +693,18 @@ const COPY = {
   settingsStopped: ["Stopped", "Detenido"],
   settingsStartup: ["Start with Windows", "Iniciar con Windows"],
   settingsRestart: ["Restart service", "Reiniciar el servicio"],
+  settingsRestartShort: ["Restart", "Reiniciar"],
+  settingsIssuesOne: ["{count} record could not be read", "No se pudo leer {count} registro"],
+  settingsIssuesOther: ["{count} records could not be read", "No se pudieron leer {count} registros"],
+  settingsIssuesNote: ["The rest of the M1ND works.", "El resto de la M1ND funciona."],
+  settingsShowFiles: ["Show files", "Mostrar archivos"],
+  settingsHideFiles: ["Hide files", "Ocultar archivos"],
+  settingsIssueState: ["Unit state could not be read", "No se pudo leer el estado de una unidad"],
+  settingsIssueTask: ["Task could not be read", "No se pudo leer una tarea"],
+  settingsIssueOther: ["Could not be read", "No se pudo leer"],
+  settingsClosed: ["Closed", "Cerrado"],
+  settingsOpenUntil: ["Open until {time}", "Abierto hasta las {time}"],
+  settingsLocationsStatus: ["M1ND and staging folders", "Carpetas de la M1ND y de preparación"],
   settingsComingSoon: ["Coming soon", "Próximamente"],
   settingsRelayPlus: ["Sync your preferences on any device, phones included, through the same service as Nebula+.", "Sincronizar las preferencias en cualquier dispositivo, incluidos los teléfonos, mediante el mismo servicio que Nebula+."],
   settingsLocations: ["Locations", "Ubicaciones"],
@@ -651,21 +714,30 @@ const COPY = {
   settingsPhoneCountUnknown: ["The phone count is unavailable.", "La cantidad de teléfonos conectados no está disponible."],
   settingsOpenPhone: ["Open on the phone", "Abrir en el teléfono"],
   settingsCloseAccess: ["Close access", "Cerrar el acceso"],
-  settingsAgent: ["Agent", "Agente"],
-  settingsCli: ["Command line (CLI): runs your agents", "Línea de comandos (CLI): ejecutar los agentes"],
-  settingsApp: ["Desktop app: optional", "Aplicación de escritorio: opcional"],
   settingsConnected: ["Connected", "Conectado"],
   settingsAuto: ["Auto", "Automático"],
   settingsOnDemand: ["On demand", "Bajo demanda"],
   settingsReview: ["Review changes", "Revisar cambios"],
+  settingsReviewAll: ["Review all changes", "Revisar todos los cambios"],
+  settingsReviewAllIntro: ["HIVEM1ND needs these changes on {machine}. Nothing is written until you apply them.", "HIVEM1ND necesita estos cambios en {machine}. No se escribe nada hasta aplicarlos."],
+  settingsApplyAll: ["Apply to all", "Aplicar a todos"],
+  jobApplyAllOne: ["Apply the M1ND's rules and Relay to {count} agent", "Aplicar las reglas de la M1ND y Relay a {count} agente"],
+  jobApplyAllOther: ["Apply the M1ND's rules and Relay to {count} agents", "Aplicar las reglas de la M1ND y Relay a {count} agentes"],
+  settingsNeedTitleOne: ["{count} agent needs the M1ND's rules and Relay", "{count} agente necesita las reglas de la M1ND y Relay"],
+  settingsNeedTitleOther: ["{count} agents need the M1ND's rules and Relay", "{count} agentes necesitan las reglas de la M1ND y Relay"],
+  settingsNeedSameOne: ["The same change for each: rules, commands and the Relay entry. Each one can be read before applying.", "El mismo cambio para cada uno: reglas, comandos y la entrada de Relay. Cada uno se puede leer antes de aplicarlo."],
+  settingsNeedSameOther: ["The same {count} changes for each: rules, commands and the Relay entry. Each one can be read before applying.", "Los mismos {count} cambios para cada uno: reglas, comandos y la entrada de Relay. Cada uno se puede leer antes de aplicarlo."],
+  settingsNeedUpTo: ["Up to {count} changes for each: rules, commands and the Relay entry. Each one can be read before applying.", "Hasta {count} cambios para cada uno: reglas, comandos y la entrada de Relay. Cada uno se puede leer antes de aplicarlo."],
   settingsScan: ["Scan again", "Volver a buscar"],
   settingsFind: ["Find manually", "Buscar manualmente"],
+  settingsFindIt: ["Find it", "Buscarla"],
   settingsFindHint: ["The absolute path to the installed agent's command line executable.", "La ruta absoluta al ejecutable de línea de comandos del agente instalado."],
   settingsNotFound: ["Not found on this machine", "No se encontró en esta máquina"],
-  settingsChangesNeeded: ["{count} changes needed", "{count} cambios necesarios"],
+  settingsChangesOne: ["{count} change", "{count} cambio"],
+  settingsChangesOther: ["{count} changes", "{count} cambios"],
   settingsAppConnected: ["{app} connected", "{app} conectada"],
   settingsConnectApp: ["Connect {app}", "Conectar {app}"],
-  settingsNoApp: ["No app", "Sin aplicación"],
+  settingsNoApp: ["No desktop app", "Sin aplicación de escritorio"],
   settingsNoAgents: ["No agents reported on this machine.", "No hay agentes registrados en el informe de esta máquina."],
   settingsDisconnect: ["Disconnect", "Desconectar"],
   settingsDisconnectTitle: ["Disconnect {client}?", "¿Desconectar {client}?"],
@@ -680,8 +752,23 @@ const COPY = {
   settingsConfigurationChanged: ["The configuration changed. Nothing was applied. Cancel and review it again.", "La configuración cambió. No se aplicó ningún cambio. Cancelar y revisar de nuevo."],
   settingsStanding: ["Standing approvals", "Aprobaciones permanentes"],
   settingsAgentPermissions: ["Agent permissions", "Permisos de agentes"],
-  settingsClusterLinks: ["Cluster links", "Enlaces de clústeres"],
+  settingsPermissionsNone: ["No standing approvals", "Sin aprobaciones permanentes"],
+  settingsPermissionsCountOne: ["{count} standing approval", "{count} aprobación permanente"],
+  settingsPermissionsCountOther: ["{count} standing approvals", "{count} aprobaciones permanentes"],
+  settingsNoStanding: ["No standing approvals yet.", "Todavía no hay aprobaciones permanentes."],
+  settingsNoAgentPermissions: ["No agent permissions yet.", "Todavía no hay permisos de agentes."],
+  settingsClusterLinks: ["Linked folders", "Carpetas vinculadas"],
   settingsNoLinks: ["No repository links reported.", "El informe no contiene enlaces de repositorios."],
+  settingsLinkSearchOne: ["Search {count} linked folder", "Buscar entre {count} carpeta vinculada"],
+  settingsLinkSearchOther: ["Search {count} linked folders", "Buscar entre {count} carpetas vinculadas"],
+  settingsLinkNoMatch: ["No linked folder matches.", "Ninguna carpeta vinculada coincide."],
+  settingsOrderAscending: ["A to Z", "De la A a la Z"],
+  settingsOrderDescending: ["Z to A", "De la Z a la A"],
+  settingsNotHere: ["Not on this machine", "No está en esta máquina"],
+  settingsCopyPath: ["Copy the path", "Copiar la ruta"],
+  settingsPathCopied: ["Path copied", "Ruta copiada"],
+  settingsPathNotCopied: ["The path could not be copied.", "No se pudo copiar la ruta."],
+  settingsUnlink: ["Unlink", "Desvincular"],
   settingsFeatures: ["Features", "Funciones"],
   settingsKnowledge: ["Knowledge packs", "Paquetes de conocimiento"],
   settingsPreferences: ["Preferences", "Preferencias"],
@@ -772,6 +859,17 @@ export function formatWhen(language, value) {
   return formatter("when", language, (code) => new Intl.DateTimeFormat(code, WHEN)).format(date);
 }
 
+const SHORT_DATE = { month: "short", day: "numeric" };
+
+// A date with no time ("2026-10-19") names a calendar day, so it is read in UTC; any other stamp is read in the viewer's time zone.
+export function formatShortDate(language, value) {
+  if (value == null || value === "") return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const calendar = /^\d{4}-\d{2}-\d{2}$/.test(String(value).trim());
+  return formatter(calendar ? "dayUtc" : "day", language, (code) => new Intl.DateTimeFormat(code, calendar ? { ...SHORT_DATE, timeZone: "UTC" } : SHORT_DATE)).format(date);
+}
+
 const CLOCK = {
   hour: "2-digit",
   minute: "2-digit",
@@ -794,6 +892,18 @@ export function formatShortTime(language, value) {
   return formatter("short", language, (code) => new Intl.DateTimeFormat(code, SHORT_TIME)).format(date);
 }
 
+// The time of a last message: the hour today, the weekday inside the last six days, the date before that.
+export function formatRecent(language, value, now = Date.now()) {
+  if (value == null || value === "") return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const midnight = (stamp) => { const day = new Date(stamp); return new Date(day.getFullYear(), day.getMonth(), day.getDate()).getTime(); };
+  const days = Math.round((midnight(now) - midnight(date)) / 86400000);
+  if (days <= 0) return formatShortTime(language, value);
+  if (days < 7) return formatter("weekday", language, (code) => new Intl.DateTimeFormat(code, { weekday: "short" })).format(date);
+  return formatShortDate(language, value);
+}
+
 export function limitsUsage(language, messages = {}, bytes = {}) {
   const messageForm = pluralForm(language, messages.max ?? 0);
   const byteForm = pluralForm(language, bytes.max ?? 0);
@@ -803,6 +913,15 @@ export function limitsUsage(language, messages = {}, bytes = {}) {
     bytes: formatNumber(language, bytes.used ?? 0),
     byteMax: formatNumber(language, bytes.max ?? 0),
   });
+}
+
+// Megabytes with one decimal at most. The used part is cut down, not rounded up, so a window just under full never reads as full.
+export function syncUsage(language, bytes = {}) {
+  const tenths = (value, round) => {
+    const number = Number(value);
+    return formatter("megabytes", language, (code) => new Intl.NumberFormat(code, { maximumFractionDigits: 1 })).format(Number.isFinite(number) ? round(number / 100000) / 10 : 0);
+  };
+  return text(language, "limitsSyncUsed", { used: tenths(bytes.used, Math.floor), max: `${tenths(bytes.max, Math.round)} MB` });
 }
 
 export function dictionaryKeys() {

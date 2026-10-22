@@ -35,6 +35,10 @@ export function createClusterAgent(api,clusterId,input,retained=null){
 export function createOverseer(api,input,retained=null){
   const{machine,runsIn,fresh,expectedRevision}=input;return write(api,'/overseer',{machine,runsIn,fresh,expectedRevision},undefined,retained);
 }
+// A service such as the Incubator or Genesis is a unit of the root scope, named after its role. Where it runs is chosen right after, with setRunsIn.
+export function createService(api,input,retained=null){
+  const{machine,role}=input;return write(api,'/units',{unit:role,role,scope:{kind:'root'},machine},undefined,retained);
+}
 export function setRunsIn(api,unitId,input,retained=null){
   const{machine,runsIn,useAsDefault,expectedRevision}=input;return patch(api,'/units/:unitId/runs-in',{machine,runsIn,useAsDefault,expectedRevision},{unitId},retained);
 }

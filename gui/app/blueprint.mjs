@@ -511,6 +511,8 @@ function renderLink(document, board, link) {
   return line;
 }
 
+// The view a board opens in: every screen and nothing more, centred in the canvas, with room above for the titles and the toolbar.
+// The editor keeps the view it was given in `boardView`, so a redraw never fits a board again.
 export function boardBounds(board) {
   const screens = board.screens ?? [];
   if (!screens.length) return { x: -70, y: -100, w: 900, h: 760 };
@@ -518,7 +520,7 @@ export function boardBounds(board) {
   const top = Math.min(...screens.map((screen) => number(screen.y)));
   const right = Math.max(...screens.map((screen) => number(screen.x) + number(screen.w)));
   const bottom = Math.max(...screens.map((screen) => number(screen.y) + number(screen.h)));
-  return { x: left - 70, y: top - 140, w: Math.max(900, right - left + 140), h: Math.max(760, bottom - top + 200) };
+  return { x: left - 70, y: top - 140, w: right - left + 140, h: bottom - top + 200 };
 }
 
 function paint(value) {

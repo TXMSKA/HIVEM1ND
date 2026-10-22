@@ -1005,6 +1005,12 @@ function readMessageFile(bytes, relative, issues, receipts = new Set(), units = 
   }
 }
 
+// A task written without a title line reads as its file name: "027-media-to-disk-and-webp.md" is "Media to disk and webp".
+function titleFromFileName(relative) {
+  const words = path.basename(String(relative ?? ''), '.md').replace(/^\d+(?:-|$)/, '').replace(/[-_]+/g, ' ').trim();
+  return words.charAt(0).toLocaleUpperCase() + words.slice(1);
+}
+
 function readTask(bytes, relative, units, issues, aliases = []) {
   if (!bytes) return null;
   try {
@@ -1029,7 +1035,7 @@ function readTask(bytes, relative, units, issues, aliases = []) {
       id: id.id,
       number: id.number,
       scope: id.scope,
-      title: headers.get('title') || '',
+      title: headers.get('title') || titleFromFileName(relative),
       status,
       fromId,
       toId,

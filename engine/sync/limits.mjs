@@ -10,6 +10,10 @@ export const SYNC_WINDOW_MS = 3600000;
 const LOCK = 'sync-ledger';
 const SLOWING_NUMERATOR = 8;
 const SLOWING_DENOMINATOR = 10;
+const SLOWING_AT = {
+  messages: MESSAGE_MAX * SLOWING_NUMERATOR / SLOWING_DENOMINATOR,
+  bytes: SYNC_BYTES_MAX * SLOWING_NUMERATOR / SLOWING_DENOMINATOR,
+};
 
 export function openLedger({ store, paths, now = () => Date.now(), machine }) {
   if (!store || !paths?.localDirectory || !machine) throw new CoreError(500, 'internal_error', 'Limits need a store, local directory, and machine.');
@@ -60,12 +64,13 @@ export async function limitsFor(ledger, phase = 'publication', machine = null) {
   return view(ledger, phase, data, ledger.now(), null, machine);
 }
 
-export function retryAtFor(now, entries, proposed) {
+// The moment the proposed charge fits under the ceiling: the hard limit by default, or the point where slowing starts.
+export function retryAtFor(now, entries, proposed, ceiling = { messages: MESSAGE_MAX, bytes: SYNC_BYTES_MAX }) {
   const messages = Math.max(0, proposed?.messages ?? 0);
   const bytes = Math.max(0, proposed?.bytes ?? 0);
-  const messageRetry = messages > MESSAGE_MAX ? null : dimensionRetry(now, entries, messages, MESSAGE_WINDOW_MS, MESSAGE_MAX, (entry) => entry.messages ?? 1);
-  const byteRetry = bytes > SYNC_BYTES_MAX ? null : dimensionRetry(now, entries, bytes, SYNC_WINDOW_MS, SYNC_BYTES_MAX, (entry) => entry.bytes ?? 0);
-  if (messages > MESSAGE_MAX || bytes > SYNC_BYTES_MAX) return null;
+  const messageRetry = messages > ceiling.messages ? null : dimensionRetry(now, entries, messages, MESSAGE_WINDOW_MS, ceiling.messages, (entry) => entry.messages ?? 1);
+  const byteRetry = bytes > ceiling.bytes ? null : dimensionRetry(now, entries, bytes, SYNC_WINDOW_MS, ceiling.bytes, (entry) => entry.bytes ?? 0);
+  if (messages > ceiling.messages || bytes > ceiling.bytes) return null;
   const times = [messageRetry, byteRetry].filter((value) => value !== null);
   if (times.length === 0) return null;
   return Math.max(...times);
@@ -119,12 +124,14 @@ function view(ledger, phase, data, now, forcedRetry = null, machine = null) {
   const messagesUsed = phase === 'admission' ? messageActive.length : sum(messageActive, (entry) => entry.messages ?? 0);
   const bytesUsed = phase === 'admission' ? 0 : sum(byteActive, (entry) => entry.bytes ?? 0);
   const state = hard(messagesUsed, bytesUsed) ? 'paused' : slow(messagesUsed, bytesUsed) ? 'slowing' : 'normal';
-  const retryAt = forcedRetry ?? (state === 'paused'
-    ? retryAtFor(now, uniqueCharges([...messageActive, ...byteActive]), {
-      messages: messagesUsed >= MESSAGE_MAX ? 1 : 0,
-      bytes: bytesUsed >= SYNC_BYTES_MAX ? 1 : 0,
-    })
-    : null);
+  // A paused window frees up under the hard limit; a slowing one, under the point where slowing starts.
+  const ceiling = state === 'paused' ? { messages: MESSAGE_MAX, bytes: SYNC_BYTES_MAX } : SLOWING_AT;
+  const retryAt = forcedRetry ?? (state === 'normal'
+    ? null
+    : retryAtFor(now, uniqueCharges([...messageActive, ...byteActive]), {
+      messages: messagesUsed >= ceiling.messages ? 1 : 0,
+      bytes: bytesUsed >= ceiling.bytes ? 1 : 0,
+    }, ceiling));
   return {
     messages: { used: messagesUsed, max: MESSAGE_MAX, windowSeconds: MESSAGE_WINDOW_MS / 1000 },
     messageBytes: { max: MESSAGE_BYTES_MAX },

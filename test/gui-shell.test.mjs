@@ -10,14 +10,15 @@ import { answerApproval, changeTaskStatus, createGroup, createUnit, removeUnit, 
 import { documentSaver, findTextMatches, textDraft } from "../gui/app/void.mjs";
 import { createThread, markMailboxRead, openDirectChat, postMessage } from "../gui/app/chats.mjs";
 import { dispose as disposeEmbed, handleParentMessage, publishDirty, publishReady, startEmbedChannel } from "../gui/app/embed.mjs";
-import { DICTIONARIES, cardinal, dictionaryKeys, formatClock, formatShortTime, formatWhen, limitsUsage, text } from "../gui/app/i18n.mjs";
+import { DICTIONARIES, cardinal, dictionaryKeys, formatClock, formatRecent, formatShortDate, formatShortTime, formatWhen, limitsUsage, text } from "../gui/app/i18n.mjs";
 import { encodeHomeQr } from "../gui/app/qr.mjs";
 import { canPerform, exchangeCode, exchangeHomeFragment, logout, renderCodeEntry, renderPhone } from "../gui/app/phone.mjs";
 import { applyIssueChange, applyServiceBeat, applySettingsRead, applySyncSnapshot, armExpiry, clearGrant, closeHome, limitsLabel, noteHomeChange, openHome, renderSettings, saveSettings, takeGrant, updateExpiry } from "../gui/app/settings.mjs";
 import { activateUnit, buildHierarchy, flattenVisibleHierarchy, revealGroup, toggleGroup } from "../gui/app/hierarchy.mjs";
 import { collectPages, createPagedList, loadAll, moveFocus, reloadList, renderWindow, setQuery } from "../gui/app/lists.mjs";
-import { flushLayout, queueLayoutPatch } from "../gui/app/map.mjs";
-import { setAttachments, startWatch, libraryState, createResource } from "../gui/app/editors.mjs";
+import { flushLayout, graphBounds, queueLayoutPatch, wheelZoom } from "../gui/app/map.mjs";
+import { clusterCamera } from "../gui/app/cluster-geometry.mjs";
+import { setAttachments, startWatch, libraryState, createResource, registerResource } from "../gui/app/editors.mjs";
 import { composeCore } from "../engine/service/service.mjs";
 import { stopService } from "../engine/service/service.mjs";
 import { close as closeStream } from '../gui/app/stream.mjs';
@@ -242,8 +243,8 @@ test("English and Spanish use the same copy keys", () => {
   assert.throws(() => text("es", "missing-key"), /Unknown copy key: missing-key/);
 });
 
-async function settingsApp(t, onFetch) {
-  const fixture = await createGuiFixture({ scenario: "settings", now: new Date().toISOString() });
+async function settingsApp(t, onFetch, options = {}) {
+  const fixture = await createGuiFixture({ scenario: "settings", now: new Date().toISOString(), ...options });
   t.after(() => fixture.close());
   const desktop = await bootApp(fixture.desktopUrl, 1440, [], onFetch);
   t.after(() => dispose(desktop.app));
@@ -258,11 +259,11 @@ function changeControl(control, value) {
   for (const handler of control.listeners.get("change") ?? []) handler({ target: control });
 }
 
-test("Settings exposes five keyboard tabs, own-palette looks and machine-owned read-only reports", async t => {
+test("Settings exposes four keyboard tabs, own-palette looks and machine-owned read-only reports", async t => {
   const desktop = await settingsApp(t);
   const { root, app } = desktop;
   assert.deepEqual([...root.querySelectorAll("[data-settings-tab]")].map(node => node.textContent || text("en", `settings${node.dataset.settingsTab[0].toUpperCase()}${node.dataset.settingsTab.slice(1)}`)),
-    ["General", "Agents", "Permissions", "Projects", "Content"]);
+    ["General", "Agents", "Projects", "Content"]);
   assert.equal(root.querySelectorAll(".look-choice").length, 6);
   for (const preview of root.querySelectorAll(".look-choice")) {
     assert.equal(preview.getAttribute("data-look"), null);
@@ -354,7 +355,7 @@ test("Settings applies a reviewed selection once after a lost response and revok
   assert.equal(applied[0].key === applied[1].key, true);
   assert.deepEqual(applied[0].body, applied[1].body);
   assert.equal(app.settingsState.agents.items.find(item => item.id === "cursor").mode, "on-demand");
-  click(root.querySelector("[data-settings-tab='permissions']"));
+  assert.equal(root.querySelector("[data-settings-tab='permissions']"), null);
   const permission = app.settingsState.permissions.agentPermissions[0];
   assert.equal(permission.client, "cursor");
   click(root.querySelector(`[data-action='settings-revoke-${permission.id}']`));
@@ -527,6 +528,257 @@ test("Settings startup, scan and manual finding target the selected owner with r
   releaseFind();
   await waitFor(() => app.settingsState.agents.items.find(item => item.id === "copilot").found && document.querySelector("[data-form='settings-find']") == null, "The known client path was not found.");
   assert.equal(document.querySelector("[data-form='settings-find']"), null);
+});
+
+test("Settings General keeps Restart in the Relay card header, names the time of a slowdown and lists unreadable records by file", () => {
+  const { document } = createTestDocument(1440);
+  const restarts = [], opened = [];
+  const render = (extra = {}, language = "en") => renderSettings(document, { tab: "general", machine: "DESKTOP", localMachine: "DESKTOP", language, canWrite: true,
+    service: { state: "running", machine: "DESKTOP", version: "3.0.0", startedAt: "2026-10-21T14:15:00.000Z" }, locations: { mind: "C:/M1ND", staging: "C:/staging" }, ...extra },
+  (key, values) => text(language, key, values), { onRestart: () => restarts.push(1), onIssuesOpen: open => opened.push(open) });
+  const retryAt = "2026-10-21T14:40:00.000Z";
+  const issues = [{ code: "corrupt_resource", path: "units/shop.json", message: "The state could not be projected." },
+    { code: "corrupt_resource", path: "tasks/027-media.md", message: "The task could not be projected." }, { code: "bad_record", path: "odd.txt", message: "Something else went wrong." }];
+  const panel = render({ limits: { state: "slowing", retryAt, messages: { used: 50, max: 60 }, syncBytes: { used: 49900000, max: 50000000 } }, issues });
+  const head = panel.querySelector(".settings-card-head");
+  assert.equal(head.querySelector("h3").textContent, "Relay service");
+  const restart = head.querySelector("[data-action='settings-restart']");
+  assert.equal(restart.children.at(-1).textContent, "Restart");
+  assert.equal(restart.getAttribute("aria-label"), "Restart service");
+  assert.equal(restart.className.includes("is-secondary"), true);
+  assert.equal(restart.disabled, false);
+  click(restart);
+  assert.equal(restarts.length, 1);
+  assert.equal(render({ readOnly: true }).querySelector("[data-action='settings-restart']").disabled, true);
+  assert.deepEqual(panel.querySelectorAll(".settings-line").slice(0, 4).map(line => line.children[0].textContent), ["State", "Version", "Started", "Start with Windows"]);
+  const slowing = panel.querySelector("[data-limits='slowing']");
+  assert.equal(slowing.querySelector("strong").textContent, `Publishing slows down until ${formatShortTime("en", retryAt)}`);
+  assert.equal(slowing.querySelector("[data-limit-usage]").textContent, "49.9 of 50 MB of sync used in this window. Messages still go out.");
+  assert.equal(render({ limits: { state: "slowing", retryAt: null, syncBytes: { used: 1, max: 50000000 } } }).querySelector("[data-limits='slowing']").querySelector("strong").textContent, "Publishing slows down");
+  const normal = render({ limits: { state: "normal", messages: { used: 3, max: 60 }, syncBytes: { used: 1, max: 50000000 } } });
+  assert.equal(normal.querySelector(".settings-notice"), null);
+  assert.equal(normal.querySelector("[data-limits='normal']").textContent, limitsUsage("en", { used: 3, max: 60 }, { used: 1, max: 50000000 }));
+  const notice = panel.querySelector("[data-issues]");
+  assert.equal(notice.querySelector("strong").textContent, "3 records could not be read");
+  assert.equal(notice.querySelector("p").textContent, "The rest of the M1ND works.");
+  const files = notice.querySelector("[data-issue-files]"), toggle = notice.querySelector("[data-action='settings-issues-toggle']");
+  assert.equal(files.getAttribute("hidden") !== null, true);
+  assert.equal(toggle.textContent, "Show files");
+  click(toggle);
+  assert.equal(files.getAttribute("hidden"), null);
+  assert.equal(toggle.textContent, "Hide files");
+  assert.equal(toggle.getAttribute("aria-expanded"), "true");
+  assert.deepEqual(opened, [true]);
+  assert.deepEqual(files.querySelectorAll("code").map(node => node.textContent), ["units/shop.json", "tasks/027-media.md", "odd.txt"]);
+  assert.deepEqual(files.querySelectorAll("span").map(node => node.textContent), ["Unit state could not be read", "Task could not be read", "Could not be read"]);
+  assert.equal(render({ issues: issues.slice(0, 1) }).querySelector("[data-issues]").querySelector("strong").textContent, "1 record could not be read");
+  assert.equal(render({ issues, issuesOpen: true }).querySelector("[data-issue-files]").getAttribute("hidden"), null);
+  assert.equal(render().querySelector("[data-issues]"), null);
+  const spanish = render({ limits: { state: "slowing", retryAt, syncBytes: { used: 49900000, max: 50000000 } }, issues }, "es");
+  assert.equal(spanish.querySelector("[data-limits='slowing']").querySelector("strong").textContent, `La publicación se ralentiza hasta las ${formatShortTime("es", retryAt)}`);
+  assert.equal(spanish.querySelector("[data-issues]").querySelector("strong").textContent, "No se pudieron leer 3 registros");
+  assert.deepEqual(spanish.querySelector("[data-issue-files]").querySelectorAll("span").map(node => node.textContent),
+    ["No se pudo leer el estado de una unidad", "No se pudo leer una tarea", "No se pudo leer"]);
+  assertVisibleCopy("es", [["General", nodeText(spanish)]]);
+});
+
+test("Settings General folds Phone, Relay+ and Locations into disclosures that stay closed until asked", () => {
+  const { document } = createTestDocument(1440);
+  const render = (home, language = "en") => renderSettings(document, { tab: "general", machine: "DESKTOP", localMachine: "DESKTOP", language, canWrite: true, canManage: true, home,
+    now: Date.parse("2026-10-21T10:00:00.000Z"), locations: { mind: "C:/M1ND", staging: "C:/staging" } }, (key, values) => text(language, key, values), {});
+  const panel = render({ enabled: false });
+  const folds = panel.querySelectorAll("details");
+  assert.deepEqual(folds.map(node => node.getAttribute("data-disclosure")), ["settings-phone", "settings-relay-plus", "settings-locations"]);
+  assert.deepEqual(folds.map(node => node.getAttribute("open")), [null, null, null]);
+  assert.deepEqual(folds.map(node => node.querySelector("summary").children.at(-1).textContent), ["Closed", "Coming soon", "M1ND and staging folders"]);
+  assert.deepEqual(folds.map(node => node.querySelector("summary").children[1].textContent), ["Phone on the home network", "Relay+", "Locations"]);
+  assert.equal(folds[0].querySelector("[data-action='open-home']").className.includes("is-secondary"), true);
+  const expiresAt = "2026-10-21T22:00:00.000Z";
+  const open = render({ enabled: true, expiresAt, phoneCount: 1 });
+  assert.equal(open.querySelector("details").querySelector("summary").children.at(-1).textContent, `Open until ${formatShortTime("en", expiresAt)}`);
+  assert.equal(open.querySelector("details").getAttribute("open"), null);
+  assert.equal(render({ enabled: false }, "es").querySelector("details").querySelector("summary").children.at(-1).textContent, "Cerrado");
+});
+
+test("Settings Agents offers one Review all notice, folds Permissions and opens it for a saved permissions tab", () => {
+  const { document } = createTestDocument(1440);
+  const reviewed = [];
+  const agent = (id, name, changes, extra = {}) => ({ id, name, version: "1.0.0", found: true, mode: "auto", cli: { state: changes ? "changes-needed" : "connected", changes }, app: { name: null, state: "missing" }, ...extra });
+  const items = [agent("claude", "Claude Code", 52), agent("codex", "Codex", 52), agent("cursor", "Cursor", 51), agent("opencode", "OpenCode", 0),
+    agent("lyra", "Lyra", 0, { found: false, version: null, cli: { state: "missing", changes: 0 } })];
+  const render = (extra = {}, language = "en") => renderSettings(document, { tab: "agents", machine: "DESKTOP", localMachine: "DESKTOP", language, canWrite: true, canRevoke: true,
+    agents: { items, reportedAt: "2026-10-21T13:31:00.000Z" }, permissions: { unitGrants: [], agentPermissions: [] }, ...extra }, (key, values) => text(language, key, values), { onReviewAll: list => reviewed.push(list.map(item => item.id)), onReview: (item, mode, target) => reviewed.push([item.id, mode, target]), onFind: item => reviewed.push(["find", item.id]) });
+  const panel = render();
+  assert.deepEqual(panel.querySelectorAll("[data-settings-tab]").map(node => node.getAttribute("data-settings-tab")), ["general", "agents", "projects", "content"]);
+  const notice = panel.querySelector("[data-agents-notice]");
+  assert.equal(notice.querySelector("strong").textContent, "3 agents need the M1ND's rules and Relay");
+  assert.equal(notice.querySelector("p").textContent, "Up to 52 changes for each: rules, commands and the Relay entry. Each one can be read before applying.");
+  click(notice.querySelector("[data-action='settings-review-all']"));
+  assert.deepEqual(reviewed.pop(), ["claude", "codex", "cursor"]);
+  const same = render({ agents: { items: [agent("claude", "Claude Code", 52), agent("codex", "Codex", 52)] } });
+  assert.equal(same.querySelector("[data-agents-notice]").querySelector("p").textContent, "The same 52 changes for each: rules, commands and the Relay entry. Each one can be read before applying.");
+  assert.equal(render({ agents: { items: [agent("claude", "Claude Code", 0)] } }).querySelector("[data-agents-notice]"), null);
+  const link = panel.querySelector("[data-agent='cursor']").querySelector("[data-action='settings-review-cursor']");
+  assert.equal(link.children[0].textContent, "51 changes");
+  click(link);
+  assert.deepEqual(reviewed.pop(), ["cursor", "auto", "cli"]);
+  const missing = panel.querySelector("[data-agent='lyra']");
+  assert.equal(missing.className.includes("is-missing"), true);
+  assert.equal(missing.querySelector("small").textContent, "Not found on this machine");
+  const find = missing.querySelector("[data-action='settings-find-lyra']");
+  assert.equal(find.textContent, "Find it");
+  click(find);
+  assert.deepEqual(reviewed.pop(), ["find", "lyra"]);
+  const connected = panel.querySelector("[data-agent='opencode']");
+  assert.equal(connected.querySelector(".settings-connected").textContent, "Connected");
+  assert.equal(connected.querySelector("[data-action='settings-review-opencode']"), null);
+  const folded = panel.querySelector("[data-disclosure='settings-permissions']");
+  assert.equal(folded.getAttribute("open"), null);
+  assert.equal(folded.querySelector("summary").children.at(-1).textContent, "No standing approvals");
+  assert.deepEqual(folded.querySelectorAll("p").map(node => node.textContent).filter(value => value.endsWith("yet.")), ["No standing approvals yet.", "No agent permissions yet."]);
+  const grant = { unitId: "root:overseer", grant: { id: "g1", action: "shell", pattern: { command: "npm test" }, grantedAt: "2026-10-21T10:00:00.000Z" } };
+  const listed = render({ permissions: { unitGrants: [grant], agentPermissions: [{ id: "p1", client: "codex", actions: ["git.commit"], grantedAt: "2026-10-21T10:00:00.000Z" }] } });
+  assert.equal(listed.querySelector("[data-disclosure='settings-permissions']").querySelector("summary").children.at(-1).textContent, "2 standing approvals");
+  assert.deepEqual(listed.querySelectorAll("[data-permission]").map(node => node.getAttribute("data-permission")), ["g1", "p1"]);
+  const requested = render({ tab: "permissions" });
+  assert.equal(requested.querySelector("[data-settings-page]").getAttribute("data-settings-page"), "agents");
+  assert.equal(requested.querySelector("[data-settings-tab='agents']").getAttribute("aria-selected"), "true");
+  assert.notEqual(requested.querySelector("[data-disclosure='settings-permissions']").getAttribute("open"), null);
+  const spanish = render({}, "es");
+  assert.equal(spanish.querySelector("[data-agents-notice]").querySelector("strong").textContent, "3 agentes necesitan las reglas de la M1ND y Relay");
+  assert.equal(spanish.querySelector("[data-agent='lyra']").querySelector("[data-action='settings-find-lyra']").textContent, "Buscarla");
+  assert.equal(spanish.querySelector("[data-disclosure='settings-permissions']").querySelector("summary").children.at(-1).textContent, "Sin aprobaciones permanentes");
+  assertVisibleCopy("es", [["Agents", nodeText(spanish)]]);
+});
+
+test("Settings Projects sorts A to Z or Z to A, searches by name and path, marks missing folders and keeps Unlink in a row menu", () => {
+  const { document } = createTestDocument(1440);
+  const calls = [], views = [];
+  const links = [
+    { clusterId: "c3", title: "zeta-site", kind: "repository", localPath: "C:\\Web\\zeta-site", available: true },
+    { clusterId: "c1", title: "alpha", kind: "folder", localPath: "C:\\Unity\\alpha", available: true },
+    { clusterId: "c2", title: "Beta", kind: "repository", localPath: null, available: false },
+    { clusterId: "c4", title: "gamma", kind: "none", localPath: null, available: false },
+  ];
+  const render = (extra = {}, language = "en") => renderSettings(document, { tab: "projects", machine: "DESKTOP", localMachine: "DESKTOP", language, canWrite: true, projects: { clusterLinks: links }, ...extra },
+    (key, values) => text(language, key, values), { onLinkFolder: () => calls.push("link"), onRemoveLink: link => calls.push(["unlink", link.clusterId]), onOpenEditor: link => calls.push(["editor", link.clusterId]),
+      onCopyPath: link => calls.push(["copy", link.clusterId]), onProjectView: view => views.push(view) });
+  const panel = render();
+  const order = () => panel.querySelectorAll("[data-cluster-link]").map(node => node.getAttribute("data-cluster-link"));
+  assert.equal(panel.querySelector(".settings-card-head").querySelector("h3").textContent, "Linked folders");
+  const add = panel.querySelector(".settings-card-head").querySelector("[data-action='settings-link-folder']");
+  assert.equal(add.children.at(-1).textContent, "Link a folder");
+  click(add);
+  assert.deepEqual(calls.pop(), "link");
+  const search = panel.querySelector("[data-action='settings-link-search']");
+  assert.equal(search.getAttribute("placeholder"), "Search 4 linked folders");
+  const button = panel.querySelector("[data-action='settings-link-order']");
+  assert.equal(button.children[0].textContent, "A to Z");
+  assert.deepEqual(order(), ["c1", "c2", "c4", "c3"]);
+  click(button);
+  assert.equal(button.children[0].textContent, "Z to A");
+  assert.deepEqual(order(), ["c3", "c4", "c2", "c1"]);
+  assert.deepEqual(views.at(-1), { query: "", order: "descending" });
+  click(button);
+  assert.deepEqual(order(), ["c1", "c2", "c4", "c3"]);
+  search.value = "WEB"; for (const handler of search.listeners.get("input") ?? []) handler();
+  assert.deepEqual(order(), ["c3"]);
+  assert.deepEqual(views.at(-1), { query: "WEB", order: "ascending" });
+  search.value = "ALP"; for (const handler of search.listeners.get("input") ?? []) handler();
+  assert.deepEqual(order(), ["c1"]);
+  search.value = "nothing at all"; for (const handler of search.listeners.get("input") ?? []) handler();
+  assert.deepEqual(order(), []);
+  assert.equal(panel.querySelector(".settings-link-list").querySelector("p").textContent, "No linked folder matches.");
+  search.value = ""; for (const handler of search.listeners.get("input") ?? []) handler();
+  const missing = panel.querySelector("[data-cluster-link='c2']");
+  assert.equal(nodeText(missing.querySelector("[data-link-missing]")), "Not on this machine");
+  assert.equal(missing.querySelector("code"), null);
+  assert.equal(panel.querySelector("[data-cluster-link='c4']").querySelector("[data-action='settings-link-more']"), null);
+  assert.equal(panel.querySelector("[data-cluster-link='c3']").querySelector("code").textContent, "C:\\Web\\zeta-site");
+  const restored = render({ projectQuery: "al", projectOrder: "descending" });
+  assert.deepEqual(restored.querySelectorAll("[data-cluster-link]").map(node => node.getAttribute("data-cluster-link")), ["c1"]);
+  assert.equal(restored.querySelector("[data-action='settings-link-order']").children[0].textContent, "Z to A");
+  const more = panel.querySelector("[data-cluster-link='c3']").querySelector("[data-action='settings-link-more']");
+  click(more);
+  const menu = document.querySelector("[data-context-menu]");
+  assert.deepEqual(menu.children.map(node => node.getAttribute("data-action") ?? node.getAttribute("role")), ["context-open-editor", "context-copy-path", "separator", "context-unlink"]);
+  assert.deepEqual(menu.children.filter(node => node.tag === "button").map(node => node.textContent), ["Open in editor", "Copy the path", "Unlink"]);
+  assert.equal(menu.querySelector("[data-action='context-unlink']").className.includes("is-danger"), true);
+  click(menu.querySelector("[data-action='context-copy-path']"));
+  assert.deepEqual(calls.pop(), ["copy", "c3"]);
+  assert.equal(document.querySelector("[data-context-menu]"), null);
+  click(more);
+  click(document.querySelector("[data-action='context-open-editor']"));
+  assert.deepEqual(calls.pop(), ["editor", "c3"]);
+  click(more);
+  click(document.querySelector("[data-action='context-unlink']"));
+  assert.deepEqual(calls.pop(), ["unlink", "c3"]);
+  assert.equal(document.querySelector("[data-context-menu]"), null);
+  click(panel.querySelector("[data-cluster-link='c1']").querySelector("[data-action='settings-link-more']"));
+  assert.equal(document.querySelector("[data-action='context-open-editor']") != null, true);
+  document.querySelector("[data-context-menu]").remove();
+  click(panel.querySelector("[data-cluster-link='c2']").querySelector("[data-action='settings-link-more']"));
+  assert.deepEqual(document.querySelector("[data-context-menu]").children.map(node => node.getAttribute("data-action")), ["context-unlink"]);
+  document.querySelector("[data-context-menu]").remove();
+  const spanish = render({}, "es");
+  assert.equal(spanish.querySelector("[data-action='settings-link-order']").children[0].textContent, "De la A a la Z");
+  assert.equal(spanish.querySelector("[data-action='settings-link-search']").getAttribute("placeholder"), "Buscar entre 4 carpetas vinculadas");
+  assert.equal(nodeText(spanish.querySelector("[data-link-missing]")), "No está en esta máquina");
+  assertVisibleCopy("es", [["Projects", nodeText(spanish)]]);
+  assert.equal(render({ canWrite: false }).querySelector("[data-action='settings-link-folder']").disabled, true);
+});
+
+test("Settings Review all reads every agent that is behind and applies them in Activity, a refusal on one not stopping the others", async t => {
+  const writes = [];
+  const desktop = await settingsApp(t, (input, init) => { if (init.body && !["GET", "HEAD"].includes(init.method)) writes.push(new URL(input).pathname); }, {
+    seed: async ({ tree }) => {
+      const file = join(tree.user, "machines", "DESKTOP", "settings.json");
+      const report = JSON.parse(await readFile(file, "utf8"));
+      report.agents.items = report.agents.items.map(item => ["claude", "codex"].includes(item.id) ? { ...item, cli: { state: "changes-needed", changes: 52 } } : item);
+      await writeFile(file, JSON.stringify(report));
+    },
+  });
+  const { root, app, document, fixture } = desktop;
+  click(root.querySelector("[data-settings-tab='agents']"));
+  const notice = root.querySelector("[data-agents-notice]");
+  assert.equal(notice.querySelector("strong").textContent, "3 agents need the M1ND's rules and Relay");
+  click(notice.querySelector("[data-action='settings-review-all']"));
+  await waitFor(() => document.querySelector("[data-settings-review-all]"), "Review all did not open.");
+  const dialog = document.querySelector("[data-settings-review-all]");
+  const agents = dialog.querySelectorAll("[data-review-agent]");
+  assert.deepEqual(agents.map(node => node.getAttribute("data-review-agent")), ["claude", "codex", "cursor"]);
+  assert.deepEqual(agents.map(node => node.getAttribute("open") !== null), [true, false, false]);
+  assert.deepEqual(agents.map(node => node.querySelector("summary").children.at(-1).textContent), ["2 changes", "2 changes", "2 changes"]);
+  assert.equal(dialog.querySelector("[data-review-change='git']"), null);
+  assert.equal(writes.filter(path => path.endsWith("/preview")).length, 3);
+  assert.equal(writes.some(path => path.endsWith("/apply")), false);
+  fixture.control.setFault({ method: "POST", path: "/api/v1/settings/agents/codex/apply", status: 409, code: "configuration_changed" });
+  click(dialog.querySelector("[data-action='settings-apply-all']"));
+  assert.equal(document.querySelector("[data-settings-review-all]"), null);
+  await waitFor(() => root.querySelector("[data-queue-state='failed']"), "The refused agent did not fail in Activity.");
+  assert.deepEqual(root.querySelectorAll("[data-queue-result]").map(node => node.getAttribute("data-queue-result")), ["done", "failed", "done"]);
+  assert.deepEqual(writes.filter(path => path.endsWith("/apply")), ["claude", "codex", "cursor"].map(id => `/api/v1/settings/agents/${id}/apply`));
+  await waitFor(() => ["claude", "cursor"].every(id => app.settingsState.agents.items.find(item => item.id === id).cli.state === "connected"), "The agents that were accepted did not connect.");
+  assert.equal(app.settingsState.agents.items.find(item => item.id === "codex").cli.state, "changes-needed");
+  click(root.querySelector("[data-action='queue-retry']"));
+  await waitFor(() => root.querySelector("[data-queue-state='done']"), "Retry did not finish the agent that was left.");
+  assert.deepEqual(root.querySelectorAll("[data-queue-result]").map(node => node.getAttribute("data-queue-result")), ["done", "done", "done"]);
+  assert.equal(writes.filter(path => path.endsWith("/codex/apply")).length, 2);
+  assert.equal(writes.filter(path => path.endsWith("/claude/apply") || path.endsWith("/cursor/apply")).length, 2);
+  await waitFor(() => !app.settingsState.loading && app.settingsState.agents.items.every(item => !item.found || item.cli.state === "connected"), "Settings did not read the connected agents.");
+  assert.equal(root.querySelector("[data-agents-notice]"), null);
+});
+
+test("a saved permissions tab opens Agents with its Permissions disclosure open", async t => {
+  const { root, app } = await settingsApp(t);
+  assert.equal(root.querySelector("[data-disclosure='settings-permissions']"), null);
+  app.settingsState.tab = "permissions";
+  renderShell(app);
+  assert.equal(app.settingsState.tab, "agents");
+  assert.equal(root.querySelector("[data-settings-page]").getAttribute("data-settings-page"), "agents");
+  assert.notEqual(root.querySelector("[data-disclosure='settings-permissions']").getAttribute("open"), null);
+  renderShell(app);
+  assert.notEqual(root.querySelector("[data-disclosure='settings-permissions']").getAttribute("open"), null);
 });
 
 test("Settings phone dialog uses the real grant, retains expiry and scrubs secrets on dismissal and close", async t => {
@@ -1712,7 +1964,7 @@ test("R13 accepted waiting tasks use a toast and quiet Undo without opening the 
   await waitFor(() => desktop.app.waitingList?.items?.some(item => item.taskId === "project:shop:029"), "The review task did not load.");
   assert.equal(desktop.app.inspectorData ?? null, null);
   click(desktop.root.querySelector("[data-action='waiting']"));
-  click(desktop.root.querySelector("[data-waiting-surface]").querySelector("[data-task='project:shop:029']"));
+  click(desktop.root.querySelector("[data-waiting-panel]").querySelector("[data-task='project:shop:029']"));
   await waitFor(() => desktop.root.querySelector("[data-waiting-record='review']")?.querySelector("[data-action='accept']"), "The review did not open.");
   click(desktop.root.querySelector("[data-waiting-record='review']").querySelector("[data-action='accept']"));
   await waitFor(() => desktop.app.activity.get("task:project:shop:029")?.phase === "success", "Task acceptance did not settle.");
@@ -1737,26 +1989,24 @@ test("waiting opens from either navigation surface and refreshes without a selec
   const pending = desktop.app.waitingList.items.find((item) => item.approvalId === "e80a0bf9-8fb4-4d64-9527-04524c9a2ecf");
   assert.ok(pending);
   click(desktop.root.querySelector("[data-action='waiting']"));
-  await waitFor(() => desktop.root.querySelector("[data-waiting-surface]")?.querySelector("[data-approval='e80a0bf9-8fb4-4d64-9527-04524c9a2ecf']"), "The waiting list did not open.");
-  const search = desktop.root.querySelector("[data-waiting-search]");
-  typeInput(search, "zzzz-no-such-waiting", 0, 20);
-  await waitFor(() => desktop.root.querySelector("[data-waiting-total]")?.getAttribute("data-waiting-total") === "0", "Waiting search did not filter.");
-  typeInput(search, "", 0, 0);
-  await waitFor(() => desktop.root.querySelector("[data-waiting-surface]")?.querySelector("[data-approval='e80a0bf9-8fb4-4d64-9527-04524c9a2ecf']"), "Waiting search did not restore the list.");
-  click(desktop.root.querySelector("[data-waiting-surface]").querySelector("[data-approval='e80a0bf9-8fb4-4d64-9527-04524c9a2ecf']"));
+  await waitFor(() => desktop.root.querySelector("[data-waiting-panel]")?.querySelector("[data-approval='e80a0bf9-8fb4-4d64-9527-04524c9a2ecf']"), "The waiting list did not open.");
+  assert.ok(desktop.root.querySelector(".map"), "the Map stays beside Waiting");
+  assert.equal(desktop.root.querySelector("[data-waiting-surface]"), null);
+  click(desktop.root.querySelector("[data-waiting-panel]").querySelector("[data-approval='e80a0bf9-8fb4-4d64-9527-04524c9a2ecf']"));
   await waitFor(() => desktop.root.querySelector("[data-waiting-record='approval']")?.querySelector("[data-action='approve']"), "The approval action was not offered.");
   assert.equal(desktop.root.querySelector("[data-waiting-record]")?.querySelector("[data-action='revoke-grant']"), null);
   navigate(desktop.app, "settings");
   assert.equal(desktop.root.querySelector("[data-settings]") != null, true);
-  assert.equal(desktop.root.querySelector("[data-waiting-surface]"), null);
+  assert.equal(desktop.root.querySelector("[data-waiting-panel]"), null);
   navigate(desktop.app, "map");
-  assert.equal(desktop.root.querySelector("[data-waiting-surface]") != null, true);
+  assert.equal(desktop.root.querySelector("[data-waiting-panel]"), null, "any mode change, the Map included, closes Waiting");
+  assert.equal(desktop.root.querySelector("[data-action='waiting']").getAttribute("aria-pressed"), "false");
 
   for (const mode of ["settings", "blueprint", "document", "focus"]) {
     navigate(desktop.app, mode);
     assert.equal(desktop.root.querySelector("[data-action='waiting']").getAttribute("aria-pressed"), "false");
     click(desktop.root.querySelector("[data-action='waiting']"));
-    await waitFor(() => desktop.root.querySelector("[data-waiting-surface]"), `Waiting did not open from ${mode}.`);
+    await waitFor(() => desktop.root.querySelector("[data-waiting-panel]"), `Waiting did not open from ${mode}.`);
     assert.equal(desktop.app.mode, "map");
     assert.equal(desktop.root.querySelector("[data-action='waiting']").getAttribute("aria-pressed"), "true");
   }
@@ -1803,7 +2053,7 @@ test("desktop registers a path, copies a legacy module, and edits structure with
   click(desktop.root.querySelector("[data-action='open-register']"));
   typeInput(desktop.document.querySelector("[data-field='register-path']"), "docs/flows/boards/legacy-cart.mjs", 0, 0);
   click(desktop.document.querySelector("[data-action='register-resource']"));
-  await waitFor(() => desktop.root.querySelector("[data-legacy]")?.textContent === "docs/flows/boards/legacy-cart.mjs", "The original module path was not shown.");
+  await waitFor(() => desktop.root.querySelector(".board-notice")?.getAttribute("data-legacy") === "docs/flows/boards/legacy-cart.mjs", "The module board was not drawn with its path.");
   assert.equal(desktop.root.querySelector("[data-action='resize-screen']"), null);
   click(desktop.root.querySelector("[data-action='copy-json']"));
   await waitFor(() => desktop.app.editors.error || desktop.root.querySelector("[data-action='resize-screen']"), "The copy returned no result.");
@@ -1819,7 +2069,7 @@ test("desktop registers a path, copies a legacy module, and edits structure with
   await waitFor(() => desktop.app.editors.catalog.some((item) => item.title === "Cart"), "The board catalog did not load.");
   const cart = desktop.app.editors.catalog.find((item) => item.title === "Cart");
   renderShell(desktop.app);
-  click(desktop.root.querySelector(`[data-id="${cart.id}"]`));
+  openLibraryItem(desktop, cart.id);
   await waitFor(() => desktop.app.editors.current?.resourceId === cart.id && desktop.root.querySelector("[data-field='screen-width']"), "The Cart board did not open.");
   assert.equal(desktop.root.querySelector("[data-action='move-page']")?.getAttribute("disabled"), "");
   assert.equal(desktop.root.querySelector("[data-action='add-link']")?.getAttribute("disabled"), "");
@@ -1856,7 +2106,7 @@ test("desktop registers a path, copies a legacy module, and edits structure with
   await waitFor(() => desktop.app.editors.catalog.some((item) => item.title === "Release notes"), "The text catalog did not load.");
   const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
   renderShell(desktop.app);
-  click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
+  openLibraryItem(desktop, notes.id);
   await waitFor(() => desktop.app.editors.current?.resourceId === notes.id && desktop.root.querySelector("[data-void-title]"), "The text did not open.");
   const textRevision = desktop.app.editors.current.revision;
   const textRev = desktop.app.editors.current.authoritative.document.rev;
@@ -1903,7 +2153,7 @@ test("void drafts stay with their page and comments use the rendered selection",
   await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
   const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
   renderShell(desktop.app);
-  click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
+  openLibraryItem(desktop, notes.id);
   await waitFor(() => desktop.root.querySelector("[data-source]")?.value?.includes("<b>Welcome</b>"), "The release text did not open.");
   const commentsBefore = () => writes.filter((item) => item.method === "POST" && item.url.includes("/comments"));
   click(desktop.root.querySelector("[data-action='comment-quote']"));
@@ -1974,7 +2224,7 @@ test("void drafts stay with their page and comments use the rendered selection",
   assert.notEqual(desktop.root.querySelector("[data-source]").value, "LOCAL DRAFT");
   assert.notEqual(desktop.root.querySelector("[data-source]").value, "Next page.");
   renderShell(desktop.app);
-  click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
+  openLibraryItem(desktop, notes.id);
   await waitFor(() => desktop.app.editors.current?.resourceId === notes.id && desktop.app.voidState?.page === "Notes.Next", "The text did not restore its selected page.");
   assert.equal(textDraft(desktop.app.editors.current, notes.id, "Intro.Welcome", "en"), "LOCAL DRAFT");
   desktop.app.voidState.page = "Intro.Welcome";
@@ -1996,7 +2246,7 @@ test("comments use a complete anchor and stay disabled until one exists", async 
   await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");
   const cart = desktop.app.editors.catalog.find((item) => item.title === "Cart");
   renderShell(desktop.app);
-  click(desktop.root.querySelector(`[data-id="${cart.id}"]`));
+  openLibraryItem(desktop, cart.id);
   await waitFor(() => desktop.root.querySelector("[data-action='comment']") && desktop.root.querySelector("[data-node='label']"), "The board comment control did not appear.");
   const commentPosts = () => writes.filter((item) => item.url.includes("/comments") && item.body.anchor);
   assert.equal(desktop.root.querySelector("[data-action='comment']").getAttribute("disabled"), "");
@@ -2052,7 +2302,7 @@ test("comments use a complete anchor and stay disabled until one exists", async 
   await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
   const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
   renderShell(desktop.app);
-  click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
+  openLibraryItem(desktop, notes.id);
   await waitFor(() => desktop.root.querySelector("[data-source]")?.value?.includes("<b>Welcome</b>"), "The release text did not open.");
   assert.equal(desktop.root.querySelector("[data-action='comment']").getAttribute("disabled"), "");
   typeInput(desktop.root.querySelector("[data-comment]"), "Use the rendered words", 0, 3);
@@ -2193,11 +2443,16 @@ for (const language of ["en", "es"]) test(`current mounted ${language} states us
   assert.ok(always);
   assert.equal(always.textContent, text(language, "approveAlways"));
   click(desktop.root.querySelector("[data-action='waiting']"));
+  await waitFor(() => desktop.root.querySelector("[data-waiting-panel]"), "The copy inventory did not open Waiting.");
   capture("Waiting");
   click(desktop.root.querySelector("[data-action='new-cluster']"));
   await waitFor(() => desktop.document.querySelector("[data-start-dialog='cluster']"), "The copy inventory did not open the unit form.");
   capture("New cluster form");
   desktop.document.querySelector("dialog[open]").close();
+  click(desktop.root.querySelector("[data-action='waiting']"));
+  const idle = desktop.app.unitList.catalog.find((unit) => unit.id === "root:adjutant");
+  desktop.app.activeHandlers.onActivate({ id: idle.id, kind: "unit", unit: idle }, "double");
+  await waitFor(() => desktop.app.inspectorData?.unitId === idle.id && desktop.root.querySelector("[data-action='start-session']"), "The copy inventory did not open an agent that can start.");
   click(desktop.root.querySelector("[data-action='start-session']"));
   await waitFor(() => desktop.document.querySelector("[data-form='session']"), "The copy inventory did not open the session form.");
   capture("Session form");
@@ -2211,7 +2466,7 @@ for (const language of ["en", "es"]) test(`current mounted ${language} states us
     capture(`${mode} library`);
     const item = desktop.app.editors.catalog.find((item) => item.kind === kind && item.title === (kind === "blueprint" ? "Cart" : "Release notes"));
     renderShell(desktop.app);
-    click(desktop.root.querySelector(`[data-id='${item.id}']`));
+    openLibraryItem(desktop, item.id);
     await waitFor(() => desktop.app.editors.current?.resourceId === item.id && desktop.root.querySelector(kind === "blueprint" ? ".board-host" : "[data-void]"), "The copy inventory did not open the resource.");
     capture(`${mode} content and comments`);
   }
@@ -2266,6 +2521,8 @@ test("unit forms use machines, session forms use the stored runtime, and the ins
   assert.equal(session.querySelector("[data-session-quota]").getAttribute("data-session-quota"), "unknown");
   assert.equal(session.querySelector("[data-session-wake]").getAttribute("data-session-wake"), "enabled");
   assert.equal(desktop.root.querySelector("[data-machine='DESKTOP']").getAttribute("data-answers"), "true");
+  assert.equal(desktop.root.querySelector("[data-action='start-session']"), null, "a running session offers Stop and no Start");
+  assert.ok(desktop.root.querySelector("[data-action='stop-session']"));
   const grant = desktop.root.querySelector("[data-grant-action='process.run']").parent;
   assert.equal(grant.querySelector("[data-grant-action]").getAttribute("data-grant-action"), "process.run");
   assert.equal(grant.querySelector("[data-grant-pattern]").textContent, "command: npm run build, cwd: project:shop");
@@ -2301,7 +2558,15 @@ test("unit forms use machines, session forms use the stored runtime, and the ins
   const blog = desktop.app.unitList.catalog.find((unit) => unit.id === "project:blog:executor-shop");
   desktop.app.activeHandlers.onActivate({ id: blog.id, kind: "unit", unit: blog }, "double");
   await waitFor(() => desktop.root.querySelector("[data-machine='OFFLINE']")?.getAttribute("data-answers") === "false", "The silent machine was not shown.");
-  assert.notEqual(desktop.root.querySelector("[data-action='start-session']").getAttribute('disabled'), null);
+  assert.equal(desktop.root.querySelector("[data-action='start-session']"), null, "a machine that does not answer offers neither Start nor Stop");
+  assert.equal(desktop.root.querySelector("[data-action='stop-session']"), null);
+  const notice = desktop.root.querySelector("[data-machine-notice='OFFLINE']");
+  assert.equal(notice.querySelector("strong").textContent, "OFFLINE is not answering");
+  assert.equal(notice.querySelector("p").textContent, "Executor shop runs there; it starts when OFFLINE is back.");
+  desktop.app.language = "es";
+  renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector("[data-machine-notice='OFFLINE']").querySelector("strong").textContent, "OFFLINE no responde");
+  assert.equal(desktop.root.querySelector("[data-machine-notice='OFFLINE']").querySelector("p").textContent, "Executor shop se ejecuta allí; se inicia cuando OFFLINE vuelva.");
 });
 
 test('a rejected cluster keeps its name and focus across refresh and retries its original operation', async t => {
@@ -2358,14 +2623,14 @@ test("unsaved forms share one dirty flag and only a saved draft clears it", asyn
   await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");
   const cart = desktop.app.editors.catalog.find((item) => item.title === "Cart");
   renderShell(desktop.app);
-  click(desktop.root.querySelector(`[data-id="${cart.id}"]`));
+  openLibraryItem(desktop, cart.id);
   await waitFor(() => desktop.root.querySelector("[data-node-name]"), "The node name field did not open.");
   typeInput(desktop.root.querySelector("[data-node-name]"), "Label 2", 0, 7);
   navigate(desktop.app, "document");
   await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
   const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
   renderShell(desktop.app);
-  click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
+  openLibraryItem(desktop, notes.id);
   await waitFor(() => desktop.root.querySelector("[data-source]")?.value?.includes("<b>Welcome</b>"), "The release text did not open.");
   const source = desktop.root.querySelector("[data-source]");
   typeInput(source, `${source.value}!`, 0, 1);
@@ -2382,14 +2647,14 @@ test("unsaved forms share one dirty flag and only a saved draft clears it", asyn
   navigate(desktop.app, "blueprint");
   await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.id === cart.id), "The board catalog did not return.");
   renderShell(desktop.app);
-  click(desktop.root.querySelector(`[data-id="${cart.id}"]`));
+  openLibraryItem(desktop, cart.id);
   await waitFor(() => desktop.root.querySelector("[data-node-name]")?.value === "Label 2", `The node draft was not restored. value=${desktop.root.querySelector("[data-node-name]")?.value ?? "missing"} stored=${desktop.app.inputDrafts.nodes?.get(cart.id) ?? "missing"}`);
   typeInput(desktop.root.querySelector("[data-node-name]"), "", 0, 0);
   assert.equal(dirtyPatches().some((item) => item.body.dirty === false), false);
   navigate(desktop.app, "document");
   await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.id === notes.id), "The text catalog did not return.");
   renderShell(desktop.app);
-  click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
+  openLibraryItem(desktop, notes.id);
   await waitFor(() => desktop.root.querySelector("[data-source]")?.value?.endsWith("!"), "The source draft was discarded with the other forms.");
   await desktop.app.editors.current.voidSaver?.flush();
   await waitFor(() => !(desktop.app.editors.current?.textDrafts?.size), "The source draft was not saved.");
@@ -2439,7 +2704,7 @@ test("Blueprint and Document place the catalog beside the comments", async (t) =
   renderShell(desktop.app);
   const cart = desktop.app.editors.catalog.find((item) => item.title === "Cart");
   renderShell(desktop.app);
-  click(desktop.root.querySelector(`[data-id="${cart.id}"]`));
+  openLibraryItem(desktop, cart.id);
   await waitFor(() => desktop.root.querySelector(".board-host"), "The board did not open.");
   const resource = desktop.root.querySelector("[data-editor-column='resource']");
   const comments = desktop.root.querySelector("[data-editor-column='comments']");
@@ -2460,7 +2725,7 @@ test("Blueprint and Document place the catalog beside the comments", async (t) =
   assert.equal(documentLayout.querySelector("[data-editor-column='catalog']").querySelector("h2").textContent, "Texts");
   const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
   renderShell(desktop.app);
-  click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
+  openLibraryItem(desktop, notes.id);
   await waitFor(() => desktop.root.querySelector("[data-source]")?.value?.includes("<b>Welcome</b>"), "The release text did not open.");
   const textResource = desktop.root.querySelector("[data-editor-column='resource']");
   const textComments = desktop.root.querySelector("[data-editor-column='comments']");
@@ -2510,7 +2775,8 @@ test("a narrow desktop keeps the main column and dismisses the side panels", asy
   desktop.app.look = "high-contrast";
   renderShell(desktop.app);
   assert.equal(desktop.root.querySelector(".shell").getAttribute("data-layout"), "desktop");
-  assert.equal(desktop.root.querySelector("[data-action='toggle-catalog']").textContent, text("es", "hideCatalog"));
+  assert.equal(desktop.root.querySelector("[data-action='toggle-catalog']").children.at(-1).textContent, text("es", "boards"));
+  assert.equal(desktop.root.querySelector("[data-action='toggle-catalog']").getAttribute("aria-pressed"), "true");
   assert.equal(desktop.root.querySelector("[data-action='toggle-comments']").textContent, text("es", "hideComments"));
   const css = await readFile("gui/app/styles.css", "utf8");
   const start = css.indexOf("@media (max-width: 987px)");
@@ -2534,7 +2800,7 @@ test("board nodes and named controls are available from the keyboard", async (t)
   await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");
   const cart = desktop.app.editors.catalog.find((item) => item.title === "Cart");
   renderShell(desktop.app);
-  click(desktop.root.querySelector(`[data-id="${cart.id}"]`));
+  openLibraryItem(desktop, cart.id);
   await waitFor(() => desktop.root.querySelector("[data-node][tabindex='0']"), "The board node was not keyboard focusable.");
   const node = desktop.root.querySelector("[data-node][tabindex='0']");
   assert.equal(node.getAttribute("role"), "treeitem");
@@ -2561,7 +2827,7 @@ test("board nodes and named controls are available from the keyboard", async (t)
   await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
   const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
   renderShell(desktop.app);
-  click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
+  openLibraryItem(desktop, notes.id);
   await waitFor(() => desktop.root.querySelector("[data-source]"), "The source field did not open.");
   assert.equal(desktop.root.querySelector("[data-source]").closest("label").querySelector(".field-label").textContent, "Source");
   assert.equal(desktop.root.querySelector("[data-source]").closest("[data-source-edit]") != null, true);
@@ -2613,7 +2879,7 @@ test("Focus keeps only the readable document until the pointer reveals its tools
   await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
   const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
   renderShell(desktop.app);
-  click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
+  openLibraryItem(desktop, notes.id);
   await waitFor(() => desktop.root.querySelector("[data-action='enter-focus']"), "The Focus control did not appear.");
   click(desktop.root.querySelector("[data-action='enter-focus']"));
   assert.equal(desktop.root.querySelector(".shell")?.getAttribute("data-mode"), "focus");
@@ -2732,7 +2998,7 @@ test("Void keeps the source selection and draft through formatting, Source, Focu
   navigate(desktop.app, "document");
   await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
   const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
-  click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
+  openLibraryItem(desktop, notes.id);
   await waitFor(() => desktop.root.querySelector("[data-void-body]"), "The document did not open.");
   const editor = desktop.app.editors.current;
   editor.voidSaver = documentSaver(desktop.app.api, editor, () => {}, 10000);
@@ -2819,7 +3085,7 @@ test("Void shows Not saved and retries the captured operation before saving late
   navigate(desktop.app, "document");
   await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
   const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
-  click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
+  openLibraryItem(desktop, notes.id);
   await waitFor(() => desktop.root.querySelector("[data-source]"), "The document did not open.");
   const editor = desktop.app.editors.current;
   fixture.control.setFault({ method: "PUT", path: `/api/v1/void/texts/${notes.id}`, dropAfterCommit: true });
@@ -2843,7 +3109,7 @@ test("Void shows Not saved and retries the captured operation before saving late
   assert.equal(desktop.root.querySelector("[data-void-save]").textContent, "Saved");
 });
 
-test("mounted map circles use translated status and keep pan", async (t) => {
+test("mounted map circles use translated status and the zoom bar has no pan button", async (t) => {
   const fixture = await createGuiFixture();
   t.after(() => fixture.close());
   const desktop = await bootApp(fixture.desktopUrl, 1440, []);
@@ -2861,7 +3127,8 @@ test("mounted map circles use translated status and keep pan", async (t) => {
   assert.equal(lead.className.includes("is-lead"), true);
   assert.equal(shop.getAttribute("data-role"), executor.role);
   assert.equal(shop.querySelector("[data-map-label]").textContent, displayName(executor.unit));
-  assert.equal(desktop.root.querySelector("[data-action='pan']") != null, true);
+  assert.equal(desktop.root.querySelector("[data-action='pan']"), null);
+  assert.equal(desktop.root.querySelector("[data-action='map-help']") != null, true);
   desktop.app.language = "es";
   renderShell(desktop.app);
   const status = desktop.root.querySelector("[data-unit-id='project:shop:executor-shop']").querySelector("[data-status]");
@@ -2896,24 +3163,29 @@ test("settings and the footer follow sync, service, and issue changes", async (t
   await waitFor(() => desktop.root.querySelector("[data-sync='paused']")?.textContent === "Sync is paused", "The paused sync state was not shown.");
   assert.equal(desktop.root.querySelector("[data-pending-changes]")?.textContent, "4 changes waiting");
   assert.equal(desktop.root.querySelector("[data-limits='paused']")?.getAttribute("data-retry-at"), retryAt);
-  const limitText = desktop.root.querySelector("[data-limits='paused']").textContent;
+  const limitText = desktop.root.querySelector("[data-limits='paused']").querySelector("strong").textContent;
+  assert.equal(limitText, text("en", "limitsPaused", { time: formatShortTime("en", retryAt) }));
   assert.equal(limitText.includes(retryAt), false);
-  assert.equal(limitText.includes(String(new Date(retryAt).getFullYear())), true);
   assert.equal(limitText.includes("T"), false);
-  const usage = desktop.root.querySelector("[data-limit-usage]")?.textContent ?? "";
-  assert.equal(usage.includes("61 of 60"), true);
-  assert.equal(usage.includes("50,000,000"), true);
-  assert.equal(usage.includes("50000000"), false);
+  assert.equal(desktop.root.querySelector("[data-limit-usage]")?.textContent, "0 of 50 MB of sync used in this window. Messages still go out.");
   await fixture.control.emit("service.changed", { machine: { id: "LAPTOP", version: "3.0.1", state: "running", answers: true } });
   await waitFor(() => desktop.root.querySelector("[data-service-machine]")?.getAttribute("data-service-machine") === "LAPTOP", "The service machine was not updated.");
+  // The unreadable records the fixture already has are listed too; each says which file and why, never the service's English sentence.
+  const unreadable = () => desktop.root.querySelector("[data-issue-files]")?.querySelectorAll("li") ?? [];
+  const before = unreadable().length;
   await fixture.control.emit("issue.changed", { issue: { path: "units/shop", code: "bad_record", message: "The unit file is unreadable." }, resolved: false });
-  await waitFor(() => [...desktop.root.querySelector("[data-issues]").children].some((node) => node.textContent === "The unit file is unreadable."), "The issue was not shown.");
+  await waitFor(() => unreadable().length === before + 1, "The issue was not shown.");
+  assert.equal(desktop.root.querySelector("[data-issues]").querySelector("strong").textContent, cardinal("en", "settingsIssues", before + 1));
+  const added = unreadable().find((row) => row.querySelector("code").textContent === "units/shop");
+  assert.deepEqual(added.querySelectorAll("span").map((node) => node.textContent), ["Could not be read"]);
+  assert.equal(/projected|unreadable/.test(nodeText(desktop.root.querySelector("[data-issue-files]"))), false);
   desktop.app.language = "es";
   renderShell(desktop.app);
   assert.equal(desktop.root.querySelector("[data-sync='paused']")?.textContent, "La sincronización está en pausa");
-  assert.equal(desktop.root.querySelector("[data-limits='paused']").textContent.includes("en pausa"), true);
+  assert.equal(desktop.root.querySelector("[data-limits='paused']").querySelector("strong").textContent.includes("en pausa"), true);
+  assert.equal(desktop.root.querySelector("[data-issues]").querySelector("strong").textContent, cardinal("es", "settingsIssues", before + 1));
   await fixture.control.emit("issue.changed", { issue: { path: "units/shop", code: "bad_record", message: "The unit file is unreadable." }, resolved: true });
-  await waitFor(() => ![...desktop.root.querySelector("[data-issues]").children].some((node) => node.textContent === "The unit file is unreadable."), "The resolved issue remained.");
+  await waitFor(() => unreadable().length === before, "The resolved issue remained.");
   const token = desktop.app.api.token;
   desktop.app.store.stream = { state: "error", error: "reconnect_exhausted" };
   renderShell(desktop.app);
@@ -3035,7 +3307,7 @@ test("request expiry stays separate from reopening guidance and comments require
   await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");
   const cart = desktop.app.editors.catalog.find((item) => item.title === "Cart");
   renderShell(desktop.app);
-  click(desktop.root.querySelector(`[data-id="${cart.id}"]`));
+  openLibraryItem(desktop, cart.id);
   await waitFor(() => desktop.root.querySelector("[data-action='comment-node']"), "The node comment control did not appear.");
   const commentBodies = () => writes.filter((item) => item.url.includes("/comments")).map((item) => item.body.text);
   click(desktop.root.querySelector("[data-action='comment-node']"));
@@ -3054,7 +3326,7 @@ test("request expiry stays separate from reopening guidance and comments require
   await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
   const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
   renderShell(desktop.app);
-  click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
+  openLibraryItem(desktop, notes.id);
   await waitFor(() => desktop.root.querySelector("[data-action='reply']"), "The reply control did not appear.");
   const replies = () => writes.filter((item) => item.url.includes("/replies")).map((item) => item.body.text);
   click(desktop.root.querySelector("[data-action='reply']"));
@@ -3079,7 +3351,7 @@ test("a shell refresh keeps the focused editor field and its caret", async (t) =
   await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
   const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
   renderShell(desktop.app);
-  click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
+  openLibraryItem(desktop, notes.id);
   await waitFor(() => desktop.root.querySelector("[data-source]"), "The source field did not appear.");
   click(desktop.root.querySelector("[data-action='toggle-source']"));
   let typed = "";
@@ -3147,7 +3419,7 @@ test("editor forms, chats, and the inspector stay compact", async (t) => {
   await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");
   const cart = desktop.app.editors.catalog.find((item) => item.title === "Cart");
   renderShell(desktop.app);
-  click(desktop.root.querySelector(`[data-id="${cart.id}"]`));
+  openLibraryItem(desktop, cart.id);
   await waitFor(() => desktop.root.querySelector("[data-action='attach']"), "The attach control did not appear.");
   const toolbar = desktop.root.querySelector("[data-toolbar='board']");
   assert.equal(toolbar?.getAttribute("role"), "toolbar");
@@ -3167,7 +3439,7 @@ test("editor forms, chats, and the inspector stay compact", async (t) => {
   await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
   const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
   renderShell(desktop.app);
-  click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
+  openLibraryItem(desktop, notes.id);
   await waitFor(() => desktop.root.querySelector("[data-editor-column='comments']")?.querySelector(".comment-author")?.textContent === "You", "The comment author was not shown as the person.");
   const source = desktop.root.querySelector("[data-source]");
   assert.equal(source?.closest("[data-source-edit]") != null, true);
@@ -3212,7 +3484,7 @@ test("editor events refresh attachments, assets, delivery and conflicts", async 
   await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");
   const cart = desktop.app.editors.catalog.find((item) => item.title === "Cart");
   renderShell(desktop.app);
-  click(desktop.root.querySelector(`[data-id="${cart.id}"]`));
+  openLibraryItem(desktop, cart.id);
   await waitFor(() => desktop.app.editors.current?.resourceId === cart.id && desktop.root.querySelector("[data-comment]"), "The board did not open.");
   desktop.app.editors.selectedNodeId = "kept-node";
   desktop.app.editors.current.selectedNodeId = "kept-node";
@@ -3322,7 +3594,7 @@ test("phone navigation stays compact and focus can leave the source", async (t) 
   await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
   const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
   renderShell(desktop.app);
-  click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
+  openLibraryItem(desktop, notes.id);
   await waitFor(() => desktop.root.querySelector("[data-action='enter-focus']"), "The Focus control did not appear.");
   click(desktop.root.querySelector("[data-action='enter-focus']"));
   const source = desktop.root.querySelector("[data-source]");
@@ -3357,7 +3629,7 @@ test("disabled controls explain how to continue", async (t) => {
   await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");
   const cart = desktop.app.editors.catalog.find((item) => item.title === "Cart");
   renderShell(desktop.app);
-  click(desktop.root.querySelector(`[data-id="${cart.id}"]`));
+  openLibraryItem(desktop, cart.id);
   await waitFor(() => desktop.root.querySelector("[data-action='resize-screen']"), "The resize control did not appear.");
   assert.equal(desktop.root.querySelector("[data-action='patch-node']")?.getAttribute("disabled"), "");
   assert.equal(desktop.root.querySelector("[data-action='remove-node']")?.getAttribute("disabled"), "");
@@ -3394,7 +3666,7 @@ test("an editor action names its failure and waits inside its dialog", async (t)
   await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");
   const cart = desktop.app.editors.catalog.find((item) => item.title === "Cart");
   renderShell(desktop.app);
-  click(desktop.root.querySelector(`[data-id="${cart.id}"]`));
+  openLibraryItem(desktop, cart.id);
   await waitFor(() => desktop.root.querySelector("[data-action='add-node']"), "The shape control did not appear.");
   click(desktop.root.querySelector("[data-action='add-node']"));
   await waitFor(() => nodePosts === 1, "The shape write did not start.");
@@ -4583,9 +4855,9 @@ test('Claude Code and Cursor show the bilingual warning; Work automatically crea
   desktop.app.language = 'es'; renderShell(desktop.app);
   assert.equal(desktop.root.querySelector('[data-native-mode]').textContent, 'Automático, sin confinamiento');
   desktop.app.language = 'en'; renderShell(desktop.app);
-  // Settings, Permissions lists the grant with Revoke, which applies to the next operation in a running session.
+  // Settings, Agents, Permissions lists the grant with Revoke, which applies to the next operation in a running session.
   navigate(desktop.app, 'settings'); await desktop.app.settingsState.pending; await patient(() => desktop.app.settingsState?.loaded && !desktop.app.settingsState.loading, 'Settings did not load.');
-  click(desktop.root.querySelector('[data-action="settings-tab-permissions"]'));
+  click(desktop.root.querySelector('[data-action="settings-tab-agents"]'));
   await patient(() => desktop.root.querySelector(`[data-permission="${listed[0].id}"]`), 'The grant is not listed in Permissions.');
   const row = desktop.root.querySelector(`[data-permission="${listed[0].id}"]`);
   assert.ok(nodeText(row).includes('root:overseer')); assert.ok(nodeText(row).includes(`Works automatically in ${client === 'claude' ? 'Claude Code' : 'Cursor'}, not confined`));
@@ -4664,7 +4936,7 @@ test("a reopened board gives each added shape a distinct persisted identity", as
     await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");
     const cart = desktop.app.editors.catalog.find((item) => item.title === "Cart");
     renderShell(desktop.app);
-    click(desktop.root.querySelector(`[data-id="${cart.id}"]`));
+    openLibraryItem(desktop, cart.id);
     await waitFor(() => desktop.root.querySelector("[data-action='add-node']"), "The board did not open.");
     const kids = () => desktop.app.editors.current.authoritative.document.screens[0].root.kids;
     if (expectedCount === null) expectedCount = kids().length;
@@ -4720,7 +4992,7 @@ test("failure causes and empty lists name the resource and its next step", async
   await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
   const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
   renderShell(desktop.app);
-  click(desktop.root.querySelector(`[data-id="${notes.id}"]`));
+  openLibraryItem(desktop, notes.id);
   await waitFor(() => desktop.root.querySelector("[data-comment]"), "The comment field did not open.");
   assert.equal(desktop.root.querySelector("[data-comment]").closest("label").querySelector(".field-hint").textContent, "Select text, then write the comment.");
   assert.equal(desktop.root.querySelector("[data-disabled-reason='comment']")?.textContent, "Select text before commenting on it.");
@@ -4735,7 +5007,10 @@ test("failure causes and empty lists name the resource and its next step", async
   desktop.app.editors.loadedKind = "void";
   desktop.app.editors.catalogLoading = false;
   renderShell(desktop.app);
-  assert.equal(desktop.root.querySelector("[data-empty='void']")?.textContent, "No texts yet. Create or register one.");
+  const empty = desktop.root.querySelector("[data-empty='void']");
+  assert.equal(empty.children[0].textContent, "No texts yet");
+  assert.match(empty.children[1].textContent, /^A text is a Markdown file in /);
+  assert.deepEqual(empty.querySelectorAll("button").map((button) => button.getAttribute("data-action")), ["library-empty-create", "library-empty-register"]);
   assert.equal(desktop.root.querySelector("[data-action='open-create']")?.getAttribute("aria-label"), "New text");
   assert.equal(desktop.root.querySelector("[data-action='refresh-catalog']")?.getAttribute("aria-label"), "Refresh");
   assert.equal([...desktop.root.querySelectorAll("p")].some((node) => node.textContent.includes("Nothing to show yet.")), false);
@@ -4752,15 +5027,15 @@ test("failure causes and empty lists name the resource and its next step", async
   assert.equal(desktop.root.querySelector("[data-action='clear-search']")?.textContent, "Clear search");
 
   click(desktop.root.querySelector("[data-action='waiting']"));
-  await waitFor(() => desktop.app.waitingList && desktop.app.waitingList.status !== "loading" && desktop.root.querySelector("[data-waiting-surface]"), "Waiting did not open.");
+  await waitFor(() => desktop.app.waitingList && desktop.app.waitingList.status !== "loading" && desktop.root.querySelector("[data-waiting-panel]"), "Waiting did not open.");
   desktop.app.waitingList.items = [];
   desktop.app.waitingList.total = 0;
   desktop.app.waitingList.status = "empty";
   renderShell(desktop.app);
-  const waiting = desktop.root.querySelector("[data-waiting-surface]");
+  const waiting = desktop.root.querySelector("[data-waiting-panel]");
   assert.equal(waiting.querySelector("[data-empty='waiting']")?.textContent, "Nothing is waiting.");
   assert.equal(waiting.querySelector("[data-empty-next='waiting']")?.textContent, "Open the map to find who is waiting.");
-  assert.equal(waiting.querySelector("[data-action='show-map']")?.textContent, "Show the map");
+  assert.equal(waiting.querySelector("[data-action='show-map']"), null, "the Map is already beside the panel");
   assert.equal([...desktop.root.querySelectorAll("p")].some((node) => node.textContent.includes("Nothing to show yet.")), false);
 
   desktop.app.waitingOpen = false;
@@ -4789,7 +5064,7 @@ test("the board toolbar is one row on the canvas", async (t) => {
   await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");
   const cart = desktop.app.editors.catalog.find((item) => item.title === "Cart");
   renderShell(desktop.app);
-  click(desktop.root.querySelector(`[data-id="${cart.id}"]`));
+  openLibraryItem(desktop, cart.id);
   await waitFor(() => desktop.root.querySelector("[data-toolbar='board']"), "The board toolbar did not appear.");
   const resource = desktop.root.querySelector("[data-editor-column='resource']");
   const comments = desktop.root.querySelector("[data-editor-column='comments']");
@@ -4953,6 +5228,15 @@ function typeInput(node, value, start, end) {
 
 function click(node) {
   for (const handler of node?.listeners?.get("click") ?? []) handler({ preventDefault() {}, target: node });
+}
+
+// A library row waits in a folded folder until the folders above it are opened, so a test opens them as a person would before it presses the row.
+function openLibraryItem(desktop, id) {
+  const editors = desktop.app.editors, item = editors.catalog.find((entry) => entry.id === id), state = libraryState(editors, item.kind);
+  state.opened.add(`project:${item.project}`);
+  for (let folder = state.folders.find((entry) => entry.id === item.folderId); folder; folder = state.folders.find((entry) => entry.id === folder.parentId)) state.opened.add(`${item.project}:${folder.id}`);
+  renderShell(desktop.app);
+  click(desktop.root.querySelector(`[data-id="${id}"]`));
 }
 
 function clickAndWait(node) {
@@ -5677,7 +5961,12 @@ async function libraryDesktop(t, kind = "blueprint", options = {}) {
   const desktop = await bootApp(fixture.desktopUrl, 1440, []); t.after(() => dispose(desktop.app));
   navigate(desktop.app, kind === "blueprint" ? "blueprint" : "document");
   await waitFor(() => desktop.app.editors?.loadedKind === kind && !desktop.app.editors.catalogLoading, "The shared library did not load.");
-  return { ...desktop, fixture, state: libraryState(desktop.app.editors, kind) };
+  // The library starts folded; these tests work on its rows, so they begin with every project and folder open.
+  const state = libraryState(desktop.app.editors, kind);
+  for (const project of state.projects) state.opened.add(`project:${project.id ?? project.name}`);
+  for (const folder of state.folders) state.opened.add(`${folder.project}:${folder.id}`);
+  renderShell(desktop.app);
+  return { ...desktop, fixture, state };
 }
 
 function changeSelect(node, value) {
@@ -5696,7 +5985,7 @@ async function openCommentEditor(desktop, kind) {
   navigate(desktop.app, kind === "blueprint" ? "blueprint" : "document");
   await waitFor(() => desktop.app.editors?.loadedKind === kind && !desktop.app.editors.catalogLoading, "The editor library did not load.");
   const item = desktop.app.editors.catalog.find((entry) => entry.title === (kind === "blueprint" ? "Cart" : "Release notes"));
-  renderShell(desktop.app); click(desktop.root.querySelector(`[data-id="${item.id}"]`));
+  renderShell(desktop.app); openLibraryItem(desktop, item.id);
   await waitFor(() => desktop.app.editors.current?.resourceId === item.id && desktop.root.querySelector("[data-send-to-agent]"), "The comment composer did not open.");
   return desktop.app.editors.current;
 }
@@ -5826,7 +6115,7 @@ async function openedBoardDesktop(t, onFetch) {
   navigate(desktop.app, "blueprint");
   await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board library did not load.");
   const board = desktop.app.editors.catalog.find((item) => item.title === "Cart");
-  renderShell(desktop.app); click(desktop.root.querySelector(`[data-id="${board.id}"]`));
+  renderShell(desktop.app); openLibraryItem(desktop, board.id);
   await waitFor(() => desktop.root.querySelector(".board-svg"), "The board did not open.");
   return { ...desktop, fixture, board };
 }
@@ -5847,7 +6136,149 @@ test('R6 comment metadata separates the short time and reports submitted recipie
   assert.equal(statuses[0].textContent, 'Sent to Executor shop and Overlord web.');
   assert.equal(desktop.root.querySelector('[data-notice="queued"]'), null);
   const css = await readFile('gui/app/styles.css', 'utf8');
-  assert.match(css, /\.comment-line time \{ display: block;/);
+  assert.match(css, /\.comment-line \{ display: flex; flex-wrap: wrap; align-items: baseline;/);
+  assert.match(css, /\.comment-line time \{ color: var\(--mute\);/);
+});
+
+test('comments scroll inside their panel: chips split open from resolved threads, Reply and Resolve are links, and the reply count sits in the header', async t => {
+  const desktop = await openedBoardDesktop(t), current = desktop.app.editors.current;
+  const thread = (index, status) => ({ id: `thread-${index}`, status, messages: [
+    { id: `message-${index}`, authorId: 'root:master', at: '2026-10-10T12:00:00.000Z', text: `Comment ${index}` },
+    ...(index % 2 ? [{ id: `reply-${index}`, authorId: 'root:master', at: '2026-10-10T12:05:00.000Z', text: `Reply ${index}` }] : []),
+  ] });
+  current.threads = [...Array.from({ length: 45 }, (_, index) => thread(index, 'open')), ...Array.from({ length: 15 }, (_, index) => thread(100 + index, 'resolved'))];
+  current.commentsTotal = 60;
+  renderShell(desktop.app);
+  const column = () => desktop.root.querySelector("[data-editor-column='comments']");
+  const chips = () => column().querySelectorAll('[data-comment-filter]');
+  const boxes = () => column().querySelectorAll('.comment-box');
+  assert.deepEqual(chips().map(chip => [chip.getAttribute('data-comment-filter'), chip.getAttribute('aria-pressed'), chip.children[0].textContent]), [['open', 'true', 'Open 45'], ['resolved', 'false', 'Resolved 15']]);
+  assert.equal(boxes().length, 40, 'the cap of 40 counts within the group');
+  assert.ok(column().querySelector("[data-action='more-comments']"));
+  assert.ok(boxes().every(box => box.getAttribute('data-status') === 'open'));
+  const replied = boxes()[1], plain = boxes()[0];
+  assert.equal(replied.querySelector('.comment-replies').textContent, '1 reply');
+  assert.deepEqual(replied.querySelector("[data-comment-message='message-1']").children.map(child => child.tag === 'time' ? 'time' : child.className), ['comment-author', 'time', 'comment-replies', 'comment-text']);
+  assert.equal(plain.querySelector('.comment-replies'), null);
+  assert.deepEqual(plain.querySelector('.comment-actions').querySelectorAll('button').map(button => [button.getAttribute('data-action'), button.className]), [['reply', 'comment-action'], ['resolve', 'comment-action']]);
+  // The composer stays under the list, in the same column, which does the scrolling inside it.
+  assert.deepEqual(column().children.slice(0, 3).map(child => child.className.split(' ')[0]), ['editor-comments-head', 'editor-comments', 'comment-composer']);
+  click(chips()[1]);
+  assert.equal(chips()[1].getAttribute('aria-pressed'), 'true');
+  assert.equal(boxes().length, 15);
+  assert.ok(boxes().every(box => box.getAttribute('data-status') === 'resolved' && !box.querySelector("[data-action='resolve']") && box.querySelector("[data-action='reply']")), 'a resolved thread offers Reply only');
+  desktop.app.language = 'es';
+  renderShell(desktop.app);
+  assert.deepEqual(chips().map(chip => chip.children[0].textContent), ['Abiertos 45', 'Resueltos 15']);
+  click(chips()[0]);
+  assert.equal(boxes()[1].querySelector('.comment-replies').textContent, '1 respuesta');
+  current.threads = [thread(1, 'open')];
+  current.commentFilter = 'resolved';
+  desktop.app.language = 'en';
+  renderShell(desktop.app);
+  assert.equal(column().querySelector('.editor-comments-none').textContent, 'No resolved comments.');
+  const css = await readFile('gui/app/styles.css', 'utf8');
+  assert.match(css, /\.workspace \{[^}]*grid-template-rows: minmax\(0, 1fr\);/);
+  assert.match(css, /\.editor-comments-column \{ overflow: hidden; \}/);
+  assert.match(css, /\.editor-comments \{[^}]*flex: 1 1 auto; min-height: 0; overflow: auto;/);
+  assert.match(css, /\.comment-composer \{[^}]*flex: none;/);
+  assert.match(css, /\.comment-action \{[^}]*color: var\(--accent\); font-size: 12px; font-weight: 700;/);
+  assert.match(css, /\.comment-action:hover \{ text-decoration: underline;/);
+  assert.match(css, /\.comment-chip\[aria-pressed="true"\] \{[^}]*background: var\(--accent-soft\)/);
+});
+
+test('with nothing open, the middle and the comments column say what to do, and the library search waits for a pause', async t => {
+  const fixture = await createGuiFixture(); t.after(() => fixture.close());
+  const urls = [], desktop = await bootApp(fixture.desktopUrl, 1440, urls); t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.root.querySelector('.shell') && desktop.app.layout === 'desktop', 'The desktop shell did not open.');
+  navigate(desktop.app, 'document');
+  await waitFor(() => desktop.app.editors?.loadedKind === 'void' && !desktop.app.editors.catalogLoading, 'The texts did not load.');
+  const idle = () => desktop.root.querySelector('[data-editor-idle]');
+  assert.equal(idle().getAttribute('data-editor-idle'), 'void');
+  assert.deepEqual(idle().children.slice(1).map(child => child.textContent), ['Pick a text or start a new one', 'Texts open here with their comments beside them.']);
+  assert.equal(desktop.root.querySelector('.editor-comments-idle').textContent, 'Comments on the open text show here.');
+  assert.equal(desktop.root.querySelector("[data-action='toggle-catalog']").children.at(-1).textContent, 'Texts');
+  desktop.app.language = 'es';
+  renderShell(desktop.app);
+  assert.deepEqual(idle().children.slice(1).map(child => child.textContent), ['Elegir un texto o empezar uno nuevo', 'Los textos se abren aquí con sus comentarios al lado.']);
+  assert.equal(desktop.root.querySelector('.editor-comments-idle').textContent, 'Aquí se muestran los comentarios del texto abierto.');
+  desktop.app.language = 'en';
+  navigate(desktop.app, 'blueprint');
+  await waitFor(() => desktop.app.editors?.loadedKind === 'blueprint' && !desktop.app.editors.catalogLoading, 'The boards did not load.');
+  assert.equal(idle().getAttribute('data-editor-idle'), 'blueprint');
+  assert.deepEqual(idle().children.slice(1).map(child => child.textContent), ['Pick a board or start a new one', 'Boards open here with their comments beside them.']);
+  assert.equal(desktop.root.querySelector('.editor-comments-idle').textContent, 'Comments on the open board show here.');
+  assert.equal(desktop.root.querySelector("[data-action='toggle-catalog']").children.at(-1).textContent, 'Boards');
+  const board = desktop.app.editors.catalog.find(item => item.title === 'Cart');
+  openLibraryItem(desktop, board.id);
+  await waitFor(() => desktop.root.querySelector('.board-svg'), 'The board did not open.');
+  assert.equal(idle(), null);
+  assert.equal(desktop.root.querySelector('.editor-comments-idle'), null);
+  // One request follows a pause in typing; the letters in between ask for nothing, and an emptied box asks at once.
+  const search = () => desktop.root.querySelector('[data-library-search]'), asked = () => urls.slice(before).filter(url => url.includes('/blueprint/boards?'));
+  const before = urls.length;
+  for (const value of ['c', 'ca', 'car']) { typeInput(search(), value, value.length, value.length); await delay(40); }
+  assert.equal(asked().length, 0, 'nothing is asked while the typing goes on');
+  await waitFor(() => asked().some(url => url.includes('q=car')), 'The pause did not send the search.');
+  await delay(300);
+  assert.deepEqual([...new Set(asked().map(url => new URL(url).searchParams.get('q')))], ['car']);
+  assert.equal(asked().length, 1);
+  const quiet = urls.length;
+  typeInput(search(), '', 0, 0);
+  await waitFor(() => urls.slice(quiet).some(url => url.includes('/blueprint/boards?') && !url.includes('q=')), 'An emptied search did not ask at once.');
+});
+
+test('a module board is drawn from its module in memory with a read-only notice, converts once, and falls back to the old message when it cannot be read', async t => {
+  const fixture = await createGuiFixture(); t.after(() => fixture.close());
+  const boards = join(fixture.root, 'repositories', 'shop', 'docs', 'flows', 'boards'), legacyFile = join(boards, 'legacy-cart.mjs'), brokenFile = join(boards, 'broken-cart.mjs');
+  await writeFile(legacyFile, 'import { board } from "blueprint/board.mjs";\nimport { col, text } from "blueprint/kit.mjs";\nexport default board({ id: "legacy-cart", title: "Legacy cart", screens: [{ id: "cart", title: "Cart", root: col({ w: 300, h: 560 }, text("Actual legacy cart")) }] });\n');
+  await writeFile(brokenFile, 'throw new Error("This module does not load.");\n');
+  const index = JSON.parse(await readFile(join(boards, 'index.json'), 'utf8'));
+  index.push({ id: 'legacy-cart', title: 'Legacy cart' }, { id: 'broken-cart', title: 'Broken cart' });
+  await writeFile(join(boards, 'index.json'), JSON.stringify(index));
+  await fixture.control.refresh();
+  const legacyBytes = await readFile(legacyFile);
+  const api = apiFrom(fixture.desktopUrl);
+  const legacy = (await registerResource(api, { kind: 'blueprint', project: 'shop', path: 'docs/flows/boards/legacy-cart.mjs' })).data;
+  const broken = (await registerResource(api, { kind: 'blueprint', project: 'shop', path: 'docs/flows/boards/broken-cart.mjs' })).data;
+  const urls = [], desktop = await bootApp(fixture.desktopUrl, 1440, urls); t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.root.querySelector('.shell') && desktop.app.layout === 'desktop', 'The desktop shell did not open.');
+  navigate(desktop.app, 'blueprint');
+  await waitFor(() => desktop.app.editors?.catalog?.some(item => item.id === legacy.id) && desktop.app.editors.catalog.some(item => item.id === broken.id), 'The module boards were not listed.');
+  openLibraryItem(desktop, legacy.id);
+  await waitFor(() => desktop.root.querySelector('.board-notice'), 'The module board was not drawn.');
+  const notice = desktop.root.querySelector('.board-notice');
+  assert.equal(notice.getAttribute('data-legacy'), 'docs/flows/boards/legacy-cart.mjs');
+  assert.equal(notice.children[0].textContent, 'Module board, read only. A JSON copy can be edited.');
+  assert.equal(notice.querySelector("[data-action='copy-json']").children[0].textContent, 'Create JSON copy');
+  assert.ok(desktop.root.querySelector("[data-screen='cart']"), 'the screen of the module is on the canvas');
+  assert.equal(desktop.root.querySelector("[data-action='resize-screen']"), null);
+  assert.deepEqual(desktop.root.querySelectorAll('.board-tool').map(tool => tool.getAttribute('data-board-tool')), ['select', 'comment'], 'no tool that draws');
+  // A screen can still be chosen to comment on.
+  const host = desktop.root.querySelector('.board-host');
+  clickEvent(host, { target: host.querySelector("[data-screen='cart']"), offsetX: 10, offsetY: 10 });
+  typeInput(desktop.root.querySelector('[data-comment]'), 'On the cart', 0, 3);
+  assert.equal(desktop.root.querySelector("[data-action='comment']").getAttribute('disabled'), null);
+  // Opening it again reads the kept document; nothing is imported or written.
+  const exports = () => urls.filter(url => url.includes('/export')).length;
+  assert.equal(exports(), 1);
+  const cart = desktop.app.editors.catalog.find(item => item.title === 'Cart');
+  openLibraryItem(desktop, cart.id);
+  await waitFor(() => desktop.app.editors.current?.resourceId === cart.id && !desktop.root.querySelector('.board-notice'), 'The other board did not open.');
+  openLibraryItem(desktop, legacy.id);
+  await waitFor(() => desktop.root.querySelector('.board-notice'), 'The module board did not come back.');
+  assert.equal(exports(), 1, 'the conversion is kept by resource and revision');
+  assert.equal(urls.some(url => url.endsWith('/blueprint/boards/import')), false);
+  assert.deepEqual(await readFile(legacyFile), legacyBytes);
+  // A module that cannot be read keeps today's message and button, and says why.
+  openLibraryItem(desktop, broken.id);
+  await waitFor(() => desktop.root.querySelector('[data-legacy-reason]'), 'The failure did not show its reason.');
+  assert.equal(desktop.root.querySelector('[data-legacy]').textContent, 'docs/flows/boards/broken-cart.mjs');
+  assert.equal(desktop.root.querySelector('[data-legacy-reason]').textContent, 'The module could not be read.');
+  assert.ok(desktop.root.querySelectorAll('p').some(node => node.textContent === 'This module needs a JSON copy.'));
+  assert.ok(desktop.root.querySelector("[data-action='copy-json']"));
+  assert.equal(desktop.root.querySelector('.board-notice'), null);
+  assert.equal(desktop.root.querySelector('.board-svg'), null);
 });
 
 test('R9 plan cards use the chat scroll area and the Overseer notice wraps its actions', async () => {
@@ -6264,7 +6695,7 @@ for (const kind of ["blueprint", "void"]) test(`the ${kind} library shares heade
   click(root.querySelector('[data-action="library-filters"]'));
   const menu = root.querySelector('[data-library-menu="filters"]');
   for (const handler of menu.listeners.get("keydown") ?? []) handler({ key: "Escape", preventDefault() {} });
-  click(root.querySelector(`[data-id="${entry.id}"]`));
+  openLibraryItem(desktop, entry.id);
   await waitFor(() => app.editors.current?.resourceId === entry.id && root.querySelector("[data-comment]"), "The selected editor did not open.");
   typeInput(root.querySelector("[data-comment]"), "Kept comment draft", 3, 8);
   const current = app.editors.current;
@@ -6367,7 +6798,7 @@ test("text deletion retries one operation and restores the selected draft with t
   const desktop = await libraryDesktop(t, "void");
   const { app, root, document, fixture } = desktop;
   const entry = app.editors.catalog.find((item) => item.title === "Release notes");
-  click(root.querySelector(`[data-id="${entry.id}"]`));
+  openLibraryItem(desktop, entry.id);
   await waitFor(() => root.querySelector("[data-source]"), "The text did not open.");
   app.editors.current.voidSaver = documentSaver(app.api, app.editors.current, () => {}, 10000);
   typeInput(root.querySelector("[data-source]"), "Unsent source", 2, 5);
@@ -6423,7 +6854,7 @@ test("cross-project GUI movement confirms both repositories and moves real-core 
   await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.id === source.data.id), "The actual core library did not load.");
   assert.deepEqual(libraryState(desktop.app.editors, "blueprint").projects.map((project) => project.id), ["api", "shop"]);
   const entry = desktop.app.editors.catalog.find((item) => item.id === source.data.id);
-  click(desktop.root.querySelector(`[data-id="${entry.id}"]`));
+  openLibraryItem(desktop, entry.id);
   await waitFor(() => desktop.app.editors.current?.resourceId === entry.id, "The real board did not open.");
   libraryMenu(desktop, entry, "move");
   await waitFor(() => desktop.document.querySelector('[data-form="library-move"]'), "The destination chooser did not open.");
@@ -6454,7 +6885,7 @@ test("cross-project GUI movement confirms both repositories and moves real-core 
   navigate(desktop.app, "document");
   await waitFor(() => desktop.app.editors.catalog.some((item) => item.id === sourceText.data.id), "The real text did not appear in the library.");
   const textEntry = desktop.app.editors.catalog.find((item) => item.id === sourceText.data.id);
-  click(desktop.root.querySelector(`[data-id="${textEntry.id}"]`));
+  openLibraryItem(desktop, textEntry.id);
   await waitFor(() => desktop.root.querySelector("[data-source]"), "The real text did not open.");
   desktop.app.editors.current.voidSaver = documentSaver(desktop.app.api, desktop.app.editors.current, () => {}, 10000);
   typeInput(desktop.root.querySelector("[data-source]"), "Unsaved text", 2, 6);
@@ -6905,7 +7336,9 @@ test('T094 actual-core Add selects one repository cluster, creates only an expli
   assert.equal(app.store.drafts.get('document-draft'), draft);
   click(root.querySelector('[data-action="settings-tab-projects"]'));
   assert.ok(root.querySelector(`[data-cluster-link="${clusterId}"]`));
-  click(root.querySelector(`[data-cluster-link="${clusterId}"]`).querySelector('[data-action="settings-remove-link"]'));
+  // Unlink lives in the row's menu and leads to the same confirmation as before.
+  click(root.querySelector(`[data-cluster-link="${clusterId}"]`).querySelector('[data-action="settings-link-more"]'));
+  click(document.querySelector('[data-action="context-unlink"]'));
   await clickAndWait(document.querySelector('.dialog').querySelector('.primary'));
   await waitFor(() => !document.querySelector('.dialog') && app.store.indexes.groups.get(clusterId)?.link.kind === 'none', 'The canonical link did not detach.');
   assert.equal(app.store.indexes.groups.get(clusterId).members.length, 1); assert.equal(launches.length, 0);
@@ -7178,9 +7611,8 @@ test('a manual session and a session that never ran here are not guessed', async
   const manual = await openShopExecutor(t, {});
   await waitFor(() => manual.facts()['Works in'], 'The folder row did not appear.');
   assert.equal(manual.facts()['Works in'].text, 'Not known');
-  assert.equal(manual.facts().Branch.text, 'Not known');
+  assert.equal(manual.facts().Branch, undefined, 'a branch nobody knows is not a row');
   assert.equal(manual.facts()['Works in'].title, 'This session was started outside M1ND, so its folder is not recorded.');
-  assert.equal(manual.facts().Branch.title, manual.facts()['Works in'].title);
   manual.desktop.app.language = 'es'; renderShell(manual.desktop.app);
   assert.equal(manual.facts()['Trabaja en'].text, 'Sin determinar');
   assert.equal(manual.facts()['Trabaja en'].title, 'Esta sesión se inició fuera de M1ND, por lo que no se registra su carpeta.');
@@ -7208,12 +7640,18 @@ test('the folder and branch rows cover a detached head, a plain folder, a privat
   assert.deepEqual(rows('es', { data: detached }), [['worksIn', 'shop', 'C:/Web/shop'], ['branch', 'Desacoplada en bbbbbbb', null]]);
   assert.deepEqual(rows('en', { data: { ...base, path: 'C:/Notes', kind: 'folder' } }), [['worksIn', 'Notes', 'C:/Notes']], 'A folder without Git has no branch to show.');
   assert.deepEqual(rows('en', { data: { ...base, path: 'C:/Local/sessions/8c2f', kind: 'private' } }), [['worksIn', 'Private folder', 'C:/Local/sessions/8c2f']]);
-  assert.deepEqual(rows('en', { error: new Error('offline') }).map(row => row.slice(0, 2)), [['worksIn', 'Not known'], ['branch', 'Not known']]);
+  assert.deepEqual(rows('en', { error: new Error('offline') }).map(row => row.slice(0, 2)), [['worksIn', 'Not known']], 'an unknown branch is not a row');
+  assert.deepEqual(rows('en', { data: { ...base, path: 'C:/Web/shop', kind: 'repository' } }), [['worksIn', 'shop', 'C:/Web/shop']], 'a repository without a branch name shows none');
+  // A unit of the root scope works in every cluster: an unknown folder is not "Not known" for it, and a known one is still named.
+  const rootRows = (language, entry) => checkoutFacts((key, values) => text(language, key, values), language, { session, local: 'DESKTOP', entry, root: true });
+  assert.deepEqual(rootRows('en', { error: new Error('offline') }), [['worksIn', 'Every cluster', null]]);
+  assert.deepEqual(rootRows('es', { data: { sessionId: 'session', known: false, reason: 'manual' } }), [['worksIn', 'Todos los clústeres', null]]);
+  assert.deepEqual(rootRows('en', { data: detached })[0], ['worksIn', 'shop', 'C:/Web/shop']);
   assert.deepEqual(rows('en', { error: new Error('offline') }, { state: 'stopped' }), []);
   assert.deepEqual(rows('en', undefined), [], 'Nothing is shown before the first answer.');
   assert.deepEqual(checkoutFacts(key => key, 'en', { session: null, local: 'DESKTOP' }), []);
   assert.equal(rows('en', { data: { sessionId: 'session', known: false, reason: 'other_machine' } })[0][2], 'Another machine runs this session.');
-  assert.equal(rows('es', { data: { sessionId: 'session', known: false, reason: 'git_unavailable' } })[1][2], 'Git no respondió para esta carpeta.');
+  assert.equal(rows('es', { data: { sessionId: 'session', known: false, reason: 'git_unavailable' } })[0][2], 'Git no respondió para esta carpeta.');
   assert.equal(rows('en', undefined, { machine: 'LAPTOP' })[0][2], 'Another machine runs this session.', 'No request is made for another machine.');
   for (const key of ['worksIn', 'branch', 'worktree', 'detachedAt', 'notKnown', 'lastSeen']) {
     assert.ok(text('en', key, { head: 'x', time: 'y' }).length > 0 && text('es', key, { head: 'x', time: 'y' }).length > 0);
@@ -7737,14 +8175,14 @@ test("every loaded waiting item shows, and more load on request", async (t) => {
   t.after(() => dispose(desktop.app));
   await waitFor(() => desktop.app.waitingList?.status === "ready" && desktop.app.waitingList.items.length, "Waiting did not load.");
   click(desktop.root.querySelector("[data-action='waiting']"));
-  await waitFor(() => desktop.root.querySelector("[data-waiting-surface]") && desktop.app.waitingList.status === "ready", "The waiting list did not open.");
+  await waitFor(() => desktop.root.querySelector("[data-waiting-panel]") && desktop.app.waitingList.status === "ready", "The waiting list did not open.");
   const sample = desktop.app.waitingList.items[0];
   desktop.app.waitingList.items = Array.from({ length: 100 }, (_, index) => ({ ...sample, id: `${sample.id}-${index}` }));
   desktop.app.waitingList.total = 140;
   desktop.app.waitingList.nextCursor = "next-page";
   renderShell(desktop.app);
-  const surface = desktop.root.querySelector("[data-waiting-surface]");
-  assert.equal(surface.querySelectorAll("[data-waiting-item]").length, 100, "every loaded item has its card");
+  const surface = desktop.root.querySelector("[data-waiting-panel]");
+  assert.equal(surface.querySelectorAll("[data-waiting-item]").length, 100, "every loaded item has its row");
   assert.ok(surface.querySelector("[data-action='waiting-more']"), "a list with more pages offers to show them");
 });
 
@@ -7852,6 +8290,204 @@ test('agents picked in the Hierarchy are deleted in one background job with a ba
   await waitFor(() => [first.id, second.id].every(id => app.unitList.catalog.some(unit => unit.id === id && !unit.removed)), 'Undo did not bring the agents back.');
 });
 
+test('a pick starts empty, the Map marks it, and the inspector shows it with the actions that fit what was picked', async t => {
+  const desktop = await startMenuDesktop(t), { root, app, state } = desktop;
+  const [first, second] = state.units;
+  const pick = (row, how = { toggle: true }) => app.activeHandlers.onPick(row, how);
+  const agentRow = unit => ({ id: unit.id, kind: 'unit', unit: unitOf(app, unit.id) });
+  const clusterRow = id => ({ id: `cluster:${id}`, kind: 'cluster', groupId: id });
+  for (const [id, title] of [['b', 'Bravo'], ['c', 'Charlie']]) app.store.indexes.groups.set(id, { id, title, parentId: null, members: [], link: { kind: 'repository' }, revision: 'x', chatId: `chat-${id}` });
+  const panel = () => root.querySelector('[data-pick-inspector]');
+  const actions = () => panel().querySelectorAll('[data-action]').map(node => node.getAttribute('data-action'));
+  const kind = () => panel().querySelector('.agent-status').textContent;
+  // The agent that is open is not part of the pick: the first Ctrl click picks only the row it lands on.
+  app.store.selected.unitId = first.id; renderShell(app);
+  pick(agentRow(second));
+  assert.deepEqual([...app.hierarchySelection], [second.id]);
+  assert.equal(panel(), null, 'one row is not a pick yet');
+  pick(clusterRow('b')); pick(clusterRow('c'));
+  assert.equal(app.hierarchySelection.size, 3, 'three Ctrl picks give three');
+  assert.equal(app.mapState.picked, app.hierarchySelection);
+  assert.ok(root.querySelector(`[data-unit-id='${second.id}']`).className.includes('is-picked'), 'the Map marks a picked agent');
+  assert.ok(!root.querySelector(`[data-unit-id='${first.id}']`).className.includes('is-picked'));
+  assert.ok(root.querySelector("[data-group-zone='b']").getAttribute('class').includes('is-picked'), 'and a picked cluster');
+  assert.equal(root.querySelector('[data-pick-bar]').getAttribute('data-pick-bar'), '3', 'the floating bar stays');
+  assert.equal(panel().getAttribute('data-pick-inspector'), '3');
+  assert.equal(panel().querySelector('h2').textContent, '3 selected');
+  assert.equal(kind(), 'Clusters and agents');
+  assert.deepEqual(panel().querySelectorAll('.pick-item').map(node => node.getAttribute('data-pick-item')), ['Bravo', 'Charlie', displayName(second.unit)]);
+  assert.deepEqual(panel().querySelectorAll('.pick-note').map(node => node.textContent), ['no agents', 'no agents', 'Executor']);
+  assert.deepEqual(actions(), ['clear-pick', 'pick-message', 'pick-delete'], 'agents can be messaged as a group, but only a pick of agents alone can be moved');
+  assert.equal(panel().querySelector('[data-action="pick-delete"]').textContent, 'Delete 3');
+  // Clusters alone.
+  app.hierarchySelection.delete(second.id); renderShell(app);
+  assert.equal(kind(), 'Repository clusters');
+  assert.deepEqual(actions(), ['clear-pick', 'pick-delete']);
+  assert.equal(panel().querySelector('[data-action="pick-delete"]').textContent, 'Delete 2');
+  app.store.indexes.groups.get('b').parentId = state.cluster.id; app.store.indexes.groups.get('c').parentId = state.cluster.id; renderShell(app);
+  assert.equal(kind(), 'Repository clusters in Planning');
+  // Agents alone.
+  app.hierarchySelection.clear(); app.hierarchySelection.add(first.id); app.hierarchySelection.add(second.id); renderShell(app);
+  assert.equal(kind(), 'Agents');
+  assert.deepEqual(panel().querySelectorAll('.pick-note').map(node => node.textContent), ['Executor', 'Executor']);
+  assert.deepEqual(actions(), ['clear-pick', 'pick-message', 'pick-move', 'pick-delete']);
+  // The delete button asks once for everything picked, and the close button ends the pick.
+  click(panel().querySelector('[data-action="pick-delete"]'));
+  assert.equal(app.root.ownerDocument.querySelector('[data-delete-many]').getAttribute('data-delete-many'), '2');
+  app.root.ownerDocument.querySelector('[data-delete-many]').querySelector('button').listeners.get('click')[0]();
+  click(panel().querySelector('[data-action="clear-pick"]'));
+  assert.equal(app.hierarchySelection.size, 0);
+  assert.equal(panel(), null, 'the inspector shows the open agent again');
+  // Escape ends a pick too, wherever the focus is.
+  app.hierarchySelection.add(first.id); app.hierarchySelection.add(second.id); renderShell(app);
+  assert.ok(panel());
+  for (const handler of desktop.view.listeners.get('keydown') ?? []) handler({ key: 'Escape', target: root, preventDefault() {} });
+  assert.equal(app.hierarchySelection.size, 0);
+  assert.equal(panel(), null);
+  // Spanish.
+  app.language = 'es';
+  app.hierarchySelection.add(first.id); app.hierarchySelection.add(second.id); renderShell(app);
+  assert.equal(panel().querySelector('h2').textContent, '2 seleccionados');
+  assert.equal(kind(), 'Agentes');
+  assert.equal(panel().querySelector('[data-action="pick-delete"]').textContent, 'Eliminar 2');
+  assertVisibleCopy('es', [['pick panel', panel().textContent]]);
+});
+
+test('agents picked together are moved to one cluster in one job, and messaged as a group', async t => {
+  const { root, app, document, state } = await startMenuDesktop(t);
+  const [first, second] = state.units, machine = app.store.settings?.service?.machine ?? app.store.view?.mind?.machine;
+  const other = (await fetch(`${app.api.location.origin}/api/v1/clusters`, { method: 'POST', headers: { authorization: `Bearer ${app.api.token}`, 'content-type': 'application/json', origin: app.api.location.origin, 'idempotency-key': crypto.randomUUID() },
+    body: JSON.stringify({ title: 'Elsewhere', parentId: null, link: { kind: 'none' }, machine, confirmed: true }) }).then(response => response.json())).data;
+  await waitFor(() => app.store.indexes.groups.get(other.id), 'The second cluster did not load.');
+  const pickBoth = () => { for (const unit of [first, second]) app.activeHandlers.onPick({ id: unit.id, kind: 'unit', unit: unitOf(app, unit.id) }, { toggle: true }); };
+  pickBoth();
+  click(root.querySelector('[data-pick-inspector]').querySelector('[data-action="pick-move"]'));
+  const form = document.querySelector('[data-form="move-agent"]');
+  assert.equal(form.querySelector('h2').textContent, 'Move 2 agents');
+  const choices = form.querySelector('select').children.map(option => option.value);
+  assert.ok(choices.includes(other.id) && !choices.includes(state.cluster.id), 'the cluster that holds all of them is not offered');
+  form.querySelector('select').value = other.id;
+  await clickAndWait(form.querySelector('[data-action="confirm-form"]'));
+  await waitFor(() => app.queue.items.some(item => item.kind === 'move' && item.state === 'done'), 'The move did not finish.');
+  assert.equal(app.queue.items.filter(item => item.kind === 'move').length, 1, 'one job for all of them');
+  assert.equal(app.queue.items.find(item => item.kind === 'move').label, 'Move 2 agents to Elsewhere');
+  await waitFor(() => [first.id, second.id].every(id => app.store.indexes.groups.get(other.id)?.members.includes(id) && !app.store.indexes.groups.get(state.cluster.id)?.members.includes(id)), 'The cluster members did not change.');
+  // Messaging them as a group clears the pick and opens one chat with both.
+  app.hierarchySelection.clear(); pickBoth();
+  click(root.querySelector('[data-pick-inspector]').querySelector('[data-action="pick-message"]'));
+  assert.equal(app.hierarchySelection.size, 0);
+  await waitFor(() => app.thread?.chat?.members?.includes(first.id) && app.thread.chat.members.includes(second.id), 'The group chat did not open.');
+  assert.equal(root.querySelector('[data-pick-inspector]'), null);
+});
+
+test('the Map follows its stage while it shows the fitted view, and a stage too small to fit leaves the view as it is', async t => {
+  const fixture = await createGuiFixture(); t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []); t.after(() => dispose(desktop.app));
+  const { app, root, document } = desktop, observers = [];
+  desktop.view.ResizeObserver = class { constructor(callback) { this.callback = callback; observers.push(this); } observe(host) { this.host = host; } disconnect() { this.disconnected = true; } };
+  renderShell(app);
+  const observer = observers.at(-1), host = observer.host, map = app.mapState;
+  assert.equal(host, root.querySelector('.map'));
+  assert.equal(map.autoFit, true, 'the first fit follows the stage');
+  const stage = { left: 0, top: 0, width: 1000, height: 640 };
+  host.getBoundingClientRect = () => stage;
+  observer.callback();
+  assert.deepEqual(map.view, clusterCamera(graphBounds(map), stage, 48, 1.15), 'a new size fits the graph again');
+  const fitted = map.view;
+  observer.callback();
+  assert.equal(map.view, fitted, 'the same size fits nothing again');
+  host.getBoundingClientRect = () => ({ ...stage, width: 80, height: 80 });
+  observer.callback();
+  assert.equal(map.view, fitted, 'a stage under 96 px is left alone');
+  // The Fit item of the Map menu does not throw on a stage that small either.
+  map.onContextMenu({ kind: 'map', x: 5, y: 5 });
+  [...document.querySelector('[data-context-menu]').children].find(child => child.getAttribute('data-action') === 'context-fit').listeners.get('click')[0]();
+  assert.equal(map.view, fitted);
+  // Once the person zooms, the Map stays where it is.
+  host.getBoundingClientRect = () => stage;
+  wheelZoom(map, { clientX: 100, clientY: 100, deltaY: -1, preventDefault() {} }, stage);
+  const zoomed = map.view;
+  host.getBoundingClientRect = () => ({ ...stage, width: 1200 });
+  observer.callback();
+  assert.equal(map.view, zoomed);
+  // A new drawing has a new stage: the old observer is let go and the new one watches it. A stage that starts at another size than the
+  // one it replaces is fitted to, while the view is the fitted one.
+  map.autoFit = true;
+  renderShell(app);
+  const next = observers.at(-1);
+  assert.equal(observer.disconnected, true);
+  assert.equal(next.host, root.querySelector('.map'));
+  assert.notEqual(next, observer);
+  next.callback();
+  assert.deepEqual(map.view, clusterCamera(graphBounds(map), next.host.getBoundingClientRect(), 48, 1.15));
+  const settled = map.view;
+  next.callback();
+  assert.equal(map.view, settled, 'the same stage is not fitted twice');
+  // Leaving the Map lets go of the observer too.
+  dispose(app);
+  assert.equal(next.disconnected, true);
+});
+
+test('the Hierarchy ends with Services: a unit that exists opens its chat, one that does not offers to be set up, and the Map has no Services pills', async t => {
+  const fixture = await createGuiFixture(); t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []); t.after(() => dispose(desktop.app));
+  const { app, root } = desktop;
+  assert.equal(root.querySelector('.map-services'), null);
+  assert.equal(root.querySelector("[data-action='map-services']"), null);
+  assert.equal(app.mapState.onServices, undefined);
+  const services = () => app.activeRows.slice(app.activeRows.findIndex(row => row.id === 'section:services'));
+  assert.deepEqual(services().map(row => row.id), ['section:services', 'root:incubator', 'root:genesis']);
+  assert.equal(app.activeRows.at(-1).id, 'root:genesis', 'the section is last');
+  const incubator = services()[1];
+  app.activeHandlers.onActivate(incubator, 'double');
+  await waitFor(() => app.inspectorData?.unitId === 'root:incubator' && app.store.selected.unitId === 'root:incubator', 'The Incubator did not open.');
+  // A service nobody set up shows its name and a muted line, and is a row of its own.
+  for (const shown of [app.unitList.catalog.find(unit => unit.id === 'root:genesis'), app.store.indexes.units.get('root:genesis')]) if (shown) shown.removed = true;
+  renderShell(app);
+  assert.deepEqual(services().map(row => row.id), ['section:services', 'root:incubator', 'service:genesis']);
+  const row = root.querySelector("[data-service-row='genesis']");
+  assert.ok(row);
+  assert.equal(row.querySelector('.unit-original').textContent, 'Genesis');
+  assert.equal(row.querySelector('.hierarchy-sub').textContent, 'Not set up');
+  assert.equal(row.getAttribute('aria-disabled'), null);
+  app.language = 'es'; renderShell(app);
+  assert.equal(root.querySelector("[data-service-row='genesis']").querySelector('.hierarchy-sub').textContent, 'Sin configurar');
+});
+
+test('a service that is not set up opens the new agent form with its role chosen, and creates a root unit of that role', async t => {
+  const desktop = await startCoreDesktop(t), { app, root, document } = desktop;
+  click(document.querySelector("[data-action='cancel-agent']"));
+  await waitFor(() => app.unitList?.status && root.querySelector("[data-service-row='incubator']"), 'The services did not show.');
+  assert.deepEqual(app.activeRows.slice(-3).map(row => row.id), ['section:services', 'service:incubator', 'service:genesis']);
+  // Services is a heading like Clusters: the same element and class, not a larger row title.
+  const heading = root.querySelector("[data-id='section:services']");
+  assert.deepEqual([heading.tag, heading.className, heading.children[0].textContent], ['div', 'my-groups-heading', 'Services']);
+  click(root.querySelector("[data-service-row='incubator']"));
+  await waitFor(() => document.querySelector("[data-start-dialog='agent']"), 'The form did not open.');
+  const dialog = document.querySelector("[data-start-dialog='agent']");
+  assert.equal(dialog.querySelector('h2').textContent, 'Set up Incubator');
+  assert.equal(dialog.querySelectorAll('button').filter(node => node.getAttribute('data-action')?.startsWith('choose-')).length, 0, 'the role is not asked: it is the row\'s');
+  assert.ok(dialog.querySelector("[data-action='open-runs-picker']"));
+  click(dialog.querySelector("[data-action='create-agent']"));
+  await waitFor(() => app.unitList.catalog.some(unit => unit.id === 'root:incubator'), 'The Incubator was not created.');
+  const unit = (await request(app.api, 'GET', '/units/:unitId', { params: { unitId: 'root:incubator' } })).data;
+  assert.equal(unit.role, 'incubator');
+  assert.equal(unit.runsIn.client, 'codex', 'where it runs is set right after it is created');
+  assert.equal(unit.clusterId ?? null, null, 'it belongs to no cluster');
+  await waitFor(() => !root.querySelector("[data-service-row='incubator']") && app.activeRows.some(row => row.id === 'root:incubator'), 'The row did not become the unit.');
+  assert.equal(root.querySelector("[data-service-row='genesis']") != null, true);
+});
+
+test('a cluster row keeps its whole name and shortens only its branch', async t => {
+  const { root, app, state } = await startMenuDesktop(t);
+  const cluster = { ...app.store.indexes.groups.get(state.cluster.id), title: 'E pet' };
+  app.store.indexes.groups.set(cluster.id, cluster);
+  app.clusterGit ??= new Map(); app.clusterGit.set(cluster.id, { revision: cluster.revision, git: { branch: 'checkpoint/scout-2026-10-12' } });
+  renderShell(app);
+  const [, , title, branch] = root.querySelector(`[data-cluster-row='${cluster.id}']`).children;
+  assert.deepEqual([title.className, title.textContent, branch.className, branch.textContent], ['group-title', 'E pet', 'hierarchy-branch', 'checkpoint/scout-2026-10-12']);
+});
+
 test('a cluster with a cluster inside it is deleted with it, the inner one first', async t => {
   const { app, document, state, calls } = await startMenuDesktop(t);
   const parent = state.cluster;
@@ -7912,8 +8548,8 @@ test('the right-click menu of an agent and of a cluster lists only what the stat
   await waitFor(() => document.querySelector('.dialog'), 'Remove did not ask for confirmation.');
   assert.match(document.querySelector('.dialog').querySelector('h2').textContent, /Remove .* from Planning\?/);
   await clickAndWait(document.querySelector('.dialog').querySelector('.primary'));
-  await waitFor(() => calls.some(call => call.method === 'PATCH' && call.path === `/api/v1/clusters/${clusterId}`), 'Remove did not reach the service.');
-  const patched = calls.find(call => call.method === 'PATCH' && call.path === `/api/v1/clusters/${clusterId}`);
+  await waitFor(() => calls.some(call => call.method === 'PATCH' && call.path === `/api/v1/groups/${clusterId}`), 'Remove did not reach the service.');
+  const patched = calls.find(call => call.method === 'PATCH' && call.path === `/api/v1/groups/${clusterId}`);
   assert.deepEqual(patched.body.members, state.units.filter(unit => unit.id !== member.id).map(unit => unit.id));
 
   // A cluster: open, add an agent, rename, collapse on the Map and delete.
@@ -8142,18 +8778,31 @@ test('a tab whose service stopped says so and how to open it again instead of a 
   assert.equal(cause.includes('30 s'), false);
 });
 
-test('the library marks each unavailable project as a row and keeps Refresh and Register on one line', async t => {
+test('the library folds the unavailable projects into one row and keeps Refresh and Register on one small line', async t => {
   const desktop = await openedBoardDesktop(t);
   navigate(desktop.app, 'blueprint');
   desktop.app.editors.catalogIssues = [{ project: 'ntk.solutions', code: 'project_unavailable' }, { project: 'Cosmic', code: 'project_unavailable' }];
   desktop.app.editors.catalogLoading = true;
   renderShell(desktop.app);
-  const rows = desktop.root.querySelectorAll('[data-library-issue]');
-  assert.deepEqual(rows.map(row => row.getAttribute('data-library-issue')), ['ntk.solutions', 'Cosmic']);
-  for (const row of rows) assert.ok(String(row.className).split(/\s+/).includes('notice'));
+  const row = desktop.root.querySelector('[data-action="library-issues"]');
+  assert.equal(row.getAttribute('aria-expanded'), 'false');
+  assert.equal(row.children.find(child => child.tag === 'span').textContent, '2 repositories are not on this machine');
+  assert.equal(desktop.root.querySelectorAll('[data-library-issue]').length, 0);
+  click(row);
+  assert.deepEqual(desktop.root.querySelectorAll('[data-library-issue]').map(item => item.getAttribute('data-library-issue')), ['ntk.solutions', 'Cosmic']);
+  desktop.app.language = 'es';
+  renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector('[data-action="library-issues"]').children.find(child => child.tag === 'span').textContent, '2 repositorios no están en esta máquina');
+  desktop.app.language = 'en';
+  desktop.app.editors.catalogIssues = [{ project: 'Cosmic', code: 'project_unavailable' }];
+  renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector('[data-action="library-issues"]').children.find(child => child.tag === 'span').textContent, '1 repository is not on this machine');
+  click(desktop.root.querySelector('[data-action="library-issues"]'));
+  assert.equal(desktop.root.querySelectorAll('[data-library-issue]').length, 0, 'the row folds again');
   const footer = desktop.root.querySelector('[data-library-footer="blueprint"]');
   assert.ok(footer.querySelector('[data-action="refresh-catalog"]'));
   assert.ok(footer.querySelector('[data-action="open-register"]'));
+  for (const button of [footer.querySelector('[data-action="refresh-catalog"]'), footer.querySelector('[data-action="open-register"]')]) assert.ok(button.className.split(/\s+/).includes('ghost'), 'both are secondary buttons');
   assert.ok(desktop.root.querySelector('[data-catalog-progress]'));
   // With no board open, the title is one word, never "Blueprint Blueprint".
   assert.notEqual(desktop.root.querySelector('[data-editor-title]').textContent, 'Blueprint Blueprint');
@@ -8206,3 +8855,578 @@ test('a failure notice can be closed without retrying', async t => {
 });
 
 function unitOf(app, id) { return app.unitList.catalog.find(unit => unit.id === id); }
+
+// A window keydown, as the browser sends it to every listener the shell attached to the window.
+function pressKey(desktop, key, target = { tagName: "BODY" }) {
+  for (const handler of desktop.view.listeners.get("keydown") ?? []) handler({ key, target, preventDefault() {} });
+}
+
+test("Waiting opens in the inspector column beside the Map; a review names its task, project and day, opens in place and folds", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.waitingList?.items?.some((item) => item.taskId === "project:shop:029"), "The review task did not load.");
+  click(desktop.root.querySelector("[data-action='waiting']"));
+  await waitFor(() => desktop.root.querySelector("[data-waiting-panel]") && desktop.app.waitingList.status === "ready", "The Waiting panel did not open.");
+  assert.ok(desktop.root.querySelector(".inspector-body").querySelector("[data-waiting-panel]"), "Waiting is in the inspector column");
+  assert.ok(desktop.root.querySelector(".stage").querySelector(".map"), "the stage keeps the Map");
+  assert.equal(desktop.root.querySelector("[data-waiting-surface]"), null);
+  assert.match(desktop.root.querySelector("[data-waiting-panel]").querySelector("h2").textContent, /waiting on you$/);
+  // The task has no title line: the engine names it from its file, and the row adds its project and day.
+  const review = desktop.app.waitingList.items.find((item) => item.taskId === "project:shop:029");
+  Object.assign(review, { title: "Media to disk and webp", since: "2026-10-19" });
+  renderShell(desktop.app);
+  const row = desktop.root.querySelector("[data-waiting-panel]").querySelector("[data-task='project:shop:029']");
+  assert.equal(row.querySelector(".waiting-row-title").textContent, "Media to disk and webp");
+  assert.equal(row.querySelector(".waiting-row-meta").textContent, "Shop, task 029, Oct 19");
+  assert.match(desktop.root.querySelector("[data-waiting-panel]").querySelector("p").textContent, /^From /, "asks and reviews together are only said to come from projects");
+  Object.assign(review, { title: "" });
+  renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector("[data-waiting-panel]").querySelector("[data-task='project:shop:029']").querySelector(".waiting-row-title").textContent, "Task 029", "a review with no title at all still names itself");
+  Object.assign(review, { title: "Media to disk and webp" });
+  click(desktop.root.querySelector("[data-waiting-panel]").querySelector("[data-task='project:shop:029']"));
+  await waitFor(() => desktop.root.querySelector("[data-waiting-open]") && desktop.app.waitingRecord?.task, "The review did not open in place.");
+  desktop.app.waitingRecord.task.request = `${"Old uploads move to the media folder as optimized WebP. ".repeat(8)}\n\nA second paragraph that stays out.`;
+  renderShell(desktop.app);
+  const open = desktop.root.querySelector("[data-waiting-open='review:project:shop:029']");
+  assert.match(open.querySelector(".waiting-row-meta").textContent, /^Shop, task 029, delivered Oct 19 by /);
+  const request = open.querySelector(".waiting-request").textContent;
+  assert.ok(request.length <= 241 && request.endsWith("…") && !request.includes("second paragraph"), "the first paragraph, cut at a word with an ellipsis");
+  assert.ok(open.querySelector("[data-action='accept']") && open.querySelector("[data-action='send-back']") && open.querySelector("[data-action='open-task']"));
+  // The note is asked for only once Send back is pressed: the first press shows and focuses it, the second sends it.
+  const opened = () => desktop.root.querySelector("[data-waiting-open]"), sendBack = () => opened().querySelector("[data-action='send-back']"), note = () => opened().querySelector("[data-note]");
+  assert.notEqual(note().closest("label").getAttribute("hidden"), null, "the note is not shown before Send back is pressed");
+  assert.equal(sendBack().disabled, false, "Send back can be pressed with no note yet");
+  click(sendBack());
+  assert.equal(note().closest("label").getAttribute("hidden"), null, "the first press shows the note");
+  assert.equal(desktop.document.activeElement, note(), "and focuses it");
+  assert.equal(sendBack().disabled, true, "Send back keeps its required note");
+  renderShell(desktop.app);
+  assert.equal(note().closest("label").getAttribute("hidden"), null, "a redraw keeps the note shown");
+  typeInput(note(), "Needs another pass", 0, 18);
+  assert.equal(sendBack().disabled, false, "with a note the second press can send");
+  assert.equal(desktop.root.querySelectorAll("[data-waiting-open]").length, 1, "one row is open at a time");
+  click(open.querySelector("[data-waiting-item]"));
+  assert.equal(desktop.app.waitingRecord, null);
+  assert.equal(desktop.root.querySelector("[data-waiting-open]"), null, "the header of the open row folds it");
+  const reviews = (...ids) => ids.map((id) => ({ ...review, id: `review:${id}`, taskId: id, unitId: null }));
+  const sub = () => desktop.root.querySelector("[data-waiting-panel]").querySelector("p").textContent;
+  desktop.app.waitingList.items = reviews("project:alpha:001");
+  renderShell(desktop.app);
+  assert.equal(sub(), "Reviews from Alpha");
+  desktop.app.waitingList.items = reviews("project:alpha:001", "project:beta:002", "project:gamma:003", "project:alpha:004");
+  renderShell(desktop.app);
+  assert.equal(sub(), "Reviews from Alpha, Beta and Gamma");
+  desktop.app.waitingList.items = reviews("project:alpha:001", "project:beta:002", "project:gamma:003", "project:delta:004");
+  renderShell(desktop.app);
+  assert.equal(sub(), "Reviews from Alpha, Beta, Gamma and 1 more");
+  desktop.app.language = "es";
+  renderShell(desktop.app);
+  assert.equal(sub(), "Revisiones de Alpha, Beta, Gamma y 1 más");
+  assert.equal(desktop.root.querySelector("[data-waiting-panel]").querySelector("[data-task='project:alpha:001']").querySelector(".waiting-row-meta").textContent, "Alpha, tarea 001, 19 oct");
+});
+
+test("Waiting closes with the Map button, with Escape unless a dialog is open, and when something else is picked", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.unitList?.catalog?.length && desktop.app.waitingList?.items?.length, "The lists did not load.");
+  const pill = () => desktop.root.querySelector("[data-action='waiting']");
+  click(pill());
+  assert.ok(desktop.root.querySelector("[data-waiting-panel]"));
+  click(desktop.root.querySelector("[data-action='mode-map']"));
+  assert.equal(desktop.root.querySelector("[data-waiting-panel]"), null, "the Map button closes Waiting");
+  click(pill());
+  const dialog = desktop.document.createElement("dialog");
+  dialog.setAttribute("open", "");
+  desktop.document.body.append(dialog);
+  pressKey(desktop, "Escape");
+  assert.ok(desktop.root.querySelector("[data-waiting-panel]"), "Escape belongs to the dialog while one is open");
+  dialog.remove();
+  pressKey(desktop, "Enter");
+  assert.ok(desktop.root.querySelector("[data-waiting-panel]"));
+  pressKey(desktop, "Escape");
+  assert.equal(desktop.root.querySelector("[data-waiting-panel]"), null, "Escape closes Waiting");
+  assert.equal(pill().getAttribute("aria-pressed"), "false");
+  click(pill());
+  click(desktop.root.querySelector("[data-action='waiting-close']"));
+  assert.equal(desktop.root.querySelector("[data-waiting-panel]"), null, "the close button closes it too");
+  click(pill());
+  const executor = desktop.app.unitList.catalog.find((unit) => unit.id === "project:shop:executor-shop");
+  desktop.app.activeHandlers.onActivate({ id: executor.id, kind: "unit", unit: executor }, "single");
+  assert.equal(desktop.root.querySelector("[data-waiting-panel]"), null, "picking an agent shows the agent");
+});
+
+test("the phone button opens a panel under the bar, not Settings: a closed access offers 12 hours, an open one shows its code, and a click outside closes it", async (t) => {
+  const fixture = await createGuiFixture({ now: new Date().toISOString() });
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.unitList?.catalog?.length, "The lists did not load.");
+  const panel = () => desktop.root.querySelector("[data-phone-panel]");
+  const state = () => panel().querySelector("[data-phone-state]");
+  click(desktop.root.querySelector("[data-action='open-phone']"));
+  assert.equal(desktop.app.mode, "map", "the phone button does not go to Settings");
+  assert.ok(panel());
+  assert.equal(panel().querySelector("h2").textContent, "Open on the phone");
+  assert.equal(panel().querySelector(".phone-panel-esc").textContent, "Esc closes");
+  // The access this fixture starts with is open, and the screen holds no code for it.
+  assert.equal(state().getAttribute("data-phone-state"), "open");
+  assert.match(state().textContent, /^Open until \d\d:\d\d$/);
+  assert.equal(panel().querySelector(".qr"), null);
+  assert.equal(panel().querySelector(".phone-panel-note").textContent, "Open home access on this screen to show a new code.");
+  click(panel().querySelector("[data-action='phone-close-home']"));
+  await waitFor(() => panel()?.querySelector("[data-action='phone-open-home']"), "Closing the access did not show it closed.");
+  assert.equal(state().getAttribute("data-phone-state"), "closed");
+  assert.equal(state().textContent, "Home access is closed");
+  assert.equal(panel().querySelector(".phone-panel-note").textContent, text("en", "finalPhoneHint"));
+  assert.equal(panel().querySelector("[data-action='phone-open-home']").textContent, "Open for 12 hours");
+  assert.equal(panel().querySelector("[data-action='phone-close-home']"), null);
+  assert.equal(panel().querySelector(".qr"), null);
+  click(panel().querySelector("[data-action='phone-open-home']"));
+  await waitFor(() => panel()?.querySelector(".qr"), "The code did not appear.");
+  assert.equal(panel().querySelector("[data-code]").textContent.length, 6, "the short code stays under the code");
+  assert.match(state().textContent, /^Open until \d\d:\d\d$/);
+  assert.equal(panel().querySelector("[data-action='phone-copy-link']").textContent, "Copy the link");
+  assert.deepEqual(panel().querySelector(".phone-panel-scan").children.filter((node) => node.tag === "p").map((node) => node.textContent), ["Scan with the phone on the same network.", "Access closes after 12 hours."]);
+  assert.equal(panel().querySelector("[data-action='phone-open-home']"), null);
+  assert.equal(panel().querySelector("[data-action='phone-close-home']").textContent, "Close access");
+  // A click on the panel or on its button leaves it open; one anywhere else closes it.
+  const outside = (target) => { for (const handler of desktop.root.listeners.get("click") ?? []) handler({ target }); };
+  outside(panel().querySelector("h2"));
+  outside(desktop.root.querySelector("[data-action='open-phone']"));
+  assert.ok(panel());
+  outside(desktop.root.querySelector(".stage"));
+  assert.equal(panel(), null);
+  click(desktop.root.querySelector("[data-action='open-phone']"));
+  assert.ok(panel().querySelector(".qr"), "the code is still there while the access is open and the screen has not changed");
+  click(panel().querySelector("[data-action='phone-close-home']"));
+  await waitFor(() => panel()?.querySelector("[data-action='phone-open-home']") && !panel().querySelector(".qr"), "Closing the access did not show it closed.");
+  assert.equal(state().textContent, "Home access is closed");
+  desktop.app.language = "es";
+  renderShell(desktop.app);
+  assert.equal(panel().querySelector("[data-action='phone-open-home']").textContent, "Abrir por 12 horas");
+  assert.equal(state().textContent, "El acceso desde casa está cerrado");
+  assert.equal(panel().querySelector(".phone-panel-esc").textContent, "Esc cierra");
+  click(desktop.root.querySelector("[data-action='open-phone']"));
+  assert.equal(panel(), null, "the button also closes the panel");
+  const css = await readFile("gui/app/styles.css", "utf8");
+  assert.match(css, /\.phone-panel \{[^}]*position: fixed;[^}]*top: 56px;[^}]*width: min\(360px, calc\(100vw - 32px\)\);[^}]*border: 1px solid var\(--line2\); border-radius: 16px; background: var\(--card\)/);
+  // The buttons and the access state never wrap, so "Open for 12 hours" stays on one line; the row moves a whole button down instead.
+  assert.match(css, /\.phone-panel-foot \{[^}]*flex-wrap: wrap;/);
+  assert.match(css, /\.phone-panel-state \{[^}]*white-space: nowrap;/);
+  assert.match(css, /\.phone-panel-foot \.btn \{[^}]*white-space: nowrap;/);
+  assert.match(css, /\.phone-panel-scan \.btn \{[^}]*white-space: nowrap;/);
+});
+
+test("the Runs in choice is one line of 13 px bold text with its chevron inside the button, section headings share one style, and Waiting rows are 8 px tall with 2 px between them", async () => {
+  const css = await readFile("gui/app/styles.css", "utf8");
+  for (const part of [/font-size: 13px;/, /font-weight: 700;/, /white-space: nowrap;/, /text-overflow: ellipsis;/, /overflow: hidden;/, /position: relative;/]) assert.match(css, new RegExp(String.raw`\.runs-in-choice \{[^}]*${part.source}`));
+  assert.match(css, /\.runs-in-choice::after \{[^}]*position: absolute;[^}]*right: 12px;/, "the chevron stays inside the button at the right");
+  assert.match(css, /\.my-groups-heading \{[^}]*font-size: 11\.5px;[^}]*letter-spacing: 0\.08em;[^}]*text-transform: uppercase;/);
+  assert.match(css, /\.my-groups-heading:focus-visible \{[^}]*outline: var\(--focus\);/);
+  assert.match(css, /\.waiting-panel-list \{[^}]*gap: 2px;/);
+  assert.match(css, /\.waiting-row \{[^}]*padding: 8px 10px;/);
+});
+
+test("Escape closes only the topmost open layer: a menu, the phone panel, Activity, Waiting, then a drawer", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1024, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.unitList?.catalog?.length && desktop.app.waitingList?.items?.length, "The lists did not load.");
+  const has = (selector) => desktop.root.querySelector(selector) != null;
+  click(desktop.root.querySelector("[data-action='waiting']"));
+  click(desktop.root.querySelector("[data-action='open-notifications']"));
+  assert.deepEqual([has("[data-waiting-panel]"), has("[data-queue-panel]")], [true, true]);
+  assert.equal(desktop.root.querySelector(".inspector").className.includes("is-open"), true, "where the inspector is a drawer, Waiting opens it");
+  pressKey(desktop, "Escape");
+  assert.deepEqual([has("[data-waiting-panel]"), has("[data-queue-panel]")], [true, false], "Activity goes first");
+  desktop.app.phonePanelOpen = true; desktop.app.queuePanelOpen = true;
+  renderShell(desktop.app);
+  pressKey(desktop, "Escape");
+  assert.deepEqual([has("[data-phone-panel]"), has("[data-queue-panel]"), has("[data-waiting-panel]")], [false, true, true], "the phone panel is above Activity");
+  pressKey(desktop, "Escape");
+  assert.deepEqual([has("[data-queue-panel]"), has("[data-waiting-panel]")], [false, true]);
+  // Waiting goes before the drawer that holds it.
+  pressKey(desktop, "Escape");
+  assert.deepEqual([has("[data-waiting-panel]"), desktop.root.querySelector(".inspector").className.includes("is-open")], [false, true]);
+  pressKey(desktop, "Escape");
+  assert.equal(desktop.root.querySelector(".inspector").className.includes("is-open"), false, "then the drawer");
+  pressKey(desktop, "Escape");
+  assert.equal(desktop.app.mode, "map");
+  // A dialog keeps Escape for itself.
+  desktop.app.phonePanelOpen = true;
+  renderShell(desktop.app);
+  const dialog = desktop.document.createElement("dialog");
+  dialog.setAttribute("open", "");
+  desktop.document.body.append(dialog);
+  pressKey(desktop, "Escape");
+  assert.ok(has("[data-phone-panel]"));
+  dialog.remove();
+  pressKey(desktop, "Escape");
+  assert.equal(has("[data-phone-panel]"), false);
+});
+
+test("at 1024 px the bar keeps Add, what waits and Details, and the rest sits in More; Details opens the inspector as a drawer with its own close button", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1024, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.unitList?.catalog?.length && desktop.app.waitingList?.items?.length, "The lists did not load.");
+  const menu = () => desktop.document.querySelector("[data-context-menu]");
+  const more = () => desktop.root.querySelector("[data-action='bar-more']");
+  const entries = () => menu().querySelectorAll("button").map((button) => [button.getAttribute("data-action"), button.children.at(-1).textContent]);
+  assert.equal(more().getAttribute("aria-label"), "More");
+  click(more());
+  assert.deepEqual(entries(), [["context-activity", "Activity"], ["context-phone", "Open on the phone"], ["context-settings", "Settings"]]);
+  click(desktop.document.querySelector("[data-action='context-phone']"));
+  assert.ok(desktop.root.querySelector("[data-phone-panel]"), "the phone entry opens the panel");
+  click(more());
+  click(desktop.document.querySelector("[data-action='context-activity']"));
+  assert.ok(desktop.root.querySelector("[data-queue-panel]"));
+  assert.equal(desktop.root.querySelector("[data-phone-panel]"), null, "one panel at a time");
+  click(more());
+  click(desktop.document.querySelector("[data-action='context-settings']"));
+  assert.equal(desktop.app.mode, "settings");
+  navigate(desktop.app, "map");
+  pressKey(desktop, "Escape");
+  assert.equal(desktop.root.querySelector("[data-queue-panel]"), null, "Activity was still open and goes first");
+  // The waiting pill is the hand and the count; the full words stay as its name.
+  const pill = desktop.root.querySelector("[data-action='waiting']");
+  assert.match(pill.getAttribute("aria-label"), /^\d+ waiting on you$/);
+  assert.match(pill.querySelector(".pill-count").textContent, /^\d+$/);
+  assert.ok(pill.querySelector(".pill-label"));
+  assert.equal(desktop.root.querySelector(".brand-name").textContent, "HIVEM1ND");
+  // Details opens the drawer; its header closes it; Escape closes it.
+  const inspector = () => desktop.root.querySelector(".inspector");
+  assert.equal(inspector().className.includes("is-open"), false);
+  click(desktop.root.querySelector("[data-action='toggle-inspector']"));
+  assert.equal(inspector().className.includes("is-open"), true);
+  const close = inspector().querySelector("[data-action='close-inspector']");
+  assert.equal(close.getAttribute("aria-label"), "Close details");
+  assert.equal(inspector().children[0].className, "inspector-drawer-head");
+  click(close);
+  assert.equal(inspector().className.includes("is-open"), false);
+  click(desktop.root.querySelector("[data-action='toggle-inspector']"));
+  pressKey(desktop, "Escape");
+  assert.equal(inspector().className.includes("is-open"), false);
+  // The Map keeps its own view when it is not fitted any more: the drawer does not refit it.
+  desktop.app.mapState.autoFit = false;
+  const view = { ...desktop.app.mapState.view };
+  click(desktop.root.querySelector("[data-action='toggle-inspector']"));
+  assert.deepEqual(desktop.app.mapState.view, view);
+});
+
+test("at 800 px the Map carries a Hierarchy button, More holds Details too, and at 1440 px the bar and the panels are as they were", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const small = await bootApp(fixture.desktopUrl, 800, []);
+  t.after(() => dispose(small.app));
+  await waitFor(() => small.app.unitList?.catalog?.length, "The lists did not load.");
+  const toggle = () => small.root.querySelector("[data-action='toggle-catalog']");
+  assert.equal(toggle().className.includes("stage-toggle"), true);
+  assert.equal(toggle().children.at(-1).textContent, "Hierarchy");
+  assert.equal(small.root.querySelector(".bar").querySelector("[data-action='toggle-catalog']"), null, "the toggle left the bar");
+  assert.equal(small.root.querySelector(".side").className.includes("is-open"), false);
+  click(toggle());
+  assert.equal(small.root.querySelector(".side").className.includes("is-open"), true);
+  assert.equal(toggle().getAttribute("aria-pressed"), "true");
+  pressKey(small, "Escape");
+  assert.equal(small.root.querySelector(".side").className.includes("is-open"), false, "Escape closes the side drawer");
+  click(small.root.querySelector("[data-action='bar-more']"));
+  assert.deepEqual(small.document.querySelector("[data-context-menu]").querySelectorAll("button").map((button) => button.children.at(-1).textContent), ["Details", "Activity", "Open on the phone", "Settings"]);
+  click(small.document.querySelector("[data-action='context-details']"));
+  assert.equal(small.root.querySelector(".inspector").className.includes("is-open"), true);
+  small.app.language = "es";
+  navigate(small.app, "blueprint");
+  await waitFor(() => small.root.querySelector("[data-editor-column='resource']"), "The board column did not open.");
+  assert.equal(toggle().children.at(-1).textContent, "Tableros");
+  navigate(small.app, "document");
+  await waitFor(() => small.root.querySelector("[data-editor-idle='void']"), "The text column did not open.");
+  assert.equal(toggle().children.at(-1).textContent, "Textos");
+  const wide = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(wide.app));
+  await waitFor(() => wide.app.unitList?.catalog?.length, "The lists did not load.");
+  click(wide.root.querySelector("[data-action='bar-more']"));
+  assert.deepEqual(wide.document.querySelector("[data-context-menu]").querySelectorAll("button").map((button) => button.children.at(-1).textContent), ["Activity", "Open on the phone", "Settings"]);
+  for (const action of ["open-phone", "open-notifications", "toggle-inspector", "open-settings"]) assert.ok(wide.root.querySelector(`[data-action='${action}']`), action);
+  assert.deepEqual(wide.root.querySelector(".workspace").children.map((child) => child.className.split(" ").find((name) => ["side", "stage", "inspector"].includes(name))), ["side", "stage", "inspector"]);
+  const css = await readFile("gui/app/styles.css", "utf8");
+  const block = (query, from = 0) => { const start = css.indexOf(query, from); return css.slice(start, css.indexOf("\n}", start)); };
+  const drawer = block("@media (max-width: 1180px)");
+  assert.match(drawer, /\.bar \{ flex-wrap: nowrap; \}/);
+  for (const action of ["open-phone", "open-notifications", "open-settings"]) assert.ok(drawer.includes(`.bar [data-action="${action}"]`), action);
+  assert.match(drawer, /\.bar-more \{ display: inline-flex; \}/);
+  assert.match(drawer, /\.pill-label \{ display: none; \}/);
+  assert.match(drawer, /\.foot-read,\s+\.shell\[data-layout="desktop"\] \.foot-machine\[data-answers="true"\] \{ display: none; \}/);
+  assert.match(drawer, /\.inspector\.is-open \{[^}]*width: min\(100%, 340px\);[^}]*border: 1px solid var\(--line2\); border-radius: 18px; box-shadow: var\(--panel-shadow\);/);
+  const range = block("@media (min-width: 988px) and (max-width: 1180px)");
+  assert.match(range, /--side: 260px/);
+  assert.match(range, /grid-template-columns: var\(--side\) minmax\(0, 1fr\)/);
+  assert.match(range, /\.inspector\.is-open \{ grid-column: 2; grid-row: 1; justify-self: end; \}/);
+  const narrow = block("@media (max-width: 987px)", css.indexOf("@media (max-width: 987px)") + 30);
+  assert.match(narrow, /\.brand-name,\s+\.shell\[data-layout="desktop"\] \.bar \[data-action="toggle-inspector"\] \{ display: none; \}/);
+  assert.match(css, /\.stage-toggle \{[^}]*position: absolute; top: 12px; left: 12px;/);
+});
+
+test("opening a Waiting row from a selected cluster clears the cluster, and Open task selects the agent of the task", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const group = (await createGroup(apiFrom(fixture.desktopUrl), "Checkout launch", ["project:shop:executor-shop"])).data;
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.waitingList?.items?.some((item) => item.taskId === "project:shop:029") && desktop.root.querySelector(`[data-cluster-row="${group.id}"]`), "The lists did not load.");
+  click(desktop.root.querySelector(`[data-cluster-row="${group.id}"]`));
+  await waitFor(() => desktop.app.store.selected.groupId === group.id, "The cluster was not selected.");
+  click(desktop.root.querySelector("[data-action='waiting']"));
+  await waitFor(() => desktop.root.querySelector("[data-waiting-panel]")?.querySelector("[data-task='project:shop:029']"), "The review row did not appear.");
+  assert.equal(desktop.root.querySelector(`[data-cluster-inspector="${group.id}"]`), null, "Waiting takes the place of the cluster in the inspector");
+  click(desktop.root.querySelector("[data-waiting-panel]").querySelector("[data-task='project:shop:029']"));
+  await waitFor(() => desktop.app.waitingRecord?.task, "The review did not load.");
+  assert.equal(desktop.app.store.selected.groupId, null);
+  const owner = desktop.app.waitingRecord.item.unitId;
+  assert.ok(owner);
+  assert.equal(desktop.app.store.selected.unitId, owner);
+  click(desktop.root.querySelector("[data-waiting-open]").querySelector("[data-action='open-task']"));
+  assert.equal(desktop.app.waitingOpen, false);
+  assert.equal(desktop.root.querySelector("[data-waiting-panel]"), null);
+  assert.equal(desktop.root.querySelector(`[data-cluster-inspector="${group.id}"]`), null, "the agent shows, not the cluster");
+  await waitFor(() => desktop.app.inspectorData?.unitId === owner && desktop.root.querySelector(".agent-heading"), "The agent of the task did not open.");
+  assert.equal(desktop.app.store.selected.unitId, owner);
+  assert.equal(desktop.app.openTaskId, "project:shop:029");
+});
+
+test("a date with no time reads as its own day, and the time of a last message follows how old it is", () => {
+  assert.equal(formatShortDate("en", "2026-10-19"), "Oct 19");
+  assert.equal(formatShortDate("es", "2026-10-19"), "19 oct");
+  assert.equal(formatShortDate("en", ""), "");
+  assert.equal(formatShortDate("en", "not a date"), "");
+  const now = new Date(2026, 9, 21, 12, 0).getTime();
+  const at = (day, hour, minute = 0) => new Date(2026, 9, day, hour, minute).getTime();
+  assert.equal(formatRecent("en", at(21, 9, 5), now), formatShortTime("en", at(21, 9, 5)), "today: the hour");
+  assert.equal(formatRecent("en", at(20, 23, 59), now), "Tue", "yesterday: the weekday");
+  assert.equal(formatRecent("en", at(15, 8), now), "Thu", "six days ago: still the weekday");
+  assert.equal(formatRecent("en", at(14, 8), now), "Oct 14", "a week ago: the date");
+  assert.equal(formatRecent("es", at(20, 8), now), "mar");
+  assert.equal(formatRecent("es", at(1, 8), now), "1 oct");
+  assert.equal(formatRecent("en", "", now), "");
+});
+
+test("Chats list: the newest first, an unread pill in place of the time, and the quiet chats folded into one row", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.chatList?.catalog?.length && desktop.app.unitList?.catalog?.length, "The lists did not load.");
+  const stamp = (ms) => new Date(desktop.app.api.now() - ms).toISOString();
+  const chat = (id, title, extra = {}) => ({ id, title, kind: "group", members: [], pinned: false, unread: 0, lastMessage: null, ...extra });
+  const said = (fromId, body, ms) => ({ id: `m-${ms}`, fromId, body, timestamp: stamp(ms) });
+  desktop.app.chatList.items = [
+    chat("older", "older talk", { lastMessage: said("root:master", "An old line", 3 * 86400000) }),
+    chat("newest", "newest talk", { unread: 3, lastMessage: said("root:overseer", "Line one\nline two", 60000) }),
+    chat("quiet-1", "quiet one"), chat("quiet-2", "quiet two"), chat("quiet-3", "quiet three"), chat("quiet-4", "quiet four"),
+    chat("pinned", "pinned talk", { pinned: true }),
+  ];
+  desktop.app.chatList.status = "ready";
+  navigate(desktop.app, "chats");
+  assert.deepEqual(desktop.app.activeRows.map((row) => row.id), ["heading:pinnedChats", "pinned", "heading:recentChats", "newest", "older", "heading:quietChats", "group:quiet"]);
+  const rowOf = (id) => desktop.root.querySelector(`[data-id='${id}']`);
+  // Every heading of the list is the element and class of the Hierarchy's Clusters heading, not a larger row title.
+  const headings = ["heading:pinnedChats", "heading:recentChats", "heading:quietChats"];
+  assert.deepEqual(headings.map((id) => [rowOf(id).tag, rowOf(id).className]), headings.map(() => ["div", "my-groups-heading"]));
+  assert.deepEqual(headings.map((id) => rowOf(id).children[0].textContent), ["Pinned", "Recent", "No messages yet"]);
+  const newest = rowOf("newest");
+  assert.equal(newest.querySelector(".chat-title").textContent, "Newest talk");
+  assert.equal(newest.querySelector(".chat-preview").textContent, "Overseer: Line one line two", "the sender and the last message on one line");
+  assert.equal(newest.querySelector(".chat-unread").textContent, "3");
+  assert.equal(newest.querySelector(".chat-when"), null, "an unread count replaces the time");
+  const older = rowOf("older");
+  assert.equal(older.querySelector(".chat-unread"), null);
+  assert.equal(older.querySelector(".chat-when").textContent, formatRecent("en", stamp(3 * 86400000), desktop.app.api.now()));
+  assert.match(older.querySelector(".chat-preview").textContent, /: An old line$/);
+  assert.equal(rowOf("pinned").querySelector(".chat-preview").textContent, "No messages yet");
+  const quiet = rowOf("group:quiet");
+  assert.equal(quiet.getAttribute("aria-expanded"), "false");
+  assert.equal(quiet.querySelector(".chat-title").textContent, "4 chats");
+  assert.equal(quiet.querySelector(".chat-preview").textContent, "Quiet one, Quiet two, Quiet three and more");
+  assert.equal(rowOf("quiet-1"), null, "the chats nobody wrote in stay folded");
+  desktop.app.activeHandlers.onActivate(desktop.app.activeRows.find((row) => row.id === "group:quiet"), "single");
+  assert.deepEqual(desktop.app.activeRows.slice(-5).map((row) => row.id), ["group:quiet", "quiet-1", "quiet-2", "quiet-3", "quiet-4"]);
+  assert.equal(rowOf("quiet-2").querySelector(".chat-preview").textContent, "No messages yet");
+  assert.equal(rowOf("group:quiet").getAttribute("aria-expanded"), "true");
+  desktop.app.language = "es";
+  renderShell(desktop.app);
+  assert.equal(rowOf("group:quiet").querySelector(".chat-title").textContent, "4 chats");
+  assert.equal(rowOf("heading:quietChats").children[0].textContent, "Sin mensajes");
+  assert.equal(rowOf("quiet-2").querySelector(".chat-preview").textContent, "Todavía no hay mensajes");
+});
+
+test("an agent's empty chat says what a first message does, and a cluster keeps its own empty line", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const group = (await createGroup(apiFrom(fixture.desktopUrl), "Checkout launch", ["project:shop:executor-shop"])).data;
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.unitList?.catalog?.length && desktop.root.querySelector(`[data-cluster-row="${group.id}"]`), "The lists did not load.");
+  const adjutant = desktop.app.unitList.catalog.find((unit) => unit.id === "root:adjutant");
+  desktop.app.activeHandlers.onActivate({ id: adjutant.id, kind: "unit", unit: adjutant }, "double");
+  await waitFor(() => desktop.app.thread?.chat?.kind === "direct" && desktop.root.querySelector("[data-composer]"), "The agent conversation did not open.");
+  await waitFor(() => [...desktop.app.activity.keys()].filter((key) => key.startsWith("chat-load:")).every((key) => desktop.app.activity.get(key).phase !== "pending"), "The conversation did not finish loading.");
+  desktop.app.thread.messages = [];
+  desktop.app.thread.total = 0;
+  renderShell(desktop.app);
+  const empty = desktop.root.querySelector("[data-empty='chat']");
+  assert.ok(empty.className.includes("empty-chat"));
+  assert.equal(empty.querySelector("strong").textContent, "No messages yet");
+  assert.equal(empty.querySelector("p").textContent, "A message reaches the agent at its next step.");
+  assert.ok(empty.querySelector("svg"), "a glyph above the title");
+  desktop.app.language = "es";
+  renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector("[data-empty='chat']").querySelector("strong").textContent, "Todavía no hay mensajes");
+  assert.equal(desktop.root.querySelector("[data-empty='chat']").querySelector("p").textContent, "Un mensaje llega al agente en su siguiente paso.");
+  desktop.app.language = "en";
+  click(desktop.root.querySelector(`[data-cluster-row="${group.id}"]`));
+  await waitFor(() => desktop.app.thread?.chat?.id === group.chatId && desktop.root.querySelector("[data-composer]"), "The cluster conversation did not open.");
+  await waitFor(() => [...desktop.app.activity.keys()].filter((key) => key.startsWith("chat-load:")).every((key) => desktop.app.activity.get(key).phase !== "pending"), "The cluster conversation did not finish loading.");
+  desktop.app.thread.messages = [];
+  desktop.app.thread.total = 0;
+  renderShell(desktop.app);
+  const own = desktop.root.querySelector("[data-empty='chat']");
+  assert.equal(own.tag, "p");
+  assert.equal(own.textContent, "No messages yet. Write one below.");
+  assert.ok(desktop.root.querySelector("[data-action='start-plan']"), "the cluster keeps its Choose who plans button");
+});
+
+test("a selected cluster has Chat, Work and Details; Details holds its kind, path and repositories and never the conversation", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const api = apiFrom(fixture.desktopUrl);
+  const empty = async (title) => (await startApi.createCluster(api, { title, parentId: null, link: { kind: "none" }, machine: "DESKTOP" })).data;
+  const folder = await empty("Unity");
+  const repository = await empty("E pet");
+  const loose = await empty("Ideas");
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.root.querySelector(`[data-cluster-row="${folder.id}"]`), "The clusters did not load.");
+  click(desktop.root.querySelector(`[data-cluster-row="${folder.id}"]`));
+  await waitFor(() => desktop.app.store.selected.groupId === folder.id && desktop.app.thread?.chat?.id === folder.chatId && desktop.root.querySelector("[data-composer]"), "The cluster did not open on its chat.");
+  const groups = desktop.app.store.indexes.groups;
+  groups.get(folder.id).link = { kind: "folder", folderId: folder.id };
+  groups.get(repository.id).parentId = folder.id;
+  renderShell(desktop.app);
+  assert.equal(desktop.root.querySelector("[data-cluster-summary]").textContent, "Folder, 1 repository, no agents");
+  assert.deepEqual(desktop.root.querySelectorAll(".session-tab").map((tab) => tab.textContent), ["Chat", "Work", "Details"]);
+  assert.equal(desktop.root.querySelector("[data-action='session-chat']").getAttribute("aria-selected"), "true", "a cluster opens on its chat");
+  assert.ok(desktop.root.querySelector("[data-composer]"));
+  assert.equal(desktop.root.querySelector(`[data-cluster-details="${folder.id}"]`), null);
+  click(desktop.root.querySelector("[data-action='session-work']"));
+  assert.ok(desktop.root.querySelector("[data-unit-work]"), "no lead, so the Not started line");
+  assert.equal(desktop.root.querySelector("[data-unit-work]").children.some((node) => node.textContent === "Not started"), true);
+  click(desktop.root.querySelector("[data-action='session-details']"));
+  const details = desktop.root.querySelector(`[data-cluster-details="${folder.id}"]`);
+  assert.ok(details);
+  assert.equal(desktop.root.querySelector("[data-composer]"), null, "Details does not show the conversation");
+  assert.equal(desktop.root.querySelector(".transcript"), null);
+  const facts = details.querySelectorAll(".fact").map((fact) => fact.children.map((child) => child.textContent));
+  assert.deepEqual(facts, [["Kind", "Folder"], ["Path", "Not on this machine"], ["Repositories", "E pet"]]);
+  assert.ok(details.querySelector("[data-folder-missing]"));
+  assert.equal(details.querySelector("[data-action='new-agent-card']").textContent, "New agent");
+  assert.equal(details.querySelector("[data-action='choose-planner']").textContent, "Choose who plans");
+  click(desktop.root.querySelector("[data-action='session-chat']"));
+  assert.ok(desktop.root.querySelector("[data-composer]"), "back on Chat");
+  click(desktop.root.querySelector(`[data-cluster-row="${loose.id}"]`));
+  await waitFor(() => desktop.app.store.selected.groupId === loose.id && desktop.root.querySelector(`[data-cluster-inspector="${loose.id}"]`), "The unlinked cluster did not open.");
+  assert.equal(desktop.root.querySelector("[data-cluster-summary]").textContent, "Not linked, no agents");
+  click(desktop.root.querySelector("[data-action='session-details']"));
+  const unlinked = desktop.root.querySelector(`[data-cluster-details="${loose.id}"]`);
+  assert.equal(unlinked.querySelector("[data-action='link-folder']").textContent, "Link a folder");
+  assert.equal(unlinked.querySelector("[data-action='cluster-changes']"), null);
+  assert.equal(desktop.root.querySelector(".transcript"), null);
+});
+
+test("an agent's Details names where it works, folds its session, shows the model as a name and never the default body", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.unitList?.catalog?.length, "The units did not load.");
+  const overseer = desktop.app.unitList.catalog.find((unit) => unit.id === "root:overseer");
+  desktop.app.activeHandlers.onActivate({ id: overseer.id, kind: "unit", unit: overseer }, "double");
+  await waitFor(() => desktop.app.inspectorData?.unitId === overseer.id && desktop.root.querySelector("[data-details-section='detailsSession']"), "The agent details did not load.");
+  const facts = () => Object.fromEntries(desktop.root.querySelector("[data-agent-details]").querySelectorAll(".fact").map((fact) => [fact.children[0].textContent.replace(/: $/, ""), fact.children[1].textContent]));
+  assert.equal(facts()["Works in"], "Every cluster");
+  assert.equal(facts().Scope, undefined, "there is no separate Scope line");
+  assert.equal(facts()["Reports to"], undefined, "the Overseer reports to no one");
+  const session = desktop.root.querySelector("[data-details-section='detailsSession']");
+  assert.equal(session.tag, "details");
+  assert.equal(session.getAttribute("open"), null, "the session is folded");
+  assert.match(session.querySelector("summary").children[1].textContent, /^Session on /);
+  assert.ok(["Running", "Not started", "Unavailable"].includes(session.querySelector("summary").children[2].textContent));
+  desktop.app.language = "es";
+  renderShell(desktop.app);
+  assert.equal(facts()["Trabaja en"], "Todos los clústeres");
+  assert.match(desktop.root.querySelector("[data-details-section='detailsSession']").querySelector("summary").children[1].textContent, /^Sesión en /);
+  const shop = desktop.app.unitList.catalog.find((unit) => unit.id === "project:shop:executor-shop");
+  desktop.app.activeHandlers.onActivate({ id: shop.id, kind: "unit", unit: shop }, "double");
+  await waitFor(() => desktop.app.inspectorData?.unitId === shop.id && desktop.root.querySelector("[data-details-section='detailsSession']"), "The executor details did not load.");
+  assert.equal(facts()["Trabaja en"] != null, true, "a project scope or a started session names where it works");
+  assert.equal(facts()["Reporta a"] != null, true, "an agent below an Overlord or a cluster keeps its Reports to line");
+  assert.equal(facts().Modelo, "Strong", "the model reads as a name");
+  assert.equal(desktop.root.querySelector("[data-action='change-runs-in']").textContent.startsWith("Se ejecuta en"), false, "the card title says Run, the button only the choice");
+  assert.match(desktop.root.querySelector("[data-action='change-runs-in']").getAttribute("aria-label"), /^Se ejecuta en: /);
+});
+
+test("the body every new agent starts with is not shown as a fact, and another body still is", () => {
+  const { document } = createTestDocument(1440);
+  const t = (key, values) => text("en", key, values);
+  const unit = (context) => renderUnit(document, { unit: "ready", scope: { kind: "root" }, context }, t, "en");
+  assert.equal(unit("Ready.").querySelector(".unit-context"), null);
+  assert.equal(unit("Ready.\n").querySelector(".unit-context"), null);
+  assert.equal(unit("Waiting on the release.").querySelector(".unit-context").textContent, "Waiting on the release.");
+  const works = (scope) => renderUnit(document, { unit: "ready", scope }, t, "en").querySelector("[data-unit-facts]").children.map((node) => node.textContent);
+  assert.ok(works({ kind: "root" }).includes("Works in: Every cluster"));
+  assert.ok(works({ kind: "project", name: "shop" }).includes("Works in: shop"));
+  assert.equal(works({ kind: "root" }).some((line) => line.startsWith("Scope")), false);
+});
+
+test("a question in Waiting opens its conversation instead of a card, and an ask names the agent and the day", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.waitingList?.items?.some((item) => item.kind === "question") && desktop.app.unitList?.catalog?.length, "The lists did not load.");
+  click(desktop.root.querySelector("[data-action='waiting']"));
+  await waitFor(() => desktop.root.querySelector("[data-waiting-panel]") && desktop.app.waitingList.status === "ready", "The Waiting panel did not open.");
+  const asked = desktop.app.waitingList.items.find((item) => item.kind === "question");
+  Object.assign(asked, { since: "2026-10-19" });
+  renderShell(desktop.app);
+  const row = desktop.root.querySelector("[data-waiting-panel]").querySelector(`[data-waiting-item='${asked.id}']`);
+  assert.equal(row.querySelector(".waiting-row-meta").textContent, "Overseer, Oct 19");
+  click(row);
+  assert.equal(desktop.app.waitingOpen, false, "a question opens the conversation, which the inspector shows");
+  assert.equal(desktop.app.store.selected.unitId, asked.unitId);
+  assert.equal(desktop.root.querySelector("[data-waiting-panel]"), null);
+});
+
+test("a cluster's Work tab shows the work of the lead that has a session", async (t) => {
+  const fixture = await createGuiFixture();
+  t.after(() => fixture.close());
+  const group = (await createGroup(apiFrom(fixture.desktopUrl), "Checkout launch", ["project:shop:executor-shop"])).data;
+  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.root.querySelector(`[data-cluster-row="${group.id}"]`) && desktop.app.store.view?.sessions?.some((session) => session.unitId === "project:shop:executor-shop"), "The cluster and its session did not load.");
+  click(desktop.root.querySelector(`[data-cluster-row="${group.id}"]`));
+  await waitFor(() => desktop.app.store.selected.groupId === group.id && desktop.root.querySelector("[data-action='session-work']"), "The cluster did not open.");
+  assert.equal(desktop.root.querySelector("[data-cluster-summary]").textContent, "Not linked, 1 agent");
+  click(desktop.root.querySelector("[data-action='session-work']"));
+  await waitFor(() => desktop.root.querySelector("[data-session-work]"), "The lead's work did not show.");
+  assert.equal(desktop.root.querySelector("[data-unit-work]"), null, "a lead with a session is not Not started");
+  assert.ok(desktop.root.querySelector("[data-action='stop-step']"));
+  click(desktop.root.querySelector("[data-action='session-details']"));
+  const agents = desktop.root.querySelector(`[data-cluster-details="${group.id}"]`).querySelector("[data-cluster-agent='project:shop:executor-shop']");
+  assert.equal(agents.children[1].textContent, "Executor shop");
+  assert.equal(agents.children[2].textContent, "Executor");
+});

@@ -14,6 +14,15 @@ export function displayName(value) {
   return text.split(/(,\s*)/).map(part => part.charAt(0).toLocaleUpperCase() + part.slice(1)).join('');
 }
 
+// A phrase that starts a line begins with a capital; the rest stays as written.
+export function upperFirst(value) {
+  const text = String(value ?? '');
+  return text.charAt(0).toLocaleUpperCase() + text.slice(1);
+}
+
+// The number beside a cluster's name, in the Hierarchy and on a folded chip of the Map: the clusters inside it, otherwise its agents.
+export const clusterCount = (children, agents) => children || agents;
+
 export function pathFolder(value) {
   const parts = String(value ?? '').split(/[\\/]/).filter(Boolean);
   return parts.at(-1) ?? '';
@@ -82,7 +91,10 @@ export function buildHierarchy(units, issues = [], groups = []) {
     services, hidden, cycles: [...cycles], issues };
 }
 
-export function flattenVisibleHierarchy(tree, state, query = '') {
+// Incubator and Genesis always have a place at the end of the list: their unit when one exists, otherwise a row that offers to set it up.
+const SERVICES = Object.freeze([{ role: 'incubator', labelKey: 'finalIncubator', glyph: 'bulb' }, { role: 'genesis', labelKey: 'finalGenesis', glyph: 'genesis' }]);
+
+export function flattenVisibleHierarchy(tree, state, query = '', { loaded = true } = {}) {
   const rows = [], fold = state ?? { shown: new Map(), collapsed: new Set() };
   const matches = unit => !query || [unit.unit, unit.alias, unit.job, unit.context].some(value => String(value ?? '').toLowerCase().includes(query.toLowerCase()));
   const pushUnits = (units, depth) => {
@@ -110,7 +122,7 @@ export function flattenVisibleHierarchy(tree, state, query = '') {
     emitted.add(cluster.id);
     const key = `cluster:${cluster.id}`, children = all.filter(item => item.parentId === cluster.id && contains(item));
     const expanded = !fold.collapsed.has(key) || Boolean(query);
-    rows.push({ id: key, kind: 'cluster', groupId: cluster.id, group: cluster, label: displayName(cluster.title), depth, count: children.length || cluster.units.length, expanded });
+    rows.push({ id: key, kind: 'cluster', groupId: cluster.id, group: cluster, label: displayName(cluster.title), depth, count: clusterCount(children.length, cluster.units.length), expanded });
     if (!expanded) return;
     pushUnits(cluster.units.filter(matches), depth + 1);
     for (const worktree of cluster.worktrees ?? []) rows.push({ id: `worktree:${cluster.id}:${worktree.id}`, kind: 'worktree', groupId: cluster.id, worktree, label: pathFolder(worktree.path) || worktree.branch || '', depth: depth + 1 });
@@ -119,9 +131,14 @@ export function flattenVisibleHierarchy(tree, state, query = '') {
     if (children.length > shown) rows.push({ id: `more:${key}`, kind: 'more', groupId: key, count: children.length - shown, depth: depth + 1, labelKey: 'more' });
   };
   for (const cluster of all.filter(item => !all.some(parent => parent.id === item.parentId))) appendCluster(cluster, 0);
-  if (tree.services.length) {
+  // Until the units are known, and while a search narrows them, a missing service does not mean it is not set up.
+  const offer = loaded && !query, found = SERVICES.map(service => tree.services.filter(unit => unit.role === service.role && matches(unit)));
+  if (offer || found.some(units => units.length)) {
     rows.push({ id: 'section:services', kind: 'heading', labelKey: 'services', depth: 0 });
-    pushUnits(tree.services.filter(matches), 0);
+    SERVICES.forEach((service, index) => {
+      if (found[index].length) pushUnits(found[index], 0);
+      else if (offer) rows.push({ id: `service:${service.role}`, kind: 'service', role: service.role, glyph: service.glyph, labelKey: service.labelKey, depth: 0 });
+    });
   }
   if (tree.cycles.length) rows.push({ id: 'issue:cycle', kind: 'issue', labelKey: 'cycleIssue', depth: 0 });
   rows.forEach((row, index) => { row.pos = index + 1; row.setsize = rows.length; });
@@ -166,7 +183,8 @@ export function unitDisplayName(unit) {
 }
 
 // The right-click menu of a Map node, a Map cluster and a Hierarchy row. It opens at the pointer, stays on screen and closes on
-// Escape, on a click elsewhere, on scrolling and on a choice. Each item is { id, label, danger, disabled, run }.
+// Escape, on a click elsewhere, on scrolling and on a choice. Each item is { id, label, danger, disabled, rule, glyph, run }; rule draws a line above it
+// and glyph puts an icon before the label.
 export function openContextMenu(document, { x = 0, y = 0, items = [], label = '', title = '' } = {}) {
   document.querySelector?.('[data-context-menu]')?.remove();
   const view = document.defaultView, invoker = document.activeElement;
@@ -181,8 +199,9 @@ export function openContextMenu(document, { x = 0, y = 0, items = [], label = ''
   if (title) menu.append(element(document, 'p', { class: 'context-title', role: 'presentation', 'data-context-title': 'true', text: title }));
   const entries = items.map(item => {
     const entry = element(document, 'button', { type: 'button', class: `context-item${item.primary ? ' is-primary' : ''}${item.danger ? ' is-danger' : ''}`, role: 'menuitem',
-      'data-action': `context-${item.id}`, disabled: item.disabled ? '' : null, text: item.label });
+      'data-action': `context-${item.id}`, disabled: item.disabled ? '' : null, text: item.glyph ? null : item.label }, item.glyph ? [icon(document, item.glyph), item.label] : []);
     entry.addEventListener('click', () => { close(false); item.run?.(); });
+    if (item.rule) menu.append(element(document, 'div', { class: 'context-rule', role: 'separator' }));
     menu.append(entry);
     return entry;
   });

@@ -43,8 +43,31 @@ function layoutRecord(saved) {
 }
 
 // Below these scales a name, a badge or a mark would be smaller than it can be read, so it is not drawn.
-const LABEL_ZOOM = 0.4, DETAIL_ZOOM = 0.3;
+const LABEL_ZOOM = 0.4, DETAIL_ZOOM = 0.3, GLYPH_ZOOM = 0.5;
 const QUIET_RETRIES = [900, 2500];
+
+// The size a cluster's name is drawn at, [at a scale of one, smallest, largest]: a folded or empty cluster is a chip, an open one a title.
+const NAME_SIZE = { chip: [11.5, 6.5, 13], title: [12.5, 7, 20] };
+
+// The glyph, the name, the count and the button of a cluster are all drawn at the scale of the name's own text, and the box is the
+// sum of them, so a name is never cut. Zoomed out past the smallest readable text the box grows past its frame instead.
+export function nameFit(zone, text, zoom, measure) {
+  const [base, low, high] = zone.compact ? NAME_SIZE.chip : NAME_SIZE.title;
+  const font = clamp(base * zoom, low, high), scale = font / base;
+  const padX = (zone.compact ? 4 : 8) * scale, padY = zone.compact ? 0 : 2 * scale;
+  const glyph = zoom < GLYPH_ZOOM ? 0 : 12 * scale, gap = glyph ? 5 * scale : 0;
+  // The canvas measures at 11.5 px; the name is drawn at `font`.
+  const caption = padX * 2 + glyph + gap + Math.ceil(measure(text) * font / 11.5) + 1;
+  const fit = { font, scale, padX, padY, glyph, gap, caption, width: zone.bounds.w * zoom, maxWidth: Math.max(24, zone.bounds.w * zoom - (zone.compact ? 6 : 20) * zoom) };
+  if (!zone.compact) return { ...fit, maxWidth: Math.max(fit.maxWidth, caption) };
+  if (!zone.collapsed) return { ...fit, width: Math.max(fit.width, caption + 6 * zoom) };
+  // The count and the button are drawn from LABEL_ZOOM up.
+  const near = zoom >= LABEL_ZOOM && zone.count > 0;
+  const badge = near ? { font: 11 * scale, pad: 6 * scale, width: Math.ceil(measure(String(zone.count)) * 11 / 11.5 * scale) + 12 * scale } : null;
+  const side = zoom >= LABEL_ZOOM ? 22 * scale : 0;
+  const parts = [caption, badge?.width ?? 0, side].filter(Boolean), chipGap = 4 * scale, chipPad = 4 * scale;
+  return { ...fit, badge, side, chipGap, chipPad, width: Math.max(fit.width, parts.reduce((sum, part) => sum + part, 0) + chipGap * (parts.length - 1) + chipPad * 2) };
+}
 
 export function createMap({ units = [], groups = [], saved = { nodes: {}, groups: {} }, api = null } = {}) {
   const wrapped = layoutRecord(saved);
@@ -121,12 +144,19 @@ export function renderMap(document, host, map, labels = {}) {
     svg.append(box);
   }
   const zones = personalZones(map);
+  const zoom = map.view.zoom;
+  const measure = labelMeasure(map, document, host);
+  // A folded cluster says its count in the badge, so its title carries none.
+  const titleOf = (zone) => displayName(zone.group.title) + (zone.count && !zone.collapsed ? `, ${zone.count}` : '');
+  const fits = new Map(zones.map((zone) => [zone.group.id, nameFit(zone, titleOf(zone), zoom, measure)]));
   const frameBoxes = new Map();
+  // The rows picked in the Hierarchy are marked here by the same ids: an agent's id, or cluster:<id>.
+  const picked = (id) => map.picked?.has(id) === true;
   for (const zone of zones) {
     const screen = toScreen(zone.bounds, rect, map.view);
     const box = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-    for (const [key, value] of Object.entries({ x: screen.x - rect.left, y: screen.y - rect.top, width: zone.bounds.w * map.view.zoom, height: zone.bounds.h * map.view.zoom })) box.setAttribute(key, String(value));
-    box.setAttribute("class", `map-personal-zone map-cluster-frame${zone.compact ? ' is-mini' : ''}${zone.folder ? ' is-folder' : ''}${map.selectedGroupId === zone.group.id ? " is-selected" : ""}`);
+    for (const [key, value] of Object.entries({ x: screen.x - rect.left, y: screen.y - rect.top, width: fits.get(zone.group.id).width, height: zone.bounds.h * map.view.zoom })) box.setAttribute(key, String(value));
+    box.setAttribute("class", `map-personal-zone map-cluster-frame${zone.compact ? ' is-mini' : ''}${zone.folder ? ' is-folder' : ''}${map.selectedGroupId === zone.group.id ? " is-selected" : ""}${picked(`cluster:${zone.group.id}`) ? " is-picked" : ""}`);
     box.setAttribute("data-group-zone", zone.group.id);
     frameBoxes.set(zone.group.id, box);
     svg.append(box);
@@ -167,31 +197,46 @@ export function renderMap(document, host, map, labels = {}) {
     line.setAttribute("data-edge", `${edge.source}:${edge.target}`);
     svg.append(line);
   }
-  const zoom = map.view.zoom;
-  const measure = labelMeasure(map, document, host);
   const shorten = (text) => fitLabel(text, LABEL_TEXT_WIDTH, measure);
   const layer = document.createElement("div");
   layer.className = "map-nodes";
   layer.setAttribute("data-detail", zoom < DETAIL_ZOOM ? "far" : zoom < LABEL_ZOOM ? "mid" : "near");
   for (const zone of zones) {
     const screen = toScreen(zone.bounds, rect, map.view);
+    const fit = fits.get(zone.group.id);
     const label = document.createElement("button");
     label.type = "button";
     label.className = `map-group-label${zone.compact ? ' is-mini' : ''}`;
     label.setAttribute("data-group-id", zone.group.id);
     label.setAttribute("aria-pressed", String(map.selectedGroupId === zone.group.id));
-    // The title sits in the frame's own header, so it scales with the frame and never reaches into a neighbour.
-    label.style.left = `${screen.x - rect.left + (zone.compact ? 3 : 10) * zoom}px`;
-    label.style.top = `${screen.y - rect.top}px`;
-    label.style.height = `${(zone.compact ? zone.bounds.h : FRAME_HEAD) * zoom}px`;
-    label.style.maxWidth = `${Math.max(24, zone.bounds.w * zoom - (zone.compact ? 6 : 20) * zoom)}px`;
-    label.style.fontSize = `${zone.compact ? clamp(11.5 * zoom, 6.5, 13) : clamp(12.5 * zoom, 7, 20)}px`;
-    const folder = icon(document, clusterGlyph(zone.folder ? "folder" : zone.group.link?.kind));
-    if (zone.compact || zoom < 0.5) folder.style.display = "none";
+    // A folded cluster is a chip: the title, how much it holds, and the button that unfolds it, in one row that cannot overlap itself.
+    const chip = zone.collapsed ? document.createElement("div") : null;
+    if (chip) {
+      chip.className = "map-chip";
+      chip.style.left = `${screen.x - rect.left}px`;
+      chip.style.top = `${screen.y - rect.top}px`;
+      chip.style.width = `${fit.width}px`;
+      chip.style.height = `${zone.bounds.h * zoom}px`;
+      chip.style.gap = `${fit.chipGap}px`;
+      chip.style.paddingLeft = chip.style.paddingRight = `${fit.chipPad}px`;
+    } else {
+      // The title sits in the frame's own header, so it scales with the frame and never reaches into a neighbour.
+      label.style.left = `${screen.x - rect.left + (zone.compact ? 3 : 10) * zoom}px`;
+      label.style.top = `${screen.y - rect.top}px`;
+      label.style.height = `${(zone.compact ? zone.bounds.h : FRAME_HEAD) * zoom}px`;
+      label.style.maxWidth = `${zone.compact ? Math.max(24, fit.width - 6 * zoom) : fit.maxWidth}px`;
+    }
+    label.style.fontSize = `${fit.font}px`;
+    // A picked cluster shows a tick where its glyph would be.
+    const folder = icon(document, picked(`cluster:${zone.group.id}`) ? "check" : clusterGlyph(zone.folder ? "folder" : zone.group.link?.kind));
+    if (fit.glyph) folder.style.width = folder.style.height = `${fit.glyph}px`;
+    else folder.style.display = "none";
     const title = document.createElement("span");
-    title.textContent = displayName(zone.group.title) + (zone.count ? `, ${zone.count}` : '');
+    title.textContent = titleOf(zone);
     const caption = document.createElement("span");
     caption.className = "map-group-caption";
+    caption.style.gap = `${fit.gap}px`;
+    caption.style.padding = `${fit.padY}px ${fit.padX}px`;
     caption.append(folder, title);
     label.append(caption);
     label.setAttribute("aria-label", displayName(zone.group.title));
@@ -207,7 +252,36 @@ export function renderMap(document, host, map, labels = {}) {
     // The frame lights up with its title, so it is clear which cluster a drag or a click will act on.
     const frameBox = frameBoxes.get(zone.group.id);
     for (const [type, on] of [['pointerenter', true], ['pointerleave', false], ['focus', true], ['blur', false]]) label.addEventListener(type, () => frameBox?.classList?.toggle?.('is-hover', on));
-    layer.append(label);
+    if (!chip) {
+      layer.append(label);
+      continue;
+    }
+    chip.append(label);
+    if (zone.count) {
+      const badge = document.createElement("span");
+      badge.className = "map-group-badge";
+      badge.textContent = String(zone.count);
+      badge.style.fontSize = `${11 * fit.scale}px`;
+      badge.style.padding = `${fit.scale}px ${6 * fit.scale}px`;
+      chip.append(badge);
+    }
+    const side = 22 * fit.scale;
+    const expand = document.createElement("button");
+    expand.type = "button";
+    expand.className = "map-chip-expand";
+    expand.setAttribute("data-action", "expand-cluster");
+    const expandName = labels.expand?.(displayName(zone.group.title)) ?? `Expand ${displayName(zone.group.title)}`;
+    expand.setAttribute("aria-label", expandName);
+    expand.title = expandName;
+    expand.style.width = expand.style.height = `${side}px`;
+    const plus = icon(document, "plus");
+    plus.style.width = plus.style.height = `${12 * fit.scale}px`;
+    expand.append(plus);
+    expand.addEventListener("click", () => toggleCollapsed(map, zone.group.id));
+    // A double click on the button is not a double click on the cluster behind it.
+    expand.addEventListener("dblclick", (event) => event?.stopPropagation?.());
+    chip.append(expand);
+    layer.append(chip);
   }
   for (const node of nodes) {
     const screen = toScreen(node, rect, map.view);
@@ -223,7 +297,7 @@ export function renderMap(document, host, map, labels = {}) {
     button.setAttribute("aria-label", node.label);
     const selected = map.selection.has(node.id);
     const connecting = map.pendingConnect;
-    button.className = ["map-node", node.person ? "is-person" : "", node.overseer ? "is-overseer" : "", node.lead ? "is-lead" : "", selected ? "is-selected" : "",
+    button.className = ["map-node", node.person ? "is-person" : "", node.overseer ? "is-overseer" : "", node.lead ? "is-lead" : "", selected ? "is-selected" : "", picked(node.id) ? "is-picked" : "",
       connecting?.source === node.id ? "is-connecting" : "", connecting?.target === node.id ? "is-drop-target" : "", connecting?.invalid === node.id ? "is-drop-invalid" : ""].filter(Boolean).join(" ");
     button.setAttribute("aria-pressed", String(selected));
     button.setAttribute("data-role", node.role);
@@ -298,44 +372,24 @@ export function renderMap(document, host, map, labels = {}) {
   for (const [action, label, glyph, text, choose] of [
     ['zoom-in', labels.zoomIn ?? 'Zoom in', 'plus', null, () => { wheelZoom(map, { ...center, deltaY: -1 }, rect); refresh(map); }],
     ['zoom-out', labels.zoomOut ?? 'Zoom out', 'minus', null, () => { wheelZoom(map, { ...center, deltaY: 1 }, rect); refresh(map); }],
-    ['fit-map', labels.fit ?? 'Fit', null, labels.fit ?? 'Fit', () => fitMap(map, rect)],
+    // The stage can be resized after the Map was drawn, so Fit reads its size when it is clicked.
+    ['fit-map', labels.fit ?? 'Fit', null, labels.fit ?? 'Fit', () => fitMap(map, hostRect(host))],
     ['zoom-reset', labels.zoomReset ?? 'Back to 100%', null, `${scale}%`, () => { resetZoom(map, center, rect); refresh(map); }],
+    ['map-help', labels.help ?? 'Map controls', null, '?', () => setHelp(map, !map.helpOpen)],
   ]) {
     const control = document.createElement('button'); control.type = 'button'; control.className = 'map-zoom-button';
     control.setAttribute('data-action', action); control.setAttribute('aria-label', label); control.title = label;
+    if (action === 'map-help') { control.setAttribute('aria-expanded', String(Boolean(map.helpOpen))); control.setAttribute('aria-controls', 'map-help'); }
     if (glyph) control.append(icon(document, glyph)); else control.textContent = text;
     control.addEventListener('click', choose); zoomGroup.append(control);
+    if (action === 'map-help') map.helpButton = control;
   }
-  // Pan stays available for keyboard and touch; dragging the empty space also pans.
-  const pan = document.createElement("button");
-  pan.type = "button";
-  pan.className = "map-zoom-button";
-  pan.dataset.action = "pan";
-  pan.setAttribute("data-action", "pan");
-  pan.setAttribute("aria-pressed", String(Boolean(map.panning)));
-  pan.setAttribute("aria-label", labels.pan ?? "Pan");
-  pan.title = labels.pan ?? "Pan";
-  pan.append(icon(document, "move"));
-  pan.addEventListener("click", () => {
-    map.panning = !map.panning;
-    refresh(map);
-  });
-  zoomGroup.append(pan);
-  let services = null;
-  if (map.onServices) {
-    services = document.createElement('div');
-    services.className = 'map-services';
-    services.setAttribute('role', 'group');
-    services.setAttribute('aria-label', labels.services ?? 'Services');
-    const caption = document.createElement('span'); caption.className = 'map-services-label'; caption.textContent = labels.services ?? 'Services';
-    services.append(caption);
-    for (const [action, label, glyph] of [['map-services', labels.incubator ?? 'Incubator', 'bulb'], ['map-genesis', labels.genesis ?? 'Genesis', 'genesis']]) {
-      const pill = document.createElement('button'); pill.type = 'button'; pill.className = 'map-service';
-      pill.setAttribute('data-action', action);
-      pill.append(icon(document, glyph), document.createTextNode(label));
-      pill.addEventListener('click', () => map.onServices()); services.append(pill);
-    }
-  }
+  // What the pointer does on the Map is said on request, not in a line that is always there.
+  const help = document.createElement('div');
+  help.className = 'map-help'; help.id = 'map-help'; help.hidden = !map.helpOpen;
+  help.setAttribute('role', 'note'); help.setAttribute('data-map-help', 'true');
+  help.textContent = labels.drag ?? '';
+  map.helpNote = help;
   if (map.selection.size > 1) {
     const message = document.createElement("button");
     message.type = "button";
@@ -355,11 +409,13 @@ export function renderMap(document, host, map, labels = {}) {
   }
   const focused = (map.groups ?? []).find(group => group.id === map.focusedFolder);
   const insideCount = focused ? (map.groups ?? []).filter(group => group.parentId === focused.id).length : 0;
-  const hint = document.createElement('p'); hint.className = 'map-hint';
-  hint.textContent = focused && labels.inside ? labels.inside(displayName(focused.title), insideCount) : (labels.drag ?? '');
   // The hint and the save notice each have their own slot in one row, so they can never be drawn over each other.
   const top = document.createElement('div'); top.className = 'map-top';
-  top.append(hint);
+  if (focused && labels.inside) {
+    const hint = document.createElement('p'); hint.className = 'map-hint';
+    hint.textContent = labels.inside(displayName(focused.title), insideCount);
+    top.append(hint);
+  }
   if (map.persistState === "saving" || map.persistState === "error") {
     const status = document.createElement("p");
     status.className = "map-save";
@@ -379,7 +435,7 @@ export function renderMap(document, host, map, labels = {}) {
     }
     top.append(status);
   }
-  host.replaceChildren(svg, layer, actions, zoomGroup, ...(services ? [services] : []), top);
+  host.replaceChildren(svg, layer, actions, zoomGroup, help, top);
   bindMap(host, map);
   return nodes.map((node) => node.id);
 }
@@ -422,7 +478,7 @@ export function pointerDown(map, event) {
   map.flight = null;
   // The right button only opens the context menu.
   if (event.button === 2) return;
-  if (event.target?.closest?.("[data-action]") || event.target?.closest?.("input")) return;
+  if (event.target?.closest?.("[data-action], [data-map-help]") || event.target?.closest?.("input")) return;
   const rect = event.rect ?? hostRect(map.host);
   const world = toWorld({ x: event.clientX, y: event.clientY }, rect, map.view);
   // A cluster's title is its handle: dragging it moves the cluster. The pointer is captured once the drag starts, so a plain click still reaches the title.
@@ -500,6 +556,8 @@ export function pointerMove(map, event) {
     const distance = Math.hypot(event.clientX - gesture.originClient.x, event.clientY - gesture.originClient.y);
     if (!gesture.dragging && distance < 4) return;
     gesture.dragging = true;
+    // A view the person has moved, or a graph they have rearranged, is no longer the fitted one.
+    if (gesture.kind === "pan" || gesture.kind === "cluster" || gesture.kind === "move") map.autoFit = false;
   }
   if (gesture.kind === "pan") {
     map.view.x = gesture.originView.x + (event.clientX - gesture.originClient.x);
@@ -628,6 +686,7 @@ export function cancelGesture(map) {
 export function centerUnit(map, id, rect) {
   const point = map.positions[id];
   if (!point) return false;
+  map.autoFit = false;
   map.selection = new Set([id]);
   map.selectedGroupId = null;
   map.focusId = id;
@@ -640,7 +699,8 @@ export function centerUnit(map, id, rect) {
 export function keyDown(map, event) {
   if (event.target?.closest?.("input")) return;
   if (event.key === "Escape") {
-    cancelGesture(map);
+    if (map.helpOpen) escapeHelp(map, event);
+    else cancelGesture(map);
     return;
   }
   // The context menu key and Shift+F10 open the menu of the control that has the focus.
@@ -722,6 +782,7 @@ export function keyDown(map, event) {
 // Return to 100% around a point of the screen, keeping that point still.
 export function resetZoom(map, client, rect) {
   map.flight = null;
+  map.autoFit = false;
   const world = toWorld({ x: client.clientX, y: client.clientY }, rect, map.view);
   map.view.zoom = 1;
   map.view.x = client.clientX - rect.left - world.x;
@@ -730,6 +791,7 @@ export function resetZoom(map, client, rect) {
 
 export function wheelZoom(map, event, rect) {
   map.flight = null;
+  map.autoFit = false;
   const client = { x: event.clientX, y: event.clientY };
   const world = toWorld(client, rect, map.view);
   const factor = event.deltaY < 0 ? 1.1 : 1 / 1.1;
@@ -897,6 +959,8 @@ export function fitMap(map, rect = hostRect(map.host)) {
   map.flight = null;
   map.focusedFolder = null;
   map.view = clusterCamera(graphBounds(map), rect, 48, 1.15);
+  // While the view is the fitted one, the Map follows its stage when the stage changes size.
+  map.autoFit = true;
   refresh(map);
   return map.view;
 }
@@ -908,6 +972,7 @@ export function flyToCluster(map, id, rect = hostRect(map.host)) {
   if (focused && hint && map.labels?.inside) hint.textContent = map.labels.inside(displayName(focused.title), (map.groups ?? []).filter(group => group.parentId === focused.id).length);
   const frame = personalZones(map).find(item => item.group.id === id);
   if (!frame) return false;
+  map.autoFit = false;
   const ids = new Set([id]);
   for (let size = 0; size !== ids.size;) { size = ids.size; for (const cluster of map.groups) if (ids.has(cluster.parentId)) ids.add(cluster.id); }
   const frames = personalZones(map).filter(item => ids.has(item.group.id));
@@ -1068,11 +1133,38 @@ function refresh(map) {
     const id = active?.getAttribute?.("data-unit-id");
     const handle = active?.getAttribute?.("data-handle") ?? null;
     const groupId = active?.getAttribute?.("data-group-id");
+    const helping = Boolean(active) && active === map.helpButton;
     renderMap(map.document, map.host, map, map.labels ?? {});
     // A node and its Connect handle share the unit id, so focus returns to the same kind of control.
     if (id) [...map.host.querySelectorAll(`[data-unit-id="${id}"]`)].find((node) => (node.getAttribute?.("data-handle") ?? null) === handle)?.focus?.();
     if (groupId) map.host.querySelector(`[data-group-id="${groupId}"]`)?.focus?.();
+    if (helping) map.helpButton?.focus?.();
   }
+}
+
+// The help note closes on Escape and on a click outside it, wherever the focus is.
+function setHelp(map, open) {
+  const document = map.document;
+  map.helpOpen = open;
+  if (map.helpNote) map.helpNote.hidden = !open;
+  map.helpButton?.setAttribute("aria-expanded", String(open));
+  if (open && !map.helpListeners) {
+    map.helpListeners = {
+      pointerdown: (event) => { if (!event.target?.closest?.('[data-map-help="true"], [data-action="map-help"]')) setHelp(map, false); },
+      keydown: (event) => { if (event.key === "Escape") escapeHelp(map, event); },
+    };
+    for (const [type, listener] of Object.entries(map.helpListeners)) document.addEventListener?.(type, listener, true);
+  } else if (!open && map.helpListeners) {
+    for (const [type, listener] of Object.entries(map.helpListeners)) document.removeEventListener?.(type, listener, true);
+    map.helpListeners = null;
+  }
+}
+
+// A panel above the help takes the first Escape; otherwise the key is spent here, so one Escape never closes the help and what is under it.
+function escapeHelp(map, event) {
+  if (map.layerAbove?.()) return;
+  event.preventDefault?.();
+  setHelp(map, false);
 }
 
 function selectOne(map, id, shift) {

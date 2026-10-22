@@ -1,3 +1,5 @@
+import { clusterCount } from './hierarchy.mjs';
+
 const LIMIT = 100000;
 const CLEARANCE = 64;
 const byId = (a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
@@ -115,6 +117,9 @@ function overseerPoint(frames) {
   return { x: Math.round((left + right) / 2), y: Math.round(Math.min(...frames.map(frame => frame.bounds.y)) - 110) };
 }
 
+// Centre to centre, a unit outside a frame stands at least this far from every other one.
+const UNIT_GAP = 96;
+const SLOT_TRIES = 400;
 const LOOSE_PER_ROW = 8;
 const looseSlot = (overseer, index) => ({ x: overseer.x + CELL_W * (index % LOOSE_PER_ROW + 1), y: overseer.y - CELL_H * Math.floor(index / LOOSE_PER_ROW) });
 
@@ -133,18 +138,36 @@ export function placeUnits(units, saved, clusters = []) {
       // A place the person chose stays while it is inside the frame; every other unit takes its own cell of the grid.
       positions[unit.id] = chosenPoint(current) && insideFrame(current, nodeRadius(unit), frame.bounds) ? { x: current.x, y: current.y } : { ...slots.get(unit.id) };
     }
+    // No agent outside a frame stands under another or on a frame. The Overseer is placed first; the places the person chose stay while
+    // they are clear of everyone placed before them.
+    const placed = [];
+    let anchor = overseer;
     for (const unit of units) {
       if (unit.role === 'master' || unit.removed || homes.has(unit.id) || !canonicalOverseer(unit)) continue;
       const current = layout.nodes?.[unit.id];
       positions[unit.id] = chosenPoint(current) && clearsFrames(current, nodeRadius(unit), frames) ? { x: current.x, y: current.y } : { ...overseer };
+      placed.push(positions[unit.id]);
+      anchor = positions[unit.id];
     }
-    // A unit that belongs to no cluster, such as a new root agent, stands beside the Overseer instead of being left out;
-    // the row wraps upward, away from the boxes below the Overseer.
-    let next = 0;
-    for (const unit of units) {
-      if (unit.role === 'master' || unit.removed || homes.has(unit.id) || canonicalOverseer(unit) || hidden.has(unit.id)) continue;
+    const loose = units.filter(unit => unit.role !== 'master' && !unit.removed && !homes.has(unit.id) && !canonicalOverseer(unit) && !hidden.has(unit.id));
+    const free = (point, unit) => clearsFrames(point, nodeRadius(unit), frames) && !tooClose(point, placed, UNIT_GAP);
+    const moving = [];
+    for (const unit of loose) {
       const current = layout.nodes?.[unit.id];
-      positions[unit.id] = chosenPoint(current) && clearsFrames(current, nodeRadius(unit), frames) ? { x: current.x, y: current.y } : looseSlot(overseer, next++);
+      if (chosenPoint(current) && free(current, unit)) { positions[unit.id] = { x: current.x, y: current.y }; placed.push(positions[unit.id]); }
+      else moving.push(unit);
+    }
+    // A unit that belongs to no cluster, such as a new root agent, stands beside the Overseer instead of being left out; the row wraps
+    // upward, away from the boxes below the Overseer, and skips the cells that a unit or a box holds.
+    let next = 0;
+    for (const unit of moving) {
+      let point = null;
+      for (let tries = 0; !point && tries < SLOT_TRIES; tries += 1) {
+        const slot = looseSlot(anchor, next++);
+        if (free(slot, unit)) point = slot;
+      }
+      positions[unit.id] = point ?? looseSlot(anchor, next++);
+      placed.push(positions[unit.id]);
     }
     return { origins, positions };
   }
@@ -407,13 +430,17 @@ function packFrames(nodes, gap, aspect) {
   return best;
 }
 
-// A collapsed cluster is one chip with the number of agents inside; what it holds is not drawn.
+// The width a folded chip needs beside its title: the count of what it holds, in a badge, and the button that unfolds it.
+const CHIP_EXPAND = 28;
+const badgeWidth = count => count ? Math.ceil(String(count).length * 7 + 14) : 0;
+
+// A collapsed cluster is one chip with the number the Hierarchy shows for it; what it holds is not drawn.
 function collapseFrame(group, context) {
   const all = [group];
   for (let index = 0; index < all.length; index += 1) all.push(...(context.children.get(all[index].id) ?? []));
-  const units = all.flatMap(item => context.members.get(item.id) ?? []);
-  for (const unit of units) context.hidden.add(unit.id);
-  return { group, compact: true, collapsed: true, inside: units.length, w: clamp(titleWidth(group, units.length) + 8, 76, 320), h: CHIP_H, kids: [], placed: [], slots: [] };
+  for (const unit of all.flatMap(item => context.members.get(item.id) ?? [])) context.hidden.add(unit.id);
+  const count = clusterCount((context.children.get(group.id) ?? []).length, (context.members.get(group.id) ?? []).length);
+  return { group, compact: true, collapsed: true, count, w: clamp(titleWidth(group, 0) + badgeWidth(count) + CHIP_EXPAND + 8, 76, 360), h: CHIP_H, kids: [], placed: [], slots: [] };
 }
 
 function measureFrame(group, context) {
@@ -432,18 +459,21 @@ function measureFrame(group, context) {
     placed: packed.placed.map(item => ({ node: item.node, x: left + item.x, y: top + item.y })) };
 }
 
-function resolveFrame(node, origin, context) {
+const NO_SHIFT = Object.freeze({ x: 0, y: 0 });
+
+// `shift` is how far the root above was moved clear of another frame; the places stored for the frames inside it move with it.
+function resolveFrame(node, origin, context, shift = NO_SHIFT) {
   const stored = storedFrame(context.saved, node.group.id);
-  const anchor = stored ? { x: stored.x, y: stored.y } : origin;
+  const anchor = stored ? { x: stored.x + shift.x, y: stored.y + shift.y } : origin;
   const frame = { group: node.group, anchor, bounds: { x: anchor.x, y: anchor.y, w: stored?.w ?? node.w, h: stored?.h ?? node.h },
     compact: node.compact, collapsed: node.collapsed === true, folder: node.kids.length > 0 || node.group.link?.kind === 'folder' || (context.children.get(node.group.id)?.length ?? 0) > 0,
-    count: node.collapsed ? node.inside : node.kids.length, focused: node.group.id === context.focusedId };
+    count: node.collapsed ? node.count : node.kids.length, focused: node.group.id === context.focusedId };
   context.frames.push(frame);
   for (const slot of node.slots) {
     context.slots.set(slot.unit.id, { x: anchor.x + slot.x, y: anchor.y + slot.y });
     context.homes.set(slot.unit.id, node.group.id);
   }
-  const inside = node.placed.map(item => resolveFrame(item.node, { x: anchor.x + item.x, y: anchor.y + item.y }, context));
+  const inside = node.placed.map(item => resolveFrame(item.node, { x: anchor.x + item.x, y: anchor.y + item.y }, context, shift));
   // A child dragged out of its folder stretches the folder, so the folder still holds it.
   if (stored?.w === undefined) for (const child of inside) {
     const box = frame.bounds, left = Math.min(box.x, child.bounds.x - FRAME_PAD), top = Math.min(box.y, child.bounds.y - FRAME_HEAD);
@@ -463,6 +493,9 @@ function assignMembers(active, units) {
   return members;
 }
 
+// The first frame box that stands closer to this one than ROOT_GAP.
+const crowding = (box, id, boxes) => [...boxes].find(([other, rect]) => other !== id && rectsOverlap({ x: box.x - ROOT_GAP / 2, y: box.y - ROOT_GAP / 2, w: box.w + ROOT_GAP, h: box.h + ROOT_GAP }, rect))?.[1];
+
 // Units not loaded yet (undefined) keep room for a cluster's declared members; a loaded list, even an empty one, is the truth,
 // so a cluster whose agents were archived shrinks to what it holds.
 export function layoutClusters(clusters, saved = {}, focusedId = null, units = undefined) {
@@ -473,22 +506,36 @@ export function layoutClusters(clusters, saved = {}, focusedId = null, units = u
   for (const cluster of [...active].sort(byTitle)) (ids.has(cluster.parentId) && cluster.parentId !== cluster.id ? children.get(cluster.parentId) : roots).push(cluster);
   const context = { saved, focusedId, children, members: assignMembers(active, units), known, frames: [], slots: new Map(), homes: new Map(), hidden: new Set() };
   const nodes = roots.map(root => measureFrame(root, context));
-  const loose = nodes.filter(node => !storedFrame(saved, node.group.id)), fixed = nodes.filter(node => storedFrame(saved, node.group.id));
+  const storedBox = node => { const stored = storedFrame(saved, node.group.id); return stored && { x: stored.x, y: stored.y, w: stored.w ?? node.w, h: stored.h ?? node.h }; };
+  // A frame the person placed stays put while no frame before it in the order stands on it. One dropped onto another is
+  // drawn clear of it like a frame the layout placed; the place stored for it is not rewritten.
+  const kept = new Map(), displaced = [];
+  for (const node of nodes) {
+    const box = storedBox(node);
+    if (!box) continue;
+    if (crowding(box, node.group.id, kept)) displaced.push(node); else kept.set(node.group.id, box);
+  }
+  const loose = nodes.filter(node => !storedFrame(saved, node.group.id));
   const packed = packFrames(loose, ROOT_GAP, ROOT_ASPECT);
   const origins = new Map(packed.placed.map(item => [item.node.group.id, { x: item.x, y: item.y }]));
-  // A frame the person placed stays put; a frame the layout placed moves clear of it.
-  const boxes = new Map([...fixed.map(node => { const stored = storedFrame(saved, node.group.id); return [node.group.id, { x: stored.x, y: stored.y, w: stored.w ?? node.w, h: stored.h ?? node.h }]; }),
-    ...packed.placed.map(item => [item.node.group.id, { x: item.x, y: item.y, w: item.node.w, h: item.node.h }])]);
-  for (const item of packed.placed) {
-    const box = boxes.get(item.node.group.id);
+  // A frame the layout placed moves clear of the frames the person placed.
+  const boxes = new Map([...kept, ...packed.placed.map(item => [item.node.group.id, { x: item.x, y: item.y, w: item.node.w, h: item.node.h }])]);
+  const pushClear = id => {
+    const box = boxes.get(id);
     for (let guard = 0; guard < 64; guard += 1) {
-      const other = [...boxes].find(([id, rect]) => id !== item.node.group.id && rectsOverlap({ x: box.x - ROOT_GAP / 2, y: box.y - ROOT_GAP / 2, w: box.w + ROOT_GAP, h: box.h + ROOT_GAP }, rect))?.[1];
+      const other = crowding(box, id, boxes);
       if (!other) break;
       box.y = other.y + other.h + ROOT_GAP;
     }
-    origins.set(item.node.group.id, { x: box.x, y: box.y });
-  }
-  const rootFrames = nodes.map(node => resolveFrame(node, origins.get(node.group.id) ?? { x: 0, y: 0 }, context));
+    origins.set(id, { x: box.x, y: box.y });
+  };
+  for (const item of packed.placed) pushClear(item.node.group.id);
+  for (const node of displaced) { boxes.set(node.group.id, storedBox(node)); pushClear(node.group.id); }
+  const moved = new Set(displaced.map(node => node.group.id));
+  const rootFrames = nodes.map(node => {
+    const origin = origins.get(node.group.id) ?? { x: 0, y: 0 }, stored = moved.has(node.group.id) ? storedFrame(saved, node.group.id) : null;
+    return resolveFrame(node, origin, context, stored ? { x: origin.x - stored.x, y: origin.y - stored.y } : NO_SHIFT);
+  });
   const placedByLayout = rootFrames.filter(frame => !storedFrame(saved, frame.group.id));
   return { frames: context.frames, slots: context.slots, homes: context.homes, hidden: context.hidden, overseer: overseerPoint(placedByLayout.length ? placedByLayout : rootFrames) };
 }

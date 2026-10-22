@@ -22,10 +22,14 @@ import {
   pointerDown,
   pointerMove,
   pointerUp,
+  fitMap,
+  graphBounds,
   renderMap,
   requestConnect,
+  resetZoom,
   wheelZoom,
 } from "../gui/app/map.mjs";
+import { clusterCamera } from '../gui/app/cluster-geometry.mjs';
 import { buildHierarchy, flattenVisibleHierarchy, unitRoleName } from '../gui/app/hierarchy.mjs';
 
 test('canonical unread counts stay on the same aliased agent in Hierarchy and Map without selection acknowledgments', () => {
@@ -205,7 +209,7 @@ test("keyboard movement is saved and panning changes only the viewport", async (
     return { data: { layout: { nodes: operation.body.nodes, groups: {} }, revision: "b".repeat(64) } };
   };
   const host = createHost();
-  renderMap(host.ownerDocument, host, map, { pan: "Pan" });
+  renderMap(host.ownerDocument, host, map);
   assert.equal(map.focusId, null);
   const node = host.querySelector("[data-unit-id='a']");
   host.listeners.get("focusin")[0]({ target: node });
@@ -233,8 +237,7 @@ test("keyboard movement is saved and panning changes only the viewport", async (
   assert.equal(calls.length, 1);
 
   map.view = { x: 0, y: 0, zoom: 1 };
-  host.querySelector("[data-action='pan']").listeners.get("click")[0]();
-  assert.equal(map.panning, true);
+  assert.equal(host.querySelector("[data-action='pan']"), null, "dragging the empty space pans, so there is no pan button");
   pointerDown(map, point(200, 200, { rect }));
   pointerMove(map, point(230, 210, { rect }));
   cancelGesture(map);
@@ -360,7 +363,7 @@ test("map circles keep role, status, and the name below the icon", async () => {
   renderMap(host.ownerDocument, host, map, labels);
   assert.equal(host.querySelector("[data-unit-id='lead']").getAttribute("data-selected"), "true");
   assert.equal(host.querySelector("[data-unit-id='lead']").className.includes("is-selected"), true);
-  assert.equal(host.querySelector("[data-action='pan']") != null, true);
+  assert.deepEqual(["zoom-in", "zoom-out", "fit-map", "zoom-reset", "map-help"].map((action) => host.querySelector(`[data-action='${action}']`) != null), [true, true, true, true, true]);
   const overseerHandle = host.querySelectorAll("[data-handle='connect']").find((item) => item.getAttribute("data-unit-id") === "overseer");
   assert.equal(overseerHandle.getAttribute("aria-label"), "Conectar Overseer");
   assert.equal(boss.querySelector("[data-handle='connect']"), null);
@@ -376,7 +379,7 @@ test("map circles keep role, status, and the name below the icon", async () => {
 
 test('saved cluster frames remain fixed while agents move and circles take priority', () => {
   const units = [unit('a', 'executor-a', 'executor', 'root'), { ...unit('b', 'executor-b', 'executor', 'root'), alias: 'Blog' }];
-  const groups = [{ id: 'large', title: 'Large', members: ['a', 'b'], link: { kind: 'none' } }, { id: 'small', title: 'Small', members: ['a'], link: { kind: 'none' } }];
+  const groups = [{ id: 'large', title: 'Large', members: ['a', 'b'], link: { kind: 'none' } }, { id: 'small', title: 'Small', parentId: 'large', members: ['a'], link: { kind: 'none' } }];
   const map = createMap({ units, groups, saved: { nodes: { a: { x: 100, y: 100 }, b: { x: 250, y: 300 } }, groups: { 'cluster:large': { x: 0, y: 0, width: 400, height: 400 }, 'cluster:small': { x: 20, y: 20, width: 180, height: 70 } } } });
   const host = createHost(); renderMap(host.ownerDocument, host, map);
   assert.equal(hitPersonalGroup(map, { x: 60, y: 60 }).id, 'small');
@@ -510,4 +513,119 @@ test("the Map draws each new role with its own mark, names a role the icon canno
   assert.equal(host.querySelector("[data-unit-id='j']").style.width, "42px");
   renderMap(host.ownerDocument, host, map);
   assert.equal(host.querySelector("[data-unit-id='i']").getAttribute("title"), null);
+});
+
+const fitted = () => createMap({ units: [unit("a", "a", "executor", "project", "shop"), unit("b", "b", "executor", "project", "shop")], saved: { nodes: { a: { x: 100, y: 100 }, b: { x: 700, y: 420 } }, groups: {} } });
+
+test("Fit centres the graph in the stage it is given, on both axes", () => {
+  const map = fitted();
+  for (const rect of [{ left: 0, top: 0, width: 900, height: 600 }, { left: 0, top: 0, width: 400, height: 900 }, { left: 0, top: 0, width: 1500, height: 500 }]) {
+    const view = fitMap(map, rect);
+    const boxes = graphBounds(map);
+    const left = Math.min(...boxes.map((b) => b.x)) * view.zoom + view.x, right = Math.max(...boxes.map((b) => b.x + b.width)) * view.zoom + view.x;
+    const top = Math.min(...boxes.map((b) => b.y)) * view.zoom + view.y, bottom = Math.max(...boxes.map((b) => b.y + b.height)) * view.zoom + view.y;
+    assert.ok(Math.abs(left - (rect.width - right)) <= 1, `centred across ${rect.width}`);
+    assert.ok(Math.abs(top - (rect.height - bottom)) <= 1, `centred down ${rect.height}`);
+  }
+});
+
+test("the Fit button reads the size of the stage when it is clicked, not the size it had when the Map was drawn", () => {
+  const map = fitted(), host = createHost();
+  renderMap(host.ownerDocument, host, map);
+  host.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1300, height: 820 });
+  host.querySelector("[data-action='fit-map']").listeners.get("click")[0]();
+  assert.deepEqual(map.view, clusterCamera(graphBounds(map), { width: 1300, height: 820 }, 48, 1.15));
+});
+
+test("the Map follows its stage while it shows the fitted view, and stops once the person pans, zooms or drags", () => {
+  const map = fitted(), host = createHost(), rect = { left: 0, top: 0, width: 760, height: 700 };
+  renderMap(host.ownerDocument, host, map);
+  const click = (action) => host.querySelector(`[data-action='${action}']`).listeners.get("click")[0]();
+  const refit = () => { click("fit-map"); assert.equal(map.autoFit, true, "Fit is the fitted view"); };
+  refit();
+  wheelZoom(map, { clientX: 100, clientY: 80, deltaY: -1, preventDefault() {} }, rect);
+  assert.equal(map.autoFit, false, "the wheel");
+  refit(); click("zoom-in");
+  assert.equal(map.autoFit, false, "the zoom button");
+  refit(); resetZoom(map, { clientX: 100, clientY: 80 }, rect);
+  assert.equal(map.autoFit, false, "back to 100%");
+  refit(); pointerDown(map, point(5, 5, { rect })); pointerUp(map, point(5, 5, { rect }));
+  assert.equal(map.autoFit, true, "a click on the empty space does not move the view");
+  pointerDown(map, point(5, 5, { rect })); pointerMove(map, point(60, 40, { rect })); pointerUp(map, point(60, 40, { rect }));
+  assert.equal(map.autoFit, false, "a pan");
+  refit(); pointerDown(map, point(5, 5, { rect, unitId: "a" })); pointerMove(map, point(60, 40, { rect })); pointerUp(map, point(60, 40, { rect }));
+  assert.equal(map.autoFit, false, "a unit dragged");
+  refit(); centerUnit(map, "a", rect);
+  assert.equal(map.autoFit, false, "a unit brought to the centre");
+});
+
+test("the hint is behind a ? button in the zoom bar: not at the top, shown by the button, hidden by Escape and by a click outside", () => {
+  const map = fitted(), host = createHost(), document = host.ownerDocument, listening = new Map();
+  document.addEventListener = (type, listener) => listening.set(type, listener);
+  document.removeEventListener = (type) => listening.delete(type);
+  renderMap(document, host, map, { drag: "Drag the empty space", help: "Map controls" });
+  const note = () => host.querySelector("[data-map-help='true']"), button = host.querySelector("[data-action='map-help']");
+  assert.deepEqual(host.children.at(-1).children.map((child) => child.className), [], "the top row holds no hint");
+  assert.equal(button.getAttribute("aria-label"), "Map controls");
+  assert.equal(button.textContent, "?");
+  assert.equal(button.getAttribute("aria-expanded"), "false");
+  assert.equal(note().textContent, "Drag the empty space");
+  assert.equal(note().hidden, true);
+  button.listeners.get("click")[0]();
+  assert.equal(note().hidden, false);
+  assert.equal(button.getAttribute("aria-expanded"), "true");
+  keyDown(map, { key: "Escape" });
+  assert.equal(note().hidden, true);
+  assert.equal(button.getAttribute("aria-expanded"), "false");
+  assert.equal(listening.size, 0, "nothing keeps listening once it is closed");
+  // The note stays closed when the Map is drawn again, and open when it was open.
+  button.listeners.get("click")[0]();
+  renderMap(document, host, map, { drag: "Drag the empty space", help: "Map controls" });
+  assert.equal(note().hidden, false);
+  // A click inside the note or on its button is not outside; one anywhere else closes it, and so does Escape wherever the focus is.
+  listening.get("pointerdown")({ target: { closest: () => ({}) } });
+  assert.equal(note().hidden, false);
+  listening.get("pointerdown")({ target: { closest: () => null } });
+  assert.equal(note().hidden, true);
+  map.helpButton.listeners.get("click")[0]();
+  listening.get("keydown")({ key: "x" });
+  assert.equal(note().hidden, false);
+  listening.get("keydown")({ key: "Escape" });
+  assert.equal(note().hidden, true);
+  assert.equal(listening.size, 0);
+  const zoom = host.children.find((child) => child.className === "map-zoom");
+  assert.deepEqual(zoom.children.map((child) => child.getAttribute("data-action")), ["zoom-in", "zoom-out", "fit-map", "zoom-reset", "map-help"]);
+});
+
+test("Escape closes the help and spends the key, unless a panel above the help is open, which takes it first", () => {
+  const map = fitted(), host = createHost(), document = host.ownerDocument, listening = new Map();
+  document.addEventListener = (type, listener) => listening.set(type, listener);
+  document.removeEventListener = (type) => listening.delete(type);
+  renderMap(document, host, map, { drag: "Drag the empty space", help: "Map controls" });
+  const note = () => host.querySelector("[data-map-help='true']"), spent = [];
+  const escape = () => ({ key: "Escape", preventDefault() { spent.push(true); } });
+  map.helpButton.listeners.get("click")[0]();
+  map.layerAbove = () => true;
+  listening.get("keydown")(escape());
+  keyDown(map, escape());
+  assert.equal(note().hidden, false, "a panel above the help is closed first");
+  assert.equal(spent.length, 0);
+  map.layerAbove = () => false;
+  listening.get("keydown")(escape());
+  assert.equal(note().hidden, true);
+  assert.equal(spent.length, 1, "the key is spent, so nothing under the help closes with it");
+  map.helpButton.listeners.get("click")[0]();
+  keyDown(map, escape());
+  assert.equal(note().hidden, true);
+  assert.equal(spent.length, 2);
+});
+
+test("the Map has no Services pills", () => {
+  const map = fitted(), host = createHost();
+  map.onServices = () => {};
+  renderMap(host.ownerDocument, host, map, { services: "Services", incubator: "Incubator", genesis: "Genesis" });
+  const names = [];
+  const walk = (node) => { names.push(node.className, node.getAttribute?.("data-action")); node.children?.forEach(walk); };
+  walk(host);
+  assert.equal(names.some((name) => /map-service|map-genesis/.test(name ?? "")), false);
 });

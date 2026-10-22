@@ -98,10 +98,10 @@ function only(object, keys, path) {
   for (const key of Object.keys(object)) if (!keys.has(key)) fail(`${path}.${key}`, "is not part of a Lite sketch.");
 }
 
-function checkNode(node, path, depth, seen, count) {
+function checkNode(node, path, depth, seen, count, maxNodes = MAX_NODES) {
   if (!plain(node)) fail(path, "must be an object.");
   if (depth > MAX_DEPTH) fail(path, `is nested deeper than ${MAX_DEPTH} levels.`);
-  if (++count.nodes > MAX_NODES) fail(path, `is past the ${MAX_NODES} nodes a sketch may hold.`);
+  if (++count.nodes > maxNodes) fail(path, `is past the ${maxNodes} nodes a sketch may hold.`);
   void NODE_KEYS;
   if (typeof node.id !== "string" || node.id.length > 80 || !ID.test(node.id)) fail(`${path}.id`, "must be lowercase letters and digits joined by hyphens, at most 80 characters.");
   if (seen.has(node.id)) fail(`${path}.id`, "is used twice in the sketch.");
@@ -137,7 +137,7 @@ function checkNode(node, path, depth, seen, count) {
   }
   if (node.kids !== undefined) {
     if (node.t !== "box" || !Array.isArray(node.kids)) fail(`${path}.kids`, "must be a list of nodes, on a box.");
-    node.kids.forEach((kid, index) => checkNode(kid, `${path}.kids[${index}]`, depth + 1, seen, count));
+    node.kids.forEach((kid, index) => checkNode(kid, `${path}.kids[${index}]`, depth + 1, seen, count, maxNodes));
   }
   if (node.t === "vector" && !node.d) fail(`${path}.d`, "is required on a vector.");
   if (node.t === "image" && !node.src) fail(`${path}.src`, "is required on an image.");
@@ -153,7 +153,8 @@ function checkNode(node, path, depth, seen, count) {
  * link whose end it cannot find, so only the shape is checked here. Returns a
  * copy; throws SketchError naming the first field that is wrong.
  */
-export function validateSketch(value) {
+// `maxNodes` is raised only to draw a module board read-only; a sketch that is saved keeps the v1 cap.
+export function validateSketch(value, { maxNodes = MAX_NODES } = {}) {
   if (!plain(value)) fail("The sketch", "must be an object.");
   for (const key of DOC_KEYS) if (!(key in value)) fail(key, "is missing.");
   if (value.formatVersion !== 1) fail("formatVersion", "must be 1.");
@@ -196,7 +197,7 @@ export function validateSketch(value) {
     if (!value.pages.some((page) => page.id === screen.pageId)) fail(`${path}.pageId`, "must name a page of the sketch.");
     if (!Number.isFinite(screen.x) || !Number.isFinite(screen.y)) fail(`${path}.x`, "and y must be finite numbers.");
     if (!number(screen.w, 1, 16000) || !number(screen.h, 1, 16000)) fail(`${path}.w`, "and h must be numbers from 1 to 16000.");
-    checkNode(screen.root, `${path}.root`, 1, seen, count);
+    checkNode(screen.root, `${path}.root`, 1, seen, count, maxNodes);
     if (screen.root.t !== "box") fail(`${path}.root.t`, "must be a box.");
     if (screen.root.place.x !== 0 || screen.root.place.y !== 0) fail(`${path}.root.place`, "must be { x: 0, y: 0 }.");
     if (screen.root.w !== screen.w || screen.root.h !== screen.h) fail(`${path}.root`, "must be as wide and tall as its screen.");
@@ -232,7 +233,7 @@ export function validateSketch(value) {
 }
 
 /** Freeze a laid-out Lite module as editable, parent-relative JSON, retaining its data. */
-export function normalizeBoard(source, { skin, sketch = null } = {}) {
+export function normalizeBoard(source, { skin, sketch = null, maxNodes = MAX_NODES } = {}) {
   const unavailable = () => { throw new SketchError("import_unavailable"); };
   const copy = (value, depth = 0) => {
     if (depth > 60) return unavailable();
@@ -295,7 +296,8 @@ export function normalizeBoard(source, { skin, sketch = null } = {}) {
       result.kids = raw.kids.map((kid) => node(kid, { x: raw._x, y: raw._y }, ownTheme, screen, depth + 1));
     }
     if (raw.t === "space" || raw.t === "rule") {
-      result.t = "box"; result.dir = "stack"; result.kids = [];
+      // A spacer's size and grow only steered the layout, which is frozen in place, w and h by now.
+      result.t = "box"; result.dir = "stack"; result.kids = []; delete result.size; delete result.grow;
       if (raw.t === "rule") result.fill = colors(raw.color ?? "border-subtle", ownTheme);
     }
     return result;
@@ -310,7 +312,9 @@ export function normalizeBoard(source, { skin, sketch = null } = {}) {
   }
   result.links = (result.links ?? []).map((link) => {
     const next = { ...link, id: link.id ? take(link.id) : fresh("link"), transition: link.transition ?? "cut" };
-    if (link.at !== undefined) next.element = names.get(link.from)?.get(link.at) ?? unavailable();
+    // An element the screen no longer names leaves the arrow starting from the screen itself.
+    const element = link.at === undefined ? undefined : names.get(link.from)?.get(link.at);
+    if (element !== undefined) next.element = element;
     return next;
   });
   Object.assign(result, { formatVersion: 1, note: result.note ?? "", pages, components: result.components ?? [], fonts: result.fonts ?? [], threads: result.threads ?? [] });
@@ -320,7 +324,7 @@ export function normalizeBoard(source, { skin, sketch = null } = {}) {
     result.legacySketch = checkedSketch;
   }
   if (new TextEncoder().encode(JSON.stringify(result)).length > 16_000_000) return unavailable();
-  return validateSketch(result);
+  return validateSketch(result, { maxNodes });
 }
 
 // ---- building --------------------------------------------------------------

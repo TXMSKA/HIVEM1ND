@@ -1,11 +1,11 @@
 import { createOperation, request } from "./api.mjs";
 import { element, icon, labelDialog, labeledField, pathIcon } from "./components.mjs";
-import { formatShortTime, formatWhen, limitsUsage } from "./i18n.mjs";
+import { cardinal, formatNumber, formatShortTime, formatWhen, limitsUsage, syncUsage } from "./i18n.mjs";
 import { encodeHomeQr } from "./qr.mjs";
 import { renderQr } from "./qr-render.mjs";
 import { catalogLabel, clientLabel } from './clusters.mjs';
 import { startText } from './start-copy.mjs';
-import { displayName } from './hierarchy.mjs';
+import { displayName, openContextMenu } from './hierarchy.mjs';
 import { addButton, renderAddedContent } from './add-view.mjs';
 
 export function updateExpiry(home, nowMs) {
@@ -157,6 +157,17 @@ export async function closeHome(api, retained = null) {
   return finishOperation(api, operation);
 }
 
+// The preview and the apply of one agent's configuration; Review all runs them for each agent in turn.
+export async function previewAgent(api, client, body, retained = null) {
+  const operation = retained ?? createOperation({ method: "POST", path: `/settings/agents/${encodeURIComponent(client)}/preview`, body });
+  return finishOperation(api, operation);
+}
+
+export async function applyAgent(api, client, body, retained = null) {
+  const operation = retained ?? createOperation({ method: "POST", path: `/settings/agents/${encodeURIComponent(client)}/apply`, body });
+  return finishOperation(api, operation);
+}
+
 async function finishOperation(api, operation) {
   try {
     const result = await request(api, operation.method, operation.path, { operation });
@@ -195,8 +206,10 @@ export function renderHomeGrant(document, grant, index, label) {
 export function renderSettings(document, model, t, actions) {
   const panel = element(document, "section", { class: "settings-panel", "data-settings": "true" });
   const tabs = [["general", "settingsGeneral", "settings"], ["agents", "settingsAgents", "executor"],
-    ["permissions", "settingsPermissions", "waiting"], ["projects", "settingsProjects", "document"], ["content", "settingsContent", "blueprint"]];
-  const tab = model.tab ?? "general";
+    ["projects", "settingsProjects", "document"], ["content", "settingsContent", "blueprint"]];
+  // Permissions was a tab of its own; a saved or requested "permissions" opens it where it lives now, at the end of Agents.
+  const requested = model.tab ?? "general";
+  const tab = requested === "permissions" ? "agents" : requested;
   const bar = element(document, "div", { class: "settings-tabs", role: "tablist", "aria-label": t("settings") });
   for (const [id, key, glyph] of tabs) {
     const button = element(document, "button", { type: "button", role: "tab", id: `settings-tab-${id}`,
@@ -221,8 +234,7 @@ export function renderSettings(document, model, t, actions) {
     settingsButton(document, "retry-settings", t("retry"), actions.onRetry));
   const page = element(document, "div", { id: "settings-page", role: "tabpanel", "aria-labelledby": `settings-tab-${tab}`, "data-settings-page": tab });
   if (tab === "general") page.append(renderGeneral(document, model, t, actions));
-  if (tab === "agents") page.append(renderAgents(document, model, t, actions));
-  if (tab === "permissions") page.append(renderPermissions(document, model, t, actions));
+  if (tab === "agents") page.append(renderAgents(document, model, t, actions, requested === "permissions"));
   if (tab === "projects") page.append(renderProjects(document, model, t, actions));
   if (tab === "content") page.append(renderContent(document, model, t, actions));
   panel.append(page);
@@ -272,15 +284,44 @@ function settingsSection(document, title, ...children) {
   return element(document, "section", { class: "settings-section" }, element(document, "h3", { text: title }), ...children);
 }
 
-function settingsButton(document, action, label, onClick, disabled = false) {
-  const button = element(document, "button", { type: "button", class: "btn", "data-action": action, text: label, onclick: onClick });
+// A card whose title row also carries a control at its right.
+function settingsCard(document, title, right, ...children) {
+  return element(document, "section", { class: "settings-section" },
+    element(document, "div", { class: "settings-card-head" }, element(document, "h3", { text: title }), right), ...children);
+}
+
+// The accent fill belongs to the one action of a card; every other control is secondary.
+function settingsButton(document, action, label, onClick, disabled = false, secondary = false, glyph = null) {
+  const button = element(document, "button", { type: "button", class: secondary ? "btn is-secondary" : "btn", "data-action": action, text: glyph ? null : label, onclick: onClick },
+    glyph, glyph ? label : null);
   button.disabled = disabled;
   return button;
 }
 
+function retryGlyph(document) {
+  return pathIcon(document, "M20 12a8 8 0 1 1-2.5-5.8M20 4v5h-5");
+}
+
 function settingsFact(document, name, value, attributes = {}) {
-  return element(document, "div", { class: "settings-fact" }, element(document, "span", { text: name }),
+  return element(document, "div", { class: "settings-line" }, element(document, "span", { text: name }),
     element(document, "span", { ...attributes, text: value }));
+}
+
+// A folded card: the title at the left, a muted status at the right and the content inside. It stays closed until asked.
+function settingsDisclosure(document, key, title, status, open, ...children) {
+  const details = element(document, "details", { class: "settings-disclosure", "data-disclosure": key },
+    element(document, "summary", {}, icon(document, "chevronRight"), element(document, "span", { class: "settings-disclosure-title", text: title }),
+      status ? element(document, "span", { class: "settings-disclosure-status", text: status }) : null),
+    element(document, "div", { class: "settings-disclosure-body" }, ...children));
+  if (open) { details.open = true; details.setAttribute("open", ""); }
+  return details;
+}
+
+// A notice sits in a card: a glyph, what happened, and optionally the control that answers it. The body is text or nodes.
+function settingsNotice(document, tone, attributes, title, body, ...extra) {
+  const lines = [].concat(body ?? []).map(line => typeof line === "string" ? element(document, "p", { text: line }) : line);
+  return element(document, "div", { class: `settings-notice is-${tone}`, ...attributes }, icon(document, "alert"),
+    element(document, "div", { class: "settings-notice-text" }, element(document, "strong", { text: title }), ...lines), ...extra);
 }
 
 function renderGeneral(document, model, t, actions) {
@@ -300,56 +341,81 @@ function renderGeneral(document, model, t, actions) {
   startup.checked = service.startWithWindows === true;
   startup.disabled = !model.canWrite || model.readOnly || model.loading;
   startup.addEventListener("change", () => actions.onStartup?.(startup.checked));
-  const relay = settingsSection(document, t("settingsService"),
+  const restart = settingsButton(document, "settings-restart", t("settingsRestartShort"), actions.onRestart, !model.canWrite || model.readOnly || model.loading, true, retryGlyph(document));
+  restart.setAttribute("aria-label", t("settingsRestart"));
+  const relay = settingsCard(document, t("settingsService"), restart,
     settingsFact(document, t("settingsState"), service.state === "running" ? t("finalRunningOn", { machine: service.machine }) : t(service.state === "stopped" ? "settingsStopped" : "unknown"), { "data-machine": service.machine ?? "" }),
     settingsFact(document, t("settingsVersion"), service.version ?? t("unknown"), { "data-version": service.version ?? "" }),
     settingsFact(document, t("settingsStarted"), formatWhen(model.language, service.startedAt) || t("unknown")),
-    element(document, "label", { class: "settings-fact" }, t("settingsStartup"), element(document, "span", {}, startup, t(startup.checked ? "finalOn" : "finalOff"))),
-    settingsButton(document, "settings-restart", t("settingsRestart"), actions.onRestart, !model.canWrite || model.readOnly || model.loading));
+    element(document, "label", { class: "settings-line is-toggle" }, t("settingsStartup"), element(document, "span", {}, startup, t(startup.checked ? "finalOn" : "finalOff"))));
   // Transport status remains diagnostic; it never offers a synchronization choice.
-  if (model.limits) {
-    const limits = model.limits;
-    relay.append(element(document, "p", {
-      "data-limits": limits.state ?? "normal",
-      "data-retry-at": limits.retryAt ?? "",
-      text: t(limitsLabel(limits.state), { time: formatWhen(model.language, limits.retryAt) }),
-    }));
-    const messages = limits.messages ?? {};
-    const bytes = limits.syncBytes ?? {};
-    relay.append(element(document, "p", {
-      "data-limit-usage": "true",
-      text: limitsUsage(model.language, messages, bytes),
-    }));
-  }
-  const issues = element(document, "ul", { "data-issues": "true" });
-  for (const issue of model.issues ?? []) issues.append(element(document, "li", { text: issue.message ?? "" }));
-  relay.append(issues);
+  if (model.limits) relay.append(renderLimits(document, model, t));
+  if (model.issues?.length) relay.append(renderIssues(document, model, t, actions));
   const coming = settingsButton(document, "relay-coming-soon", t("settingsComingSoon"), null, true);
   return element(document, "div", { class: "settings-columns" },
     element(document, "div", { class: "settings-column" }, settingsSection(document, t("finalLook"), looks,
       element(document, "p", { class: "settings-hint", text: t("finalPreviewHint") })),
-    settingsSection(document, t("settingsLanguage"), language), renderHome(document, model, t, actions)),
-    element(document, "div", { class: "settings-column" }, relay, settingsSection(document, "Relay+", coming,
-      element(document, "p", { text: t("settingsRelayPlus") })), settingsSection(document, t("settingsLocations"),
-      settingsFact(document, "M1ND", model.locations?.mind || t("unknown")),
-      settingsFact(document, t("settingsStaging"), model.locations?.staging || t("unknown")))));
+    settingsSection(document, t("settingsLanguage"), language)),
+    element(document, "div", { class: "settings-column" }, relay, renderHome(document, model, t, actions),
+      settingsDisclosure(document, "settings-relay-plus", "Relay+", t("settingsComingSoon"), false, coming, element(document, "p", { text: t("settingsRelayPlus") })),
+      settingsDisclosure(document, "settings-locations", t("settingsLocations"), t("settingsLocationsStatus"), false,
+        settingsFact(document, "M1ND", model.locations?.mind || t("unknown")),
+        settingsFact(document, t("settingsStaging"), model.locations?.staging || t("unknown")))));
 }
 
-function renderAgents(document, model, t, actions) {
+// While the limits are normal the usage is one muted line; slowing or paused is a notice that says until when.
+function renderLimits(document, model, t) {
+  const limits = model.limits;
+  const state = limits.state ?? "normal";
+  const attributes = { "data-limits": state, "data-retry-at": limits.retryAt ?? "" };
+  if (state === "normal") {
+    return element(document, "p", { class: "settings-usage", ...attributes, "data-limit-usage": "true", text: limitsUsage(model.language, limits.messages ?? {}, limits.syncBytes ?? {}) });
+  }
+  const time = Number.isNaN(Date.parse(limits.retryAt ?? "")) ? "" : formatShortTime(model.language, limits.retryAt);
+  const key = limitsLabel(state);
+  const title = state === "error" ? t(key) : time ? t(key, { time }) : t(`${key}NoTime`);
+  const usage = state === "error" ? null : element(document, "p", { "data-limit-usage": "true", text: syncUsage(model.language, limits.syncBytes ?? {}) });
+  return settingsNotice(document, "wait", attributes, title, usage);
+}
+
+// The service reports a record in English; the screen says which file and what kind of failure, in its own words.
+const ISSUE_REASONS = { "The state could not be projected.": "settingsIssueState", "The task could not be projected.": "settingsIssueTask" };
+
+function renderIssues(document, model, t, actions) {
+  const issues = model.issues;
+  const files = element(document, "ul", { class: "settings-issue-files", "data-issue-files": "true" }, issues.map(issue => element(document, "li", {},
+    element(document, "code", { text: issue.path ?? "" }),
+    element(document, "span", { text: t(issue.code === "corrupt_resource" && Object.hasOwn(ISSUE_REASONS, issue.message) ? ISSUE_REASONS[issue.message] : "settingsIssueOther") }))));
+  const toggle = settingsButton(document, "settings-issues-toggle", "", null, false, true);
+  const paint = open => {
+    if (open) files.removeAttribute("hidden"); else files.setAttribute("hidden", "");
+    toggle.setAttribute("aria-expanded", String(open));
+    toggle.textContent = t(open ? "settingsHideFiles" : "settingsShowFiles");
+  };
+  paint(model.issuesOpen === true);
+  toggle.addEventListener("click", () => {
+    const open = files.getAttribute("hidden") !== null;
+    paint(open);
+    actions.onIssuesOpen?.(open);
+  });
+  return settingsNotice(document, "error", { "data-issues": "true" }, cardinal(model.language, "settingsIssues", issues.length), [t("settingsIssuesNote"), files], toggle);
+}
+
+function renderAgents(document, model, t, actions, permissionsOpen = false) {
   const disabled = !model.canWrite || model.readOnly || model.loading;
   const reviewDisabled = disabled || model.machine !== model.localMachine;
-  const section = settingsSection(document, t("finalAgentsOn", { machine: model.machine }));
-  section.append(element(document, "div", { class: "settings-scan" },
+  const items = model.agents?.items ?? [];
+  const section = settingsCard(document, t("finalAgentsOn", { machine: model.machine }), element(document, "div", { class: "settings-scan" },
     element(document, "small", { text: t("finalScanned", { time: formatWhen(model.language, model.agents?.reportedAt) || t("unknown") }) }),
-    settingsButton(document, "settings-scan", t("settingsScan"), actions.onScan, disabled)),
-    element(document, "div", { class: "settings-agent-head" }, element(document, "span", { text: t("settingsAgent") }),
-      element(document, "span", { text: t("settingsCli") }), element(document, "span", { text: t("settingsApp") })));
-  for (const agent of model.agents?.items ?? []) {
-    const row = element(document, "div", { class: "settings-agent-row", "data-agent": agent.id });
+    settingsButton(document, "settings-scan", t("settingsScan"), actions.onScan, disabled, true, retryGlyph(document))));
+  const waiting = items.filter(agent => agent.found && agent.cli?.state !== "connected" && (agent.cli?.changes ?? 0) > 0);
+  if (waiting.length) section.append(renderAgentsNotice(document, model, t, actions, waiting, reviewDisabled));
+  for (const agent of items) {
+    const row = element(document, "div", { class: agent.found ? "settings-agent-row" : "settings-agent-row is-missing", "data-agent": agent.id });
     row.append(element(document, "span", { class: "settings-avatar", "aria-hidden": "true" }, icon(document, "executor")),
       element(document, "div", { class: "settings-agent-identity" }, element(document, "strong", { text: agent.name }),
         element(document, "small", { text: agent.found ? `CLI ${agent.version ?? t("unknown")}` : t("settingsNotFound") })));
-    if (!agent.found) row.append(settingsButton(document, `settings-find-${agent.id}`, t("settingsFind"), () => actions.onFind?.(agent), disabled));
+    if (!agent.found) row.append(settingsButton(document, `settings-find-${agent.id}`, t("settingsFindIt"), () => actions.onFind?.(agent), disabled, true));
     else {
       const cli = element(document, "div", { class: "settings-agent-cli" });
       if (agent.cli?.state === "connected") {
@@ -362,14 +428,19 @@ function renderAgents(document, model, t, actions) {
           modes.append(button);
         }
         cli.append(modes);
-      } else cli.append(element(document, "span", { text: t("settingsChangesNeeded", { count: agent.cli?.changes ?? 0 }) }),
-        settingsButton(document, `settings-review-${agent.id}`, t("settingsReview"), () => actions.onReview?.(agent, agent.mode, "cli"), reviewDisabled));
+      } else {
+        const count = cardinal(model.language, "settingsChanges", agent.cli?.changes ?? 0);
+        const link = element(document, "button", { type: "button", class: "btn is-link", "data-action": `settings-review-${agent.id}`, "aria-label": `${agent.name}: ${count}`,
+          onclick: () => actions.onReview?.(agent, agent.mode, "cli") }, count, icon(document, "chevronRight"));
+        link.disabled = reviewDisabled;
+        cli.append(link);
+      }
       const app = element(document, "div", { class: "settings-agent-app" });
       if (agent.app?.state === "connected") app.append(element(document, "span", { class: "settings-connected", text: t("settingsAppConnected", { app: agent.app.name }) }));
-      else if (agent.app?.state === "available" && agent.app.name) app.append(settingsButton(document, `settings-app-${agent.id}`, t("settingsConnectApp", { app: agent.app.name }), () => actions.onReview?.(agent, agent.mode, "app"), reviewDisabled));
+      else if (agent.app?.state === "available" && agent.app.name) app.append(settingsButton(document, `settings-app-${agent.id}`, t("settingsConnectApp", { app: agent.app.name }), () => actions.onReview?.(agent, agent.mode, "app"), reviewDisabled, true));
       else app.append(element(document, "span", { text: t("settingsNoApp") }));
       row.append(cli, app);
-      if (agent.cli?.state === "connected" || agent.app?.state === "connected") row.append(settingsButton(document, `settings-disconnect-${agent.id}`, t("settingsDisconnect"), () => actions.onDisconnect?.(agent), reviewDisabled));
+      if (agent.cli?.state === "connected" || agent.app?.state === "connected") row.append(settingsButton(document, `settings-disconnect-${agent.id}`, t("settingsDisconnect"), () => actions.onDisconnect?.(agent), reviewDisabled, true));
     }
     section.append(row);
     const capability = model.agents?.connectedClients?.find(item => item.id === agent.id);
@@ -377,10 +448,21 @@ function renderAgents(document, model, t, actions) {
       capability.models.map(item => catalogLabel(item.title, item.id, model.language)).join(', ') + ' · ' + (capability.id === 'lyra' ? startText(model.language, 'localQuota')
         : capability.quota?.known ? startText(model.language, 'quota', { label: capability.quota.period ?? capability.title, percent: capability.quota.remainingPercent }) : startText(model.language, 'quotaUnknown')) }));
   }
-  if (!model.agents?.items?.length) section.append(element(document, "p", { text: t("settingsNoAgents") }));
+  if (!items.length) section.append(element(document, "p", { text: t("settingsNoAgents") }));
   if (model.machine !== model.localMachine && !model.readOnly) section.append(element(document, "p", { class: "settings-hint", text: t("settingsReviewOwner", { machine: model.machine }) }));
   for (const key of ["finalCliExplanation", "finalAppExplanation", "finalManualExplanation"]) section.append(element(document, "p", { class: "settings-hint", text: t(key) }));
-  return section;
+  const standing = model.permissions ? (model.permissions.unitGrants?.length ?? 0) + (model.permissions.agentPermissions?.length ?? 0) : null;
+  return element(document, "div", { class: "settings-column" }, section, settingsDisclosure(document, "settings-permissions", t("settingsPermissions"),
+    standing === null ? "" : standing ? cardinal(model.language, "settingsPermissionsCount", standing) : t("settingsPermissionsNone"), permissionsOpen, renderPermissions(document, model, t, actions)));
+}
+
+// Every agent that is behind needs the same rules, commands and Relay entry, so one notice offers to read and apply them together.
+function renderAgentsNotice(document, model, t, actions, waiting, disabled) {
+  const counts = waiting.map(agent => agent.cli.changes);
+  const most = Math.max(...counts);
+  const body = counts.every(count => count === most) ? cardinal(model.language, "settingsNeedSame", most) : t("settingsNeedUpTo", { count: formatNumber(model.language, most) });
+  return settingsNotice(document, "wait", { "data-agents-notice": "true" }, cardinal(model.language, "settingsNeedTitle", waiting.length), body,
+    settingsButton(document, "settings-review-all", t("settingsReviewAll"), () => actions.onReviewAll?.(waiting), disabled));
 }
 
 function renderPermissions(document, model, t, actions) {
@@ -388,7 +470,7 @@ function renderPermissions(document, model, t, actions) {
   const standing = settingsSection(document, t("settingsStanding"));
   const agents = settingsSection(document, t("settingsAgentPermissions"));
   const row = (id, name, description, at, action, cannotWrite) => {
-    const revoke = settingsButton(document, `settings-revoke-${id}`, t("revoke"), action, disabled || cannotWrite);
+    const revoke = settingsButton(document, `settings-revoke-${id}`, t("revoke"), action, disabled || cannotWrite, true);
     revoke.setAttribute("aria-label", `${t("revoke")}: ${name}, ${description}`);
     return element(document, "div", { class: "settings-grant", "data-permission": id }, element(document, "strong", { text: name }),
       element(document, "code", { text: description }), element(document, "small", { text: formatWhen(model.language, at) }), revoke);
@@ -404,23 +486,61 @@ function renderPermissions(document, model, t, actions) {
   if ((model.permissions?.agentPermissions ?? []).some(item => item.actions.includes('native.automatic'))) agents.append(element(document, 'p', { class: 'settings-hint', text: startText(model.language, 'automaticRevokeHint') }));
   standing.append(element(document, "p", { class: "settings-hint", text: t("finalStandingExplanation") }));
   agents.append(element(document, "p", { class: "settings-hint", text: t("finalAgentPermissionExplanation") }));
-  return element(document, "div", { class: "settings-column" }, standing, agents);
+  if (!model.permissions?.unitGrants?.length) standing.append(element(document, "p", { text: t("settingsNoStanding") }));
+  if (!model.permissions?.agentPermissions?.length) agents.append(element(document, "p", { text: t("settingsNoAgentPermissions") }));
+  return element(document, "div", { class: "settings-permissions" }, standing, agents);
 }
 
 function renderProjects(document, model, t, actions) {
-  const section = settingsSection(document, t("settingsClusterLinks"));
   const links = model.projects?.clusterLinks ?? [];
-  for (const link of links) {
-    const remove = settingsButton(document, 'settings-remove-link', startText(model.language, 'removeLink'), () => actions.onRemoveLink?.(link), !model.canWrite || model.readOnly);
-    // Removing a link repeats on every row and undoes work, so it is a quiet bordered button, not the accent of a primary action.
-    remove.setAttribute('class', 'btn danger');
-    remove.setAttribute('aria-label', startText(model.language, 'removeLink') + ': ' + displayName(link.title));
-    section.append(element(document, 'div', { class: 'settings-link', 'data-cluster-link': link.clusterId },
-      element(document, 'strong', { text: displayName(link.title) }), element(document, 'span', { class: 'cluster-link-kind', text: startText(model.language, link.kind === 'none' ? 'noLink' : link.kind) }),
-      element(document, 'code', { text: link.localPath ?? (link.available ? '' : startText(model.language, 'unavailable')) }), link.kind === 'none' ? null : remove));
+  const canWrite = model.canWrite && !model.readOnly;
+  const section = settingsCard(document, t("settingsClusterLinks"),
+    settingsButton(document, 'settings-link-folder', startText(model.language, 'linkFolder'), actions.onLinkFolder, !canWrite, false, icon(document, "plus")));
+  if (!links.length) {
+    section.append(element(document, "p", { text: t("settingsNoLinks") }));
+    return section;
   }
-  if (!links.length) section.append(element(document, "p", { text: t("settingsNoLinks") }));
-  section.append(settingsButton(document, 'settings-link-folder', startText(model.language, 'linkFolder'), actions.onLinkFolder, !model.canWrite || model.readOnly));
+  const view = { query: model.projectQuery ?? "", order: model.projectOrder === "descending" ? "descending" : "ascending" };
+  const label = cardinal(model.language, "settingsLinkSearch", links.length);
+  const search = element(document, "input", { type: "text", autocomplete: "off", placeholder: label, "aria-label": label, "data-action": "settings-link-search", "data-keep": "settings|projects-search" });
+  search.value = view.query;
+  const order = element(document, "button", { type: "button", class: "btn is-secondary", "data-action": "settings-link-order" });
+  const list = element(document, "div", { class: "settings-link-list" });
+  const collator = new Intl.Collator(model.language === "es" ? "es" : "en", { sensitivity: "accent" });
+  const lower = value => String(value ?? "").toLocaleLowerCase(model.language);
+  const place = link => {
+    if (link.kind === "none") return element(document, "span", { class: "settings-link-note", text: startText(model.language, "noLink") });
+    if (!link.available) return element(document, "span", { class: "settings-chip", "data-link-missing": "true" }, icon(document, "alert"), t("settingsNotHere"));
+    return link.localPath ? element(document, "code", { class: "settings-link-path", title: link.localPath, text: link.localPath }) : null;
+  };
+  const row = link => {
+    const name = displayName(link.title);
+    const items = [];
+    if (link.available && link.kind !== "none" && model.machine === model.localMachine) items.push({ id: "open-editor", label: startText(model.language, "openEditor"), run: () => actions.onOpenEditor?.(link) });
+    if (link.available && link.localPath) items.push({ id: "copy-path", label: t("settingsCopyPath"), run: () => actions.onCopyPath?.(link) });
+    if (link.kind !== "none") items.push({ id: "unlink", label: t("settingsUnlink"), danger: true, rule: items.length > 0, disabled: !canWrite, run: () => actions.onRemoveLink?.(link) });
+    const more = !items.length ? null : element(document, "button", { type: "button", class: "settings-more", "data-action": "settings-link-more", "aria-haspopup": "menu",
+      "aria-label": startText(model.language, "menuLabel", { name }), title: startText(model.language, "moreMenu") }, pathIcon(document, "M5 12h.1M12 12h.1M19 12h.1"));
+    more?.addEventListener("click", () => {
+      const box = more.getBoundingClientRect?.();
+      openContextMenu(document, { x: box ? box.right - 210 : 0, y: box ? box.bottom + 6 : 0, items, label: startText(model.language, "menuLabel", { name }) });
+    });
+    return element(document, "div", { class: "settings-link-row", "data-cluster-link": link.clusterId }, icon(document, link.kind === "folder" ? "folder" : "graph"),
+      element(document, "strong", { class: "settings-link-name", text: name }), place(link), more);
+  };
+  const paint = () => {
+    const needle = lower(view.query.trim());
+    const sign = view.order === "ascending" ? 1 : -1;
+    const shown = links.filter(link => !needle || lower(displayName(link.title)).includes(needle) || lower(link.localPath).includes(needle))
+      .sort((left, right) => sign * collator.compare(displayName(left.title), displayName(right.title)) || String(left.clusterId).localeCompare(String(right.clusterId)));
+    list.replaceChildren(...(shown.length ? shown.map(row) : [element(document, "p", { class: "settings-hint", text: t("settingsLinkNoMatch") })]));
+    order.replaceChildren(t(view.order === "ascending" ? "settingsOrderAscending" : "settingsOrderDescending"), icon(document, "chevron"));
+  };
+  search.addEventListener("input", () => { view.query = search.value; paint(); actions.onProjectView?.({ query: view.query, order: view.order }); });
+  order.addEventListener("click", () => { view.order = view.order === "ascending" ? "descending" : "ascending"; paint(); actions.onProjectView?.({ query: view.query, order: view.order }); });
+  paint();
+  section.append(element(document, "div", { class: "settings-link-tools" },
+    element(document, "label", { class: "settings-search" }, pathIcon(document, "M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14M15 15l6 6"), search), order), list);
   return section;
 }
 
@@ -491,6 +611,25 @@ function commonFolder(paths) {
   return cut > 0 ? prefix.slice(0, cut) : "";
 }
 
+const CHANGE_DESCRIPTIONS = { "Load the M1ND rules in every session": "settingsLoadRules", "Stop loading the M1ND rules automatically": "settingsStopRules",
+  "Remove owned Content no longer included": "settingsRemoveContent", "Make included M1ND Content available on demand": "settingsIncludeContent" };
+
+// The service describes a change in English; the screen says it in the viewer's language.
+function describeChange(change, t) {
+  return change.id === "mcp" ? t("settingsRelayChange") : change.id === "hooks" ? t("settingsHooksChange") : change.optional ? t("settingsGitChange")
+    : CHANGE_DESCRIPTIONS[change.description] ? t(CHANGE_DESCRIPTIONS[change.description]) : change.description;
+}
+
+function groupChanges(changes, t) {
+  const groups = new Map();
+  for (const change of changes) {
+    const key = describeChange(change, t);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(change);
+  }
+  return groups;
+}
+
 export function renderClientReview(document, review, t, actions) {
   const dialog = element(document, "dialog", { class: "dialog settings-review", "data-settings-review": review.agent.id });
   const heading = element(document, "h2", { text: t("settingsConnectTitle", { client: review.target === "app" ? review.agent.app.name : `${review.agent.name} CLI` }) });
@@ -499,22 +638,12 @@ export function renderClientReview(document, review, t, actions) {
   const selected = review.selected;
   const apply = settingsButton(document, "settings-apply", "", () => actions.onApply?.([...selected]));
   const update = () => { apply.textContent = t("settingsApply", { count: selected.size }); apply.disabled = !selected.size; };
-  const descriptions = { "Load the M1ND rules in every session": "settingsLoadRules", "Stop loading the M1ND rules automatically": "settingsStopRules",
-    "Remove owned Content no longer included": "settingsRemoveContent", "Make included M1ND Content available on demand": "settingsIncludeContent" };
-  const describe = (change) => change.id === "mcp" ? t("settingsRelayChange") : change.id === "hooks" ? t("settingsHooksChange") : change.optional ? t("settingsGitChange")
-    : descriptions[change.description] ? t(descriptions[change.description]) : change.description;
   // Changes of one kind are one row with a count and their folder; the files open on demand, so 53 changes read as a few lines.
   const list = element(document, "div", { class: "settings-review-list" });
   for (const optional of [false, true]) {
     const changes = review.preview.changes.filter(change => change.optional === optional);
     if (optional && changes.length) list.append(element(document, "h3", { text: t("settingsOptional") }));
-    const groups = new Map();
-    for (const change of changes) {
-      const key = describe(change);
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(change);
-    }
-    for (const [description, members] of groups) {
+    for (const [description, members] of groupChanges(changes, t)) {
       const inputs = members.map((change) => {
         const input = element(document, "input", { type: "checkbox", "data-review-change": change.id, "aria-label": change.path });
         input.checked = selected.has(change.id);
@@ -556,19 +685,53 @@ export function renderClientReview(document, review, t, actions) {
   return dialog;
 }
 
+// One dialog for every agent that is behind: a disclosure per agent with its changes grouped as in the single review, the first one open.
+export function renderReviewAll(document, review, t, actions) {
+  const dialog = element(document, "dialog", { class: "dialog settings-review", "data-settings-review-all": "true" });
+  const heading = element(document, "h2", { text: t("settingsReviewAll") });
+  labelDialog(dialog, heading);
+  dialog.append(heading, element(document, "p", { text: t("settingsReviewAllIntro", { machine: review.machine }) }));
+  const list = element(document, "div", { class: "settings-review-list" });
+  for (const [index, { agent, preview }] of review.items.entries()) {
+    const changes = preview.changes.filter(change => !change.optional);
+    const body = element(document, "div", { class: "settings-review-agent-body" });
+    for (const [description, members] of groupChanges(changes, t)) {
+      const folder = commonFolder(members.map(change => change.path));
+      const files = members.length === 1
+        ? element(document, "pre", { text: members[0].afterText })
+        : element(document, "ul", { class: "settings-change-files" }, members.map(change => element(document, "li", {},
+          element(document, "code", { text: folder ? change.path.slice(folder.length).replace(/^[\\/]/, "") : change.path }))));
+      body.append(element(document, "div", { class: "settings-change" + (members.length > 1 ? " is-group" : "") },
+        element(document, "span", { class: "settings-change-title" }, element(document, "strong", { text: members.length > 1 ? `${description} (${members.length})` : description }),
+          element(document, "code", { text: folder || members[0].path })),
+        element(document, "details", {}, element(document, "summary", { text: t("details") }), files)));
+    }
+    if (preview.restartRequired) body.append(element(document, "p", { class: "settings-hint", text: t("finalRestartClientExplanation", { client: agent.name }) }));
+    const item = element(document, "details", { class: "settings-review-agent", "data-review-agent": agent.id },
+      element(document, "summary", {}, icon(document, "chevronRight"), element(document, "strong", { text: agent.name }),
+        element(document, "span", { class: "settings-disclosure-status", text: cardinal(review.language, "settingsChanges", changes.length) })), body);
+    if (index === 0) { item.open = true; item.setAttribute("open", ""); }
+    list.append(item);
+  }
+  dialog.append(list, element(document, "p", { text: t("finalBackupExplanation") }));
+  dialog.append(element(document, "div", { class: "dialog-actions" }, settingsButton(document, "settings-review-cancel", t("cancel"), () => dialog.close(), false, true),
+    settingsButton(document, "settings-apply-all", t("settingsApplyAll"), () => actions.onApplyAll?.(review), !review.items.some(({ preview }) => preview.changes.some(change => !change.optional)))));
+  return dialog;
+}
+
 function renderHome(document, model, t, actions) {
   const home = model.home;
   const expiry = updateExpiry(home, model.now ?? Date.now());
-  const block = element(document, "section", { class: "settings-section", "data-home": home?.enabled && !expiry.expired ? "open" : "closed" });
-  block.append(element(document, "h3", { text: t("settingsPhone") }), element(document, "p", { text: t("finalPhoneHint") }));
-  if (!home?.enabled || expiry.expired) {
-    block.append(element(document, "p", { text: t("homeClosed") }));
+  const open = Boolean(home?.enabled) && !expiry.expired;
+  const body = [element(document, "p", { text: t("finalPhoneHint") })];
+  if (!open) {
+    body.push(element(document, "p", { text: t("homeClosed") }));
   } else {
-    block.append(element(document, "p", { "data-phone-count": home.phoneCount ?? "unknown", text: Number.isInteger(home.phoneCount)
+    body.push(element(document, "p", { "data-phone-count": home.phoneCount ?? "unknown", text: Number.isInteger(home.phoneCount)
       ? t(home.phoneCount === 1 ? "finalPhoneStatus" : "finalPhoneStatusPlural", { time: formatShortTime(model.language, home.expiresAt), count: home.phoneCount })
       : `${t("homeActive", { time: formatShortTime(model.language, home.expiresAt) })} ${t("settingsPhoneCountUnknown")}` }));
     const hours = Math.floor(expiry.remainingSeconds / 3600), minutes = Math.floor(expiry.remainingSeconds % 3600 / 60);
-    block.append(element(document, "p", { "data-remaining": String(expiry.remainingSeconds), text: expiry.remainingSeconds < 60
+    body.push(element(document, "p", { "data-remaining": String(expiry.remainingSeconds), text: expiry.remainingSeconds < 60
       ? t("finalAccessClosesSoon") : t("finalAccessCloses", { hours, minutes }) }));
   }
   const grant = !expiry.expired ? model.grant : null;
@@ -592,17 +755,23 @@ function renderHome(document, model, t, actions) {
       if (event.shiftKey && document.activeElement === controls[0]) { event.preventDefault(); controls.at(-1)?.focus(); }
       else if (!event.shiftKey && document.activeElement === controls.at(-1)) { event.preventDefault(); controls[0]?.focus(); }
     });
-    block.append(dialog);
+    body.push(dialog);
   }
-  else if (home?.enabled && !expiry.expired) block.append(element(document, "p", { text: t("noGrantSecret") }));
-  if (model.canManage && (!home?.enabled || expiry.expired)) {
-    block.append(addressField(document, t));
-    block.append(element(document, "button", { type: "button", class: "btn primary", "data-action": "open-home", text: t("settingsOpenPhone") }));
+  else if (open) body.push(element(document, "p", { text: t("noGrantSecret") }));
+  if (model.canManage && !open) {
+    body.push(addressField(document, t));
+    body.push(element(document, "div", { class: "settings-actions" },
+      element(document, "button", { type: "button", class: "btn is-secondary", "data-action": "open-home", text: t("settingsOpenPhone") })));
   } else if (model.canManage && home?.enabled) {
-    block.append(addressField(document, t));
-    block.append(element(document, "button", { type: "button", class: "btn primary", "data-action": "replace-home", text: t("settingsOpenPhone") }));
-    block.append(element(document, "button", { type: "button", class: "btn", "data-action": "close-home", text: t("settingsCloseAccess") }));
+    body.push(addressField(document, t));
+    body.push(element(document, "div", { class: "settings-actions" },
+      element(document, "button", { type: "button", class: "btn is-secondary", "data-action": "replace-home", text: t("settingsOpenPhone") }),
+      element(document, "button", { type: "button", class: "btn", "data-action": "close-home", text: t("settingsCloseAccess") })));
   }
+  // A grant is shown in a dialog inside this disclosure, so it stays open while the dialog is.
+  const block = settingsDisclosure(document, "settings-phone", t("settingsPhone"),
+    open ? t("settingsOpenUntil", { time: formatShortTime(model.language, home.expiresAt) }) : t("settingsClosed"), Boolean(grant?.qrPayloads?.length), ...body);
+  block.setAttribute("data-home", open ? "open" : "closed");
   block.addEventListener("click", (event) => {
     const link = event.target?.closest?.("[data-link]");
     if (link) actions.onSelect?.(Number(link.getAttribute("data-link")));

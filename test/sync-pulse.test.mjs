@@ -143,6 +143,34 @@ test('retry waits for both blocked dimensions and ignores an unrelated older ent
   });
 });
 
+test('a slowing window names the moment it falls back under the slowing point, for messages and for bytes', async (t) => {
+  const { fixture, ledger } = await ledgerFor(t);
+  const start = fixture.clock.now;
+  for (let index = 0; index < 48; index += 1) {
+    await admitMessage(ledger, { id: `m-${index}`, record: Buffer.from('ok') });
+    fixture.clock.now += 1000;
+  }
+  const slowing = await limitsFor(ledger, 'admission');
+  assert.equal(slowing.state, 'slowing');
+  assert.equal(slowing.retryAt, new Date(start + 60000).toISOString());
+  assert.ok(Date.parse(slowing.retryAt) > fixture.clock.now);
+  fixture.clock.now = start + 3600000;
+  assert.equal((await limitsFor(ledger, 'admission')).retryAt, null);
+
+  fixture.clock.now = start;
+  await reservePublication(ledger, { id: 'first', messages: 0, bytes: 20000000 });
+  fixture.clock.now = start + 600000;
+  await reservePublication(ledger, { id: 'second', messages: 0, bytes: 20000000 });
+  const heavy = await limitsFor(ledger, 'publication');
+  assert.equal(heavy.state, 'slowing');
+  assert.equal(heavy.retryAt, new Date(start + 3600000).toISOString());
+  assert.ok(Date.parse(heavy.retryAt) > fixture.clock.now);
+  fixture.clock.now = start + 3600000;
+  const eased = await limitsFor(ledger, 'publication');
+  assert.equal(eased.state, 'normal');
+  assert.equal(eased.retryAt, null);
+});
+
 function fakeClock(fixture) {
   const timers = [];
   let sequence = 0;
