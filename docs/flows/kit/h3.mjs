@@ -59,6 +59,35 @@ export const FAMILY = [
   }),
 ];
 
+// The ONEM1ND look, approved by the owner on 2026-10-26 (M1ND user/projects/HIVEM1ND/identity/onem1nd-identity.html):
+// all red on black like Nebula, dark alien techno, synthwave only as glow. Status keeps its shapes: working is
+// Ember filled, waiting on the person is a Signal ring, idle a dim ring.
+export const ONEM1ND = {
+  bg: "#07040a", panel: "#110a0e", card: "#1a0e14", card2: "#23131b",
+  line: "rgba(255,45,85,0.10)", line2: "rgba(255,45,85,0.22)",
+  text: "#f3e6ea", body: "#d9c4ca", mute: "#a8878f",
+  acc: "#ff2d55", accInk: "#07040a", accSoft: "rgba(255,45,85,0.14)",
+  ring: "#e0103a", ringSoft: "rgba(224,16,58,0.16)", edge: "rgba(224,16,58,0.5)",
+  ok: "#ff2d55", wait: "#ff2e88", waitSoft: "rgba(255,46,136,0.12)", idle: "#6e5560", sel: "#2a0f18",
+  me: "#2a111a", meText: "#f3e6ea", labBg: "rgba(7,4,10,0.8)",
+  zone: "rgba(224,16,58,0.35)", zoneFill: "rgba(224,16,58,0.04)", zoneLab: "#0b0609", ground: "#0a0509",
+};
+export const ONE = { id: "onem1nd", m: true, name: "ONEM1ND", brand: "ONEM1ND", one: true, theme: ONEM1ND };
+
+/** The ONEM1ND mark: a central hexagonal node joined to six smaller ones, on the 0..100 grid of a square vector. */
+const ONE_LINES = "M60.51 31.79 L63.07 27.37 M71.02 50.00 L76.14 50.00 M60.51 68.21 L63.07 72.63 M39.49 68.21 L36.93 72.63 M28.98 50.00 L23.86 50.00 M39.49 31.79 L36.93 27.37";
+const ONE_CORE = "M50.00 69.32 L33.27 59.66 L33.27 40.34 L50.00 30.68 L66.73 40.34 L66.73 59.66 Z";
+const ONE_NODES = ["M68.75 27.18 L60.38 22.35 L60.38 12.69 L68.75 7.86 L77.12 12.69 L77.12 22.35 Z", "M87.50 59.66 L79.13 54.83 L79.13 45.17 L87.50 40.34 L95.87 45.17 L95.87 54.83 Z", "M68.75 92.14 L60.38 87.31 L60.38 77.65 L68.75 72.82 L77.12 77.65 L77.12 87.31 Z", "M31.25 92.14 L22.88 87.31 L22.88 77.65 L31.25 72.82 L39.62 77.65 L39.62 87.31 Z", "M12.50 59.66 L4.13 54.83 L4.13 45.17 L12.50 40.34 L20.87 45.17 L20.87 54.83 Z", "M31.25 27.18 L22.88 22.35 L22.88 12.69 L31.25 7.86 L39.62 12.69 L39.62 22.35 Z"];
+// The ONEM1ND wordmark: only the 1 in the accent.
+export const wordOne = (size) => row({ gap: 0 }, t("ONEM", size, { weight: 700, track: 0.06 }), t("1", size, { weight: 700, track: 0.06, color: "acc" }), t("ND", size, { weight: 700, track: 0.06 }));
+
+export function markOne(w = 26) {
+  return stack({ w, h: w },
+    vector({ w, h: w, d: ONE_LINES, stroke: "#e0103a", strokeWidth: Math.max(1.5, w / 22) }),
+    ...ONE_NODES.map((d) => vector({ w, h: w, d, fill: "#a30c2c" })),
+    vector({ w, h: w, d: ONE_CORE, fill: "#ff2d55" }));
+}
+
 // ---- parts ----------------------------------------------------------------------------------------
 
 export const t = (value, size = 14, props = {}) => text(value, { size, ...props });
@@ -70,7 +99,8 @@ export const centered = (node) => ({ ...node, place: "center" });
 export const hex = (points) => `M${points.map(([x, y]) => `${((x / 56) * 100).toFixed(2)} ${((y / 48) * 100).toFixed(2)}`).join(" L")} Z`;
 export const HEX_A = hex([[14, 2], [26, 9], [26, 23], [14, 30], [2, 23], [2, 9]]);
 export const HEX_B = hex([[30, 18], [42, 25], [42, 39], [30, 46], [18, 39], [18, 25]]);
-export function mark(w = 26) {
+export function mark(w = 26, look = null) {
+  if (look?.one) return markOne(w);
   const h = Math.round((w * 48) / 56);
   return stack({ w, h }, vector({ w, h, d: HEX_A, fill: "#81648c" }), vector({ w, h, d: HEX_B, fill: "#bdcd79" }));
 }
@@ -135,7 +165,7 @@ export function bar(L, mode, waiting = 2, { gear = false } = {}) {
   });
   return row(
     { name: "bar", label: "Bar", h: 52, gap: 18, pad: [0, L.m ? 20 : 16], fill: L.m ? undefined : "panel", edge: L.m ? undefined : { side: "bottom", color: "line" } },
-    row({ gap: 9 }, mark(), t("HIVEM1ND", 15, { weight: 700, track: 0.06 })),
+    row({ gap: 9 }, mark(26, L), L.one ? wordOne(15) : t(L.brand ?? "HIVEM1ND", 15, { weight: 700, track: 0.06 })),
     fill(),
     row({ name: "modes", label: "Modes", gap: 4, pad: L.m ? 4 : 0, radius: 14, fill: L.m ? "panel" : undefined, stroke: L.m ? "line" : undefined }, ...modes),
     fill(),
@@ -829,7 +859,7 @@ export function voidCanvas(L) {
     toolbar(L, t("Attached", 13, { color: "body" }), chip(L, "adj", "adjutant"), watch(L, "Watch", false, "eye", "watch"), watch(L, "Focus", true, null, "focus")),
     col(
       { name: "document", label: "Document", w: 640, h: 760, pad: [44, 56], radius: L.m ? 20 : 12, fill: L.m ? "panel" : "card", stroke: L.m ? undefined : "line", clip: true, place: "top-center", dy: 70 },
-      t("HIVEM1ND 3.0", 26, { weight: 700, color: "text" }),
+      t(`${L.brand ?? "HIVEM1ND"} 3.0`, 26, { weight: 700, color: "text" }),
       space(6),
       t("Release notes, draft by adjutant", 13, { color: "mute" }),
       space(20),
@@ -913,7 +943,7 @@ export const focus = (L) => () =>
     ),
     col(
       { name: "focus-text", label: "Text", w: 640, gap: 18, place: "top-center", dy: 120 },
-      col({ pad: [0, 0, 10] }, t("HIVEM1ND 3.0", 28, { weight: 700, color: "#f1efe9" })),
+      col({ pad: [0, 0, 10] }, t(`${L.brand ?? "HIVEM1ND"} 3.0`, 28, { weight: 700, color: "#f1efe9" })),
       t(DOC.intro, 17, { color: "#d8d4cc", lh: 1.8 }),
       t(`${DOC.service} An idle machine makes no requests and sends nothing.`, 17, { color: "#d8d4cc", lh: 1.8 }),
       // The caret ends the last line, so the paragraph is given in its two lines.
@@ -929,10 +959,10 @@ export const focus = (L) => () =>
 
 export function phoneTop(L, title, waiting = null) {
   return [
-    row({ h: 44, pad: [0, 22], justify: "between" }, t("23:42", 13, { weight: 700 }), t("HIVEM1ND", 13, { weight: 700 })),
+    row({ h: 44, pad: [0, 22], justify: "between" }, t("23:42", 13, { weight: 700 }), L.one ? wordOne(13) : t(L.brand ?? "HIVEM1ND", 13, { weight: 700 })),
     row(
       { h: 52, gap: 10, pad: [0, 14], fill: L.m ? undefined : "panel", edge: L.m ? undefined : { side: "bottom", color: "line" } },
-      mark(),
+      mark(26, L),
       t(title, 16, { weight: 700 }),
       fill(),
       waiting ? waitingPill(L, String(waiting), 14) : null,
