@@ -963,6 +963,40 @@ test('every contract route has a success result and an authority or boundary fai
   const token = local.json.data.token;
   const seen = new Set(['POST /auth/local']);
   const hit = (method, template) => seen.add(`${method} ${template}`);
+  const relanFixture = await makeCoreFixture();
+  let relanCore;
+  t.after(async () => {
+    await relanCore?.http.close();
+    await dispose(relanFixture);
+  });
+  const relanOrigin = path.join(relanFixture.root, 'origin');
+  await mkdir(relanOrigin, { recursive: true });
+  relanCore = await composeCore({
+    store: relanFixture.store,
+    paths: { ...relanFixture.paths, origin: relanOrigin },
+    now: () => relanFixture.clock.now,
+    originKind: 'relan',
+    relan: { addresses: ['127.0.0.1'], allowLoopback: true, discovery: { port: 0, targets: [] } },
+    projects: [], clients: [],
+  });
+  const relanLogin = await call(relanCore.http.port, 'POST', '/api/v1/auth/local', {
+    token: relanCore.bootstrap.secret,
+    body: { embedded: false, hostOrigin: null, look: null, language: null },
+  });
+  expectStatus(relanLogin, 201, 'ReLAN desktop login');
+  const relanToken = relanLogin.json.data.token;
+  const relanRequest = (selected, body) => ({ token: selected, body, headers: { 'idempotency-key': randomUUID() } });
+  const relanStatus = await call(relanCore.http.port, 'POST', '/api/v1/relan', relanRequest(relanToken, { action: 'status' }));
+  expectStatus(relanStatus, 200, 'ReLAN status');
+  assert.equal(relanStatus.json.data.paired, false);
+  for (const audience of ['phone', 'agent']) {
+    const denied = relanCore.credentials.issue({ audience, unitId: 'root:executor', capabilities: ['read'] });
+    expectStatus(await call(relanCore.http.port, 'POST', '/api/v1/relan', relanRequest(denied.token, { action: 'status' })), 403, 'ReLAN desktop authority');
+  }
+  expectStatus(await call(relanCore.http.port, 'POST', '/api/v1/relan', relanRequest(relanToken, { action: 'status', unknown: true })), 400, 'ReLAN unknown field');
+  expectStatus(await call(relanCore.http.port, 'POST', '/api/v1/relan', relanRequest(relanToken, { action: 'invalid' })), 422, 'ReLAN invalid action');
+  expectStatus(await call(port, 'POST', '/api/v1/relan', relanRequest(token, { action: 'status' })), 503, 'ReLAN unconfigured service');
+  hit('POST', '/relan');
   await writeBeat({ store: fixture.store, paths, now: () => fixture.clock.now }, 'running');
 
   for (const template of ['/view', '/units', '/leads', '/squads', '/projects', '/machines', '/sync', '/sessions', '/layout', '/settings', '/chats', '/mailboxes', '/approvals', '/tasks', '/waiting']) {

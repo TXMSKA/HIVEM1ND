@@ -18,7 +18,8 @@ export function nextDue(now, first, last, limits) {
   return Math.max(now, Math.min(last + (slow ? 4000 : 2000), first + (slow ? 30000 : 10000)));
 }
 
-export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeout, events = sync.store.events } = {}) {
+export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeout, events = sync.store.events,
+  encryption = { algorithm: 'none' }, keyProvider = origin?.keyProvider, ready = () => true } = {}) {
   if (!sync || !origin || !ledger || !now || !setTimeout || !clearTimeout) {
     throw new CoreError(500, 'internal_error', 'A pulse needs a sync store, origin, ledger, and clock.');
   }
@@ -46,7 +47,7 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
   async function arm() {
     const token = ++scheduleToken;
     clearTimer();
-    if (closed || pending.length === 0 || first === null) return;
+    if (closed || !ready() || pending.length === 0 || first === null) return;
     const limits = await currentLimits();
     if (token !== scheduleToken || closed) return;
     const due = backlog && limits.state === 'normal' ? now() : nextDue(now(), first, last, limits);
@@ -80,6 +81,7 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
     clearTimer();
     holdUntil = null;
     backlog = false;
+    if (!ready()) return { published: false, packs: 0, ids: [], issues: [], waitingForKey: true };
     await loadSkipped();
     const recovered = await finishJournal();
     const batch = new Set(pending);
@@ -213,7 +215,9 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
   async function resume() {
     await loadSkipped();
     const staged = await listStaged(sync);
-    return changed(staged.map((change) => change.id));
+    const result = await changed(staged.map((change) => change.id));
+    await arm();
+    return result;
   }
 
   async function beat(record) {
@@ -263,6 +267,7 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
     if (objects.size === 0) return committed;
     const machines = [origin.machine, ...(await listMachineNames(origin)).filter((machine) => machine !== origin.machine).sort()];
     const provider = {
+      keyProvider,
       readHead: (machine) => readHead(origin, machine),
       readPack: (machine, sequence) => readOriginPack(origin, machine, sequence),
     };
@@ -284,7 +289,7 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
           if (!known) {
             bytes = await provider.readPack(machine, entry.sequence);
             if (!bytes || bytes.length !== entry.bytes) continue;
-            const decoded = decodePack(bytes, { expectedHash: entry.hash, machine });
+            const decoded = decodePack(bytes, { expectedHash: entry.hash, machine, keyProvider });
             if (decoded.header.sequence !== entry.sequence) continue;
             known = { hashes: [...decoded.objects.keys()], ready: false };
             packIndex.set(key, known);
@@ -337,7 +342,7 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
       await sendPack(packed);
       published = true;
     }
-    const decoded = decodePack(packed);
+    const decoded = decodePack(packed, { keyProvider });
     const live = new Set((await listStaged(sync)).map((change) => change.id));
     const ids = decoded.changes.map((change) => change.id).filter((id) => live.has(id));
     if (ids.length > 0) await ackPublished(sync, ids);
@@ -406,14 +411,20 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
     if (notice.created) events.push({ type: 'sync.error', code: error?.code ?? 'internal_error', noticeId: notice.id });
   }
 
+  function packFor(...args) {
+    return preparePack(...args, { encryption: typeof encryption === 'function' ? encryption() : encryption, keyProvider });
+  }
+
   return { changed, flush, resume, beat, close };
 }
 
-function packFor(groups, sequence, head, objects, committed, compressed = null) {
+function preparePack(groups, sequence, head, objects, committed, compressed = null, { encryption, keyProvider } = {}) {
   const changes = groups.flat();
   const blobs = objectsFor(changes, objects);
   const body = encodePack({
     compressed,
+    encryption,
+    keyProvider,
     machine: changes[0].machine,
     sequence,
     changes,

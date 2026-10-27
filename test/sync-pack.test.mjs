@@ -307,7 +307,8 @@ test('invalid packs are rejected before any file is written', async (t) => {
       transactions: [{ id: splitChange.transactionId, changeIds: [splitChange.id, splitId] }],
     })), 'invalid_pack'],
     ['unknown target', finish(emptyIndex([{ ...tomb, target: { kind: 'disk', path: 'C:/secret' } }])), 'invalid_pack'],
-    ['requested encryption', finish(emptyIndex([tomb]), [], (header) => ({ ...header, encryption: { algorithm: 'aes-256-gcm', keyId: 'k', nonce: 'n', tag: 't' } })), 'unsupported_origin'],
+    ['malformed encryption', finish(emptyIndex([tomb]), [], (header) => ({ ...header, encryption: { algorithm: 'aes-256-gcm', keyId: 'k', nonce: 'n', tag: 't' } })), 'invalid_pack'],
+    ['unsupported encryption', finish(emptyIndex([tomb]), [], (header) => ({ ...header, encryption: { algorithm: 'aes-128-gcm' } })), 'unsupported_origin'],
     ['quantum configuration', finish(emptyIndex([tomb]), [], (header) => ({ ...header, quantum: true })), 'unsupported_origin'],
   ];
   for (const [name, bytes, code] of cases) {
@@ -321,7 +322,7 @@ test('invalid packs are rejected before any file is written', async (t) => {
     sequence: 1,
     changes: [tomb],
     encryption: { algorithm: 'aes-256-gcm', keyId: 'k', nonce: 'n', tag: 't' },
-  }), (error) => error.code === 'unsupported_origin');
+  }), (error) => error.code === 'invalid_pack');
   const expanded = brotliCompressSync(Buffer.alloc(1000, 7));
   assert.ok(expanded.length < 1000);
   assert.deepEqual(await tree(fixture.root), before);

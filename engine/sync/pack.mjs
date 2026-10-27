@@ -1,13 +1,7 @@
+import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { brotliCompress, brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from 'node:zlib';
 import { CoreError, canonicalJson, hashBytes, isUuid, uuidV8, validateMachineName, validateName } from '../service/identity.mjs';
 import { safeRelative } from '../service/paths.mjs';
-
-// Reserved encrypted envelope from contract 2.9. It is not wired in 3.0.
-// The envelope is {algorithm:"aes-256-gcm",keyId,nonce,tag}: a 12-byte nonce
-// and a 16-byte tag, both base64url. The index and blob payload are encrypted
-// after compression. Authenticated data is the UTF-8 string
-// hivem1nd-pack-v1:<machine>:<sequence>:<keyId>. Account and team keys stay
-// outside synced files. Requested encryption or Quantum is unsupported_origin.
 
 export const MAX_PACK_BYTES = 50000000;
 export const MAX_OBJECT_BYTES = 16000000;
@@ -115,7 +109,7 @@ export function validateChange(change, owner = null) {
   };
 }
 
-export function encodePack({ machine, sequence, changes, objects = [], dependencies = [], transactions = [], encryption = { algorithm: 'none' }, compressed = null }) {
+export function encodePack({ machine, sequence, changes, objects = [], dependencies = [], transactions = [], encryption = { algorithm: 'none' }, keyProvider = null, compressed = null }) {
   const owner = validateMachineName(machine);
   assertSequence(sequence);
   assertEncryption(encryption);
@@ -164,7 +158,8 @@ export function encodePack({ machine, sequence, changes, objects = [], dependenc
     dependencies: dependencyList,
     transactions: transactionList,
   };
-  const payload = payloadOf(index, blobs);
+  const sealed = encryptPayload(payloadOf(index, blobs), encryption, owner, sequence, keyProvider);
+  const payload = sealed.payload;
   if (payload.length > MAX_PACK_BYTES) throw new CoreError(413, 'pack_too_large', 'The pack exceeds 50 MB.');
   const header = {
     format: 'hivem1nd-pack-v1',
@@ -172,14 +167,14 @@ export function encodePack({ machine, sequence, changes, objects = [], dependenc
     sequence,
     payloadBytes: payload.length,
     payloadHash: hashBytes(payload),
-    encryption: { algorithm: 'none' },
+    encryption: sealed.encryption,
   };
   const packed = framed(header, payload);
   if (packed.length > MAX_PACK_BYTES) throw new CoreError(413, 'pack_too_large', 'The pack exceeds 50 MB.');
   return packed;
 }
 
-export function decodePack(bytes, { expectedHash = null, machine = null } = {}) {
+export function decodePack(bytes, { expectedHash = null, machine = null, keyProvider = null } = {}) {
   const buffer = asBuffer(bytes);
   if (buffer.length > MAX_PACK_BYTES) throw new CoreError(413, 'pack_too_large', 'The pack exceeds 50 MB.');
   if (expectedHash !== null && hashBytes(buffer) !== expectedHash) throw new CoreError(422, 'corrupt_resource', 'The pack digest does not match the head.');
@@ -187,19 +182,18 @@ export function decodePack(bytes, { expectedHash = null, machine = null } = {}) 
   const headerFrame = readSpan(buffer, 4);
   const header = parseJson(headerFrame.bytes);
   assertPlain(header);
-  if (header.quantum || (header.encryption && header.encryption.algorithm !== 'none')) {
-    throw new CoreError(422, 'unsupported_origin', 'Encryption and Quantum origins are not available.');
-  }
+  if (header.quantum) throw new CoreError(422, 'unsupported_origin', 'Quantum origins are not available.');
   exactKeys(header, HEADER_KEYS, 'header');
   if (header.format !== 'hivem1nd-pack-v1') throw new CoreError(422, 'invalid_pack', 'The pack format is not supported.');
   const owner = validateMachineName(header.machine);
   if (machine && owner !== machine) throw new CoreError(422, 'invalid_record_owner', 'The pack owner does not match its directory.');
   assertSequence(header.sequence);
-  assertEncryption(header.encryption);
-  const payload = buffer.subarray(headerFrame.end);
-  if (header.payloadBytes !== payload.length || header.payloadHash !== hashBytes(payload)) {
+  assertEncryption(header.encryption, true);
+  const transmitted = buffer.subarray(headerFrame.end);
+  if (header.payloadBytes !== transmitted.length || header.payloadHash !== hashBytes(transmitted)) {
     throw new CoreError(422, 'corrupt_resource', 'The payload digest does not match the header.');
   }
+  const payload = decryptPayload(transmitted, header, keyProvider);
   if (payload.length < 4) throw new CoreError(422, 'invalid_pack', 'The pack payload is truncated.');
   const indexFrame = readSpan(payload, 0);
   if (indexFrame.end > payload.length) throw new CoreError(422, 'invalid_pack', 'The pack index is truncated.');
@@ -231,7 +225,7 @@ export function decodePack(bytes, { expectedHash = null, machine = null } = {}) 
     if (!seenHashes.has(hash)) throw new CoreError(422, 'invalid_pack', 'The pack contains an unreferenced object.');
   }
   return {
-    header: { ...header, machine: owner, encryption: { algorithm: 'none' } },
+    header: { ...header, machine: owner, encryption: { ...header.encryption } },
     index: { ...index, changes, dependencies, transactions },
     changes,
     dependencies,
@@ -293,7 +287,7 @@ export function validateHead(head, { machine = null, previous = null, packBytes 
 export async function resolveDependencies(packBytes, provider, state = { stack: new Set(), seen: 0, memo: new Map() }) {
   state.memo ??= new Map();
   const buffer = asBuffer(packBytes);
-  const decoded = decodePack(buffer);
+  const decoded = decodePack(buffer, { keyProvider: provider?.keyProvider });
   const here = `${decoded.header.machine}:${decoded.header.sequence}`;
   if (state.stack.has(here)) throw new CoreError(422, 'invalid_pack', 'Pack dependencies form a cycle.');
   state.seen += 1;
@@ -646,9 +640,78 @@ function assertSequence(value) {
   if (!Number.isSafeInteger(value) || value < 1 || value > MAX_SEQUENCE) throw new CoreError(422, 'invalid_pack', 'The pack sequence is not valid.');
 }
 
-function assertEncryption(encryption) {
-  if (!encryption || encryption.algorithm !== 'none') throw new CoreError(422, 'unsupported_origin', 'Encryption and Quantum origins are not available.');
-  exactKeys(encryption, ['algorithm'], 'encryption');
+function assertEncryption(encryption, envelope = false) {
+  assertPlain(encryption);
+  if (encryption.algorithm === 'none') {
+    exactKeys(encryption, ['algorithm'], 'encryption');
+    return;
+  }
+  if (encryption.algorithm !== 'aes-256-gcm') throw new CoreError(422, 'unsupported_origin', 'The pack encryption algorithm is not supported.');
+  exactKeys(encryption, envelope ? ['algorithm', 'keyId', 'nonce', 'tag'] : ['algorithm', 'keyId'], 'encryption');
+  if (typeof encryption.keyId !== 'string' || encryption.keyId.length < 1 || encryption.keyId.length > 256
+    || /[\r\n\u0000]/.test(encryption.keyId) || Buffer.from(encryption.keyId, 'utf8').toString('utf8') !== encryption.keyId) {
+    throw new CoreError(422, 'invalid_pack', 'The encryption key id is not valid.');
+  }
+  if (envelope) {
+    envelopeBytes(encryption.nonce, 12, 'nonce');
+    envelopeBytes(encryption.tag, 16, 'tag');
+  }
+}
+
+function envelopeBytes(value, length, label) {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9_-]+$/.test(value)) {
+    throw new CoreError(422, 'invalid_pack', `The encryption ${label} is not valid base64url.`);
+  }
+  const bytes = Buffer.from(value, 'base64url');
+  if (bytes.length !== length || bytes.toString('base64url') !== value) {
+    throw new CoreError(422, 'invalid_pack', `The encryption ${label} has an invalid length or encoding.`);
+  }
+  return bytes;
+}
+
+function encryptionKey(keyProvider, keyId) {
+  if (typeof keyProvider !== 'function') throw new CoreError(422, 'encryption_key_missing', 'The pack encryption key is not available.');
+  let key;
+  try {
+    key = keyProvider(keyId);
+  } catch {
+    throw new CoreError(422, 'encryption_key_missing', 'The pack encryption key is not available.');
+  }
+  if (key === null || key === undefined) throw new CoreError(422, 'encryption_key_missing', 'The pack encryption key is not available.');
+  if (!(key instanceof Uint8Array) || key.byteLength !== 32) {
+    throw new CoreError(422, 'invalid_encryption_key', 'The pack encryption key must contain exactly 32 bytes.');
+  }
+  return key;
+}
+
+function packAdditionalData(machine, sequence, keyId) {
+  return Buffer.from(`hivem1nd-pack-v1:${machine}:${sequence}:${keyId}`, 'utf8');
+}
+
+function encryptPayload(payload, encryption, machine, sequence, keyProvider) {
+  if (encryption.algorithm === 'none') return { payload, encryption: { algorithm: 'none' } };
+  const key = encryptionKey(keyProvider, encryption.keyId);
+  const nonce = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', key, nonce, { authTagLength: 16 });
+  cipher.setAAD(packAdditionalData(machine, sequence, encryption.keyId));
+  const encrypted = Buffer.concat([cipher.update(payload), cipher.final()]);
+  return { payload: encrypted, encryption: { algorithm: 'aes-256-gcm', keyId: encryption.keyId, nonce: nonce.toString('base64url'), tag: cipher.getAuthTag().toString('base64url') } };
+}
+
+function decryptPayload(payload, header, keyProvider) {
+  const encryption = header.encryption;
+  if (encryption.algorithm === 'none') return payload;
+  const key = encryptionKey(keyProvider, encryption.keyId);
+  const nonce = envelopeBytes(encryption.nonce, 12, 'nonce');
+  const tag = envelopeBytes(encryption.tag, 16, 'tag');
+  try {
+    const decipher = createDecipheriv('aes-256-gcm', key, nonce, { authTagLength: 16 });
+    decipher.setAAD(packAdditionalData(header.machine, header.sequence, encryption.keyId));
+    decipher.setAuthTag(tag);
+    return Buffer.concat([decipher.update(payload), decipher.final()]);
+  } catch {
+    throw new CoreError(422, 'authentication_failed', 'The pack authentication failed.');
+  }
 }
 
 function assertArray(value, label) {

@@ -12,6 +12,7 @@ import { applyPack, recoverIncomingGroups } from '../sync/apply.mjs';
 import { openLedger } from '../sync/limits.mjs';
 import { closeOrigin, listMachineNames, openOrigin, readHead, readOriginPack, watchOrigin, writeDurable } from '../sync/origin.mjs';
 import { createPulse } from '../sync/pulse.mjs';
+import { createRelan } from '../relan/runtime.mjs';
 import { clearInboundFailure, openSync, readInboundFailure, recordInboundFailure } from '../sync/store.mjs';
 import { clientRecords, createNativeAdapter, ownsSessionExecution, probeClients } from './adapters.mjs';
 import { ownChildProcess } from './process-handle.mjs';
@@ -168,6 +169,7 @@ export async function startService(options, retained = null) {
       ledger: handle.runtime.ledger,
       sync: handle.runtime.sync,
       pulse: handle.runtime.pulse,
+      relanControl: input => controlRelan(handle.runtime, input),
       adapters: handle.adapters.adapters,
       wake: { ...options.wake,
         touch: binding => handle.adopted?.controller?.wake.touch(binding),
@@ -228,6 +230,10 @@ export async function startService(options, retained = null) {
 
 export async function runConfiguredService(options = {}) {
   const located = await readConfiguredMind(options);
+  // Codec support alone must not let a service without encrypted publication send plaintext.
+  if (located.config.encryption?.algorithm === 'aes-256-gcm' && located.config.origin.kind !== 'relan') {
+    throw new CoreError(503, 'encryption_unavailable', 'Encrypted service publication is not configured.');
+  }
   const platform = options.platform ?? process.platform;
   const paths = servicePaths({
     platform,
@@ -251,6 +257,7 @@ export async function runConfiguredService(options = {}) {
     store,
     paths,
     projects,
+    originKind: located.config.origin.kind,
     port: options.port ?? located.config.port,
     userKey: options.userKey,
     guardPort: options.guardPort,
@@ -674,6 +681,7 @@ export async function composeCore(options) {
     ledger: runtime.ledger,
     sync: runtime.sync,
     pulse: runtime.pulse,
+    relanControl: input => controlRelan(runtime, input),
     settingsOwner: runtime.settingsOwner,
     additionOwner: runtime.settingsOwner,
   });
@@ -857,9 +865,13 @@ async function openServiceSync(options, paths, { migrate = true } = {}) {
   await mkdir(path.join(paths.origin, 'machines'), { recursive: true });
   const now = options.now ?? (() => Date.now());
   const sync = openSync({ store: options.store, paths, now, projects: options.projects ?? [] });
-  const origin = openOrigin({ store: options.store, paths, now, machine: paths.machine });
+  let relan = null;
+  const usingRelan = options.originKind === 'relan';
+  const keyProvider = usingRelan ? keyId => relan?.keyProvider(keyId) ?? null : null;
+  const origin = openOrigin({ store: options.store, paths, now, machine: paths.machine, keyProvider });
   const ledger = openLedger({ store: options.store, paths, now, machine: paths.machine });
-  const pulse = createPulse({ sync, origin, ledger, now, setTimeout: quietTimer, clearTimeout });
+  const pulse = createPulse({ sync, origin, ledger, now, setTimeout: quietTimer, clearTimeout,
+    ...(usingRelan ? { encryption: () => relan.encryption(), keyProvider, ready: () => relan?.status().paired === true } : {}) });
   const runtime = {
     sync,
     origin,
@@ -883,6 +895,22 @@ async function openServiceSync(options, paths, { migrate = true } = {}) {
   if (migrate) await migrateClusters(runtime.settingsOwner);
   await refreshClusterProjects(runtime.settingsOwner);
   try {
+    if (usingRelan) {
+      relan = await createRelan({
+        ...options.relan,
+        origin, localDirectory: paths.localDirectory, machine: paths.machine, store: options.store,
+        aclRunner: options.aclRunner, now, startedAt: options.startedAt ?? now(),
+        onKey: () => {
+          if (runtime.closed) return;
+          runtime.startSync?.().then(() => pulse.resume()).catch(error => { runtime.lastError = error; });
+        },
+        onReplicated: () => {
+          if (!runtime.syncStarted) { runtime.originWaiting = true; return; }
+          return reconcileOrigin(runtime);
+        },
+      });
+      runtime.relan = relan;
+    }
     try {
       await recoverIncomingGroups(sync);
     } catch (error) {
@@ -892,10 +920,11 @@ async function openServiceSync(options, paths, { migrate = true } = {}) {
     // A service that answers first (deferSync) starts its first pass over the files, the publication of what is staged and the
     // settings report when the first view has been served, instead of before it listens: on a large M1ND those took the
     // start from seconds to tens of seconds. startSync is that start, and it runs once.
-    const defer = options.deferSync === true;
+    const defer = options.deferSync === true || usingRelan;
     runtime.unwatchProject = await watchLocalChanges(runtime, changes => emitObserved(runtime, changes), { deferBaseline: defer });
     runtime.syncStarted = false;
     runtime.startSync = () => {
+      if (usingRelan && !relan.status().paired) return Promise.resolve();
       runtime.syncStart ??= (async () => {
         try {
           if (runtime.closed) return;
@@ -916,8 +945,9 @@ async function openServiceSync(options, paths, { migrate = true } = {}) {
       })();
       return runtime.syncStart;
     };
-    if (!defer) await runtime.startSync();
+    if (options.deferSync !== true) await runtime.startSync();
     runtime.unwatch = watchOrigin(origin, () => {
+      relan?.wake();
       if (!runtime.syncStarted) {
         runtime.originWaiting = true;
         return;
@@ -931,6 +961,35 @@ async function openServiceSync(options, paths, { migrate = true } = {}) {
     await closeServiceSync(runtime, { beat: false });
     throw error;
   }
+}
+
+async function controlRelan(runtime, input) {
+  if (!runtime.relan) throw new CoreError(503, 'relan_unavailable', 'This service is not configured for ReLAN.');
+  const relan = runtime.relan;
+  if (input.action === 'status') return relan.status();
+  if (input.action === 'code') {
+    const pairing = await relan.showCode();
+    return { ...relan.status(), pairing };
+  }
+  if (input.action === 'peer-add' || input.action === 'peer-remove') {
+    if (typeof input.address !== 'string') throw new CoreError(422, 'invalid_body', 'The ReLAN peer address is required.');
+    if (input.action === 'peer-add') await relan.addPeer(input.address);
+    else await relan.removePeer(input.address);
+    return relan.status();
+  }
+  if (input.action === 'join') {
+    if (typeof input.code !== 'string') throw new CoreError(422, 'invalid_body', 'Joining ReLAN needs a code.');
+    if (input.host !== undefined && typeof input.host !== 'string') throw new CoreError(422, 'invalid_body', 'The ReLAN host address must be a string.');
+    if (input.host === undefined) await relan.join(input.code);
+    else await relan.join(input.code, { host: input.host });
+  } else if (input.action === 'host') await relan.host();
+  else if (input.action === 'leave') {
+    await runtime.pulse.flush();
+    return relan.leave();
+  } else throw new CoreError(422, 'invalid_body', 'The ReLAN action is not valid.');
+  await runtime.startSync();
+  await runtime.pulse.resume();
+  return relan.status();
 }
 
 async function publishServiceBeat(runtime, state, { settings = true } = {}) {
@@ -998,6 +1057,7 @@ async function closeServiceSync(runtime, { beat = true } = {}) {
     }
   }
   await runtime.pulse.close().done;
+  await runtime.relan?.close();
   await closeOrigin(runtime.origin);
 }
 
@@ -1059,6 +1119,7 @@ async function receiveOrigin(runtime) {
   const names = await listMachineNames(runtime.origin);
   const bindings = await ownerBindings(runtime.sync);
   const provider = {
+    keyProvider: runtime.origin.keyProvider,
     async readHead(machine) { return readHead(runtime.origin, machine); },
     async readPack(machine, sequence) { return readOriginPack(runtime.origin, machine, sequence); },
   };

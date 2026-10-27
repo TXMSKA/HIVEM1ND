@@ -6,8 +6,23 @@ import { assertNoLinks } from '../service/paths.mjs';
 import { decodePack, packFileName, validateHead } from './pack.mjs';
 
 const TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+const writers = new Map();
 
-export function openOrigin({ store, paths, now = () => Date.now(), machine } = {}) {
+// Publication and transport copies share a writer so an older head cannot replace a newer one.
+export async function withOriginWrite(directory, machine, run) {
+  const resolved = path.join(path.resolve(directory), 'machines', validateMachineName(machine));
+  const key = process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  const previous = writers.get(key) ?? Promise.resolve();
+  const pending = previous.catch(() => {}).then(run);
+  writers.set(key, pending);
+  try {
+    return await pending;
+  } finally {
+    if (writers.get(key) === pending) writers.delete(key);
+  }
+}
+
+export function openOrigin({ store, paths, now = () => Date.now(), machine, keyProvider = null } = {}) {
   if (!store || !paths?.origin || !paths?.localDirectory || !machine) {
     throw new CoreError(500, 'internal_error', 'An origin needs a store, a folder, and a machine.');
   }
@@ -16,6 +31,7 @@ export function openOrigin({ store, paths, now = () => Date.now(), machine } = {
     paths,
     now,
     machine: validateMachineName(machine),
+    keyProvider,
     fault: null,
     watchers: [],
     closeWatch: null,
@@ -23,6 +39,10 @@ export function openOrigin({ store, paths, now = () => Date.now(), machine } = {
 }
 
 export async function publishPack(origin, packBytes) {
+  return withOriginWrite(origin.paths.origin, origin.machine, () => publishPackLocked(origin, packBytes));
+}
+
+async function publishPackLocked(origin, packBytes) {
   const bytes = Buffer.isBuffer(packBytes) ? packBytes : Buffer.from(packBytes);
   const digest = hashBytes(bytes);
   const head = await readHead(origin, origin.machine);
@@ -40,7 +60,7 @@ export async function publishPack(origin, packBytes) {
   } else if (journal?.phase === 'committed' && journal.packHash === digest) {
     return { sequence: journal.sequence, hash: digest, bytes: bytes.length, replayed: true };
   }
-  const decoded = decodePack(bytes);
+  const decoded = decodePack(bytes, { keyProvider: origin.keyProvider });
   await validateProjectPublication(origin, decoded.changes);
   if (decoded.header.machine !== origin.machine) {
     throw new CoreError(422, 'invalid_record_owner', 'The pack machine does not match the origin.');

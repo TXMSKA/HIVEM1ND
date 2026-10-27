@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { formatBytes } from '../engine/measure.mjs';
 import { relayLine } from '../engine/texts.mjs';
 import { defaultMind, MIND_DIRECTORY_NAME } from '../engine/service/paths.mjs';
+import { parsePeerAddress } from '../engine/relan/addresses.mjs';
 
 const require = createRequire(import.meta.url);
 const VERSION = require("../package.json").version;
@@ -37,6 +38,8 @@ Usage:
   hivem1nd swarm [options]
   hivem1nd view [--project <name>] [options]
   hivem1nd relay <in|register|send|link|inbox|read|history|threads|status|events|reminder|delivery|mcp|hook|wake|configure|unconfigure|diagnose> [options]
+  hivem1nd relan <status|join <code>|host|leave> [options]
+  hivem1nd relan peer <add|remove> <address>[:port] [options]
   hivem1nd uninstall [--dry-run] [--remove-mind] [options]
   hivem1nd service <install|uninstall|status|run|launch> [--dry-run] [options]
   hivem1nd task status <project> <id> <status> [--note <text>]
@@ -50,6 +53,7 @@ Commands:
   swarm      Show units, tasks and unread messages
   view       Show chats, squads, what waits on the person, tasks, inbox and products
   relay     Send and read messages, link sessions in one thread, register sessions, or configure Relay clients
+  relan      Show the pairing code, join the private network, manage peers, host here, or leave
   uninstall  Remove what HIVEM1ND wrote on this machine
   service    Plan the user login service, or print its status
   task       Change a task status or undo the last change through the service
@@ -85,6 +89,8 @@ ${Object.values(WAKE_ADAPTERS).flatMap((adapter) => adapter.helpLines).map((line
 Init options:
   --gui                 Open the local browser wizard
   --resume              Continue the saved setup session
+  --join-code <code>     Join ReLAN directly from the terminal
+  --host <address>[:port] Contact this ReLAN host directly with --join-code
   --no-desktop-shortcut Do not add a shortcut to the desktop on Windows (the Start menu one stays)
   --language <en|es>    Start in English or Spanish
 
@@ -93,6 +99,11 @@ Evolve options:
   --conflict <path>=<keep|replace|omit>
                         Resolve a file or link conflict (repeatable)
 
+ReLAN options:
+  relan join <code> --host <address>[:port] Pair directly over a private network or tailnet
+  relan peer add|remove <address>[:port]   Manage local discovery peers (default port 43119)
+  --host <address>[:port]                 Host IPv4 address (default port 43120)
+
 Uninstall options:
   --dry-run             Report the plan without removing anything
   --remove-mind         Also delete the M1ND folder when it is safe to
@@ -100,7 +111,7 @@ Uninstall options:
 Service options:
   service install --dry-run    Print the login plan. This does not register a task.
   service launch               Open the app: start the service in the background when it is not running, then open the viewer. Prints nothing.
-  --origin-kind <folder|onedrive>
+  --origin-kind <folder|onedrive|relan|relay-plus>
   --origin-path <path>         Explicit origin folder
   --cosmic-path <path>         Cosmic parent. The M1ND folder ${MIND_DIRECTORY_NAME} is appended when no M1ND path is set.
 
@@ -139,6 +150,8 @@ const VALUE_FLAGS = new Map([
   ["--origin-kind", "originKind"],
   ["--origin-path", "originPath"],
   ["--cosmic-path", "cosmicPath"],
+  ["--join-code", "joinCode"],
+  ["--host", "host"],
 ]);
 
 const BOOLEAN_FLAGS = new Map([
@@ -156,7 +169,7 @@ const BOOLEAN_FLAGS = new Map([
 ]);
 
 const ALLOWED_FLAGS = {
-  init: new Set(["gui", "resume", "desktopShortcut", "language", "kitPath", "mindPath", "homeDir", "hostname", "originKind", "originPath", "cosmicPath"]),
+  init: new Set(["gui", "resume", "desktopShortcut", "language", "kitPath", "mindPath", "homeDir", "hostname", "originKind", "originPath", "cosmicPath", "joinCode", "host"]),
   evolve: new Set(["checkOnly", "conflicts", "json", "kitPath", "mindPath", "homeDir", "hostname", "originKind", "originPath", "cosmicPath", "dryRun"]),
   pylon: new Set(["state", "aiFiles", "aiTrailers", "environment", "json", "kitPath", "mindPath", "homeDir", "hostname"]),
   check: new Set(["json", "kitPath", "mindPath", "homeDir", "hostname"]),
@@ -168,6 +181,7 @@ const ALLOWED_FLAGS = {
 export function parseArgs(argv) {
   if (!Array.isArray(argv)) throw new CliUsageError("Arguments must be an array.");
   if (argv[0] === "relay") return parseRelayArgs(argv.slice(1));
+  if (argv[0] === "relan") return parseRelanArgs(argv.slice(1));
   if (argv[0] === "service") return parseServiceArgs(argv.slice(1));
   if (argv[0] === "task") return parseTaskArgs(argv.slice(1));
   if (argv.length === 0) return { help: true };
@@ -229,6 +243,15 @@ export function parseArgs(argv) {
     throw new CliUsageError("--state must be branch or main.");
   }
   if (options.checkOnly && options.conflicts) throw new CliUsageError("--conflict cannot be used with --check-only.");
+  if (options.joinCode) {
+    validateRelanCode(options.joinCode);
+    if (options.gui || options.resume) throw new CliUsageError("--join-code cannot be used with --gui or --resume.");
+    if (options.originKind && options.originKind !== "relan") throw new CliUsageError("--join-code requires the relan origin kind.");
+  }
+  if (options.host) {
+    if (!options.joinCode) throw new CliUsageError("--host requires --join-code.");
+    validateRelanAddress(options.host, 43120);
+  }
   if (command === "pylon") {
     if (positional.length !== 1) throw new CliUsageError("pylon requires exactly one repository path.");
     options.repoPath = positional[0];
@@ -269,10 +292,58 @@ function parseServiceArgs(tokens) {
     if (token.startsWith("-")) throw new CliUsageError(`Unknown option: ${token}`);
     throw new CliUsageError("service does not accept positional arguments.");
   }
-  if (options.originKind && !["folder", "onedrive"].includes(options.originKind)) {
-    throw new CliUsageError("--origin-kind must be folder or onedrive.");
+  if (options.originKind && !["folder", "onedrive", "relan", "relay-plus"].includes(options.originKind)) {
+    throw new CliUsageError("--origin-kind must be folder, onedrive, relan or relay-plus.");
   }
   return { command: "service", options };
+}
+
+function validateRelanCode(code) {
+  if (!/^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{6}$/i.test(code)) throw new CliUsageError("ReLAN requires a six-character pairing code.");
+}
+
+function validateRelanAddress(value, port) {
+  try { parsePeerAddress(value, port); }
+  catch (error) { throw new CliUsageError(error.message); }
+}
+
+function parseRelanArgs(tokens) {
+  const action = tokens[0];
+  if (!action || ["--help", "-h"].includes(action)) return { command: "relan", help: true };
+  if (!["status", "join", "host", "leave", "peer"].includes(action)) throw new CliUsageError("relan requires status, join, host, leave or peer.");
+  const options = { action };
+  const positional = [];
+  for (let index = 1; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (["--help", "-h"].includes(token)) return { command: "relan", help: true };
+    if (VALUE_FLAGS.has(token)) {
+      const key = VALUE_FLAGS.get(token);
+      if (!["mindPath", "homeDir", "hostname", "cosmicPath", "host"].includes(key)) throw new CliUsageError(`${token} is not valid for relan.`);
+      if (key === "host" && action !== "join") throw new CliUsageError("--host requires relan join.");
+      if (Object.hasOwn(options, key)) throw new CliUsageError(`${token} was provided more than once.`);
+      const value = tokens[index + 1];
+      if (!value || value.startsWith("-")) throw new CliUsageError(`${token} requires a value.`);
+      options[key] = value;
+      index += 1;
+    } else if (token === "--json") {
+      if (options.json) throw new CliUsageError("--json was provided more than once.");
+      options.json = true;
+    } else if (token.startsWith("-")) {
+      throw new CliUsageError(`Unknown option: ${token}`);
+    } else positional.push(token);
+  }
+  if (action === "join") {
+    if (positional.length !== 1) throw new CliUsageError("relan join requires one pairing code.");
+    validateRelanCode(positional[0]);
+    options.code = positional[0].toUpperCase();
+    if (options.host) validateRelanAddress(options.host, 43120);
+  } else if (action === "peer") {
+    if (positional.length !== 2 || !["add", "remove"].includes(positional[0])) throw new CliUsageError("relan peer requires add or remove and one address.");
+    validateRelanAddress(positional[1], 43119);
+    options.action = `peer-${positional[0]}`;
+    options.address = positional[1];
+  } else if (positional.length) throw new CliUsageError(`relan ${action} does not accept positional arguments.`);
+  return { command: "relan", options };
 }
 
 function parseTaskArgs(tokens) {
@@ -1010,6 +1081,10 @@ async function waitForServer(server, output) {
 }
 
 async function runInit(options, dependencies, output) {
+  if (options.joinCode) {
+    const { initializeRelan } = await import("../engine/relan/cli.mjs");
+    return initializeRelan(options, dependencies, output);
+  }
   if (options.gui) {
     const { createWizardServer } = dependencies.wizard ?? await import("../gui/server.mjs");
     const server = await createWizardServer({
@@ -1653,6 +1728,9 @@ export async function runCli(argv, dependencies = {}) {
       return await runUninstall(parsed.options, dependencies, output);
     } else if (parsed.command === "relay") {
       return await runRelay(parsed.options, dependencies, output);
+    } else if (parsed.command === "relan") {
+      const { runRelanCommand } = await import("../engine/relan/cli.mjs");
+      return await runRelanCommand(parsed.options, dependencies, output);
     } else {
       return await runLifecycle(parsed.command, parsed.options, dependencies, output);
     }

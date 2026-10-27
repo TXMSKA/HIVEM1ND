@@ -359,15 +359,27 @@ export function bootstrapConfig(config) {
   if (config.startWithWindows !== undefined && typeof config.startWithWindows !== 'boolean') {
     fail(422, 'invalid_body', 'startWithWindows must be a boolean.');
   }
-  if (config.encryption || config.preset === 'quantum' || config.quantum || config.algorithm) {
+  if (config.preset === 'quantum' || config.quantum || config.algorithm) {
     fail(422, 'unsupported_origin', 'Unsupported encryption is refused.');
+  }
+  let encryption;
+  if (config.encryption !== undefined) {
+    const requested = config.encryption;
+    if (!requested || typeof requested !== 'object' || Array.isArray(requested)) fail(422, 'invalid_body', 'The encryption configuration is not valid.');
+    if (requested.algorithm !== 'none' && requested.algorithm !== 'aes-256-gcm') fail(422, 'unsupported_origin', 'The encryption algorithm is not supported.');
+    const keys = requested.algorithm === 'none' ? ['algorithm'] : ['algorithm', 'keyId'];
+    if (Object.keys(requested).sort().join(',') !== keys.join(',')) fail(422, 'invalid_body', 'The encryption configuration is not valid.');
+    if (requested.algorithm === 'aes-256-gcm' && (typeof requested.keyId !== 'string' || requested.keyId.length < 1
+      || requested.keyId.length > 256 || /[\r\n\u0000]/.test(requested.keyId)
+      || Buffer.from(requested.keyId, 'utf8').toString('utf8') !== requested.keyId)) fail(422, 'invalid_body', 'The encryption key id is not valid.');
+    encryption = requested.algorithm === 'none' ? { algorithm: 'none' } : { algorithm: 'aes-256-gcm', keyId: requested.keyId };
   }
   if (!config.mindPath || !config.stagingPath) fail(422, 'invalid_body', 'Config needs a mind and a staging path.');
   if (!config.machine) fail(422, 'invalid_body', 'Config needs a machine.');
   assertLegacyWakeClosure(config.mindPath, config.machine);
   const origin = config.origin ?? { kind: 'folder', path: config.originPath };
-  if (!origin?.path || (origin.kind !== 'folder' && origin.kind !== 'onedrive')) {
-    fail(422, 'invalid_body', 'Config needs a folder or OneDrive origin.');
+  if (!origin?.path || !['folder', 'onedrive', 'relan', 'relay-plus'].includes(origin.kind)) {
+    fail(422, 'invalid_body', 'Config needs a supported origin and a local folder path.');
   }
   if (isInside(config.mindPath, config.stagingPath) || isInside(config.stagingPath, config.mindPath)) {
     fail(422, 'invalid_path', 'Staging cannot sit inside the mind.');
@@ -383,6 +395,7 @@ export function bootstrapConfig(config) {
     mindPath: path.resolve(config.mindPath),
     machine: config.machine,
     origin: { kind: origin.kind, path: path.resolve(origin.path) },
+    ...(encryption ? { encryption } : {}),
     stagingPath: path.resolve(config.stagingPath),
     port: 0,
     startWithWindows: config.startWithWindows ?? false,
@@ -514,7 +527,7 @@ export async function configureOwnedService(options = {}) {
     kind: options.originKind ?? 'folder',
     path: options.originPath ?? path.join(cosmic, 'hivem1nd-origin', mindKey),
   };
-  const config = bootstrapConfig({ mindPath, machine, origin, stagingPath,
+  const config = bootstrapConfig({ mindPath, machine, origin, stagingPath, encryption: existing?.encryption,
     startWithWindows: Object.hasOwn(options, 'startWithWindows') ? options.startWithWindows : existing?.startWithWindows ?? false,
     syncedRoots: options.syncedRoots ?? oneDriveRoots({ platform, env }) });
   const registration = {

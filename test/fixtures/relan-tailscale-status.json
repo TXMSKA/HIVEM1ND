@@ -1,0 +1,13 @@
+{
+  "BackendState": "Running",
+  "TailscaleIPs": ["100.64.0.1", "fd7a:115c:a1e0::1"],
+  "Self": { "Online": true, "TailscaleIPs": ["100.64.0.1"] },
+  "Peer": {
+    "online-a": { "Online": true, "TailscaleIPs": ["100.64.0.2", "fd7a:115c:a1e0::2"] },
+    "online-b": { "Online": true, "TailscaleIPs": ["100.127.255.254", "100.64.0.2"] },
+    "offline": { "Online": false, "TailscaleIPs": ["100.64.0.3"] },
+    "public": { "Online": true, "TailscaleIPs": ["8.8.8.8", "0.0.0.0", "100.128.0.1", "100.63.255.255"] },
+    "malformed": { "Online": true, "TailscaleIPs": ["100.64.0.4:5000", "127.0.0.1", null, 123] },
+    "unknown-state": { "TailscaleIPs": ["100.64.0.5"] }
+  }
+}
