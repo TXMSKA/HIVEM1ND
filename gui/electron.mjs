@@ -1,4 +1,5 @@
 import os from "node:os";
+import { lstat } from "node:fs/promises";
 import path from "node:path";
 import { createWizardServer } from "./server.mjs";
 import { defaultMind } from '../engine/service/paths.mjs';
@@ -48,6 +49,16 @@ export function parseElectronOptions(argv, homeDir, env = process.env) {
   return options;
 }
 
+export function electronCliArgs(argv, { isPackaged = false, kitPath, platform = process.platform } = {}) {
+  if (!Array.isArray(argv) || typeof kitPath !== 'string') return null;
+  const args = argv.slice(isPackaged ? 1 : 2);
+  const paths = platform === 'win32' ? path.win32 : path.posix;
+  if (typeof args[0] !== 'string' || !paths.isAbsolute(args[0]) || !paths.isAbsolute(kitPath)) return null;
+  const normalize = value => platform === 'win32' ? paths.resolve(value).toLowerCase() : paths.resolve(value);
+  if (normalize(args[0]) !== normalize(paths.join(kitPath, 'cli', 'index.mjs'))) return null;
+  return args.slice(1);
+}
+
 export function createWindowOptions(icon, preload) {
   return {
     width: 1440,
@@ -58,9 +69,9 @@ export function createWindowOptions(icon, preload) {
     resizable: true,
     maximizable: true,
     fullscreenable: false,
-    backgroundColor: "#0f0b13",
+    backgroundColor: "#07040a",
     show: false,
-    title: "HIVEM1ND setup",
+    title: "ONEM1ND setup",
     ...(icon ? { icon } : {}),
     autoHideMenuBar: true,
     webPreferences: { ...secureWebPreferences, ...(preload ? { preload } : {}) },
@@ -82,10 +93,33 @@ export function externalLink(value) {
 export async function startElectronApp(electron, argv = process.argv.slice(2), dependencies = {}) {
   const { app, BrowserWindow, dialog, ipcMain, session, shell } = electron;
   const launchOptions = parseElectronOptions(argv, app.getPath("home"));
+  launchOptions.kitPath ??= app.getAppPath();
   if (launchOptions.userDataDir) app.setPath("userData", launchOptions.userDataDir);
+  else if (app.setPath) {
+    for (const directory of ['HIVEM1ND', 'hivem1nd']) { // Compatibility: retain an existing Electron profile and its stored viewer preferences.
+      const candidate = path.join(app.getPath('appData'), directory);
+      const state = await lstat(candidate).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+      if (!state?.isDirectory() || state.isSymbolicLink()) continue;
+      app.setPath('userData', candidate);
+      break;
+    }
+  }
   if (!app.requestSingleInstanceLock()) {
     app.quit();
     return;
+  }
+  if (dependencies.upgrade) {
+    const migrated = await dependencies.upgrade(launchOptions);
+    for (const key of ['mindPath', 'kitPath']) {
+      if (!launchOptions[key]) continue;
+      const target = path.resolve(launchOptions[key]);
+      for (const move of migrated?.relocatedPaths ?? []) {
+        const relative = path.relative(path.resolve(move.source), target);
+        if (relative !== '' && (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))) continue;
+        launchOptions[key] = path.join(move.destination, relative);
+        break;
+      }
+    }
   }
 
   let wizard;
@@ -148,8 +182,8 @@ export async function startElectronApp(electron, argv = process.argv.slice(2), d
     }
 
     const createdWindow = new BrowserWindow(createWindowOptions(
-      path.join(app.getAppPath(), "assets", "installer.ico"),
-      path.join(app.getAppPath(), "gui", "preload.cjs"),
+      path.join(launchOptions.kitPath, "assets", "installer.ico"),
+      path.join(launchOptions.kitPath, "gui", "preload.cjs"),
     ));
     window = createdWindow;
     const allowedOrigin = wizard.origin;
@@ -191,19 +225,19 @@ export async function startElectronApp(electron, argv = process.argv.slice(2), d
     return createdWindow;
   };
 
-  ipcMain.handle("hivem1nd:browse-folder", async (event) => {
+  ipcMain.handle("hivem1nd:browse-folder", async (event) => { // Compatibility: retain the preload IPC channel identity.
     const owner = BrowserWindow.fromWebContents(event.sender);
     const result = await dialog.showOpenDialog(owner, { properties: ["openDirectory"] });
     return result.canceled || !result.filePaths[0] ? null : result.filePaths[0];
   });
-  ipcMain.handle('hivem1nd:service-status', async event => {
+  ipcMain.handle('hivem1nd:service-status', async event => { // Compatibility: retain the preload IPC channel identity.
     viewerFrame(event);
-    if (!viewerHost) throw new Error('Reopen HIVEM1ND using its local launcher.');
+    if (!viewerHost) throw new Error('Reopen ONEM1ND using its local launcher.');
     return viewerHost.serviceStatus();
   });
-  ipcMain.handle('hivem1nd:recover-service', async event => {
+  ipcMain.handle('hivem1nd:recover-service', async event => { // Compatibility: retain the preload IPC channel identity.
     viewerFrame(event);
-    if (!viewerHost) throw new Error('Reopen HIVEM1ND using its local launcher.');
+    if (!viewerHost) throw new Error('Reopen ONEM1ND using its local launcher.');
     return viewerHost.recover();
   });
 
@@ -228,8 +262,24 @@ export async function startElectronApp(electron, argv = process.argv.slice(2), d
 if (process.versions.electron && process.type === "browser") {
   const electron = await import("electron");
   const argv = electron.app.isPackaged ? process.argv.slice(1) : process.argv.slice(2);
-  void startElectronApp(electron, argv).catch((error) => {
-    console.error("HIVEM1ND failed to start:", error);
+  const failLaunch = error => {
+    console.error("ONEM1ND failed to start:", error);
     electron.app.exit(1);
-  });
+  };
+  try {
+    const cliArgs = electronCliArgs(process.argv, { isPackaged: electron.app.isPackaged, kitPath: electron.app.getAppPath() });
+    if (cliArgs) {
+      const { runCli } = await import('../cli/index.mjs');
+      electron.app.exit(await runCli(cliArgs, { upgrade: true }));
+    } else {
+      void startElectronApp(electron, argv, {
+        async upgrade(options) {
+          const { migrate } = await import('../migrations/3.0.0-onem1nd.mjs');
+          return migrate({ platform: process.platform, env: process.env, homeDir: options.homeDir, kitPath: options.kitPath, nodePath: process.execPath });
+        }
+      }).catch(failLaunch);
+    }
+  } catch (error) {
+    failLaunch(error);
+  }
 }

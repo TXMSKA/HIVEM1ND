@@ -5,13 +5,13 @@
 
 :root {
   color-scheme: dark;
-  --bg: #0f0b13; --panel: #18121d; --card: #211a27; --card2: #2b2232;
-  --line: rgba(236,230,218,0.08); --line2: rgba(236,230,218,0.15);
-  --text: #f5f1f6; --body: #d4ccd8; --muted: #aa9fb1;
-  --accent: #bdcd79; --accent-hover: #cddb8d; --accent-press: #a9b968; --accent-ink: #1b200b; --mark-purple: #81648c;
-  --waiting-soft: rgba(230,192,111,0.12); --working: #8fd19e;
-  --error: #e58e7c; --error-soft: rgba(229,142,124,0.12); --error-ink: #1d0b08;
-  --scrim: rgba(4,2,6,0.62);
+  --bg: #07040a; --panel: #110a0e; --card: #1a0e14; --card2: #23131b;
+  --line: rgba(255,45,85,0.10); --line2: rgba(255,45,85,0.22);
+  --text: #f3e6ea; --body: #d9c4ca; --muted: #b3949b;
+  --accent: #ff2d55; --accent-hover: #ff5274; --accent-press: #e0103a; --accent-ink: #07040a; --mark-purple: #a30c2c;
+  --waiting-soft: rgba(255,46,136,0.12); --working: #ff2d55;
+  --error: #ffb347; --error-soft: rgba(255,179,71,0.12); --error-ink: #1d1004;
+  --scrim: rgba(3,1,4,0.66);
   --font: "Atkinson Hyperlegible", system-ui, sans-serif;
   font-family: var(--font);
 }
@@ -52,8 +52,8 @@ h1 { margin: 0; font-size: 24px; font-weight: 700; line-height: 1.2; }
 .button:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
 .button:active:not(:disabled) { background: var(--accent-press); border-color: var(--accent-press); }
 .button.secondary, .button.ghost { color: var(--body); background: transparent; border-color: var(--line2); font-weight: 600; }
-.button.secondary:hover:not(:disabled), .button.ghost:hover:not(:disabled) { color: var(--text); background: rgba(189,205,121,0.12); border-color: var(--accent); }
-.button.secondary:active:not(:disabled), .button.ghost:active:not(:disabled) { background: rgba(189,205,121,0.22); border-color: var(--accent-press); }
+.button.secondary:hover:not(:disabled), .button.ghost:hover:not(:disabled) { color: var(--text); background: rgba(255,45,85,0.12); border-color: var(--accent); }
+.button.secondary:active:not(:disabled), .button.ghost:active:not(:disabled) { background: rgba(255,45,85,0.22); border-color: var(--accent-press); }
 .button svg { width: 14px; height: 14px; }
 .button-spinner { animation: spin 1s linear infinite; }
 .setup-bullets { display: grid; gap: 12px; }

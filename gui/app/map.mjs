@@ -145,6 +145,9 @@ export function renderMap(document, host, map, labels = {}) {
   }
   const zones = personalZones(map);
   const zoom = map.view.zoom;
+  // The hexagonal ground moves and scales with the camera, so the graph reads as lying on it.
+  host.style?.setProperty?.("--map-grid-size", `${HEX_W * zoom}px ${HEX_H * zoom}px`);
+  host.style?.setProperty?.("--map-grid-position", `${map.view.x}px ${map.view.y}px`);
   const measure = labelMeasure(map, document, host);
   // A folded cluster says its count in the badge, so its title carries none.
   const titleOf = (zone) => displayName(zone.group.title) + (zone.count && !zone.collapsed ? `, ${zone.count}` : '');
@@ -293,11 +296,16 @@ export function renderMap(document, host, map, labels = {}) {
     button.style.left = `${screen.x - rect.left}px`;
     button.style.top = `${screen.y - rect.top}px`;
     button.style.width = button.style.height = `${size}px`;
+    const lift = liftAmount(map, node.id);
+    if (lift > 0) {
+      button.style.transform = `scale(${1 - LIFT_SHRINK * lift})`;
+      button.style.opacity = String(1 - LIFT_FADE * lift);
+    }
     button.style.marginLeft = button.style.marginTop = `${-size / 2}px`;
     button.setAttribute("aria-label", node.label);
     const selected = map.selection.has(node.id);
     const connecting = map.pendingConnect;
-    button.className = ["map-node", node.person ? "is-person" : "", node.overseer ? "is-overseer" : "", node.lead ? "is-lead" : "", selected ? "is-selected" : "", picked(node.id) ? "is-picked" : "",
+    button.className = ["map-node", node.person ? "is-person" : "", node.overseer ? "is-overseer" : "", node.lead ? "is-lead" : "", selected ? "is-selected" : "", picked(node.id) ? "is-picked" : "", liftAmount(map, node.id) > 0 ? "is-lifted" : "",
       connecting?.source === node.id ? "is-connecting" : "", connecting?.target === node.id ? "is-drop-target" : "", connecting?.invalid === node.id ? "is-drop-invalid" : ""].filter(Boolean).join(" ");
     button.setAttribute("aria-pressed", String(selected));
     button.setAttribute("data-role", node.role);
@@ -555,6 +563,8 @@ export function pointerMove(map, event) {
   if (gesture.kind !== "connect") {
     const distance = Math.hypot(event.clientX - gesture.originClient.x, event.clientY - gesture.originClient.y);
     if (!gesture.dragging && distance < 4) return;
+    if (!gesture.dragging && gesture.kind === "move") liftNodes(map, gesture.ids);
+    if (!gesture.dragging && gesture.kind === "cluster") liftNodes(map, clusterSubtree(map, gesture.id));
     gesture.dragging = true;
     // A view the person has moved, or a graph they have rearranged, is no longer the fitted one.
     if (gesture.kind === "pan" || gesture.kind === "cluster" || gesture.kind === "move") map.autoFit = false;
@@ -663,6 +673,7 @@ export function pointerUp(map, event) {
   if (gesture.kind === "move" && gesture.dragging) commitNodeMoves(map, gesture.ids, gesture.baselines);
   if (gesture.kind === "connect" && map.pendingConnect?.target) map.onConnect?.(map.pendingConnect);
   map.gesture = null;
+  dropNodes(map);
   refresh(map);
 }
 
@@ -680,6 +691,7 @@ export function cancelGesture(map) {
     map.view.y = gesture.originView.y;
   }
   map.gesture = null;
+  dropNodes(map);
   refresh(map);
 }
 
@@ -1125,6 +1137,59 @@ function bindMap(host, map) {
     wheelZoom(map, event, hostRect(host));
     refresh(map);
   });
+}
+
+// A grabbed node is lifted: it shrinks slightly and turns translucent while it is held, and settles back when dropped.
+const LIFT_MS = 140;
+const LIFT_SHRINK = 0.08;
+const LIFT_FADE = 0.3;
+// One cell of the hexagonal ground, in world units.
+const HEX_W = 51;
+const HEX_H = 29.445;
+
+function clock(map) {
+  return map.document?.defaultView?.performance?.now?.() ?? Date.now();
+}
+
+function liftMotion(map) {
+  const view = map.document?.defaultView;
+  return !map.reducedMotion && !view?.matchMedia?.("(prefers-reduced-motion: reduce)").matches && Boolean(view?.requestAnimationFrame);
+}
+
+function liftAmount(map, id) {
+  const lift = map.lift;
+  if (!lift || !lift.ids.has(id)) return 0;
+  const done = liftMotion(map) ? Math.min(1, (clock(map) - (lift.end ?? lift.start)) / LIFT_MS) : 1;
+  const eased = 1 - (1 - done) ** 3;
+  return lift.end == null ? eased : 1 - eased;
+}
+
+function animateLift(map) {
+  if (!liftMotion(map)) {
+    if (map.lift?.end != null) map.lift = null;
+    return;
+  }
+  const view = map.document.defaultView;
+  const lift = map.lift;
+  const step = () => {
+    if (map.lift !== lift || map.disposed) return;
+    const settled = clock(map) - (lift.end ?? lift.start) >= LIFT_MS;
+    if (settled && lift.end != null) map.lift = null;
+    refresh(map);
+    if (!settled) view.requestAnimationFrame(step);
+  };
+  view.requestAnimationFrame(step);
+}
+
+function liftNodes(map, ids) {
+  map.lift = { ids: new Set(ids), start: clock(map), end: null };
+  animateLift(map);
+}
+
+function dropNodes(map) {
+  if (!map.lift || map.lift.end != null) return;
+  map.lift.end = clock(map);
+  animateLift(map);
 }
 
 function refresh(map) {

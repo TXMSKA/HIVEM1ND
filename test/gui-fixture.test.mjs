@@ -212,7 +212,7 @@ test("reads use the contract envelope, real revisions, and malformed-record issu
   const fixture = await open(context);
   const view = await request(fixture, "GET", "/api/v1/view");
   assert.equal(view.status, 200);
-  assert.equal(view.body.contract, "hivem1nd-gui-v3");
+  assert.equal(view.body.contract, "hivem1nd-gui-v3"); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   assert.match(view.body.meta.requestId, /^[0-9a-f-]{36}$/);
   assert.match(view.body.meta.readAt, /Z$/);
   assert.match(view.body.meta.eventCursor, /:/);
@@ -226,7 +226,7 @@ test("reads use the contract envelope, real revisions, and malformed-record issu
   assert.equal(partial.revision, null);
   assert.equal(partial.status, "unknown");
   const layout = await request(fixture, "GET", "/api/v1/layout");
-  const bytes = await readFile(path.join(fixture.root, "Cosmic", "hivem1nd", "user", "gui", "layout.json"));
+  const bytes = await readFile(path.join(fixture.root, "Cosmic", "onem1nd", "user", "gui", "layout.json"));
   assert.equal(layout.body.data.revision, sha256(bytes));
   const shell = await fetch(`${fixture.origin}/app/main.mjs`);
   assert.equal(shell.status, 200);
@@ -235,7 +235,7 @@ test("reads use the contract envelope, real revisions, and malformed-record issu
   assert.equal(icon.status, 200);
   assert.match(icon.headers.get("content-type") ?? "", /^image\/svg\+xml/);
   const iconText = await icon.text();
-  assert.equal(iconText.includes("#bdcd79"), true);
+  assert.equal(iconText.includes("#ff2d55"), true);
   assert.equal(iconText.includes("data:"), false);
   const page = await fetch(`${fixture.origin}/`);
   const pageText = await page.text();
@@ -286,7 +286,7 @@ test("the same idempotency key cannot commit two resources", async (context) => 
 
 test("a stale layout write leaves the file unchanged", async (context) => {
   const fixture = await open(context);
-  const file = path.join(fixture.root, "Cosmic", "hivem1nd", "user", "gui", "layout.json");
+  const file = path.join(fixture.root, "Cosmic", "onem1nd", "user", "gui", "layout.json");
   const before = sha256(await readFile(file));
   const stale = await request(fixture, "PATCH", "/api/v1/layout", {
     key: randomUUID(),
@@ -305,7 +305,7 @@ test("a stale layout write leaves the file unchanged", async (context) => {
 
 test("mailbox detail does not archive the message", async (context) => {
   const fixture = await open(context);
-  const inbox = path.join(fixture.root, "Cosmic", "hivem1nd", "user", "inbox", "master");
+  const inbox = path.join(fixture.root, "Cosmic", "onem1nd", "user", "inbox", "master");
   const before = await readdir(inbox);
   const list = await request(fixture, "GET", "/api/v1/mailboxes/root%3Amaster/messages?state=unread");
   const message = list.body.data.items[0];
@@ -356,7 +356,7 @@ test("a committed layout event is visible on the desktop stream", async (context
     assert.equal(chunk.done, false);
     text += decoder.decode(chunk.value, { stream: true });
   }
-  assert.match(text, /hivem1nd-events-v3/);
+  assert.match(text, /hivem1nd-events-v3/); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   await reader.cancel();
 });
 
@@ -401,7 +401,7 @@ test("a crash before the receipt is recovered once for the same principal", asyn
   assert.equal(records.length, 1);
   const receipts = (await filesUnder(fixture.root)).filter((file) => file.includes(`${path.sep}receipts${path.sep}`) && file.endsWith(".json"));
   assert.equal(receipts.length, 1);
-  const layout = JSON.parse(await readFile(path.join(fixture.root, "Cosmic", "hivem1nd", "user", "gui", "layout.json"), "utf8"));
+  const layout = JSON.parse(await readFile(path.join(fixture.root, "Cosmic", "onem1nd", "user", "gui", "layout.json"), "utf8"));
   assert.equal(layout.nodes["root:master"].x, 410);
 });
 
@@ -412,7 +412,7 @@ test("a third hash during recovery is a fixture journal conflict", async (contex
   const body = { nodes: { "root:overseer": { x: 20, y: 30 } }, expectedRevision: current.body.data.revision };
   fixture.control.setFault({ method: "PATCH", path: "/api/v1/layout", crashAfterDataBeforeReceipt: true });
   await assert.rejects(() => request(fixture, "PATCH", "/api/v1/layout", { key, body }));
-  const layoutFile = path.join(fixture.root, "Cosmic", "hivem1nd", "user", "gui", "layout.json");
+  const layoutFile = path.join(fixture.root, "Cosmic", "onem1nd", "user", "gui", "layout.json");
   await writeFile(layoutFile, `${await readFile(layoutFile, "utf8")}\n`);
   await assert.rejects(() => fixture.control.restart(), /Fixture journal conflict/);
 });
@@ -612,7 +612,7 @@ test("the fixture command prints only its origin and stores viewer links private
   });
   assert.equal(output.includes("session="), false);
   assert.equal(output.includes(FIXTURE_HOME_KEY), false);
-  const directories = (await readdir(os.tmpdir())).filter((name) => name.startsWith("hivem1nd-gui-"));
+  const directories = (await readdir(os.tmpdir())).filter((name) => name.startsWith("onem1nd-gui-"));
   let links = null;
   for (const name of directories) {
     const candidate = path.join(os.tmpdir(), name, "links.json");
