@@ -9,7 +9,7 @@ import test from 'node:test';
 import { createRelay } from '../engine/relay/store.mjs';
 
 async function fixture(context) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-relay-speed-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-relay-speed-'));
   context.after(() => rm(root, { recursive: true, force: true }));
   const mind = path.join(root, 'mind');
   await mkdir(path.join(mind, 'user', 'state'), { recursive: true });

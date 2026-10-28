@@ -43,7 +43,7 @@ test('Electron recovery accepts only the verified main viewer frame and preload 
     async createWizardServer({ sessionOptions }) { await sessionOptions.serviceStart({}); return { url: 'http://127.0.0.1:12345/', origin: 'http://127.0.0.1:12345', async close() {} }; },
   });
   const window = windows[0];
-  const invoke = handlers.get('hivem1nd:recover-service');
+  const invoke = handlers.get('hivem1nd:recover-service'); // Compatibility: browser storage and desktop bridge names remain stable.
   const event = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
   await assert.rejects(invoke(event), /verified local Map/);
   const navigate = (url) => { let blocked = false; window.webContents.emit('will-navigate', { preventDefault() { blocked = true; } }, url); return blocked; };
@@ -52,7 +52,7 @@ test('Electron recovery accepts only the verified main viewer frame and preload 
   window.webContents.mainFrame.url = viewerUrl;
   await assert.rejects(invoke({ ...event, senderFrame: { url: viewerUrl } }), /verified local Map/);
   await assert.rejects(invoke({ ...event, sender: {} }), /verified local Map/);
-  assert.equal((await handlers.get('hivem1nd:service-status')(event)).state, 'stopped');
+  assert.equal((await handlers.get('hivem1nd:service-status')(event)).state, 'stopped'); // Compatibility: browser storage and desktop bridge names remain stable.
   assert.equal((await invoke(event)).viewerId, 'renewed');
   assert.equal(recovered, 1);
   // From the Map, a plain web link leaves for the system browser while the window stays.
@@ -62,7 +62,7 @@ test('Electron recovery accepts only the verified main viewer frame and preload 
   assert.deepEqual(window.openHandler({ url: 'mailto:a@example.test' }), { action: 'deny' });
   assert.deepEqual(opened, ['https://example.test/doc?q=1', 'http://example.test/new']);
   const preload = await readFile(new URL('../gui/preload.cjs', import.meta.url), 'utf8');
-  assert.match(preload, /recoverService: \(\) => ipcRenderer.invoke\('hivem1nd:recover-service'\)/);
+  assert.match(preload, /recoverService: \(\) => ipcRenderer.invoke\('hivem1nd:recover-service'\)/); // Compatibility: browser storage and desktop bridge names remain stable.
   assert.doesNotMatch(preload, /postMessage|localStorage|sessionStorage|console\.|exec|spawn/);
 });
 
@@ -112,8 +112,8 @@ test("parser rejects conflicting and repeated boolean options", () => {
 
 test("lifecycle receives isolated paths and injected environment", async () => {
   const output = sink();
-  const scratch = path.join(os.tmpdir(), "hivem1nd-interface-test");
-  const env = { HIVEM1ND_TEST: "1" };
+  const scratch = path.join(os.tmpdir(), "onem1nd-interface-test");
+  const env = { ONEM1ND_TEST: "1" };
   let received;
   const code = await runCli(["swarm", "--home-dir", scratch, "--mind-path", scratch, "--hostname", "TEST"], {
     stdout: output.stream,
@@ -137,14 +137,14 @@ test("lifecycle receives isolated paths and injected environment", async () => {
 });
 
 test("Electron defaults stay inside the selected test home", () => {
-  const testHome = path.join(os.tmpdir(), "hivem1nd-electron-home");
-  const overrideHome = path.join(os.tmpdir(), "hivem1nd-electron-override");
+  const testHome = path.join(os.tmpdir(), "onem1nd-electron-home");
+  const overrideHome = path.join(os.tmpdir(), "onem1nd-electron-override");
   const expected = (home) => defaultMind({ platform: process.platform, env: {}, home });
   assert.equal(parseElectronOptions([], testHome, {}).mindPath, expected(testHome));
   const options = parseElectronOptions(["--home-dir", overrideHome], testHome, {});
   assert.equal(options.homeDir, path.resolve(overrideHome));
   assert.equal(options.mindPath, expected(path.resolve(overrideHome)));
-  const userData = path.join(os.tmpdir(), "hivem1nd-electron-profile");
+  const userData = path.join(os.tmpdir(), "onem1nd-electron-profile");
   assert.equal(parseElectronOptions(['--user-data-dir=' + userData], testHome, {}).userDataDir, path.resolve(userData));
   const selected = path.join(testHome, 'explicit');
   assert.equal(parseElectronOptions(['--mind-path', selected], testHome, {}).mindPath, path.resolve(selected));
@@ -247,10 +247,10 @@ test("Electron shows the window after the local wizard finishes loading", async 
 
 test("terminal setup renders descriptors and installs only after preview", async () => {
   const steps = [
- {id:'install',number:1,total:4,language:'es',title:'Instalar HIVEM1ND',fields:[],values:{}},
+ {id:'install',number:1,total:4,language:'es',title:'Instalar ONEM1ND',fields:[],values:{}},
  {id:'location',number:2,total:4,language:'es',title:'Dónde se guarda la M1ND',fields:[{id:'mindPath',type:'text',label:'Carpeta',required:true}],values:{mindPath:'C:/fixture/M1ND'}},
  {id:'service',number:3,total:4,language:'es',title:'Iniciando el servicio Relay',fields:[],values:{}},
- {id:'ready',number:4,total:4,language:'es',title:'HIVEM1ND está en ejecución',description:'Listo.',fields:[],values:{},done:true,result:{completed:true,message:'Listo.',attachPrompts:[{agent:'otro',text:'Adjuntar'}]}}
+ {id:'ready',number:4,total:4,language:'es',title:'ONEM1ND está en ejecución',description:'Listo.',fields:[],values:{},done:true,result:{completed:true,message:'Listo.',attachPrompts:[{agent:'otro',text:'Adjuntar'}]}}
  ];
   let index = 0;
   const answers = [];
@@ -288,9 +288,9 @@ test("terminal setup renders descriptors and installs only after preview", async
   const result = await runTerminalSetup(session, prompts);
   assert.equal(result.completed, true);
   assert.equal(installed, true);
-  assert.match(intro, /HIVEM1ND/);
+  assert.match(intro, /ONEM1ND/);
   assert.doesNotMatch(intro, /⬡/);
-  assert.ok(stepLogs.includes("Paso 1/4 · Instalar HIVEM1ND"));
+  assert.ok(stepLogs.includes("Paso 1/4 · Instalar ONEM1ND"));
   assert.equal(notes.some((note) => note.message === ""), false);
   assert.deepEqual(answers.at(-1), { confirm: true, conflicts: {} });
   assert.ok(notes.some((note) => note.title === "Vista previa"));
@@ -336,7 +336,7 @@ test('terminal setup follows four stages and leaves discovered repositories for 
 });
 
 async function makeTerminalProjectsFixture() {
-  const root = await mkdtemp(path.join(os.tmpdir(), "hivem1nd-terminal-projects-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "onem1nd-terminal-projects-"));
   const homeDir = path.join(root, "home");
   const mindPath = path.join(root, "mind");
   await mkdir(path.join(homeDir, "GitHub", "repo1", ".git"), { recursive: true });
@@ -387,7 +387,7 @@ test("check output has one line per finding and JSON remains opt-in", async () =
   assert.equal(await runCli(["check", "--mind-path", "."], { stdout: human.stream, stderr: sink().stream, lifecycle }), 0);
   assert.equal(
     human.read(),
-    "Not installed on this machine: helper. Run /evolve to install.\nHIVEM1ND 1.1.0 is available. Run /evolve to update.\napp: 2 unread messages, 1 open task.\n",
+    "Not installed on this machine: helper. Run /evolve to install.\nONEM1ND 1.1.0 is available. Run /evolve to update.\napp: 2 unread messages, 1 open task.\n",
   );
 
   const quiet = sink();
@@ -513,7 +513,7 @@ test("service install and uninstall delegate ownership checks and preserve selec
 });
 
 test("service install starts the runtime without a logon registration", async t => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "hivem1nd-cli-startup-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "onem1nd-cli-startup-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   for (const platform of ["win32", "linux"]) {
     const home = path.join(root, platform, "home");

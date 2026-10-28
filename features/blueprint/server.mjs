@@ -36,7 +36,7 @@ import { dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createPersonRelay } from "../../engine/relay/person.mjs";
 import { CoreError } from "../../engine/service/identity.mjs";
-import { assertNoLinks } from "../../engine/service/paths.mjs";
+import { assertNoLinks, defaultMind } from "../../engine/service/paths.mjs";
 import { MAX_IMAGE_BYTES, MAX_SKETCH_BYTES, SketchError, newSketch, validateSketch } from "./review/sketch-format.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -193,12 +193,12 @@ function option(name) {
 }
 
 // The mind is found the way the kit's command line finds it: the path given,
-// else the current folder when it is a mind, else HIVEM1ND in the home folder.
+// else the current folder when it is a mind, else the local Cosmic mind.
 function mindPath() {
   const given = option("mind");
   if (given) return resolve(given);
   if (existsSync(join(process.cwd(), "user", "VERSION"))) return process.cwd();
-  return join(homedir(), "HIVEM1ND");
+  return defaultMind({ platform: process.platform, env: process.env, home: homedir() });
 }
 
 const MIND = mindPath();

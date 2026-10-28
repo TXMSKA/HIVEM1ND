@@ -86,7 +86,7 @@ export async function runRelayHook({ client, event, mindPath, nativeSessionId, u
   let service = null;
   let observed = null;
   try {
-    if (env.HIVEM1ND_SERVICE_GRANT || env.HIVEM1ND_SERVICE_BRIDGE) {
+    if (env.HIVEM1ND_SERVICE_GRANT || env.HIVEM1ND_SERVICE_BRIDGE) { // Compatibility: wire identifiers keep existing native sessions and paired machines connected.
       if (serviceConnector === connectNativeService) {
         const toolId = input.tool_use_id ?? input.tool_call_id ?? input.toolCallId;
         const toolName = input.tool_name ?? input.toolName;

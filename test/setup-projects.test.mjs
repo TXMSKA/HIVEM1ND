@@ -159,7 +159,7 @@ test('adding a root merges its repositories without duplicating an existing one'
 });
 
 async function makeFixture(context) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-setup-projects-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-setup-projects-'));
   context.after(() => rm(root, { recursive: true, force: true }));
   const mindPath = path.join(root, 'mind');
   const homeDir = path.join(root, 'home');

@@ -193,7 +193,7 @@ test('task status obtains a master viewer and logs it out', async (context) => {
   await mkdir(originPath, { recursive: true });
   await mkdir(path.join(fixtureMind.paths.mind, 'user', 'tasks'), { recursive: true });
   await writeFile(fixtureMind.paths.configFile, `${JSON.stringify({
-    format: 'hivem1nd-service-config-v1',
+    format: 'hivem1nd-service-config-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     mindPath: fixtureMind.paths.mind,
     machine: fixtureMind.machine,
     origin: { kind: 'folder', path: originPath },

@@ -88,7 +88,7 @@ test('implemented routes succeed and future routes stay unavailable', async (t) 
   const view = await call(core.http.port, 'GET', '/api/v1/view', { token });
   assert.equal(view.status, 200);
   assert.equal(view.json.meta.requestId.length > 0, true);
-  assert.equal(view.json.contract, 'hivem1nd-gui-v3');
+  assert.equal(view.json.contract, 'hivem1nd-gui-v3'); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   assert.equal(typeof view.json.meta.readAt, 'string');
   assert.equal(typeof view.json.meta.eventCursor, 'string');
   assert.equal(view.json.meta.sync, 'local');
@@ -294,7 +294,7 @@ test('phone writes are rejected and static absence leaves the API usable', async
   assert.equal(traversal.status, 404);
   const assetDir = path.join(fixture.root, 'shell');
   await mkdir(assetDir, { recursive: true });
-  await writeFile(path.join(assetDir, 'index.html'), '<!doctype html><title>HIVEM1ND</title>');
+  await writeFile(path.join(assetDir, 'index.html'), '<!doctype html><title>ONEM1ND</title>');
   const hosted = await composeCore({
     store: fixture.store,
     paths: fixture.paths,
@@ -304,7 +304,7 @@ test('phone writes are rejected and static absence leaves the API usable', async
   cores.push(hosted);
   const page = await call(hosted.http.port, 'GET', '/');
   assert.equal(page.status, 200);
-  assert.equal(page.raw.includes('HIVEM1ND'), true);
+  assert.equal(page.raw.includes('ONEM1ND'), true);
   assert.match(page.headers['content-security-policy'], /frame-ancestors 'none'/);
   assert.match(page.headers['content-security-policy'], /img-src 'self' blob:;/);
   assert.equal(page.headers['x-frame-options'], 'DENY');
@@ -776,6 +776,19 @@ function sketch(id, title) {
   return document;
 }
 
+async function directoryBytes(directory) {
+  const files = {};
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const file = path.join(directory, entry.name);
+    if (entry.isDirectory()) files[entry.name] = await directoryBytes(file);
+    else {
+      assert.ok(entry.isFile(), 'The fixture snapshot contains only ordinary files.');
+      files[entry.name] = (await readFile(file)).toString('base64');
+    }
+  }
+  return files;
+}
+
 test('comment notes consume no admission or recipient notices, true replays once and a suppressed agent reply informs only master', async (t) => {
   const fixture = await makeCoreFixture(), localPath = path.join(fixture.root, 'shop'), origin = path.join(fixture.root, 'origin');
   await mkdir(localPath, { recursive: true }); await mkdir(origin, { recursive: true });
@@ -903,10 +916,10 @@ test('every contract route has a success result and an authority or boundary fai
   const permissionId = randomUUID();
   await writeFile(path.join(paths.localDirectory, 'client-permissions.json'), JSON.stringify({ permissions: [{
     id: permissionId, machine: fixture.machine, client: 'codex', actions: ['git.commit', 'git.push'],
-    scope: 'hivem1nd-started-sessions', grantedAt: new Date(fixture.clock.now).toISOString(), grantedBy: 'root:master',
+    scope: 'hivem1nd-started-sessions', grantedAt: new Date(fixture.clock.now).toISOString(), grantedBy: 'root:master', // Compatibility: existing permission grants retain their scope identity.
   }] }));
   const transcript = [
-    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"hivem1nd","title":"HIVEM1ND","version":"3.0.0"}}}',
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"onem1nd","title":"ONEM1ND","version":"3.0.0"}}}',
     '{"jsonrpc":"2.0","id":2,"method":"thread/start","params":{"cwd":"C:/work","model":"strong"}}',
     '{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thread-1"}}}',
   ];
@@ -1214,12 +1227,25 @@ test('every contract route has a success result and an authority or boundary fai
   expectStatus(await call(port, 'GET', `/api/v1/sessions/${randomUUID()}/checkout`, { token }), 404, 'session checkout of an unknown session');
   const contextBody = { action: 'clear', expectedRevision: sessionContext.json.data.revision };
   await withLocalChanges(fixture.store, async () => {
+    const contextDirectory = path.join(paths.localDirectory, 'contexts', sessionId);
+    const sessionsDirectory = path.join(paths.mind, 'user', 'relay', 'sessions');
+    const beforeContext = await directoryBytes(contextDirectory);
+    const beforeSessions = await directoryBytes(sessionsDirectory);
     const contextWrites = fixture.store.writes.length;
+    const deniedReceipts = [];
     for (const denied of [phoneCredential.token, settingsAgent.token]) {
+      const key = randomUUID();
+      deniedReceipts.push(path.join(paths.localDirectory, 'receipts', createHash('sha256').update(denied).digest('hex'), `${key}.json`));
       expectStatus(await call(port, 'GET', contextTarget, { token: denied }), 403, 'session context authority');
-      expectStatus(await call(port, 'POST', contextTarget, { token: denied, body: contextBody, headers: { 'idempotency-key': randomUUID() } }), 403, 'renew context authority');
+      expectStatus(await call(port, 'POST', contextTarget, { token: denied, body: contextBody, headers: { 'idempotency-key': key } }), 403, 'renew context authority');
     }
-    assert.equal(fixture.store.writes.length, contextWrites);
+    // Publication may write its own ledger and origin while local observation is held.
+    const protectedWrites = fixture.store.writes.slice(contextWrites).filter(file => deniedReceipts.includes(file)
+      || [contextDirectory, sessionsDirectory].some(directory => file.startsWith(`${directory}${path.sep}`)));
+    assert.deepEqual(protectedWrites, [], 'Refused context requests write no context, registration or receipt.');
+    assert.deepEqual(await directoryBytes(contextDirectory), beforeContext);
+    assert.deepEqual(await directoryBytes(sessionsDirectory), beforeSessions);
+    for (const file of deniedReceipts) await assert.rejects(readFile(file), { code: 'ENOENT' });
   });
   assert.equal(contextReplacements.size, 0);
   const renewedContext = await call(port, 'POST', contextTarget, {
@@ -2289,14 +2315,14 @@ test('an agent cannot read another unit chat or session request', async (t) => {
   const requestDir = path.join(fixture.paths.mind, 'user', 'relay', 'requests', fixture.machine);
   await mkdir(requestDir, { recursive: true });
   await writeFile(path.join(requestDir, `${requestId}.json`), `${JSON.stringify({
-    format: 'hivem1nd-session-request-v1',
+    format: 'hivem1nd-session-request-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     id: requestId,
     unitId: 'root:two',
     owner: 'root:one',
     prompt: 'foreign-session-secret',
   })}\n`);
   await writeFile(path.join(requestDir, `${ownRequestId}.json`), `${JSON.stringify({
-    format: 'hivem1nd-session-request-v1',
+    format: 'hivem1nd-session-request-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     id: ownRequestId,
     unitId: 'root:one',
     prompt: 'own-session',

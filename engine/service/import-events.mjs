@@ -97,7 +97,7 @@ export async function importedSidecarEvents(context, change) {
   const receipt = /^user\/relay\/chats\/([^/]+)\/read\/.+\.json$/.exec(file);
   if (receipt && change.operation !== 'delete') {
     const value = await jsonAt(context.paths.mind, file);
-    if (value.format !== 'hivem1nd-chat-read-v1' || value.chatId !== receipt[1] || !Array.isArray(value.messageIds)) return null;
+    if (value.format !== 'hivem1nd-chat-read-v1' || value.chatId !== receipt[1] || !Array.isArray(value.messageIds)) return null; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     const chat = await projectChat({ ...context, principal: { ...context.principal, unitId: value.unitId } }, receipt[1]);
     return changed([event('message.read', { chatId: receipt[1], mailboxId: null, readerId: value.unitId, messageIds: value.messageIds, unread: chat.unread }, { chatId: receipt[1] })], ['chats', 'waiting']);
   }
@@ -145,7 +145,7 @@ async function projectSidecar(context, change, file) {
     const history = /^docs\/flows\/history\/([0-9a-f-]{36})\/([0-9a-f-]{36})\.json$/.exec(file);
     if (!history || change.operation === 'delete') return { events: [], collections: ['editors'] };
     const item = await jsonAt(project.localPath, file);
-    if (item.format !== 'hivem1nd-editor-history-v1' || item.resourceId !== history[1] || item.id !== history[2]) throw new Error('Imported history metadata is not valid.');
+    if (item.format !== 'hivem1nd-editor-history-v1' || item.resourceId !== history[1] || item.id !== history[2]) throw new Error('Imported history metadata is not valid.'); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     return { events: [{ name: 'editor.history.changed', resourceId: item.resourceId,
       data: { resourceId: item.resourceId, historyId: item.id, revision: item.revision } }], collections: ['editors'] };
   }

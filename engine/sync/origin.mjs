@@ -73,7 +73,7 @@ async function publishPackLocked(origin, packBytes) {
   }
   const filename = packFileName(sequence);
   await writeJson(origin, journalPath(origin), {
-    format: 'hivem1nd-publication-v1',
+    format: 'hivem1nd-publication-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     phase: 'prepared',
     sequence,
     packHash: digest,
@@ -87,7 +87,7 @@ async function publishPackLocked(origin, packBytes) {
   }
   const packs = [...(head?.packs ?? []), { sequence, file: filename, hash: digest, bytes: bytes.length }];
   const next = {
-    format: 'hivem1nd-head-v1',
+    format: 'hivem1nd-head-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     machine: origin.machine,
     sequence,
     updatedAt: new Date(origin.now()).toISOString(),
@@ -96,7 +96,7 @@ async function publishPackLocked(origin, packBytes) {
   validateHead(next, { machine: origin.machine, previous: head ?? undefined, packBytes: bytes, sequence });
   await writeJson(origin, headPath(origin, origin.machine), next);
   await writeJson(origin, journalPath(origin), {
-    format: 'hivem1nd-publication-v1',
+    format: 'hivem1nd-publication-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     phase: 'committed',
     sequence,
     packHash: digest,
@@ -127,13 +127,13 @@ async function validateProjectPublication(origin, changes) {
 }
 
 export function prepareServiceBeat(machine, beat) {
-  if (!beat || beat.format !== 'hivem1nd-service-v1' || beat.machine !== machine) {
+  if (!beat || beat.format !== 'hivem1nd-service-v1' || beat.machine !== machine) { // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     throw new CoreError(422, 'invalid_record_owner', 'A machine publishes only its own heartbeat.');
   }
   if (beat.state !== 'running' && beat.state !== 'stopped') throw new CoreError(422, 'invalid_body', 'The heartbeat state is not valid.');
   if (!TIME.test(beat.heartbeatAt ?? '') || !TIME.test(beat.startedAt ?? '')) throw new CoreError(422, 'invalid_body', 'The heartbeat time must be UTC.');
   return {
-    format: 'hivem1nd-service-v1',
+    format: 'hivem1nd-service-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     machine,
     state: beat.state,
     version: beat.version,

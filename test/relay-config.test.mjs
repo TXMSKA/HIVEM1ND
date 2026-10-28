@@ -52,7 +52,7 @@ test('OpenCode configure targets OPENCODE_CONFIG directly and an explicit home o
   const env = { OPENCODE_CONFIG: custom };
   const configured = await configureRelayClient({ client: 'opencode', env, kitPath: path.join(root, 'kit'), mindPath: path.join(root, 'mind') });
   assert.deepEqual(configured.paths, [custom]);
-  assert.match(await readFile(custom, 'utf8'), /hivem1nd-relay/);
+  assert.match(await readFile(custom, 'utf8'), /onem1nd-relay/);
   const isolated = path.join(root, 'isolated');
   const paths = clientConfigPaths({ client: 'opencode', homeDir: isolated, env });
   assert.equal(paths.mcp, path.join(isolated, '.config', 'opencode', 'opencode.jsonc'));
@@ -72,7 +72,7 @@ test('OpenCode config edits JSONC losslessly, is idempotent and removes only its
   const { parse } = await import('jsonc-parser');
   const parsed = parse(merged);
   assert.deepEqual(parsed.mcp.other, { type: 'local', command: ['other-tool'] });
-  const relay = parsed.mcp['hivem1nd-relay'];
+  const relay = parsed.mcp['onem1nd-relay'];
   assert.equal(relay.type, 'local');
   const clientIndex = relay.command.indexOf('--client');
   assert.deepEqual(relay.command.slice(clientIndex, clientIndex + 2), ['--client', 'opencode']);
@@ -89,8 +89,8 @@ test('OpenCode config edits JSONC losslessly, is idempotent and removes only its
   assert.match(after, /\/\/ Keep the user's provider settings\./);
   const removedConfig = parse(after);
   assert.deepEqual(removedConfig.mcp.other, { type: 'local', command: ['other-tool'] });
-  assert.equal(removedConfig.mcp['hivem1nd-relay'], undefined);
-  const manual = '{\n  "mcp": { "hivem1nd-relay": { "type": "local", "command": ["manual-server"] } }\n}\n';
+  assert.equal(removedConfig.mcp['onem1nd-relay'], undefined);
+  const manual = '{\n  "mcp": { "onem1nd-relay": { "type": "local", "command": ["manual-server"] } }\n}\n';
   await writeFile(configFile, manual);
   await assert.rejects(configureRelayClient(options), { code: 'RELAY_CONFIG_CONFLICT' });
   assert.deepEqual((await unconfigureRelayClient(options)).changed, []);
@@ -119,7 +119,7 @@ test('Copilot mcp-config.json merge keeps other servers, is idempotent and remov
   assert.deepEqual(installed.backups, [file + '.relay-backup']);
   const document = JSON.parse(await readFile(file, 'utf8'));
   assert.deepEqual(document.mcpServers.other, other);
-  const entry = document.mcpServers['hivem1nd-relay'];
+  const entry = document.mcpServers['onem1nd-relay'];
   assert.equal(entry.type, 'local'); assert.equal(entry.command, process.execPath); assert.deepEqual(entry.tools, ['*']);
   assert.deepEqual(entry.args.slice(0, 6), [path.join(opts.kitPath, 'cli', 'index.mjs'), 'relay', 'mcp', '--mind-path', path.resolve(opts.mindPath), '--client']);
   assert.equal(entry.args[6], 'copilot');
@@ -131,7 +131,7 @@ test('Copilot mcp-config.json merge keeps other servers, is idempotent and remov
   await writeFile(file, JSON.stringify(document));
   assert.deepEqual((await unconfigureRelayClient(opts)).changed, [file]);
   assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), { mcpServers: { other } });
-  const manual = JSON.stringify({ mcpServers: { 'hivem1nd-relay': { type: 'local', command: 'manual-server', args: [] } } });
+  const manual = JSON.stringify({ mcpServers: { 'onem1nd-relay': { type: 'local', command: 'manual-server', args: [] } } });
   await writeFile(file, manual);
   await assert.rejects(configureRelayClient(opts), { code: 'RELAY_CONFIG_CONFLICT' });
   assert.deepEqual((await unconfigureRelayClient(opts)).changed, []);
@@ -142,10 +142,10 @@ test('Codex config merge validates TOML and preserves unrelated entries byte-for
   const original = '# keep this comment\nmodel = "gpt-6-luna"\n\n[mcp_servers.other]\ncommand = "other"\nargs = []\n';
   const merged = buildClientConfig({ ...options('C:/kit-home'), existing: { mcp: original, hooks: '{"other":true}' } });
   assert.ok(merged.mcp.startsWith(original));
-  assert.match(merged.mcp, /\[mcp_servers\.hivem1nd-relay\]/);
+  assert.match(merged.mcp, /\[mcp_servers\.onem1nd-relay\]/);
   assert.deepEqual(JSON.parse(merged.hooks).other, true);
   assert.throws(() => buildClientConfig({ ...options('C:/kit-home'), existing: { mcp: 'bad = [', hooks: '{}' } }), { code: 'RELAY_CONFIG_INVALID' });
-  assert.throws(() => buildClientConfig({ ...options('C:/kit-home'), existing: { mcp: '[mcp_servers."hivem1nd-relay"]\ncommand="manual"\n', hooks: '{}' } }), { code: 'RELAY_CONFIG_CONFLICT' });
+  assert.throws(() => buildClientConfig({ ...options('C:/kit-home'), existing: { mcp: '[mcp_servers."onem1nd-relay"]\ncommand="manual"\n', hooks: '{}' } }), { code: 'RELAY_CONFIG_CONFLICT' });
 });
 
 test('isolated install is idempotent, migrates a changed kit path, and uninstalls only owned entries', async (context) => {
@@ -167,7 +167,7 @@ test('isolated install is idempotent, migrates a changed kit path, and uninstall
   assert.equal(await readFile(configFile, 'utf8'), once);
   const migrated = await configureRelayClient({ ...opts, kitPath: path.join(root, 'new-kit') });
   assert.equal(migrated.changed.length, 2);
-  assert.equal((await readFile(configFile, 'utf8')).match(/\[mcp_servers\.hivem1nd-relay\]/g).length, 1);
+  assert.equal((await readFile(configFile, 'utf8')).match(/\[mcp_servers\.onem1nd-relay\]/g).length, 1);
   const removed = await unconfigureRelayClient(opts);
   assert.equal(removed.changed.length, 2);
   assert.equal(await readFile(configFile, 'utf8'), `${unrelated}\n[profiles.other]\nmodel = "keep-this-table"\n`);
@@ -181,7 +181,7 @@ test('isolated install is idempotent, migrates a changed kit path, and uninstall
 test('Claude and Cursor config schemas keep their native structure and Windows hook commands are quoted safely', { skip: process.platform !== 'win32' && 'asserts Windows paths, which the host path module only produces on Windows' }, () => {
   const claude = buildClientConfig({ client: 'claude', existing: { mcp: '{"other":{}}', hooks: '{"permissions":{"allow":[]}}' }, kitPath: 'C:/kit', mindPath: 'C:/mind', platform: 'win32', nodePath: 'C:/Program Files/nodejs/node.exe' });
   const claudeMcp = JSON.parse(claude.mcp);
-  assert.ok(claudeMcp.mcpServers['hivem1nd-relay']);
+  assert.ok(claudeMcp.mcpServers['onem1nd-relay']);
   assert.deepEqual(JSON.parse(claude.hooks).permissions, { allow: [] });
   const claudeHandler = JSON.parse(claude.hooks).hooks.SessionStart[0].hooks[0];
   assert.equal(claudeHandler.command, 'C:\\Program Files\\nodejs\\node.exe');
@@ -219,10 +219,10 @@ test('configure honors active CODEX_HOME but explicit home-dir overrides it', as
   const root = await temp(context);
   const envRoot = path.join(root, 'codex-env');
   await configureRelayClient({ client: 'codex', env: { CODEX_HOME: envRoot }, kitPath: path.join(root, 'kit'), mindPath: path.join(root, 'mind') });
-  assert.ok((await readFile(path.join(envRoot, 'config.toml'), 'utf8')).includes('hivem1nd-relay'));
+  assert.ok((await readFile(path.join(envRoot, 'config.toml'), 'utf8')).includes('onem1nd-relay'));
   const isolated = path.join(root, 'isolated');
   await configureRelayClient({ client: 'codex', homeDir: isolated, env: { CODEX_HOME: envRoot }, kitPath: path.join(root, 'kit'), mindPath: path.join(root, 'mind') });
-  assert.ok((await readFile(path.join(isolated, '.codex', 'config.toml'), 'utf8')).includes('hivem1nd-relay'));
+  assert.ok((await readFile(path.join(isolated, '.codex', 'config.toml'), 'utf8')).includes('onem1nd-relay'));
 });
 
 test('client diagnostics honor the supplied environment and Windows command shims', async (context) => {
@@ -453,7 +453,8 @@ test('the Windows hook command hands a payload with a byte order mark and accent
   const cursor = buildClientConfig({ client: 'cursor', existing: {}, kitPath, mindPath: mind, platform: 'win32', nodePath: process.execPath });
   const command = JSON.parse(cursor.hooks).hooks.stop[0].command;
   const payload = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(JSON.stringify({ conversation_id: 'acción-1', hook_event_name: 'stop', status: 'completed', loop_count: 0 }), 'utf8')]);
-  const result = spawnSync(command, { shell: true, input: payload, encoding: 'utf8', timeout: 60000 });
+  const env = { ...process.env, HOME: mind, USERPROFILE: mind, LOCALAPPDATA: path.join(mind, 'local'), APPDATA: path.join(mind, 'roaming'), CODEX_HOME: path.join(mind, '.codex'), CLAUDE_CONFIG_DIR: path.join(mind, '.claude') };
+  const result = spawnSync(command, { shell: true, input: payload, encoding: 'utf8', timeout: 60000, env });
   assert.equal(result.status, 0, result.stderr);
   assert.doesNotMatch(result.stderr, /input unavailable/);
 });
@@ -465,15 +466,15 @@ test('owned JSON and TOML entries retain opaque credentials and unknown fields d
     const opts = options(root, { client });
     const initial = buildClientConfig(opts);
     let mcp;
-    if (client === 'codex') mcp = `${initial.mcp}\n[mcp_servers.hivem1nd-relay.env]\nCREDENTIAL = ${JSON.stringify(credential)}\n\n[profiles.foreign]\nmodel = "foreign"\n`;
+    if (client === 'codex') mcp = `${initial.mcp}\n[mcp_servers.onem1nd-relay.env]\nCREDENTIAL = ${JSON.stringify(credential)}\n\n[profiles.foreign]\nmodel = "foreign"\n`;
     else {
       const value = JSON.parse(initial.mcp);
-      (value.mcpServers ?? value.mcp)['hivem1nd-relay'].env = { CREDENTIAL: credential };
+      (value.mcpServers ?? value.mcp)['onem1nd-relay'].env = { CREDENTIAL: credential };
       mcp = JSON.stringify(value);
     }
     const changed = buildClientConfig({ ...opts, kitPath: path.join(root, 'new-kit'), existing: { ...initial, mcp } });
     const parsed = client === 'codex' ? parseToml(changed.mcp) : JSON.parse(changed.mcp);
-    const entry = (parsed.mcp_servers ?? parsed.mcpServers ?? parsed.mcp)['hivem1nd-relay'];
+    const entry = (parsed.mcp_servers ?? parsed.mcpServers ?? parsed.mcp)['onem1nd-relay'];
     assert.equal(entry.env.CREDENTIAL === credential, true);
     if (client === 'codex') assert.equal(parsed.profiles.foreign.model, 'foreign');
     const restored = restoreClientConfig({ client, kind: 'mcp', before: Buffer.from(mcp), after: Buffer.from(changed.mcp), current: Buffer.from(changed.mcp) });

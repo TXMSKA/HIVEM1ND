@@ -177,7 +177,7 @@ export async function sendCodexWake({
     const initialized = await request('initialize', {
       protocolVersion: '2025-06-18',
       capabilities: {},
-      clientInfo: { name: 'hivem1nd-relay', version: '1.0.0' },
+      clientInfo: { name: 'onem1nd-relay', version: '1.0.0' },
     });
     if (!initialized || initialized.error || initialized.result?.serverInfo?.name !== 'codex-app-tools') {
       finish(notSubmitted('app_tools_handshake_failed'));

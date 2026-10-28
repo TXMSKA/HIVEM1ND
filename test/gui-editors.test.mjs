@@ -171,7 +171,7 @@ test('Find applies the 10000 cap across pages and retained replacements reuse th
 test('the GUI replaces and undoes all matches once through the HTTP fixture while retaining drafts', async (t) => {
   const fixture = await createGuiFixture({ scenario: 'first-run' }); t.after(() => fixture.close());
   const repo = join(fixture.root, 'repositories', 'shop');
-  await writeEditors([], { repo }, join(fixture.root, 'Cosmic', 'hivem1nd', 'user'), DEFAULT_NOW);
+  await writeEditors([], { repo }, join(fixture.root, 'Cosmic', 'onem1nd', 'user'), DEFAULT_NOW);
   await fixture.control.refresh();
   const api = apiFrom(fixture.desktopUrl), editors = createEditors();
   await loadCatalog(api, editors, 'void');
@@ -525,7 +525,7 @@ test("a late editor read keeps the newer selection and draft", async () => {
       seen += 1;
       if (seen === 1) await gate;
       return new Response(JSON.stringify({
-        contract: "hivem1nd-gui-v3",
+        contract: "hivem1nd-gui-v3", // Compatibility: stored schemas and wire contracts retain their existing identifiers.
         data: { id, kind: "blueprint", title: id, revision: "a".repeat(64), commentsRevision: null, attachmentRevision: null, attached: [], threads: [], document: { title: id } },
         meta: { requestId: "11111111-1111-4111-8111-111111111111", readAt: "2026-10-10T12:00:00.000Z", eventCursor: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:1", sync: "local" },
       }), { status: 200, headers: { "Content-Type": "application/json" } });
@@ -1049,7 +1049,7 @@ test("a compliant range envelope replaces the draft with the saved editor", asyn
 
 function jsonResponse(data) {
   return new Response(JSON.stringify({
-    contract: "hivem1nd-gui-v3",
+    contract: "hivem1nd-gui-v3", // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     data,
     meta: { requestId: "req", readAt: "2026-10-10T12:00:00.000Z", eventCursor: "0", sync: "local" },
   }), { status: 200, headers: { "content-type": "application/json" } });
@@ -1373,7 +1373,7 @@ function commentApi(fetchImpl) {
 
 function commentEnvelope(data) {
   const body = JSON.stringify({
-    contract: "hivem1nd-gui-v3",
+    contract: "hivem1nd-gui-v3", // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     data,
     meta: { requestId: "req", readAt: "2026-10-10T12:00:00.000Z", eventCursor: "svc:1", sync: "local" },
   });

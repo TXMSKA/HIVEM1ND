@@ -88,7 +88,7 @@ test('auto attach writes the rule line for every adapter that has one; on demand
       const rulesPath = path.join(fixture.homeDir, ...adapter.rules.homePath.split('/'));
       if (mode === 'auto') {
         const rules = await readFile(rulesPath, 'utf8');
-        assert.match(rules, /HIVEM1ND: the mind is at/, `${adapter.id} auto`);
+        assert.match(rules, /ONEM1ND: the mind is at/, `${adapter.id} auto`);
       } else {
         await assert.rejects(() => readFile(rulesPath, 'utf8'), { code: 'ENOENT' }, `${adapter.id} on-demand`);
       }
@@ -113,7 +113,7 @@ test('accepting scan results as-is keeps every detected agent selected with its 
 });
 
 async function makeFixture(context, detectedAdapterIds = []) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-setup-agents-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-setup-agents-'));
   context.after(() => rm(root, { recursive: true, force: true }));
   const mindPath = path.join(root, 'mind');
   const homeDir = path.join(root, 'home');

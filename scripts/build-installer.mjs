@@ -1,6 +1,6 @@
 // Builds the offline Windows installer ZIP. The pinned Node runtime is supplied by the person and never downloaded.
 //
-//   npm run dist:win -- --node-zip <file>                  release build, saved at dist/hivem1nd-<version>-win-x64.zip
+//   npm run dist:win -- --node-zip <file>                  release build, saved at dist/onem1nd-<version>-win-x64.zip
 //   npm run dist:win -- --node-zip <file> --output <file>  release build, saved at the given file
 //   npm run dist:win -- --node-zip <file> --dry-run        offline staging and smoke check, saved only with --output
 //
@@ -301,7 +301,7 @@ export async function verifyRuntime(zipPath, options = {}) {
 }
 
 export async function confirmRuntimeVersion(executable, options = {}) {
-  const stage = await mkdtemp(path.join(tmpdir(), 'hivem1nd-runtime-'));
+  const stage = await mkdtemp(path.join(tmpdir(), 'onem1nd-runtime-'));
   const exe = path.join(stage, 'node.exe');
   const spawnOptions = {
     shell: false,
@@ -402,7 +402,7 @@ export function installerEntry() {
     '',
     'const here = path.dirname(fileURLToPath(import.meta.url));',
     "const manifest = JSON.parse(await readFile(path.join(here, 'manifest.json'), 'utf8'));",
-    "if (manifest.format !== 'hivem1nd-installer-v1' || manifest.version !== '3.0.0') {",
+    "if (manifest.format !== 'hivem1nd-installer-v1' || manifest.version !== '3.0.0') {", // Compatibility: retain installer and service record formats for existing payloads.
     "  throw new Error('The installer manifest is not valid.');",
     '}',
     'for (const file of manifest.files) {',
@@ -416,8 +416,8 @@ export function installerEntry() {
     'const localAppData = process.env.LOCALAPPDATA;',
     "if (!localAppData || !path.win32.isAbsolute(localAppData)) throw new Error('LOCALAPPDATA must be an absolute path.');",
     "const cosmic = path.resolve(localAppData, 'Cosmic');",
-    "const destination = path.join(cosmic, 'hivem1nd-kit');",
-    "const activeFile = path.join(cosmic, 'hivem1nd-service', 'active.json');",
+    "const destination = path.join(cosmic, 'onem1nd-kit');",
+    "const activeFile = path.join(cosmic, 'onem1nd-service', 'active.json');",
     'await assertNoAncestorLink(destination, localAppData);',
     'let active = null;',
     'try {',
@@ -446,17 +446,17 @@ export function installerEntry() {
     '  const localDirectory = normalize(active?.localDirectory);',
     "  const started = typeof active?.startedAt === 'string' && /^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$/.test(active.startedAt);",
     '  const pid = Number.isInteger(active?.pid) && active.pid > 0;',
-    "  const serviceRoot = normalize(path.join(cosmicRoot, 'hivem1nd-service'));",
+    "  const serviceRoot = normalize(path.join(cosmicRoot, 'onem1nd-service'));",
     '  if (!mindPath || !localDirectory || !machine || !started || !pid || !serviceRoot || !inside(serviceRoot, localDirectory)) return false;',
     "  const mindKey = createHash('sha256').update(mindPath).digest('hex').slice(0, 16);",
-    "  const owned = normalize(path.join(cosmicRoot, 'hivem1nd-service', mindKey, machine));",
+    "  const owned = normalize(path.join(cosmicRoot, 'onem1nd-service', mindKey, machine));",
     '  if (!owned || owned !== localDirectory) return false;',
     '  await assertNoAncestorLink(localDirectory, normalize(cosmicRoot));',
     "  const config = await readOwnedJson(path.join(localDirectory, 'config.json'));",
     "  const local = await readOwnedJson(path.join(localDirectory, 'service.json'));",
-    "  const lockFile = path.join(cosmicRoot, 'hivem1nd-service', 'service.lock');",
+    "  const lockFile = path.join(cosmicRoot, 'onem1nd-service', 'service.lock');",
     '  const lock = await readOwnedJson(lockFile);',
-    "  if (!config || config.format !== 'hivem1nd-service-config-v1' || !local || local.format !== 'hivem1nd-service-local-v1' || !lock) return false;",
+    "  if (!config || config.format !== 'hivem1nd-service-config-v1' || !local || local.format !== 'hivem1nd-service-local-v1' || !lock) return false;", // Compatibility: retain installer and service record formats for existing payloads.
     '  const configuredMind = normalize(config.mindPath);',
     "  const configuredMachine = typeof config.machine === 'string' ? config.machine.trim() : '';",
     '  if (!configuredMind || !configuredMachine || configuredMind !== mindPath || configuredMachine !== machine) return false;',
@@ -469,7 +469,7 @@ export function installerEntry() {
     "  const userKey = process.platform === 'win32' ? security.aclRunnerFrom().userSid() : String(process.getuid());",
     "  const guardDigest = createHash('sha256').update(userKey).digest();",
     '  const port = 49152 + (guardDigest.readUInt16BE(0) % 16384);',
-    "  const descriptor = { format: 'hivem1nd-service-descriptor-v1', machine, mind: path.resolve(active.mindPath), pid: active.pid, port, userKey };",
+    "  const descriptor = { format: 'hivem1nd-service-descriptor-v1', machine, mind: path.resolve(active.mindPath), pid: active.pid, port, userKey };", // Compatibility: retain installer and service record formats for existing payloads.
     "  if (lock.digest !== createHash('sha256').update(JSON.stringify(descriptor)).digest('hex')) return false;",
     '  return true;',
     '}',
@@ -495,7 +495,7 @@ export function installerEntry() {
     '}',
     "if (!manifest.files.some((file) => file.name === 'cli/index.mjs')) throw new Error('The payload has no setup command.');",
     'const nonce = randomBytes(4).toString(\'hex\');',
-    "const stage = path.join(cosmic, 'hivem1nd-kit.3.0.0.' + nonce + '.stage');",
+    "const stage = path.join(cosmic, 'onem1nd-kit.3.0.0.' + nonce + '.stage');",
     'let backup = null;',
     'let moved = false;',
     'let created = false;',
@@ -521,14 +521,14 @@ export function installerEntry() {
     '  }',
     "  if (existing?.isSymbolicLink()) throw new Error('Refusing to activate over a link.');",
     '  if (existing) {',
-    "    backup = path.join(cosmic, 'hivem1nd-kit.' + nonce + '.backup');",
+    "    backup = path.join(cosmic, 'onem1nd-kit.' + nonce + '.backup');",
     '    await rename(destination, backup);',
     '    moved = true;',
     '  }',
     '  await rename(stage, destination);',
     '  created = false;',
     '  try {',
-    '    const runner = process.env.HIVEM1ND_REGISTRATION_RUNNER;',
+    '    const runner = process.env.ONEM1ND_REGISTRATION_RUNNER;',
     "    const executable = runner ? process.execPath : path.join(destination, 'runtime', 'node.exe');",
     '    const args = runner ? [runner, ...command] : command;',
     "    const child = spawn(executable, args, { shell: false, windowsHide: true, cwd: destination, stdio: 'inherit' });",
@@ -538,7 +538,7 @@ export function installerEntry() {
     '    });',
     "    if (status !== 0) throw new Error('Setup did not finish.');",
     '  } catch (error) {',
-    "    const failed = path.join(cosmic, 'hivem1nd-kit.' + nonce + '.failed');",
+    "    const failed = path.join(cosmic, 'onem1nd-kit.' + nonce + '.failed');",
     '    await rename(destination, failed).catch(() => {});',
     '    if (moved && backup) await rename(backup, destination).catch(() => {});',
     '    await rm(failed, { recursive: true, force: true }).catch(() => {});',
@@ -577,7 +577,7 @@ export function installerEntry() {
 
 export function manifestDocument(files, runtime = 'unverified', label = 'release') {
   return {
-    format: 'hivem1nd-installer-v1',
+    format: 'hivem1nd-installer-v1', // Compatibility: retain installer and service record formats for existing payloads.
     version: '3.0.0',
     runtime,
     label,
@@ -670,7 +670,7 @@ export async function dryRun(options = {}) {
     platform: 'win32',
     nodePath: options.nodePath ?? 'C:\\Program Files\\node\\node.exe',
     cliPath: options.cliPath ?? 'C:\\kit\\cli\\index.mjs',
-    mindPath: options.mindPath ?? 'C:\\Users\\Ada\\AppData\\Local\\Cosmic\\hivem1nd',
+    mindPath: options.mindPath ?? 'C:\\Users\\Ada\\AppData\\Local\\Cosmic\\onem1nd',
     workingDirectory: options.workingDirectory ?? 'C:\\kit',
     localDirectory: options.localDirectory ?? 'C:\\local',
     sid: options.sid ?? 'S-1-5-21-1',
@@ -952,7 +952,7 @@ export async function installPayload(options) {
 // A release build is always saved: at --output, or under dist/ with the package version. A dry run is saved only with --output.
 export function outputFor(input, version) {
   if (input.output) return path.resolve(input.output);
-  return input.dryRun === true ? null : path.join(root, 'dist', `hivem1nd-${version}-win-x64.zip`);
+  return input.dryRun === true ? null : path.join(root, 'dist', `onem1nd-${version}-win-x64.zip`);
 }
 
 export async function main(argv) {
@@ -979,7 +979,7 @@ export async function main(argv) {
     label: input.dryRun ? 'dry-run' : 'release',
   });
   if (input.dryRun) {
-    const stageRoot = await mkdtemp(path.join(tmpdir(), 'hivem1nd-dry-run-'));
+    const stageRoot = await mkdtemp(path.join(tmpdir(), 'onem1nd-dry-run-'));
     try {
       const staged = await stagePayload(files, stageRoot);
       await smokeImports(staged);

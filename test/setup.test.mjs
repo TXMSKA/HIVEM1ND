@@ -23,7 +23,7 @@ const createSetupSession = options => rawCreateSetupSession({ aclRunner: stubAcl
 test('setup exposes four descriptors and preserves unreviewed client files', async context => {
  const fixture=await makeFixture(context); const session=await createSetupSession({kitPath:KIT_PATH,...fixture,hostname:'TESTBOX',env:{PATH:''},language:'en'});
  const first=await session.getStep();
- assert.deepEqual({id:first.id,number:first.number,total:first.total,back:first.back,busy:first.busy,done:first.done,title:first.title,description:first.description,fields:first.fields,values:first.values,action:first.action}, {id:'install',number:1,total:4,back:false,busy:false,done:false,title:'Install HIVEM1ND',description:'Setup takes about a minute.',fields:[],values:{},action:'Start setup'});
+ assert.deepEqual({id:first.id,number:first.number,total:first.total,back:first.back,busy:first.busy,done:first.done,title:first.title,description:first.description,fields:first.fields,values:first.values,action:first.action}, {id:'install',number:1,total:4,back:false,busy:false,done:false,title:'Install ONEM1ND',description:'Setup takes about a minute.',fields:[],values:{},action:'Start setup'});
  assert.deepEqual(first.bullets,['Control the Swarm from the Map','Organize agents to reach objectives faster and better','Relay is used for inter-session communication']);
  const location=await session.answer({}); assert.equal(location.id,'location');assert.equal(location.number,2);assert.equal(location.back,true);assert.deepEqual(location.fields.map(field=>field.id),['mindPath']);assert.equal(location.values.mindPath,fixture.mindPath);assert.equal(location.relayPlus.disabled,true);
  const service=await session.answer({mindPath:fixture.mindPath}); assert.equal(service.id,'service');assert.equal(service.number,3);assert.equal(service.back,false);assert.deepEqual(service.progress.map(row=>row.state),['todo','todo','todo','todo']);
@@ -91,11 +91,11 @@ test('unowned files and modified managed skills require per-file choices', async
     previewOnly: true,
   });
   assert.ok(lifecyclePreview.baseFiles.length > 0);
-  assert.equal(lifecyclePreview.conflicts.find((item) => item.path === skillPath)?.reason, 'The HIVEM1ND-managed file was modified after installation.');
+  assert.equal(lifecyclePreview.conflicts.find((item) => item.path === skillPath)?.reason, 'The ONEM1ND-managed file was modified after installation.');
 });
 
 test('mind selection rejects filesystem roots and the kit fixtures tree', async (context) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-invalid-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-invalid-'));
   context.after(() => rm(root, { recursive: true, force: true }));
   await assert.rejects(() => createSetupSession({
     kitPath: KIT_PATH,
@@ -231,7 +231,7 @@ async function makeRetirementFixture(context) {
   const kitPath = path.join(fixture.root, 'kit');
   await mkdir(path.join(kitPath, 'roles'), { recursive: true });
   await mkdir(path.join(kitPath, 'features', 'bundle', 'scripts'), { recursive: true });
-  await writeFile(path.join(kitPath, 'package.json'), '{"name":"hivem1nd-test","version":"1.0.0","files":["roles/","features/"]}\n');
+  await writeFile(path.join(kitPath, 'package.json'), '{"name":"onem1nd-test","version":"1.0.0","files":["roles/","features/"]}\n');
   for (const name of ['executor', 'retired']) {
     await writeFile(path.join(kitPath, 'roles', `${name}.md`), `---\nname: ${name}\ndescription: Test role.\n---\n\n# ${name}\n`);
   }
@@ -246,7 +246,7 @@ async function makeRetirementFixture(context) {
 }
 
 test('the default mind path is the user home, never the kit tree or a QA fixture', async (context) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-default-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-default-'));
   context.after(() => rm(root, { recursive: true, force: true }));
   const homeDir = path.join(root, 'home');
   await mkdir(homeDir, { recursive: true });
@@ -259,7 +259,7 @@ test('the default mind path is the user home, never the kit tree or a QA fixture
   });
   await session.answer({ installMode: 'custom' });
   const step = await session.getStep();
-  assert.equal(step.values.mindPath, path.join(homeDir, 'AppData', 'Local', 'Cosmic', '.m1nd'));
+  assert.equal(step.values.mindPath, path.join(homeDir, 'AppData', 'Local', 'Cosmic', 'onem1nd'));
   assert.ok(!step.values.mindPath.toLowerCase().includes('.qa'));
   assert.ok(!step.values.mindPath.startsWith(path.join(KIT_PATH, 'user')));
 });
@@ -419,7 +419,7 @@ test('all detected content is included by default',async context=>{
 });
 
 test('knowledge packs form their own last group, and each option names the pack and the commands it installs', async (context) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-packs-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-packs-'));
   context.after(() => rm(root, { recursive: true, force: true }));
   const kitPath = path.join(root, 'kit');
   const homeDir = path.join(root, 'home');
@@ -461,7 +461,7 @@ test('the preview groups files by owner: the mind for kit and data files, the ad
 });
 
 test('a late file change aborts the whole install before an earlier write', async (context) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-preflight-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-preflight-'));
   context.after(() => rm(root, { recursive: true, force: true }));
   const firstPath = path.join(root, 'first.md');
   const latePath = path.join(root, 'late.md');
@@ -596,7 +596,7 @@ test('Join preserves an existing 3.0 M1ND',async context=>{
 });
 
 test('Change to an existing M1ND presents Join before installation',async context=>{
- const fixture=await makeFixture(context);const installed=path.join(fixture.homeDir,'HIVEM1ND');await makeInstalledMind({...fixture,mindPath:installed},'3.0.0');const unused=path.join(fixture.root,'unused');const session=await createSetupSession({kitPath:KIT_PATH,...fixture,mindPath:unused,hostname:'SECOND',env:{PATH:''},resume:false});await session.answer({});const step=await session.answer({mindPath:installed,changeFolder:true});assert.equal(step.id,'location');assert.equal(step.values.attach,true);await session.answer({mindPath:installed,attach:true});await session.answer({confirm:true});assert.equal((await session.install()).mindPath,installed);assert.equal(await pathExists(unused),false);
+ const fixture=await makeFixture(context);const installed=path.join(fixture.homeDir,'ONEM1ND');await makeInstalledMind({...fixture,mindPath:installed},'3.0.0');const unused=path.join(fixture.root,'unused');const session=await createSetupSession({kitPath:KIT_PATH,...fixture,mindPath:unused,hostname:'SECOND',env:{PATH:''},resume:false});await session.answer({});const step=await session.answer({mindPath:installed,changeFolder:true});assert.equal(step.id,'location');assert.equal(step.values.attach,true);await session.answer({mindPath:installed,attach:true});await session.answer({confirm:true});assert.equal((await session.install()).mindPath,installed);assert.equal(await pathExists(unused),false);
 });
 
 test('a migration failure leaves setup resumable until the remaining work succeeds', async (context) => {
@@ -654,7 +654,7 @@ async function makeInstalledMind(fixture, version) {
 }
 
 async function makeFixture(context) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-setup-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-setup-'));
   context.after(() => rm(root, { recursive: true, force: true }));
   const mindPath = path.join(root, 'mind');
   const homeDir = path.join(root, 'home');
@@ -709,7 +709,7 @@ async function checkpointFixture(context, version = '2.0.0') {
   fixture.cosmicPath = path.join(fixture.root, 'local', 'Cosmic');
   fixture.kitPath = path.join(fixture.root, 'kit');
   await mkdir(path.join(fixture.kitPath, 'migrations'), { recursive: true });
-  await writeFile(path.join(fixture.kitPath, 'package.json'), '{"name":"hivem1nd-fixture","version":"3.0.0","files":["rules.md","files.md","migrations/"]}\n');
+  await writeFile(path.join(fixture.kitPath, 'package.json'), '{"name":"onem1nd-fixture","version":"3.0.0","files":["rules.md","files.md","migrations/"]}\n');
   await writeFile(path.join(fixture.kitPath, 'rules.md'), 'Current rules.\n');
   await writeFile(path.join(fixture.kitPath, 'files.md'), 'Current formats.\n');
   for (const name of ['2.0.0-experimental.4', '3.0.0']) {
@@ -885,7 +885,7 @@ test('quarantining many closed legacy registrations does not hash the whole M1ND
     const record = await addLegacySession(fixture, 'TESTBOX', { registrationId: id, sessionId: id, nativeSessionId: `native-${index}` });
     const statuses = path.join(fixture.sourcePath, 'user', 'relay', 'session-status', record.sessionId);
     await mkdir(statuses, { recursive: true });
-    await writeFile(path.join(statuses, `${id}.json`), JSON.stringify({ format: 'hivem1nd-session-status-v1', sessionId: record.sessionId,
+    await writeFile(path.join(statuses, `${id}.json`), JSON.stringify({ format: 'hivem1nd-session-status-v1', sessionId: record.sessionId, // Compatibility: stored schemas and wire contracts retain their existing identifiers.
       machine: 'TESTBOX', state: 'stopped', reason: 'native-acknowledged', at: '2026-10-14T00:00:00.000Z' }));
   }
   const session = await confirmedSetup(fixture.options);
@@ -900,7 +900,7 @@ test('quarantining many closed legacy registrations does not hash the whole M1ND
 test('a migrated copy replaces the old kit outside user without asking, and the original keeps its bytes', async context => {
   const fixture = await checkpointFixture(context);
   const nl = String.fromCharCode(10);
-  await writeFile(path.join(fixture.sourcePath, 'package.json'), '{"name":"hivem1nd","version":"2.0.1"}' + nl);
+  await writeFile(path.join(fixture.sourcePath, 'package.json'), '{"name":"hivem1nd","version":"2.0.1"}' + nl); // Historical: the 2.x source fixture retains its original package identity.
   await mkdir(path.join(fixture.sourcePath, 'node_modules', 'old-dependency'), { recursive: true });
   await writeFile(path.join(fixture.sourcePath, 'node_modules', 'old-dependency', 'index.js'), 'module.exports = 1;' + nl);
   await writeFile(path.join(fixture.sourcePath, 'rules.md'), 'Rules of 2.x.' + nl);
@@ -1024,7 +1024,7 @@ test('a stopped migration names its cause in the chosen language and a new M1ND 
   unsaved.save = async binding => ({ binding, saved: false });
   const stopped = await confirmedSetup({ ...closure.options, language: 'es', legacyControl: unsaved }, { closeLegacy: true });
   await assert.rejects(stopped.install(), { code: 'legacy_closure_required' });
-  assert.equal(stopped.checkpoint.error.message, 'La migración se detuvo: no se pudieron cerrar las sesiones de HIVEM1ND 2.x de esta máquina (1). No se cerró ninguna y no se copió nada.');
+  assert.equal(stopped.checkpoint.error.message, 'La migración se detuvo: no se pudieron cerrar las sesiones de ONEM1ND 2.x de esta máquina (1). No se cerró ninguna y no se copió nada.');
   const linked = await checkpointFixture(context);
   const outside = path.join(linked.root, 'outside');
   await mkdir(outside, { recursive: true });
@@ -1106,7 +1106,7 @@ test('native history selects the newest binding and excludes acknowledged stoppe
   assert.equal(sessions[0].sessionId, newer.sessionId);
   const directory = path.join(fixture.sourcePath, 'user', 'relay', 'session-status', newer.sessionId);
   await mkdir(directory, { recursive: true });
-  await writeFile(path.join(directory, `${old.registrationId}.json`), JSON.stringify({ format: 'hivem1nd-session-status-v1', sessionId: newer.sessionId,
+  await writeFile(path.join(directory, `${old.registrationId}.json`), JSON.stringify({ format: 'hivem1nd-session-status-v1', sessionId: newer.sessionId, // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     state: 'stopped', machine: 'TESTBOX', at: '2026-10-13T02:00:00.000Z', reason: 'native-acknowledged' }));
   assert.deepEqual(await legacySessions(fixture.sourcePath), []);
 });

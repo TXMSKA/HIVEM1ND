@@ -9,7 +9,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 const memberScript = fileURLToPath(new URL('./relan-sim-member.mjs', import.meta.url));
 const unicast = process.argv.includes('--unicast');
-const root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-relan-sim-')));
+const root = await realpath(await mkdtemp(path.join(os.tmpdir(), 'onem1nd-relan-sim-')));
 const children = [];
 const names = ['MACHINE-A', 'MACHINE-B', 'MACHINE-C'];
 const texts = Object.fromEntries(names.map(name => [name, `Private ReLAN simulation content from ${name}: ${root}`]));
@@ -188,7 +188,7 @@ try {
   }
   const temporary = await realpath(os.tmpdir());
   const relative = path.relative(temporary, root);
-  assert.ok(relative.startsWith('hivem1nd-relan-sim-') && !relative.includes(path.sep) && !path.isAbsolute(relative));
+  assert.ok(relative.startsWith('onem1nd-relan-sim-') && !relative.includes(path.sep) && !path.isAbsolute(relative));
   await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   console.log(`ReLAN simulation: ${passed} passed, ${failed} failed.`);
 }

@@ -30,7 +30,7 @@ function packed(machine, sequence, text = `${machine}:${sequence}`, options = {}
     machine,
     sequence,
     changes: [{
-      format: 'hivem1nd-change-v1',
+      format: 'hivem1nd-change-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
       id: uuidV8(['replicate', machine, sequence, hash]),
       machine,
       at: AT,
@@ -49,7 +49,7 @@ function packed(machine, sequence, text = `${machine}:${sequence}`, options = {}
 
 function headed(machine, packs) {
   return {
-    format: 'hivem1nd-head-v1',
+    format: 'hivem1nd-head-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     machine,
     sequence: packs.length,
     updatedAt: AT,

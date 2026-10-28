@@ -106,26 +106,26 @@ test('local Cosmic paths reject synced staging and Windows device junctions', as
   );
   assert.equal(
     defaultMind({ platform: 'linux', env: { XDG_DATA_HOME: 'relative' }, home: '/home/example' }),
-    path.posix.join('/home/example', '.local', 'share', 'Cosmic', '.m1nd'),
+    path.posix.join('/home/example', '.local', 'share', 'Cosmic', 'onem1nd'),
   );
   assert.equal(
     defaultMind({ platform: 'linux', env: { XDG_DATA_HOME: '/var/data' }, home: '/home/example' }),
-    '/home/example/.local/share/Cosmic/.m1nd',
+    '/home/example/.local/share/Cosmic/onem1nd',
   );
   assert.equal(
     localCosmic({ platform: 'darwin', env: {}, home: '/Users/example' }),
     path.posix.join('/Users/example', 'Library', 'Application Support', 'Cosmic'),
   );
-  assert.equal(mindKeyFor('C:\\Cosmic\\Hivem1nd', 'win32'), mindKeyFor('c:\\cosmic\\hivem1nd', 'win32'));
-  assert.notEqual(mindKeyFor('/Cosmic/Hivem1nd', 'linux'), mindKeyFor('/Cosmic/hivem1nd', 'linux'));
+  assert.equal(mindKeyFor('C:\\Cosmic\\Onem1nd', 'win32'), mindKeyFor('c:\\cosmic\\onem1nd', 'win32'));
+  assert.notEqual(mindKeyFor('/Cosmic/Onem1nd', 'linux'), mindKeyFor('/Cosmic/onem1nd', 'linux'));
   const legacy = servicePaths({
     platform: 'win32',
     env: { LOCALAPPDATA: 'C:\\Users\\example\\AppData\\Local' },
     home: 'C:\\Users\\example',
     machine: 'DESKTOP',
-    mindPath: 'C:\\Users\\example\\OneDrive\\HIVEM1ND',
+    mindPath: 'C:\\Users\\example\\OneDrive\\HIVEM1ND', // Compatibility: explicitly selected existing minds retain their location.
   });
-  assert.equal(legacy.mind, 'C:\\Users\\example\\OneDrive\\HIVEM1ND');
+  assert.equal(legacy.mind, 'C:\\Users\\example\\OneDrive\\HIVEM1ND'); // Compatibility: explicitly selected existing minds retain their location.
   assert.equal(legacy.staging.startsWith('C:\\Users\\example\\AppData\\Local\\Cosmic\\'), true);
 
   const fixture = await makeCoreFixture();
@@ -314,7 +314,7 @@ test('a crash after the first file or before the receipt recovers once', async (
 
 test('a path check remembers ancestors it already verified', async () => {
   const root = await import('node:os').then(os => os.tmpdir());
-  const base = path.join(root, `hivem1nd-links-${process.pid}`);
+  const base = path.join(root, `onem1nd-links-${process.pid}`);
   const shop = path.join(base, 'Web', 'shop');
   const blog = path.join(base, 'Web', 'blog');
   await mkdir(shop, { recursive: true });

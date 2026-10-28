@@ -112,7 +112,7 @@ async function fetchBytes(context, value, signal, redirects = 0) {
 
 function httpsBytes(url, { signal, addresses, maxBytes }) {
   return new Promise((resolve, reject) => {
-    const req = request(url, { signal, headers: { 'user-agent': 'HIVEM1ND/3.0', accept: 'application/json, application/octet-stream', 'accept-encoding': 'identity' },
+    const req = request(url, { signal, headers: { 'user-agent': 'ONEM1ND/3.0', accept: 'application/json, application/octet-stream', 'accept-encoding': 'identity' },
       lookup: (_hostname, options, callback) => callback(null, options.all ? addresses : addresses[0].address, addresses[0].family) }, res => {
       const chunks = []; let count = 0;
       res.on('data', bytes => {

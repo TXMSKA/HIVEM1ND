@@ -10,7 +10,7 @@ function fixture(statuses = []) {
       calls.push({ path: new URL(url).pathname + new URL(url).search, method: options.method,
         body: options.body == null ? null : JSON.parse(options.body), key: options.headers['Idempotency-Key'] });
       const status = statuses.shift() ?? 200;
-      return new Response(JSON.stringify(status < 400 ? { contract: 'hivem1nd-gui-v3', data: { accepted: true },
+      return new Response(JSON.stringify(status < 400 ? { contract: 'hivem1nd-gui-v3', data: { accepted: true }, // Compatibility: stored schemas and wire contracts retain their existing identifiers.
         meta: { requestId: 'fixture-request', readAt: '2026-10-13T12:00:00.000Z', eventCursor: '0', sync: 'local' } }
         : { error: { code: 'source_unavailable', message: 'The source did not answer.' } }),
         { status, headers: { 'Content-Type': 'application/json' } });

@@ -106,11 +106,11 @@ test('shared Content selections prepare only included knowledge features and req
   const fixture = await makeKnowledgeFixture(t);
   await mkdir(path.join(fixture.mindPath, 'user', 'gui'), { recursive: true });
   const settingsFile = path.join(fixture.mindPath, 'user', 'gui', 'content.json');
-  await writeFile(settingsFile, JSON.stringify({ format: 'hivem1nd-content-settings-v1', includedFeatures: [], includedKnowledge: [], preferences: { addressStyle: 'impersonal', additionalInstructions: '', keepExistingPreferencesFirst: true, updateChecks: 'off' } }));
+  await writeFile(settingsFile, JSON.stringify({ format: 'hivem1nd-content-settings-v1', includedFeatures: [], includedKnowledge: [], preferences: { addressStyle: 'impersonal', additionalInstructions: '', keepExistingPreferencesFirst: true, updateChecks: 'off' } })); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   let plan = await prepareContentAgentAssets({ ...fixture.options, agents: [{ name: 'codex', mode: 'on-demand' }], managedFiles: {} });
   assert.equal(plan.items.some(item => item.path.includes('security-sweep')), false);
   await assert.rejects(applyInstallPlan(plan), /Review changes in Settings/);
-  await writeFile(settingsFile, JSON.stringify({ format: 'hivem1nd-content-settings-v1', includedFeatures: [], includedKnowledge: ['knowledge:security'], preferences: { addressStyle: 'impersonal', additionalInstructions: '', keepExistingPreferencesFirst: true, updateChecks: 'off' } }));
+  await writeFile(settingsFile, JSON.stringify({ format: 'hivem1nd-content-settings-v1', includedFeatures: [], includedKnowledge: ['knowledge:security'], preferences: { addressStyle: 'impersonal', additionalInstructions: '', keepExistingPreferencesFirst: true, updateChecks: 'off' } })); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   plan = await prepareContentAgentAssets({ ...fixture.options, agents: [{ name: 'codex', mode: 'on-demand' }], managedFiles: {} });
   const selected = plan.items.filter(item => item.path.includes('security-sweep')).map(item => item.path);
   assert.equal(selected.length, 2);
@@ -129,7 +129,7 @@ async function writeMindFile(fixture, relativePath, content) {
 }
 
 async function makeKnowledgeFixture(context, excluded = []) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-knowledge-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-knowledge-'));
   context.after(() => rm(root, { recursive: true, force: true }));
   const kitPath = path.join(root, 'kit');
   const mindPath = path.join(root, 'mind');
@@ -141,7 +141,7 @@ async function makeKnowledgeFixture(context, excluded = []) {
   await mkdir(path.join(mindPath, 'user', 'machines'), { recursive: true });
   await mkdir(homeDir, { recursive: true });
   await writeFile(path.join(kitPath, 'package.json'), JSON.stringify({
-    name: 'hivem1nd-test-kit',
+    name: 'onem1nd-test-kit',
     version: '1.0.0',
     files: ['roles/', 'features/', 'knowledge/', 'rules.md'],
   }));

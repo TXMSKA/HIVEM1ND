@@ -12,7 +12,7 @@ const OTHER = "22222222-2222-4222-8222-222222222222";
 
 function envelope(data, cursor = `${SERVICE}:1`) {
   return {
-    contract: "hivem1nd-gui-v3",
+    contract: "hivem1nd-gui-v3", // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     data,
     meta: { requestId: "33333333-3333-4333-8333-333333333333", readAt: "2026-10-10T12:00:00.000Z", eventCursor: cursor, sync: "local" },
   };
@@ -49,7 +49,7 @@ function controlEvent(name, id, data) {
     id,
     name,
     envelope: {
-      contract: "hivem1nd-events-v3",
+      contract: "hivem1nd-events-v3", // Compatibility: stored schemas and wire contracts retain their existing identifiers.
       at: "2026-10-10T12:00:00.000Z",
       machine: "DESKTOP",
       source: { kind: "service", id: "fixture", unitId: "root:master" },
@@ -63,7 +63,7 @@ function unitEvent(id, unit) {
     id,
     name: "unit.changed",
     envelope: {
-      contract: "hivem1nd-events-v3",
+      contract: "hivem1nd-events-v3", // Compatibility: stored schemas and wire contracts retain their existing identifiers.
       at: "2026-10-10T12:00:00.000Z",
       machine: "DESKTOP",
       source: { kind: "gui", id: "fixture", unitId: "root:master" },
@@ -231,7 +231,7 @@ test("retries reuse the operation id and body bytes", async () => {
 test("the event parser accepts split UTF-8, mixed endings, and unknown events", () => {
   const note = "niño 日本語";
   const payload = {
-    contract: "hivem1nd-events-v3",
+    contract: "hivem1nd-events-v3", // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     at: "2026-10-10T12:00:00.000Z",
     machine: "DESKTOP",
     source: { kind: "gui", id: "fixture", unitId: "root:master" },
@@ -402,7 +402,7 @@ test("reconnection stops after a finite budget and keeps the session", async () 
   close(elapsedLive);
 
   const encoder = new TextEncoder();
-  const ready = `event: stream.ready\ndata: ${JSON.stringify({ contract: "hivem1nd-events-v3", data: { cursor: `${SERVICE}:1` } })}\n\n`;
+  const ready = `event: stream.ready\ndata: ${JSON.stringify({ contract: "hivem1nd-events-v3", data: { cursor: `${SERVICE}:1` } })}\n\n`; // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   let opened = 0;
   const afterReady = await exhaust(() => 1000, async () => {
     opened += 1;
@@ -468,7 +468,7 @@ test("snapshots, duplicate revisions, and late reads stay ordered", async () => 
   const conflict = applyEvent(dirty, dirtyApi, {
     id: `${SERVICE}:4`,
     name: "void.changed",
-    envelope: { contract: "hivem1nd-events-v3", data: { resourceId: "doc-1", revision: "bb" } },
+    envelope: { contract: "hivem1nd-events-v3", data: { resourceId: "doc-1", revision: "bb" } }, // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   });
   assert.equal(dirty.drafts.get("doc-1").text, "mine");
   assert.equal(dirty.conflicts.get("doc-1").revision, "bb");
@@ -880,7 +880,7 @@ test("a paged store applies live events and leaves a reset unpaused", async () =
   const api = harness({ fetch: async () => tooLarge() }).api;
   const store = createStore();
   assert.equal((await loadSnapshot(store, api)).paged, true);
-  const event = { id: `${SERVICE}:7`, name: "unit.unread", envelope: { contract: "hivem1nd-events-v3", data: { unitId: "root:master", count: 3 } } };
+  const event = { id: `${SERVICE}:7`, name: "unit.unread", envelope: { contract: "hivem1nd-events-v3", data: { unitId: "root:master", count: 3 } } }; // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   const applied = await acceptStreamEvent(store, api, event);
   assert.notEqual(applied?.dropped, true, "a paged store must not drop live events");
   applied.consume();
@@ -889,7 +889,7 @@ test("a paged store applies live events and leaves a reset unpaused", async () =
   assert.equal(store.paused, false, "a reset that ends paged resumes the stream");
   const later = await acceptStreamEvent(store, api, { ...event, id: `${SERVICE}:8` });
   assert.notEqual(later?.buffered, true);
-  assert.equal((await applyEvent(store, api, { id: `${SERVICE}:9`, name: "additions.changed", envelope: { contract: "hivem1nd-events-v3", data: {} } })).applied, true, "a paged store does not ask for the whole view again");
+  assert.equal((await applyEvent(store, api, { id: `${SERVICE}:9`, name: "additions.changed", envelope: { contract: "hivem1nd-events-v3", data: {} } })).applied, true, "a paged store does not ask for the whole view again"); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
 });
 
 test("a paged store does not ask for the whole view on view.changed, and takes a restarted service's events", async () => {
@@ -898,13 +898,13 @@ test("a paged store does not ask for the whole view on view.changed, and takes a
   const store = createStore();
   await loadSnapshot(store, api);
   requests.length = 0;
-  const changed = await applyEvent(store, api, { id: `${SERVICE}:5`, name: "view.changed", envelope: { contract: "hivem1nd-events-v3", data: { revision: "r1", collections: ["units"] } } });
+  const changed = await applyEvent(store, api, { id: `${SERVICE}:5`, name: "view.changed", envelope: { contract: "hivem1nd-events-v3", data: { revision: "r1", collections: ["units"] } } }); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   assert.equal(changed.applied, true);
   assert.equal(requests.some((url) => url.endsWith("/view")), false, "paged, view.changed reloads collections, not the view");
-  const first = await acceptStreamEvent(store, api, { id: `${SERVICE}:9`, name: "unit.unread", envelope: { contract: "hivem1nd-events-v3", data: { unitId: "root:master", count: 1 } } });
+  const first = await acceptStreamEvent(store, api, { id: `${SERVICE}:9`, name: "unit.unread", envelope: { contract: "hivem1nd-events-v3", data: { unitId: "root:master", count: 1 } } }); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   first.consume();
   const restarted = "22222222-2222-4222-8222-222222222222";
-  const next = await acceptStreamEvent(store, api, { id: `${restarted}:1`, name: "unit.unread", envelope: { contract: "hivem1nd-events-v3", data: { unitId: "root:master", count: 2 } } });
+  const next = await acceptStreamEvent(store, api, { id: `${restarted}:1`, name: "unit.unread", envelope: { contract: "hivem1nd-events-v3", data: { unitId: "root:master", count: 2 } } }); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   assert.notEqual(next?.dropped, true, "the first event of a restarted service is new, though its number is lower");
   next.consume();
   assert.equal(store.cursor, `${restarted}:1`);

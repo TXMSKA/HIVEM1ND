@@ -137,7 +137,7 @@ function verifyRecord(record, publicKey = record?.publicKey) {
 
 function reportShape(record, machine) {
   exact(record, ['format', 'machine', 'reportedAt', 'service', 'locations', 'agents', 'permissions', 'projects', 'clusterLinks', 'discoveryOffer', 'connectedClients', 'publicKey', 'signature']);
-  if (record.format !== 'hivem1nd-machine-settings-v1' || record.machine !== machine || !time(record.reportedAt) || !verifyRecord(record)) fail(422, 'corrupt_resource', 'The machine Settings report failed its integrity check.');
+  if (record.format !== 'hivem1nd-machine-settings-v1' || record.machine !== machine || !time(record.reportedAt) || !verifyRecord(record)) fail(422, 'corrupt_resource', 'The machine Settings report failed its integrity check.'); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   exact(record.locations, ['mind', 'staging']);
   if (!text(record.locations.mind) || !text(record.locations.staging)) fail(422, 'corrupt_resource', 'The machine locations are not valid.');
   exact(record.service, ['machine', 'state', 'version', 'startedAt', 'startWithWindows', 'revision']);
@@ -242,7 +242,7 @@ function validateAgentPermission(permission, machine) {
   const unit = automatic && (() => { try { return parseUnitId(permission.unitId).id === permission.unitId; } catch { return false; } })();
   if (!isUuid(permission.id) || permission.machine !== machine || !text(permission.client, 128)
     || !(automatic ? unit && AUTOMATIC_CLIENTS.includes(permission.client) : canonicalJson(permission.actions) === canonicalJson(['git.commit', 'git.push']) && !Object.hasOwn(permission, 'unitId'))
-    || permission.scope !== 'hivem1nd-started-sessions' || !time(permission.grantedAt) || permission.grantedBy !== 'root:master') fail(422, 'corrupt_resource', 'An agent permission report is not valid.');
+    || permission.scope !== 'hivem1nd-started-sessions' || !time(permission.grantedAt) || permission.grantedBy !== 'root:master') fail(422, 'corrupt_resource', 'An agent permission report is not valid.'); // Compatibility: stored permission scope preserves existing grants.
 }
 
 export async function readAgentPermissions(context) {
@@ -269,7 +269,7 @@ async function grantAutomaticWork(context, input) {
   const present = permissions.find(item => item.client === input.client && item.unitId === unit.id && item.actions.includes('native.automatic'));
   if (present) return { status: 200, body: { permission: present, revision: (await publishMachineSettings(context, 'permissions')).permissions.revision } };
   if (permissions.length >= 64) fail(409, 'permission_limit', 'Too many agent permissions exist; revoke one first.');
-  const permission = { id: randomUUID(), machine: context.paths.machine, client: input.client, actions: ['native.automatic'], scope: 'hivem1nd-started-sessions',
+  const permission = { id: randomUUID(), machine: context.paths.machine, client: input.client, actions: ['native.automatic'], scope: 'hivem1nd-started-sessions', // Compatibility: stored permission scope preserves existing grants.
     unitId: unit.id, grantedAt: stamp(context), grantedBy: 'root:master' };
   await configurationWrite(context, [{ path: file, root: context.paths.localDirectory, before: original, after: bytes({ permissions: [...permissions, permission] }), internal: true }]);
   const report = await publishMachineSettings(context, 'permissions');
@@ -347,7 +347,7 @@ async function publishOwnedSettings(context, section) {
   const refreshAgents = !existing || section === 'agents' || context.contentRevision !== contentRevision;
   context.contentRevision = contentRevision;
   const body = {
-    format: 'hivem1nd-machine-settings-v1', machine, reportedAt: stamp(context),
+    format: 'hivem1nd-machine-settings-v1', machine, reportedAt: stamp(context), // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     locations: { mind: context.paths.mind, staging: context.paths.staging },
     service: { machine, state: context.active === false ? 'stopped' : 'running', version: '3.0.0', startedAt: context.startedAt ?? stamp(context), startWithWindows: config.startWithWindows === true, revision: revisionOf(configSource) },
     agents: refreshAgents ? { revision: null, items: await agentItems(context, legacy) } : existing.agents,
@@ -423,7 +423,7 @@ export async function readMachineSettings(context, machine = context.paths.machi
   validateMachineName(machine);
   const readOnly = !await machineOnline(context, machine);
   const report = machine === context.paths.machine ? await currentReport(context) : await readPublishedSettings(context, machine);
-  const shared = await json(context, 'user/gui/settings.json') ?? { format: 'hivem1nd-settings-v1', look: 'modern', language: 'en' };
+  const shared = await json(context, 'user/gui/settings.json') ?? { format: 'hivem1nd-settings-v1', look: 'modern', language: 'en' }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   const common = { machine, readOnly, reportedAt: report?.reportedAt ?? null };
   if (section === 'agents') return { ...common, revision: report?.agents.revision ?? null, items: report?.agents.items ?? [],
     connectedClients: report?.connectedClients ?? [], defaultRunsIn: machine === context.paths.machine ? await defaultRunsIn(context) : null };
@@ -528,8 +528,8 @@ function ownershipPath(context) { return path.join(context.paths.localDirectory,
 
 async function clientOwnership(context) {
   const source = await readConfigBytes(ownershipPath(context));
-  const record = source ? JSON.parse(source) : { format: 'hivem1nd-client-configuration-v1', machine: context.paths.machine, clients: {}, applied: {} };
-  if (record.format !== 'hivem1nd-client-configuration-v1' || record.machine !== context.paths.machine) fail(409, 'configuration_changed', 'The local configuration ownership changed.');
+  const record = source ? JSON.parse(source) : { format: 'hivem1nd-client-configuration-v1', machine: context.paths.machine, clients: {}, applied: {} }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
+  if (record.format !== 'hivem1nd-client-configuration-v1' || record.machine !== context.paths.machine) fail(409, 'configuration_changed', 'The local configuration ownership changed.'); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   return record;
 }
 
@@ -592,9 +592,9 @@ export async function previewClientConfiguration(context, client, input) {
   const permissionBytes = await readConfigBytes(permissionPath);
   const permissions = await readAgentPermissions(context);
   if (!permissions.some(item => item.client === client && item.machine === input.machine)) {
-    const permission = { id: randomUUID(), machine: input.machine, client, actions: ['git.commit', 'git.push'], scope: 'hivem1nd-started-sessions', grantedAt: stamp(context), grantedBy: 'root:master' };
+    const permission = { id: randomUUID(), machine: input.machine, client, actions: ['git.commit', 'git.push'], scope: 'hivem1nd-started-sessions', grantedAt: stamp(context), grantedBy: 'root:master' }; // Compatibility: stored permission scope preserves existing grants.
     changes.push({ id: 'git', path: permissionPath, root: context.paths.localDirectory, kind: 'permission', before: permissionBytes,
-      after: bytes({ permissions: [...permissions, permission] }), afterText: canonicalJson(permission), description: 'Allow git commit and git push only in HIVEM1ND-started sessions on this machine', optional: true, selected: false });
+      after: bytes({ permissions: [...permissions, permission] }), afterText: canonicalJson(permission), description: 'Allow git commit and git push only in ONEM1ND-started sessions on this machine', optional: true, selected: false });
   }
   const previewId = randomUUID();
   const revision = hashBytes(bytes(await agentItems(context, legacy)));
@@ -720,7 +720,7 @@ export async function mutateMachineSettings(context, operation, input, id = null
   const relative = `user/relay/settings-requests/${context.paths.machine}/${requestId}.json`;
   let request = await json(context, relative);
   if (!request) {
-    request = await signed(owner, { format: 'hivem1nd-settings-request-v1', id: requestId, sourceMachine: context.paths.machine, targetMachine: input.machine, owner: 'root:master', operation, input, resourceId: id, createdAt: stamp(context), expiresAt: new Date(context.now() + 30000).toISOString(), targetKey: target.publicKey });
+    request = await signed(owner, { format: 'hivem1nd-settings-request-v1', id: requestId, sourceMachine: context.paths.machine, targetMachine: input.machine, owner: 'root:master', operation, input, resourceId: id, createdAt: stamp(context), expiresAt: new Date(context.now() + 30000).toISOString(), targetKey: target.publicKey }); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     await commitChange({ ...context, receipt: null }, { id: uuidV8(['settings-request-write', requestId]), entries: [{ resource: `settings-request:${requestId}`, recordPath: absolute(context, relative), beforeRevision: null, afterBytes: bytes(request) }], events: [], body: null });
   }
   const deadline = Date.now() + (owner.settingsTimeoutMs ?? 25000);
@@ -766,7 +766,7 @@ export async function processSettingsRequests(context) {
           error = { code: caught instanceof CoreError ? caught.code : 'service_unavailable', message: 'The selected owner could not apply this Settings request.' };
           outcome = { status: caught instanceof CoreError ? caught.status : 503, body: null };
         }
-        const result = await signed(context, { format: 'hivem1nd-settings-result-v1', id: request.id, targetMachine: context.paths.machine, requestHash: revision(request), status: outcome.status, body: outcome.body, error, reportedAt: stamp(context) });
+        const result = await signed(context, { format: 'hivem1nd-settings-result-v1', id: request.id, targetMachine: context.paths.machine, requestHash: revision(request), status: outcome.status, body: outcome.body, error, reportedAt: stamp(context) }); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
         assertNoPrivateResult(result.body);
         await commitChange({ ...context, receipt: null }, { id: uuidV8(['settings-result', request.id]), entries: [{ resource: `settings-result:${request.id}`, recordPath: absolute(context, relative), beforeRevision: null, afterBytes: bytes(result) }], events: [], body: null });
       });
@@ -799,11 +799,11 @@ export async function validateSettingsSyncRecord(sync, target, raw, machine, inc
   if (!ownerReport || !verifyRecord(record, ownerReport.publicKey)) fail(422, 'invalid_record_owner', 'The Settings record is not signed by its publishing owner.');
   if (requestMatch) {
     exact(record, ['format', 'id', 'sourceMachine', 'targetMachine', 'owner', 'operation', 'input', 'resourceId', 'createdAt', 'expiresAt', 'targetKey', 'publicKey', 'signature']);
-    if (record.format !== 'hivem1nd-settings-request-v1' || record.id !== requestMatch[2] || record.sourceMachine !== owner || record.owner !== 'root:master' || record.input?.machine !== record.targetMachine) fail(422, 'invalid_record_owner', 'The Settings request binding is not valid.');
+    if (record.format !== 'hivem1nd-settings-request-v1' || record.id !== requestMatch[2] || record.sourceMachine !== owner || record.owner !== 'root:master' || record.input?.machine !== record.targetMachine) fail(422, 'invalid_record_owner', 'The Settings request binding is not valid.'); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     validateSettingsBody(record.operation, record.input);
   } else {
     exact(record, ['format', 'id', 'targetMachine', 'requestHash', 'status', 'body', 'error', 'reportedAt', 'publicKey', 'signature']);
-    if (record.format !== 'hivem1nd-settings-result-v1' || record.id !== resultMatch[2] || record.targetMachine !== owner || !byteRevision(record.requestHash)) fail(422, 'invalid_record_owner', 'The Settings result binding is not valid.');
+    if (record.format !== 'hivem1nd-settings-result-v1' || record.id !== resultMatch[2] || record.targetMachine !== owner || !byteRevision(record.requestHash)) fail(422, 'invalid_record_owner', 'The Settings result binding is not valid.'); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     assertNoPrivateResult(record.body);
   }
 }
@@ -869,7 +869,7 @@ export async function writeContent(context, input) {
     }
     const owned = preferenceBlock(preferences);
     const preferenceBytes = Buffer.from(preferences.keepExistingPreferencesFirst ? `${current}${current && !current.endsWith('\n') ? '\n' : ''}${owned}` : `${owned}${current}`);
-    const record = { format: 'hivem1nd-content-settings-v1', includedFeatures: input.includedFeatures, includedKnowledge: input.includedKnowledge, preferences };
+    const record = { format: 'hivem1nd-content-settings-v1', includedFeatures: input.includedFeatures, includedKnowledge: input.includedKnowledge, preferences }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     const payload = bytes(record);
     const entries = [{ resource: 'settings-content', recordPath: absolute(context, CONTENT_PATH), beforeRevision: revisionOf(source), afterBytes: payload }, { resource: 'settings-preferences', recordPath: preferencePath, beforeRevision: revisionOf(previous), afterBytes: preferenceBytes }];
     await commitChange(context, { id: uuidV8(['settings-content', context.receipt?.key ?? stamp(context), revision(record)]), entries,
@@ -878,10 +878,10 @@ export async function writeContent(context, input) {
   });
 }
 
-const PREFERENCE_MARK = '<!-- HIVEM1ND Settings preferences -->';
+const PREFERENCE_MARK = '<!-- ONEM1ND Settings preferences -->';
 
 function preferenceBlock(preferences) {
-  return `${PREFERENCE_MARK}\nAddress style: ${preferences.addressStyle}\nKeep existing preferences first: ${preferences.keepExistingPreferencesFirst ? 'yes' : 'no'}\nCheck for updates: ${preferences.updateChecks}\n\n${preferences.additionalInstructions}\n<!-- /HIVEM1ND Settings preferences -->\n`;
+  return `${PREFERENCE_MARK}\nAddress style: ${preferences.addressStyle}\nKeep existing preferences first: ${preferences.keepExistingPreferencesFirst ? 'yes' : 'no'}\nCheck for updates: ${preferences.updateChecks}\n\n${preferences.additionalInstructions}\n<!-- /ONEM1ND Settings preferences -->\n`;
 }
 
 function replaceListSection(source, title, lines) {
@@ -918,7 +918,7 @@ export async function prepareAdditionProjects(context, additions, { checkOnly = 
       const mapping = { name: addition.name, path: addition.localPath };
       if (existing >= 0) mappings[existing] = mapping; else mappings.push(mapping);
     }
-    const after = bytes({ ...product, format: 'hivem1nd-product-v1', title: addition.title, additionId: addition.id, origin: addition.source.display, pin: addition.pin, removed: remove });
+    const after = bytes({ ...product, format: 'hivem1nd-product-v1', title: addition.title, additionId: addition.id, origin: addition.source.display, pin: addition.pin, removed: remove }); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     entries.push({ resource: `addition-project:${addition.name}`, recordPath: file, beforeRevision: revisionOf(before), beforeBytes: before, afterBytes: after });
   }
   if (checkOnly) return { entries: [], events: [], revision: report?.projects.revision ?? null };
@@ -947,7 +947,7 @@ export async function prepareAdditionProjects(context, additions, { checkOnly = 
   for (const event of clusterPlan.events) if (event.name === 'cluster.changed' && event.data.cluster.deleted) projected.delete(event.data.cluster.id);
   const projects = { folders }, projectRevision = revision(projects);
   const base = report ? (({ publicKey, signature, ...body }) => body)(report) : {
-    format: 'hivem1nd-machine-settings-v1', machine, locations: { mind: context.paths.mind, staging: context.paths.staging },
+    format: 'hivem1nd-machine-settings-v1', machine, locations: { mind: context.paths.mind, staging: context.paths.staging }, // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     service: { machine, state: 'running', version: '3.0.0', startedAt: stamp(context), startWithWindows: false, revision: null },
     agents: { revision: revision([]), items: [] }, permissions: { revision: revision({ unitGrants: [], agentPermissions: [] }), unitGrants: [], agentPermissions: [] } };
   const afterReport = await signed(service, { ...base, reportedAt: stamp(context), projects: { ...projects, revision: projectRevision }, clusterLinks: [...projected.values()] });
@@ -1010,7 +1010,7 @@ export async function discoveryOffer(context, { wait = true } = {}) {
   const read = async () => {
     const saved = await offerRecord(context);
     if (saved.record) {
-      if (saved.record.format !== 'hivem1nd-discovery-offer-v1' || saved.record.machine !== context.paths.machine) fail(409, 'cluster_changed', 'The discovery owner changed.');
+      if (saved.record.format !== 'hivem1nd-discovery-offer-v1' || saved.record.machine !== context.paths.machine) fail(409, 'cluster_changed', 'The discovery owner changed.'); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
       return { saved, view: offerView(saved.record) };
     }
     return { saved, view: null };
@@ -1059,7 +1059,7 @@ function saveOffer(context, found, read) {
       groups.get(id).repositories.push({ id: project.repositoryId, name: project.name, projectId: null, remote: null, worktrees: project.worktrees });
       repositories.push(project);
     }
-    const record = { format: 'hivem1nd-discovery-offer-v1', machine: context.paths.machine, id: randomUUID(), groups: [...groups.values()], repositories, dismissed: false };
+    const record = { format: 'hivem1nd-discovery-offer-v1', machine: context.paths.machine, id: randomUUID(), groups: [...groups.values()], repositories, dismissed: false }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     await commitChange({ ...context, receipt: null }, { id: randomUUID(), entries: [{ resource: 'discovery-offer', recordPath: saved.file, beforeRevision: null, afterBytes: bytes(record), private: true }], events: [], response: { status: 200, body: null } });
     return offerView(record);
   });

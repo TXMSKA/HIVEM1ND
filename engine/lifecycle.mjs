@@ -272,13 +272,14 @@ async function loadMigrations(kitPath) {
   return migrations;
 }
 
-async function applyMigrations({ kitPath, mindPath, fromVersion, toVersion }) {
+async function applyMigrations({ kitPath, mindPath, fromVersion, toVersion, ...context }) {
   const migrations = await loadMigrations(kitPath);
   const recordPath = path.join(mindPath, "user", "MIGRATIONS");
   const record = await readText(recordPath, "");
   const completed = new Set(record.split(/\r?\n/).map((line) => line.trim()).filter(Boolean));
   for (const version of completed) parseVersion(version, recordPath);
-  const selected = migrations.filter((migration) => compareVersions(migration.version, fromVersion) > 0
+  const selected = migrations.filter((migration) => (compareVersions(migration.version, fromVersion) > 0
+    || migration.version === '3.0.0-onem1nd' && compareVersions(fromVersion, '3.0.0') >= 0)
     && compareVersions(migration.version, toVersion) <= 0);
   const applied = [];
 
@@ -304,6 +305,7 @@ async function applyMigrations({ kitPath, mindPath, fromVersion, toVersion }) {
       );
     }
     await migrate({
+      ...context, kitPath, mindPath,
       userPath: path.join(mindPath, "user"),
       progressDirectory: path.join(mindPath, ".migration"),
       fromVersion,
@@ -363,6 +365,16 @@ async function pullBaseRepository(kitPath, env, userAdditions) {
 
 export async function evolve(options = {}) {
   const resolved = resolveOptions(options);
+  const rebrandFile = path.join(resolved.kitPath, 'migrations', '3.0.0-onem1nd.mjs');
+  if (await fs.access(rebrandFile).then(() => true, () => false)) {
+    const rebrand = await import(pathToFileURL(rebrandFile).href);
+    const result = await rebrand.migrate(resolved);
+    for (const move of result.relocatedPaths ?? []) {
+      if (resolved.mindPath === move.source) resolved.mindPath = move.destination;
+      const relative = path.relative(move.source, resolved.kitPath);
+      if (relative === '' || relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) resolved.kitPath = path.join(move.destination, relative);
+    }
+  }
   const versionPath = path.join(resolved.mindPath, "user", "VERSION");
   await assertSafePath(resolved.mindPath, versionPath, { allowMissing: false });
   const selectedMachinePath = await machineFilePath(resolved.mindPath, resolved.hostname);
@@ -448,6 +460,7 @@ export async function evolve(options = {}) {
   }
 
   const migrations = await applyMigrations({
+    ...resolved,
     kitPath: resolved.kitPath,
     mindPath: resolved.mindPath,
     fromVersion,
@@ -636,7 +649,7 @@ export async function checkForUpdates(options = {}) {
     sourceVersion,
     latestVersion,
     updateAvailable,
-    notice: updateAvailable ? `HIVEM1ND ${latestVersion} is available. Run /evolve to update.` : null,
+    notice: updateAvailable ? `ONEM1ND ${latestVersion} is available. Run /evolve to update.` : null,
     lastCheck: date,
     warnings,
   };
@@ -809,13 +822,13 @@ export async function pylon(options = {}) {
   const initialCommit = (await git(["rev-parse", "HEAD"])).stdout;
   const created = [];
   const warnings = [];
-  const hivemindPath = path.join(repoPath, ".hivem1nd");
-  const statePath = path.join(hivemindPath, "state");
-  const configPath = path.join(hivemindPath, "config.md");
+  const pylonPath = path.join(repoPath, ".hivem1nd"); // Compatibility: repository state paths and branch identity keep existing worktrees attached.
+  const statePath = path.join(pylonPath, "state");
+  const configPath = path.join(pylonPath, "config.md");
   if (path.relative(repoPath, statePath).startsWith("..")) {
     throw lifecycleError("UNSAFE_PYLON_PATH", "The pylon state path escapes the repository.");
   }
-  await assertSafePath(repoPath, hivemindPath);
+  await assertSafePath(repoPath, pylonPath);
   await assertSafePath(repoPath, configPath);
   await assertSafePath(repoPath, statePath);
 
@@ -839,7 +852,7 @@ export async function pylon(options = {}) {
       const gitPath = await git(["rev-parse", "--git-path", "info/exclude"]);
       ignorePath = path.resolve(repoPath, gitPath.stdout);
     }
-    ignoreLine = "/.hivem1nd/state/";
+    ignoreLine = "/.hivem1nd/state/"; // Compatibility: repository state paths and branch identity keep existing worktrees attached.
   }
   if (ignorePath) {
     const relativeIgnore = path.relative(repoPath, ignorePath);
@@ -854,30 +867,30 @@ export async function pylon(options = {}) {
 
   if (state === "branch") {
     await gitIdentity(repoPath, resolved.env);
-    if (targetWorktree && targetWorktree.branch !== "refs/heads/hivem1nd") {
+    if (targetWorktree && targetWorktree.branch !== "refs/heads/hivem1nd") { // Compatibility: repository state paths and branch identity keep existing worktrees attached.
       throw lifecycleError("PYLON_WORKTREE_CONFLICT", `${statePath} is attached to a different branch.`);
     }
-    const branchWorktree = worktrees.find((worktree) => worktree.branch === "refs/heads/hivem1nd");
+    const branchWorktree = worktrees.find((worktree) => worktree.branch === "refs/heads/hivem1nd"); // Compatibility: repository state paths and branch identity keep existing worktrees attached.
     if (branchWorktree && path.resolve(branchWorktree.path).toLowerCase() !== statePath.toLowerCase()) {
-      throw lifecycleError("PYLON_BRANCH_IN_USE", `The hivem1nd branch is already checked out at ${branchWorktree.path}.`);
+      throw lifecycleError("PYLON_BRANCH_IN_USE", `The hivem1nd branch is already checked out at ${branchWorktree.path}.`); // Compatibility: repository state paths and branch identity keep existing worktrees attached.
     }
     if (!targetWorktree && await pathExists(statePath)) {
       const entries = await fs.readdir(statePath);
       if (entries.length > 0) {
-        throw lifecycleError("PYLON_STATE_CONFLICT", `${statePath} exists and is not the hivem1nd worktree.`);
+        throw lifecycleError("PYLON_STATE_CONFLICT", `${statePath} exists and is not the hivem1nd worktree.`); // Compatibility: repository state paths and branch identity keep existing worktrees attached.
       }
     }
 
     branchExists = (await git(
-      ["show-ref", "--verify", "--quiet", "refs/heads/hivem1nd"],
+      ["show-ref", "--verify", "--quiet", "refs/heads/hivem1nd"], // Compatibility: repository state paths and branch identity keep existing worktrees attached.
       { allowFailure: true },
     )).ok;
     const remotes = (await git(["remote"])).stdout.split(/\r?\n/).filter(Boolean);
     remote = remotes.includes("origin") ? "origin" : remotes[0];
     if (remote) {
-      const fetched = await git(["fetch", remote, "hivem1nd"], { allowFailure: true });
+      const fetched = await git(["fetch", remote, "hivem1nd"], { allowFailure: true }); // Compatibility: repository state paths and branch identity keep existing worktrees attached.
       if (!fetched.ok) warnings.push(`The remote state branch could not be fetched: ${fetched.stderr}`);
-      const candidate = `refs/remotes/${remote}/hivem1nd`;
+      const candidate = `refs/remotes/${remote}/hivem1nd`; // Compatibility: repository state paths and branch identity keep existing worktrees attached.
       if ((await git(["show-ref", "--verify", "--quiet", candidate], { allowFailure: true })).ok) {
         remoteBranch = candidate;
       }
@@ -897,24 +910,24 @@ export async function pylon(options = {}) {
   if (state === "branch") {
     if (!targetWorktree && await pathExists(statePath)) await fs.rmdir(statePath);
     if (!branchExists && remoteBranch) {
-      await git(["branch", "hivem1nd", remoteBranch]);
+      await git(["branch", "hivem1nd", remoteBranch]); // Compatibility: repository state paths and branch identity keep existing worktrees attached.
       branchExists = true;
     }
     if (!branchExists) {
       const emptyTree = (await runGitWithInput(repoPath, ["mktree"], "", { env: resolved.env })).stdout;
       const rootCommit = (await git(["commit-tree", emptyTree, "-m", "Initialize team state"])).stdout;
-      await git(["update-ref", "refs/heads/hivem1nd", rootCommit]);
-      created.push("refs/heads/hivem1nd");
+      await git(["update-ref", "refs/heads/hivem1nd", rootCommit]); // Compatibility: repository state paths and branch identity keep existing worktrees attached.
+      created.push("refs/heads/hivem1nd"); // Compatibility: repository state paths and branch identity keep existing worktrees attached.
     } else {
       reused = true;
     }
     if (!targetWorktree) {
-      await git(["worktree", "add", statePath, "hivem1nd"]);
+      await git(["worktree", "add", statePath, "hivem1nd"]); // Compatibility: repository state paths and branch identity keep existing worktrees attached.
       created.push(statePath);
     }
     let canPush = true;
     if (remoteBranch) {
-      const localCommit = (await git(["rev-parse", "refs/heads/hivem1nd"])).stdout;
+      const localCommit = (await git(["rev-parse", "refs/heads/hivem1nd"])).stdout; // Compatibility: repository state paths and branch identity keep existing worktrees attached.
       const remoteCommit = (await git(["rev-parse", remoteBranch])).stdout;
       if (localCommit !== remoteCommit) {
         const localIsAncestor = (await git(
@@ -962,9 +975,9 @@ export async function pylon(options = {}) {
       created.push(...keeps);
     }
     if (remote && canPush && options.push !== false) {
-      const push = await git(["push", "--set-upstream", remote, "hivem1nd"], { allowFailure: true });
+      const push = await git(["push", "--set-upstream", remote, "hivem1nd"], { allowFailure: true }); // Compatibility: repository state paths and branch identity keep existing worktrees attached.
       if (push.ok) pushed = true;
-      else warnings.push(`The hivem1nd branch was created locally but could not be pushed: ${push.stderr}`);
+      else warnings.push(`The hivem1nd branch was created locally but could not be pushed: ${push.stderr}`); // Compatibility: repository state paths and branch identity keep existing worktrees attached.
     }
   } else {
     await ensureStateDirectories(statePath, created);
@@ -986,7 +999,7 @@ export async function pylon(options = {}) {
     action: "pylon",
     repoPath,
     state,
-    branch: state === "branch" ? "hivem1nd" : initialBranch,
+    branch: state === "branch" ? "hivem1nd" : initialBranch, // Compatibility: repository state paths and branch identity keep existing worktrees attached.
     statePath,
     reused,
     synced,

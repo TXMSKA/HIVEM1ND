@@ -21,7 +21,7 @@ export async function ownRunProcess(context, binding, handle, onEvidence) {
   const file = path.join(context.paths.localDirectory, 'runs', binding.runId, 'processes', `${binding.attemptId}.json`);
   const previous = await readBytes(context.store, file);
   if (previous) unavailable();
-  const record = { format: 'hivem1nd-run-process-v1', ...binding, identity: hashBytes(Buffer.from(handle.identity)), generation: randomUUID(), exited: false, cleaned: false };
+  const record = { format: 'hivem1nd-run-process-v1', ...binding, identity: hashBytes(Buffer.from(handle.identity)), generation: randomUUID(), exited: false, cleaned: false }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   await commitTransaction(context.store, { id: randomUUID(), entries: [{ resource: file, recordPath: file, beforeRevision: null,
     afterBytes: Buffer.from(canonicalJson(record)), private: true }], events: [] });
   const owned = { record, handle, identity: handle.identity, file, onEvidence, pending: Promise.resolve(), error: null };

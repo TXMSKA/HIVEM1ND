@@ -51,7 +51,7 @@ function fakeRelay({ agents = { alpha: { unit: 'executor-alpha', awake: true } }
 }
 
 async function fixture(context, { relay = fakeRelay(), wait, pollMs = 20, hostname = 'TESTBOX' } = {}) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-void-test-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-void-test-'));
   const mind = path.join(root, 'mind');
   const repo = path.join(root, 'repos', 'alpha');
   await mkdir(path.join(mind, 'user', 'machines'), { recursive: true });
@@ -493,7 +493,7 @@ test('the new routes refuse a foreign host, a foreign origin and the files they 
 });
 
 test('a comment reaches the agent through the person channel of Relay', async (context) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-void-relay-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-void-relay-'));
   context.after(() => rm(root, { recursive: true, force: true }));
   const mind = path.join(root, 'mind');
   const repo = path.join(root, 'alpha');

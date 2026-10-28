@@ -13,7 +13,7 @@
     "frontmatterKeys": ["name", "description", "paths", "disable-model-invocation", "icon", "color", "metadata"]
   },
   "rules": {
-    "homePath": ".cursor/rules/hivem1nd.mdc",
+    "homePath": ".cursor/rules/onem1nd.mdc",
     "mode": "cursor"
   },
   "cli": {

@@ -37,8 +37,8 @@ test('install configures each available client without a Relay entry, once, and 
   });
   assert.deepEqual(first.filter((item) => item.restart).map((item) => item.client), ['claude', 'codex']);
   const claude = JSON.parse(await readFile(path.join(homeDir, '.claude.json'), 'utf8'));
-  assert.deepEqual(claude.mcpServers['hivem1nd-relay'].args.slice(0, 5), [path.join(mindPath, 'cli', 'index.mjs'), 'relay', 'mcp', '--mind-path', mindPath]);
-  assert.match(await readFile(path.join(homeDir, '.codex', 'config.toml'), 'utf8'), /\[mcp_servers\.hivem1nd-relay\]/);
+  assert.deepEqual(claude.mcpServers['onem1nd-relay'].args.slice(0, 5), [path.join(mindPath, 'cli', 'index.mjs'), 'relay', 'mcp', '--mind-path', mindPath]);
+  assert.match(await readFile(path.join(homeDir, '.codex', 'config.toml'), 'utf8'), /\[mcp_servers\.onem1nd-relay\]/);
   assert.equal(await exists(path.join(homeDir, '.cursor')), false);
 
   const before = await readFile(path.join(homeDir, '.claude', 'settings.json'), 'utf8');
@@ -49,7 +49,7 @@ test('install configures each available client without a Relay entry, once, and 
   assert.equal(await readFile(path.join(homeDir, '.claude', 'settings.json'), 'utf8'), before);
 });
 
-const cursorMcp = `${JSON.stringify({ mcpServers: { 'hivem1nd-relay': { type: 'stdio', command: 'node', args: ['C:/mind/cli/index.mjs', 'relay', 'mcp', '--mind-path', 'C:/mind', '--client', 'cursor'] } } }, null, 2)}\n`;
+const cursorMcp = `${JSON.stringify({ mcpServers: { 'onem1nd-relay': { type: 'stdio', command: 'node', args: ['C:/mind/cli/index.mjs', 'relay', 'mcp', '--mind-path', 'C:/mind', '--client', 'cursor'] } } }, null, 2)}\n`;
 
 async function cursorFiles(homeDir, hooks) {
   const cursor = path.join(homeDir, '.cursor');
@@ -215,8 +215,8 @@ test('setup writes no Relay entry, and the reviewed apply joins the available cl
     claude: 'configured', codex: 'configured', cursor: 'not-available', opencode: 'not-available', copilot: 'not-available', antigravity: 'not-available',
   });
   const claude = JSON.parse(await readFile(path.join(homeDir, '.claude.json'), 'utf8'));
-  assert.equal(claude.mcpServers['hivem1nd-relay'].args[0], path.join(KIT_PATH, 'cli', 'index.mjs'));
-  assert.equal(claude.mcpServers['hivem1nd-relay'].args[4], mindPath);
+  assert.equal(claude.mcpServers['onem1nd-relay'].args[0], path.join(KIT_PATH, 'cli', 'index.mjs'));
+  assert.equal(claude.mcpServers['onem1nd-relay'].args[4], mindPath);
 });
 
 test('setup leaves every client alone unless Relay setup is asked for', async (context) => {
@@ -287,7 +287,7 @@ test('evolve configures a client that gained no entry yet, then only reports it'
   assert.equal(first.relay.find((item) => item.client === 'claude').restart, true);
   const file = path.join(homeDir, '.claude.json');
   const configured = await readFile(file, 'utf8');
-  assert.equal(JSON.parse(configured).mcpServers['hivem1nd-relay'].args[0], path.join(KIT_PATH, 'cli', 'index.mjs'));
+  assert.equal(JSON.parse(configured).mcpServers['onem1nd-relay'].args[0], path.join(KIT_PATH, 'cli', 'index.mjs'));
 
   const second = await evolve(evolveOptions);
   assert.equal(statuses(second.relay).claude, 'already-configured');
@@ -308,7 +308,7 @@ test('uninstall removes the Relay entries that run this mind and keeps every for
   assert.equal(statuses(applied).codex, 'configured');
   const codex = await readFile(codexFile, 'utf8');
   assert.equal(codex.startsWith(originalCodex), true);
-  assert.match(codex, /\[mcp_servers\.hivem1nd-relay\]/);
+  assert.match(codex, /\[mcp_servers\.onem1nd-relay\]/);
   assert.equal(await readFile(`${codexFile}.relay-backup`, 'utf8'), originalCodex);
   const laterCodex = '\n[profiles.foreign]\nmodel = "later-model"\n';
   await writeFile(codexFile, `${codex}${laterCodex}`);
@@ -334,7 +334,7 @@ test('uninstall removes the Relay entries that run this mind and keeps every for
   const hooks = JSON.parse(await readFile(settingsFile, 'utf8')).hooks;
   assert.deepEqual(hooks.SessionStart, [{ hooks: [{ type: 'command', command: 'echo foreign' }] }, foreignMindHook]);
   const restoredCodex = await readFile(codexFile, 'utf8');
-  assert.doesNotMatch(restoredCodex, /hivem1nd-relay/);
+  assert.doesNotMatch(restoredCodex, /onem1nd-relay/);
   assert.equal(restoredCodex, `${originalCodex}${laterCodex}`);
 });
 
@@ -349,7 +349,7 @@ test('uninstall leaves a Relay entry that runs another kit', async (context) => 
   assert.equal(statuses(result.relay).claude, 'elsewhere');
   assert.equal(statuses(result.relay).codex, 'elsewhere');
   assert.equal(await readFile(claudeFile, 'utf8'), before);
-  assert.match(await readFile(path.join(homeDir, '.codex', 'config.toml'), 'utf8'), /hivem1nd-relay/);
+  assert.match(await readFile(path.join(homeDir, '.codex', 'config.toml'), 'utf8'), /onem1nd-relay/);
 });
 
 test('uninstall dry run reports the Relay entries it would remove and writes nothing', async (context) => {

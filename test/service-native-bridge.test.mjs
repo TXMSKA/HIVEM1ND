@@ -92,7 +92,7 @@ async function configureProjects(fixture, projects) {
   await mkdir(path.dirname(machineRecordPath(fixture.paths.mind, fixture.machine)), { recursive: true });
   await writeFile(machineRecordPath(fixture.paths.mind, fixture.machine), serializeMachineRecord({ machine: fixture.machine, mind: fixture.paths.mind, setup: 'done', paths: [{ name: 'web', path: fixture.root }, ...projects.map(project => ({ name: project.name, path: project.localPath }))] }));
   await writeFile(path.join(fixture.paths.mind, 'user', 'routes.md'), '## Environments\n- web: shop, remote\n\n## Projects\n- shop (web)\n- remote (web)\n');
-  await writeFile(fixture.paths.configFile, JSON.stringify({ format: 'hivem1nd-service-config-v1', mindPath: fixture.paths.mind, machine: fixture.machine, origin: { kind: 'folder', path: origin }, stagingPath: fixture.paths.staging, port: 0 }));
+  await writeFile(fixture.paths.configFile, JSON.stringify({ format: 'hivem1nd-service-config-v1', mindPath: fixture.paths.mind, machine: fixture.machine, origin: { kind: 'folder', path: origin }, stagingPath: fixture.paths.staging, port: 0 })); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
 }
 
 function stdio(env, mindPath, requests) {
@@ -116,7 +116,7 @@ function stdio(env, mindPath, requests) {
 
 test('a launch grant forwards an actual stdio child to the agent-only service and preserves editor idempotency', async (t) => {
   const { fixture, service, launch, editor, foreign, projects } = await world(t);
-  await assert.rejects(() => dispatchNative(launch.env.HIVEM1ND_SERVICE_BRIDGE, launch.env.HIVEM1ND_SERVICE_GRANT, 'attach'), { code: 'native_login_unverified' });
+  await assert.rejects(() => dispatchNative(launch.env.HIVEM1ND_SERVICE_BRIDGE, launch.env.HIVEM1ND_SERVICE_GRANT, 'attach'), { code: 'native_login_unverified' }); // Compatibility: native bridge environment names match attached sessions.
   launch.ready(NATIVE);
   const env = { ...process.env, ...fixture.env, ...launch.env };
   const native = await connectNativeService({ env, client: 'codex', nativeSessionId: NATIVE });
@@ -337,8 +337,8 @@ test('a Relay tool call keeps its verified window open and a hook reports the en
 test('verified owner host continuity survives an MCP reconnect and rejects another host without making a separate worker', async t => {
   const w = await world(t, 'claude');
   w.launch.ready(NATIVE);
-  for (const hostSessionId of ['', null]) await assert.rejects(() => dispatchNative(w.launch.env.HIVEM1ND_SERVICE_BRIDGE,
-    w.launch.env.HIVEM1ND_SERVICE_GRANT, 'attach', { client: 'claude', hostSessionId }), { code: 'forbidden' });
+  for (const hostSessionId of ['', null]) await assert.rejects(() => dispatchNative(w.launch.env.HIVEM1ND_SERVICE_BRIDGE, // Compatibility: native bridge environment names match attached sessions.
+    w.launch.env.HIVEM1ND_SERVICE_GRANT, 'attach', { client: 'claude', hostSessionId }), { code: 'forbidden' }); // Compatibility: native bridge environment names match attached sessions.
   const env = { ...w.launch.env, CLAUDE_CODE_SESSION_ID: NATIVE, CLAUDE_CODE_HOST_SESSION_ID: 'owned-conversation' };
   const first = await connectNativeService({ env, client: 'claude' });
   first.close();
@@ -424,7 +424,7 @@ test('native host attach bounds an unacknowledged owner and requires a complete 
         socket.end(`${pending}\n${mode === 'coalesced' ? `${JSON.stringify({ id, result: { attached: true } })}\n` : ''}`);
       });
     });
-    const endpoint = process.platform === 'win32' ? `\\\\.\\pipe\\hivem1nd-native-test-${randomUUID()}` : path.join(fixture.root, `${randomUUID()}.sock`);
+    const endpoint = process.platform === 'win32' ? `\\\\.\\pipe\\onem1nd-native-test-${randomUUID()}` : path.join(fixture.root, `${randomUUID()}.sock`);
     await new Promise(resolve => server.listen(endpoint, resolve));
     t.after(() => new Promise(resolve => { for (const socket of sockets) socket.destroy(); server.close(resolve); }));
     t.mock.timers.enable({ apis: ['setTimeout'] });
@@ -455,7 +455,7 @@ test('a pending native host attach expires once even when the owner repeats its 
       socket.write(`${JSON.stringify({ id: requestId, pending: true })}\n`);
     });
   });
-  const endpoint = process.platform === 'win32' ? `\\\\.\\pipe\\hivem1nd-native-test-${randomUUID()}` : path.join(fixture.root, `${randomUUID()}.sock`);
+  const endpoint = process.platform === 'win32' ? `\\\\.\\pipe\\onem1nd-native-test-${randomUUID()}` : path.join(fixture.root, `${randomUUID()}.sock`);
   await new Promise(resolve => server.listen(endpoint, resolve));
   t.after(() => new Promise(resolve => { peer?.destroy(); server.close(resolve); }));
   const createConnection = net.createConnection;
@@ -617,7 +617,7 @@ test('ordinary v3 Relay CLI and policy controls use the existing verified servic
   assert.equal(code, 0, stderr);
   assert.equal(JSON.parse(stdout).service, 'ready');
   assert.equal(JSON.parse(await readFile(policyFile, 'utf8')).deadlineAt, before.deadlineAt);
-  await assert.rejects(() => dispatchNative(launch.env.HIVEM1ND_SERVICE_BRIDGE, launch.env.HIVEM1ND_SERVICE_GRANT, 'shutdown', {}), { code: 'native_login_unverified' });
+  await assert.rejects(() => dispatchNative(launch.env.HIVEM1ND_SERVICE_BRIDGE, launch.env.HIVEM1ND_SERVICE_GRANT, 'shutdown', {}), { code: 'native_login_unverified' }); // Compatibility: native bridge environment names match attached sessions.
   const binding = { unit: 'one', unitId: UNIT, nativeSessionId: NATIVE, client: 'codex', machine: fixture.machine };
   await assert.rejects(() => relayPolicy(options, { action: 'enable', binding, consent: { unit: 'master' } }), { code: 'invalid_body' });
   const disabled = await relayPolicy(options, { action: 'disable', binding });
@@ -634,7 +634,7 @@ test('a v3 person tool lazily posts through the real service as master with the 
   const state = path.join(fixture.paths.mind, 'user', 'projects', 'shop', 'state');
   await mkdir(state, { recursive: true });
   await writeFile(path.join(state, 'executor-shop.md'), `unit: executor-shop\nunit-id: project:shop:executor-shop\nrole: executor\nstate: in\nmachine: ${fixture.machine}\n\nReady.\n`);
-  await writeFile(fixture.paths.configFile, JSON.stringify({ format: 'hivem1nd-service-config-v1', mindPath: fixture.paths.mind, machine: fixture.machine, origin: { kind: 'folder', path: origin }, stagingPath: fixture.paths.staging, port: 0 }));
+  await writeFile(fixture.paths.configFile, JSON.stringify({ format: 'hivem1nd-service-config-v1', mindPath: fixture.paths.mind, machine: fixture.machine, origin: { kind: 'folder', path: origin }, stagingPath: fixture.paths.staging, port: 0 })); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   t.after(() => closeAttachedServices());
   const serviceOptions = { env: fixture.env, platform: fixture.platform, homeDir: fixture.home, cosmicPath: fixture.paths.cosmic, aclRunner: fixture.store.aclRunner, now: () => fixture.clock.now, userKey: service.userKey, guardPort: service.guard.address().port };
   const before = await readdir(path.join(fixture.paths.mind, 'user', 'relay', 'sessions'));

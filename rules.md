@@ -39,7 +39,7 @@ A service session's unit is in its startup message. Otherwise the project is the
 
 1. A session the service started keeps the unit, scope and Relay registration of its startup message, which carries this file, the role and the state file. Any other session runs the 2.x entry of [/relay](commands/relay.md).
 2. Run `node "<mind>/cli/index.mjs" check --mind-path "<mind>"` once; each printed line is a finding.
-3. Read `user/preferences.md`, then the project's and the repo's `.hivem1nd/preferences.md` when present.
+3. Read `user/preferences.md`, then the project's and the repo's `.hivem1nd/preferences.md` when present. <!-- Compatibility: shared team state retains its branch and folder identity. -->
 4. A role working in a project reads its brief; with none, it audits the repo, asks only what is left, and writes it.
 5. `list_inbox`, then `read_inbox` for the messages to act on (reading archives them).
 6. Report, then wait, unless a task was already requested.

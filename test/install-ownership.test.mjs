@@ -14,7 +14,7 @@ const createSetupSession = options => rawCreateSetupSession({ aclRunner: stubAcl
 const OLD_LICENSE = 'Permission is granted.\n\nThe software is provided as is.\n';
 const NEW_LICENSE = 'Permission is granted.\n\nThe software is provided as is, without warranty.\n';
 const ENDINGS = { lf: '\n', crlf: '\r\n' };
-const RECORDED_REASON = 'The HIVEM1ND-managed file was modified after installation.';
+const RECORDED_REASON = 'The ONEM1ND-managed file was modified after installation.';
 const UNOWNED_REASON = 'An unowned file already exists at this path.';
 
 function text(content, ending) {
@@ -22,7 +22,7 @@ function text(content, ending) {
 }
 
 async function makeFixture(t) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-ownership-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-ownership-'));
   t.after(() => rm(root, { recursive: true, force: true, maxRetries: 3 }));
   const fixture = {
     root,
@@ -56,7 +56,7 @@ async function writeKit(fixture, files) {
   await mkdir(fixture.kitPath, { recursive: true });
   await writeFile(
     path.join(fixture.kitPath, 'package.json'),
-    `${JSON.stringify({ name: 'hivem1nd-test', version: '1.0.0', files: roots })}\n`,
+    `${JSON.stringify({ name: 'onem1nd-test', version: '1.0.0', files: roots })}\n`,
   );
   for (const [relative, content] of Object.entries(files)) {
     const destination = path.join(fixture.kitPath, ...relative.split('/'));
@@ -317,16 +317,16 @@ test('evolve neither installs accepted scoped skills globally nor prunes their c
   const id = '11111111-1111-4111-8111-111111111111';
   const main = await writeMind(fixture, 'user/features/pdf/SKILL.md', '---\nname: pdf\n---\nImported PDF\n');
   const support = await writeMind(fixture, 'user/features/pdf/support.txt', 'Owned support\n');
-  const manifest = await writeMind(fixture, `user/additions/${id}.json`, JSON.stringify({ format: 'hivem1nd-addition-v1', id, kind: 'skill', name: 'pdf', removed: false }));
+  const manifest = await writeMind(fixture, `user/additions/${id}.json`, JSON.stringify({ format: 'hivem1nd-addition-v1', id, kind: 'skill', name: 'pdf', removed: false })); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   const pack = await writeMind(fixture, 'user/knowledge/manual/features/escaped/SKILL.md', '---\nname: escaped\n---\nPrivate knowledge support\n');
-  await writeMind(fixture, 'user/additions/22222222-2222-4222-8222-222222222222.json', JSON.stringify({ format: 'hivem1nd-addition-v1', kind: 'docs', name: 'manual', removed: false }));
+  await writeMind(fixture, 'user/additions/22222222-2222-4222-8222-222222222222.json', JSON.stringify({ format: 'hivem1nd-addition-v1', kind: 'docs', name: 'manual', removed: false })); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   const expected = await Promise.all([main, support, manifest, pack].map(file => readFile(file)));
   await writeMachine(fixture, 'TEST', Object.fromEntries(await Promise.all([main, support, manifest, pack].map(async file => [file, hashContent(await readFile(file))]))));
   const plan = await prepareContentAgentAssets({ ...fixture, agents: [{ name: 'codex', mode: 'on-demand' }] });
   assert.equal(plan.items.some(item => item.path.includes(`${path.sep}pdf${path.sep}`) || item.path.includes(`${path.sep}escaped${path.sep}`)), false);
   assert.equal((await run(fixture)).completed, true);
   assert.deepEqual(await Promise.all([main, support, manifest, pack].map(file => readFile(file))), expected);
-  await writeFile(manifest, JSON.stringify({ format: 'hivem1nd-addition-v1', id, kind: 'skill', name: 'pdf', removed: true }));
+  await writeFile(manifest, JSON.stringify({ format: 'hivem1nd-addition-v1', id, kind: 'skill', name: 'pdf', removed: true })); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   await writeFile(main, '---\nname: pdf\n---\nForeign retained edit\n');
   const removed = await prepareContentAgentAssets({ ...fixture, agents: [{ name: 'codex', mode: 'on-demand' }] });
   assert.equal(removed.items.some(item => item.path.includes(`${path.sep}pdf${path.sep}`)), false);
@@ -352,20 +352,20 @@ test('managed Content review preserves foreign client bytes and refuses changed 
 });
 
 test('the kit copy carries the runtime dependency closure into the mind and warns on a missing one', async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-deps-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-deps-'));
   t.after(() => rm(root, { recursive: true, force: true, maxRetries: 3 }));
-  const kitPath = path.join(root, 'cache', 'node_modules', 'hivem1nd');
+  const kitPath = path.join(root, 'cache', 'node_modules', 'onem1nd');
   const mindPath = path.join(root, 'mind');
   const write = async (relative, content) => {
     const destination = path.join(root, ...relative.split('/'));
     await mkdir(path.dirname(destination), { recursive: true });
     await writeFile(destination, content);
   };
-  await write('cache/node_modules/hivem1nd/package.json', JSON.stringify({ name: 'hivem1nd', files: ['cli/'], dependencies: { alpha: '1.0.0', '@scope/beta': '1.0.0', missing: '1.0.0' } }));
-  await write('cache/node_modules/hivem1nd/cli/index.mjs', 'export {};\n');
-  await write('cache/node_modules/hivem1nd/node_modules/alpha/package.json', JSON.stringify({ name: 'alpha', dependencies: { gamma: '1.0.0' } }));
-  await write('cache/node_modules/hivem1nd/node_modules/alpha/dist/index.js', 'alpha\n');
-  await write('cache/node_modules/hivem1nd/node_modules/alpha/node_modules/skip/package.json', '{}');
+  await write('cache/node_modules/onem1nd/package.json', JSON.stringify({ name: 'onem1nd', files: ['cli/'], dependencies: { alpha: '1.0.0', '@scope/beta': '1.0.0', missing: '1.0.0' } }));
+  await write('cache/node_modules/onem1nd/cli/index.mjs', 'export {};\n');
+  await write('cache/node_modules/onem1nd/node_modules/alpha/package.json', JSON.stringify({ name: 'alpha', dependencies: { gamma: '1.0.0' } }));
+  await write('cache/node_modules/onem1nd/node_modules/alpha/dist/index.js', 'alpha\n');
+  await write('cache/node_modules/onem1nd/node_modules/alpha/node_modules/skip/package.json', '{}');
   await write('cache/node_modules/@scope/beta/package.json', JSON.stringify({ name: '@scope/beta' }));
   await write('cache/node_modules/gamma/package.json', JSON.stringify({ name: 'gamma' }));
   await mkdir(mindPath, { recursive: true });

@@ -10,14 +10,14 @@ import { createCluster, patchCluster, removeCluster, validateClusterLink } from 
 export function projectGroup(bytes, id) {
   try {
     const record = JSON.parse(bytes);
-    if (!['hivem1nd-group-v1', 'hivem1nd-cluster-v1'].includes(record.format) || !isUuid(id) || record.id !== id || record.chatId !== id
+    if (!['hivem1nd-group-v1', 'hivem1nd-cluster-v1'].includes(record.format) || !isUuid(id) || record.id !== id || record.chatId !== id // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
       || typeof record.deleted !== 'boolean' || groupTitle(record.title) !== record.title
       || !Array.isArray(record.members) || record.members.length > 255
       || new Set(record.members).size !== record.members.length
       || record.members.some((member) => member === 'root:master' || parseUnitId(member).id !== member)
       || !Number.isFinite(Date.parse(record.createdAt))) throw new Error('format');
     const parentId = record.parentId ?? null, link = record.link ?? { kind: 'none' };
-    if (record.format === 'hivem1nd-cluster-v1' && (!Object.hasOwn(record, 'parentId') || !Object.hasOwn(record, 'link'))) throw new Error('cluster');
+    if (record.format === 'hivem1nd-cluster-v1' && (!Object.hasOwn(record, 'parentId') || !Object.hasOwn(record, 'link'))) throw new Error('cluster'); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     if (['localPath', 'commonDir', 'writeRoots', 'nativeSessionId', 'credential', 'token'].some(key => Object.hasOwn(record, key))) throw new Error('private');
     if (parentId !== null && !isUuid(parentId)) throw new Error('parent');
     validateClusterLink(link);
@@ -42,7 +42,7 @@ export async function prepareUnitMembershipRemoval(context, unitId) {
     if (!group.members.includes(unitId)) continue;
     const current = await loadGroup(context, group.id);
     const members = current.record.members.filter((id) => id !== unitId);
-    if (!members.length && current.record.format !== 'hivem1nd-cluster-v1') throw new CoreError(422, 'invalid_members', 'Remove the one-member group before removing its last unit.');
+    if (!members.length && current.record.format !== 'hivem1nd-cluster-v1') throw new CoreError(422, 'invalid_members', 'Remove the one-member group before removing its last unit.'); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     const chatBytes = editChatMetadata(current.chatBytes, { members: ['root:master', ...members].sort() });
     const bytes = groupBytes({ ...current.record, members,
       formerMembers: [...new Set([...(current.record.formerMembers ?? []), unitId])], chatRevision: revisionOf(chatBytes) });

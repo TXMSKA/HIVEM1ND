@@ -20,7 +20,7 @@ async function world(t, linked = true) {
     adapters: { codex: { confirm: async proof => proof.unitId === unitId && proof.nativeSessionId === 'owned' } } };
   await mkdir(path.join(fixture.paths.mind, 'user', 'state'), { recursive: true });
   await writeFile(path.join(fixture.paths.mind, 'user', 'state', 'worker.md'), `unit: worker\nunit-id: ${unitId}\nrole: executor\nstate: in\nmachine: DESKTOP\n\nReady.\n`);
-  if (linked) await writeFile(path.join(fixture.paths.localDirectory, 'cluster-links.json'), JSON.stringify({ format: 'hivem1nd-cluster-links-v1', machine: 'DESKTOP', links: {
+  if (linked) await writeFile(path.join(fixture.paths.localDirectory, 'cluster-links.json'), JSON.stringify({ format: 'hivem1nd-cluster-links-v1', machine: 'DESKTOP', links: { // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     [`folder:${folderId}`]: { localPath: root, machine: 'DESKTOP', identity: await directoryIdentity(root) },
   } }));
   const cluster = await createCluster(context, { title: 'Work', members: [unitId], parentId: null,

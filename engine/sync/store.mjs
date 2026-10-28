@@ -139,7 +139,7 @@ export function noteSync(context, state) {
 export async function recordSyncFailure(sync, error) {
   const code = typeof error?.code === 'string' && /^[a-z][a-z0-9_]{0,40}$/.test(error.code) ? error.code : 'sync_failed';
   const record = {
-    format: 'hivem1nd-sync-failure-v1',
+    format: 'hivem1nd-sync-failure-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     phase: 'publication',
     code,
     message: 'Sync failed.',
@@ -161,7 +161,7 @@ export async function readSyncFailure(sync) {
   if (!bytes) return null;
   try {
     const parsed = JSON.parse(bytes.toString('utf8'));
-    if (parsed?.format !== 'hivem1nd-sync-failure-v1' || typeof parsed.code !== 'string') return null;
+    if (parsed?.format !== 'hivem1nd-sync-failure-v1' || typeof parsed.code !== 'string') return null; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     return { code: parsed.code, message: 'Sync failed.', retryAt: parsed.retryAt ?? null };
   } catch {
     return null;
@@ -175,7 +175,7 @@ function failurePath(sync) {
 export async function recordInboundFailure(sync, error) {
   const code = typeof error?.code === 'string' && /^[a-z][a-z0-9_]{0,40}$/.test(error.code) ? error.code : 'sync_failed';
   const record = {
-    format: 'hivem1nd-sync-failure-v1',
+    format: 'hivem1nd-sync-failure-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     phase: 'receipt',
     code,
     message: safeFailureMessage(error?.message),
@@ -197,7 +197,7 @@ export async function readInboundFailure(sync) {
   if (!bytes) return null;
   try {
     const parsed = JSON.parse(bytes.toString('utf8'));
-    if (parsed?.format !== 'hivem1nd-sync-failure-v1' || parsed.phase !== 'receipt' || typeof parsed.code !== 'string') return null;
+    if (parsed?.format !== 'hivem1nd-sync-failure-v1' || parsed.phase !== 'receipt' || typeof parsed.code !== 'string') return null; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     return {
       code: parsed.code,
       message: safeFailureMessage(parsed.message),
@@ -435,7 +435,7 @@ async function stageUnlocked(sync, entries, options = {}, retainedVersion = null
     const hash = raw ? hashBytes(raw) : null;
     const id = entry.id ?? uuidV8(['change', sync.machine, canonicalJson(normalized), deleted ? 'delete' : 'put', hash ?? 'deleted', at]);
     const change = validateChange({
-      format: 'hivem1nd-change-v1',
+      format: 'hivem1nd-change-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
       id,
       machine: sync.machine,
       at,
@@ -707,7 +707,7 @@ async function readCatalog(mind, projectName) {
   if (!(await isRegular(file))) return [];
   try {
     const parsed = JSON.parse((await readFile(file)).toString('utf8'));
-    const resources = parsed?.format === 'hivem1nd-resources-v1' && Array.isArray(parsed.resources) ? parsed.resources : [];
+    const resources = parsed?.format === 'hivem1nd-resources-v1' && Array.isArray(parsed.resources) ? parsed.resources : []; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     return resources.filter((item) => item?.project === projectName);
   } catch {
     return [];
@@ -748,8 +748,8 @@ async function stagedChanges(sync) {
 async function readVersions(sync) {
   if (sync.versionsDraft?.versions) return sync.versionsDraft.versions;
   const parsed = await readJson(sync, versionPath(sync));
-  if (!parsed) return { format: 'hivem1nd-sync-versions-v1', targets: {} };
-  if (parsed.format !== 'hivem1nd-sync-versions-v1' || !parsed.targets || typeof parsed.targets !== 'object') {
+  if (!parsed) return { format: 'hivem1nd-sync-versions-v1', targets: {} }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
+  if (parsed.format !== 'hivem1nd-sync-versions-v1' || !parsed.targets || typeof parsed.targets !== 'object') { // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     throw new CoreError(422, 'corrupt_resource', 'The sync version record is not valid.');
   }
   if (sync.versionsDraft) sync.versionsDraft.versions = parsed;

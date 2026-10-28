@@ -28,22 +28,22 @@ export class CliUsageError extends Error {
 // The wake adapters load only for the help text and `relay wake`, so a hook or `relay mcp` process starts without them.
 export async function helpText() {
   const { WAKE_ADAPTERS } = await import('../engine/relay/wake-adapters.mjs');
-  return `HIVEM1ND ${VERSION}
+  return `ONEM1ND ${VERSION}
 
 Usage:
-  hivem1nd init [--gui] [--resume] [options]
-  hivem1nd evolve [--check-only] [options]
-  hivem1nd check [options]
-  hivem1nd pylon <repo> [--state branch|main] [options]
-  hivem1nd swarm [options]
-  hivem1nd view [--project <name>] [options]
-  hivem1nd relay <in|register|send|link|inbox|read|history|threads|status|events|reminder|delivery|mcp|hook|wake|configure|unconfigure|diagnose> [options]
-  hivem1nd relan <status|join <code>|host|leave> [options]
-  hivem1nd relan peer <add|remove> <address>[:port] [options]
-  hivem1nd uninstall [--dry-run] [--remove-mind] [options]
-  hivem1nd service <install|uninstall|status|run|launch> [--dry-run] [options]
-  hivem1nd task status <project> <id> <status> [--note <text>]
-  hivem1nd task undo <project> <id>
+  onem1nd init [--gui] [--resume] [options]
+  onem1nd evolve [--check-only] [options]
+  onem1nd check [options]
+  onem1nd pylon <repo> [--state branch|main] [options]
+  onem1nd swarm [options]
+  onem1nd view [--project <name>] [options]
+  onem1nd relay <in|register|send|link|inbox|read|history|threads|status|events|reminder|delivery|mcp|hook|wake|configure|unconfigure|diagnose> [options]
+  onem1nd relan <status|join <code>|host|leave> [options]
+  onem1nd relan peer <add|remove> <address>[:port] [options]
+  onem1nd uninstall [--dry-run] [--remove-mind] [options]
+  onem1nd service <install|uninstall|status|run|launch> [--dry-run] [options]
+  onem1nd task status <project> <id> <status> [--note <text>]
+  onem1nd task undo <project> <id>
 
 Commands:
   init       Configure this machine in four guided steps
@@ -54,13 +54,13 @@ Commands:
   view       Show chats, squads, what waits on the person, tasks, inbox and products
   relay     Send and read messages, link sessions in one thread, register sessions, or configure Relay clients
   relan      Show the pairing code, join the private network, manage peers, host here, or leave
-  uninstall  Remove what HIVEM1ND wrote on this machine
+  uninstall  Remove what ONEM1ND wrote on this machine
   service    Plan the user login service, or print its status
   task       Change a task status or undo the last change through the service
 
 Relay options:
   --mind-path <path>       Path to the private M1ND
-  --kit-path <path>        Path to the HIVEM1ND kit
+  --kit-path <path>        Path to the ONEM1ND kit
   --session-id <id>        Stable Relay instance identifier
   --native-session-id <id> Native client session identifier
   --client <name>          Client name: ${Object.keys(WAKE_ADAPTERS).join(', ')} or user
@@ -127,7 +127,7 @@ View options:
   --project <name>      Show one project and the units that lead it
 
 Shared path options:
-  --kit-path <path>     Path to the HIVEM1ND kit (default: installed kit)
+  --kit-path <path>     Path to the ONEM1ND kit (default: installed kit)
   --mind-path <path>    Path to the private M1ND
   --home-dir <path>     Agent configuration home
   --hostname <name>     Machine name
@@ -486,7 +486,7 @@ function formatCheck(result) {
   const line = result.notice
     || (result.updateAvailable
       ? `Version ${result.latestVersion} is available. Current version: ${result.currentVersion}.`
-      : `HIVEM1ND ${result.currentVersion ?? result.latestVersion ?? ""} is up to date.`);
+      : `ONEM1ND ${result.currentVersion ?? result.latestVersion ?? ""} is up to date.`);
   return [line, ...(result.warnings ?? []).map((warning) => `Warning: ${warning}`)].join("\n");
 }
 
@@ -503,7 +503,7 @@ function formatEvolve(result) {
   }
   lines.push(result.changed
     ? `Evolved from ${result.fromVersion} to ${result.toVersion}.`
-    : `HIVEM1ND ${result.toVersion ?? result.fromVersion} is already current.`);
+    : `ONEM1ND ${result.toVersion ?? result.fromVersion} is already current.`);
   if (result.migrations?.length) lines.push(`Migrations: ${result.migrations.join(", ")}`);
   if (result.baseFiles?.length) lines.push(`Base files: ${result.baseFiles.length}.`);
   if (result.agents?.length) {
@@ -602,11 +602,11 @@ function modelTexts(mind) {
 
 function formatStatus(result) {
   const lines = [];
-  if (!result.machineRecord) lines.push(`This machine (${result.machine}) has no machine record in the M1ND. Run hivem1nd init to set it up.`);
+  if (!result.machineRecord) lines.push(`This machine (${result.machine}) has no machine record in the M1ND. Run onem1nd init to set it up.`);
   if (result.missing?.length) {
     lines.push(`Not installed on this machine: ${result.missing.map((asset) => asset.name).join(", ")}. Run /evolve to install.`);
   }
-  if (result.update?.updateAvailable) lines.push(`HIVEM1ND ${result.update.latestVersion} is available. Run /evolve to update.`);
+  if (result.update?.updateAvailable) lines.push(`ONEM1ND ${result.update.latestVersion} is available. Run /evolve to update.`);
   if (result.repository) lines.push(`${result.repository} is a Git repository that is not a registered project.`);
   const project = result.project ? waitingText(result.project) : "";
   if (project) lines.push(`${result.project.name}: ${project}.`);
@@ -643,7 +643,7 @@ function formatHumanResult(result) {
   if (result.action === "evolve") return formatEvolve(result);
   if (result.action === "pylon") return formatPylon(result);
   if (result.action === "swarm") return formatSwarm(result);
-  if (result.contract === "hivem1nd-view-v1") return formatView(result);
+  if (result.contract === "hivem1nd-view-v1") return formatView(result); // Compatibility: the stored view contract is unchanged.
   if (result.action === "status") return formatStatus(result);
   if (result.action === "uninstall") return formatUninstall(result);
   return formatResult(result);
@@ -958,7 +958,7 @@ async function collectStep(prompts, step) {
 }
 
 export async function runTerminalSetup(session, prompts) {
-  prompts.intro(`${ACID}HIVEM1ND${RESET}`);
+  prompts.intro(`${ACID}ONEM1ND${RESET}`);
 
   while (true) {
     const step = await session.getStep();
@@ -1392,7 +1392,7 @@ async function runRelayWake(options, dependencies, output, errorOutput) {
   const shared = await import('../engine/service/client.mjs');
   const serviceOptions = { mindPath: options.mindPath, env, hostname, homeDir: options.homeDir ?? dependencies.homeDir, cosmicPath: options.cosmicPath,
     platform: dependencies.platform ?? process.platform, aclRunner: dependencies.aclRunner, userKey: dependencies.userKey, guardPort: dependencies.guardPort };
-  if (env.HIVEM1ND_SERVICE_BRIDGE || env.HIVEM1ND_SERVICE_GRANT || await shared.serviceMind(serviceOptions)) {
+  if (env.HIVEM1ND_SERVICE_BRIDGE || env.HIVEM1ND_SERVICE_GRANT || await shared.serviceMind(serviceOptions)) { // Compatibility: native service wire environment.
     if (options.wakeAction === 'watch') throw new CliUsageError('The shared service owns this wake binding; a separate watcher cannot be started.');
     const binding = relayWakeBinding(options, hostname, adapters, getWakeAdapter);
     const action = options.wakeAction === 'attach' && (options.hours || options.extended || options.unlimited || options.maxHandoffs || options.maxDailyHandoffs) ? 'enable' : options.wakeAction;
@@ -1653,7 +1653,7 @@ async function runTask(options, dependencies, output, errorOutput) {
     }
   }
   const env = dependencies.env ?? process.env;
-  const native = Boolean(env.HIVEM1ND_SERVICE_BRIDGE || env.HIVEM1ND_SERVICE_GRANT);
+  const native = Boolean(env.HIVEM1ND_SERVICE_BRIDGE || env.HIVEM1ND_SERVICE_GRANT); // Compatibility: native service wire environment.
   const service = native ? await connectNativeService({ env }) : await connectService({
     mindPath: options.mindPath,
     platform: dependencies.platform,
@@ -1718,6 +1718,35 @@ export async function runCli(argv, dependencies = {}) {
       output.write(`${await helpText()}\n`);
       return 0;
     }
+    const upgradeCommand = !['check', 'swarm', 'view'].includes(parsed.command)
+      && !(parsed.command === 'service' && parsed.options?.action === 'status');
+    if (dependencies.upgrade && upgradeCommand && !parsed.options?.dryRun && !parsed.options?.checkOnly) {
+      const { migrate } = await import('../migrations/3.0.0-onem1nd.mjs');
+      const result = await migrate({ kitPath: KIT_PATH, nodePath: process.execPath, ...parsed.options });
+      for (const move of result.relocatedPaths ?? []) {
+        for (const key of ['mindPath', 'kitPath']) {
+          const selected = parsed.options?.[key] ?? (key === 'kitPath' ? KIT_PATH : null);
+          if (!selected) continue;
+          const relative = path.relative(move.source, path.resolve(selected));
+          if (relative === '' || relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) parsed.options[key] = path.join(move.destination, relative);
+        }
+        const cliRelative = path.relative(move.source, fileURLToPath(import.meta.url));
+        if (cliRelative !== '..' && !cliRelative.startsWith(`..${path.sep}`) && !path.isAbsolute(cliRelative)) {
+          const { spawn } = await import('node:child_process');
+          const forwarded = [...argv];
+          for (const key of ['mindPath', 'kitPath']) {
+            if (key === 'kitPath' && ['service', 'task', 'relan'].includes(parsed.command)) continue;
+            if (!parsed.options[key]) continue;
+            const flag = key === 'mindPath' ? '--mind-path' : '--kit-path', index = forwarded.indexOf(flag);
+            if (index < 0) forwarded.push(flag, parsed.options[key]); else forwarded[index + 1] = parsed.options[key];
+          }
+          return await new Promise((resolve, reject) => {
+            const child = spawn(process.execPath, [path.join(move.destination, cliRelative), ...forwarded], { stdio: 'inherit', windowsHide: true });
+            child.once('error', reject); child.once('exit', code => resolve(code ?? 1));
+          });
+        }
+      }
+    }
     if (parsed.command === "init") {
       return await runInit(parsed.options, dependencies, output);
     } else if (parsed.command === "service") {
@@ -1737,12 +1766,14 @@ export async function runCli(argv, dependencies = {}) {
   } catch (error) {
     const prefix = error instanceof CliUsageError ? "Usage error" : "Error";
     errorOutput.write(`${prefix}: ${error?.message ?? "Unknown failure"}\n`);
-    if (error instanceof CliUsageError) errorOutput.write("Run hivem1nd --help for usage.\n");
+    if (error instanceof CliUsageError) errorOutput.write("Run onem1nd --help for usage.\n");
     return error instanceof CliUsageError ? 2 : 1;
   }
 }
 
-const isMain = process.argv[1] && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(path.resolve(process.argv[1]));
+// Packaged Electron dispatches its service entry explicitly from the desktop main module.
+const isMain = (!process.versions.electron || process.defaultApp === true || process.env.ELECTRON_RUN_AS_NODE === '1') && process.argv[1]
+  && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(path.resolve(process.argv[1]));
 if (isMain) {
-  process.exitCode = await runCli(process.argv.slice(2));
+  process.exitCode = await runCli(process.argv.slice(2), { upgrade: true });
 }

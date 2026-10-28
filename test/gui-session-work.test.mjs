@@ -79,7 +79,7 @@ test('uncertain context retries keep the same operation and work pages preserve 
     if (init.method === 'POST') { calls.push(init.headers['Idempotency-Key']); if (lost) { lost = false; throw new Error('Lost response'); } }
     const data = path.endsWith('/work') ? { items: [{ id: 'step', sequence: 1 }], nextCursor: 'retained' }
       : init.method === 'POST' ? { context: { ...context, generationId: 'new' } } : { ...context, generationId: 'new' };
-    return new Response(JSON.stringify({ contract: 'hivem1nd-gui-v3', data, meta: { requestId: 'fixture', readAt: '2026-10-15T12:00:00Z', eventCursor: 'fixture:1', sync: 'local' } }), { status: init.method === 'POST' ? 202 : 200 });
+    return new Response(JSON.stringify({ contract: 'hivem1nd-gui-v3', data, meta: { requestId: 'fixture', readAt: '2026-10-15T12:00:00Z', eventCursor: 'fixture:1', sync: 'local' } }), { status: init.method === 'POST' ? 202 : 200 }); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   } });
   api.token = 'fixture'; const view = createSessionView({ id: 'session' }); view.context = context;
   await assert.rejects(changeContext(api, view, 'compact'));

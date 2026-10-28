@@ -96,7 +96,7 @@ test('a stopped browser or embedded host recovers one owned service with isolate
   const { startGui, closeGuiHost } = await import('../gui/index.mjs');
   const hosts = [];
   t.after(async () => { for (const host of hosts) await host.stop(); await closeGuiHost(); await dispose(fixture); });
-  await writeFile(fixture.paths.configFile, JSON.stringify({ format: 'hivem1nd-service-config-v1', mindPath: fixture.paths.mind,
+  await writeFile(fixture.paths.configFile, JSON.stringify({ format: 'hivem1nd-service-config-v1', mindPath: fixture.paths.mind, // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     machine: fixture.machine, origin: { kind: 'folder', path: path.join(fixture.root, 'origin') }, stagingPath: fixture.paths.staging, port: 0 }));
   const input = { mindPath: fixture.paths.mind, platform: fixture.platform, env: fixture.env, cosmicPath: fixture.paths.cosmic,
     machine: fixture.machine, aclRunner: stubAclRunner(), guardPort: await freePort(), userKey: fixture.root, confineRoot: fixture.root };
@@ -298,7 +298,7 @@ test('wake adoption keeps the earlier deadline and the ambiguous delivery', asyn
   const started = await startService(options);
   let replacedToken = null;
   try {
-    assert.equal(started.bridge.endpoint.startsWith('\\\\.\\pipe\\hivem1nd-'), true);
+    assert.equal(started.bridge.endpoint.startsWith('\\\\.\\pipe\\hivem1nd-'), true); // Compatibility: native bridge pipe identity remains stable for attached sessions.
     assert.equal(started.bridge.port, undefined);
     await assert.rejects(() => dispatchLocal(started.bridge, 'register', { unitId: binding.unitId }), (error) => error.code === 'INVALID_INPUT');
     await assert.rejects(() => dispatchLocal(started.bridge, 'exec', {}), { code: 'invalid_body' });
@@ -661,9 +661,9 @@ test('a GUI host serves a M1ND that lives outside the folder above local app dat
   const assetDir = path.join(fixture.root, 'gui-assets');
   await mkdir(originPath, { recursive: true });
   await mkdir(assetDir, { recursive: true });
-  await writeFile(path.join(assetDir, 'index.html'), '<!doctype html><title>HIVEM1ND</title>\n');
+  await writeFile(path.join(assetDir, 'index.html'), '<!doctype html><title>ONEM1ND</title>\n');
   await writeFile(fixture.paths.configFile, `${JSON.stringify({
-    format: 'hivem1nd-service-config-v1',
+    format: 'hivem1nd-service-config-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     mindPath: fixture.paths.mind,
     machine: fixture.machine,
     origin: { kind: 'folder', path: originPath },
@@ -692,9 +692,9 @@ test('two GUI hosts share one service and keep separate viewers', async (t) => {
   const assetDir = path.join(fixture.root, 'gui-assets');
   await mkdir(originPath, { recursive: true });
   await mkdir(assetDir, { recursive: true });
-  await writeFile(path.join(assetDir, 'index.html'), '<!doctype html><title>HIVEM1ND</title>\n');
+  await writeFile(path.join(assetDir, 'index.html'), '<!doctype html><title>ONEM1ND</title>\n');
   await writeFile(fixture.paths.configFile, `${JSON.stringify({
-    format: 'hivem1nd-service-config-v1',
+    format: 'hivem1nd-service-config-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     mindPath: fixture.paths.mind,
     machine: fixture.machine,
     origin: { kind: 'folder', path: originPath },
@@ -743,7 +743,7 @@ test('two GUI hosts share one service and keep separate viewers', async (t) => {
 });
 
 test('two machines on one origin replicate a change and one ledger stops a flood', async (t) => {
-  const origin = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-origin-'));
+  const origin = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-origin-'));
   const left = await makeCoreFixture({ machine: 'ALPHA' });
   const right = await makeCoreFixture({ machine: 'BRAVO' });
   left.store.confineRoot = os.tmpdir();
@@ -824,7 +824,7 @@ test('service run reads the configured mind and holds the process until stop', a
   const origin = path.join(fixture.root, 'origin');
   await mkdir(origin, { recursive: true });
   await writeFile(fixture.paths.configFile, `${JSON.stringify({
-    format: 'hivem1nd-service-config-v1',
+    format: 'hivem1nd-service-config-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     mindPath: fixture.paths.mind,
     machine: fixture.machine,
     origin: { kind: 'folder', path: origin },
@@ -856,7 +856,7 @@ test('service run reads the configured mind and holds the process until stop', a
   assert.equal(lock.pid, process.pid);
   const userKey = 'S-1-5-21-1-2-3-1001';
   const digest = createHash('sha256').update(canonicalJson({
-    format: 'hivem1nd-service-descriptor-v1',
+    format: 'hivem1nd-service-descriptor-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     mind: path.resolve(fixture.paths.mind),
     machine: fixture.machine,
     userKey,
@@ -865,7 +865,7 @@ test('service run reads the configured mind and holds the process until stop', a
   })).digest('hex');
   assert.equal(lock.digest, digest);
   assert.notEqual(digest, createHash('sha256').update(canonicalJson({
-    format: 'hivem1nd-service-descriptor-v1',
+    format: 'hivem1nd-service-descriptor-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     mind: path.resolve(fixture.paths.mind),
     machine: fixture.machine,
     userKey: 'user',

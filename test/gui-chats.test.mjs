@@ -41,7 +41,7 @@ test('a late authoritative chat read clears only the confirmed send uncertainty'
     }
     noteRead(); await readHeld;
     const first = sends[0];
-    return new Response(JSON.stringify({ contract: 'hivem1nd-gui-v3', data: { items: [{ id: 'committed-first', operationId: first.id,
+    return new Response(JSON.stringify({ contract: 'hivem1nd-gui-v3', data: { items: [{ id: 'committed-first', operationId: first.id, // Compatibility: stored schemas and wire contracts retain their existing identifiers.
       channel: 'message', authorId: 'root:master', body: first.body }], nextCursor: null, total: 1 },
     meta: { requestId: 'fixture-read', readAt: '2026-10-15T00:00:00.000Z', eventCursor: '1', sync: 'local' } }), { status: 200 });
   } });

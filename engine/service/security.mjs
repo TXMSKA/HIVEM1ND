@@ -43,7 +43,7 @@ export function createAclRunner({ spawnSync: run = spawnSync, env = process.env,
     check(target) {
       assertLocalTarget(target);
       const sid = this.userSid();
-      const saved = path.join(os.tmpdir(), `hivem1nd-acl-${randomBytes(6).toString('hex')}.txt`);
+      const saved = path.join(os.tmpdir(), `onem1nd-acl-${randomBytes(6).toString('hex')}.txt`);
       try {
         runTool(run, tool('icacls.exe'), [target, '/save', saved, '/Q']);
         assertLimitedAcl(readAclText(saved), sid);

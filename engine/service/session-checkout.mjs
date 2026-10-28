@@ -92,7 +92,7 @@ async function remember(context, directory, observation) {
     await withLocks(context.store, [`checkout:${observation.sessionId}`], async () => {
       const file = recordPath(directory), before = await readBytes(context.store, file);
       await commitTransaction(context.store, { id: randomUUID(), entries: [{ resource: file, recordPath: file, private: true,
-        beforeRevision: revisionOf(before), afterBytes: Buffer.from(`${canonicalJson({ format: 'hivem1nd-session-checkout-v1', ...observation })}\n`) }], events: [] });
+        beforeRevision: revisionOf(before), afterBytes: Buffer.from(`${canonicalJson({ format: 'hivem1nd-session-checkout-v1', ...observation })}\n`) }], events: [] }); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     });
     written.set(observation.sessionId, { key, at: context.now() });
   } catch { /* A reading that cannot be kept is still a true reading. */ }
@@ -101,7 +101,7 @@ async function remember(context, directory, observation) {
 async function lastSeen(context, directory, sessionId) {
   let record;
   try { record = JSON.parse(await readBytes(context.store, recordPath(directory))); } catch { return null; }
-  if (record?.format !== 'hivem1nd-session-checkout-v1' || record.sessionId !== sessionId || !KINDS.has(record.kind)
+  if (record?.format !== 'hivem1nd-session-checkout-v1' || record.sessionId !== sessionId || !KINDS.has(record.kind) // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     || typeof record.path !== 'string' || typeof record.observedAt !== 'string') return null;
   const { format, ...fact } = record;
   return { ...fact, live: false };

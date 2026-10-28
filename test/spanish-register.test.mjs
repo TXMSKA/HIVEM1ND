@@ -235,7 +235,7 @@ test('the finite product inventory uses M1ND before interpolation in both langua
   const help = await helpText();
   assertVisibleCopy('en', help.split('\n').map((line, index) => [`cli/index.mjs helpText line ${index + 1}`, line]));
   for (const spelling of ['--mind-path', '--remove-mind']) assert.ok(help.includes(spelling), spelling);
-  assert.ok(help.includes('The M1ND folder .m1nd'));
+  assert.ok(help.includes('The M1ND folder onem1nd'));
 
   let output = '';
   const location = 'C:/fixtures/mind/mente';

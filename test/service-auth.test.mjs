@@ -294,11 +294,11 @@ test('local login requires the protected bootstrap secret and binds only the vie
   const active = JSON.parse(await readFile(fixture.paths.activeFile, 'utf8'));
   const local = JSON.parse(await readFile(path.join(fixture.paths.localDirectory, 'service.json'), 'utf8'));
   assert.deepEqual(Object.keys(boot).sort(), ['format', 'origin', 'secret', 'startedAt']);
-  assert.equal(boot.format, 'hivem1nd-bootstrap-v1');
+  assert.equal(boot.format, 'hivem1nd-bootstrap-v1'); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   assert.equal(Buffer.from(boot.secret, 'base64url').length, 32);
   assert.equal(JSON.stringify(active).includes(secret), false);
   assert.equal(JSON.stringify(local).includes(secret), false);
-  assert.equal(local.format, 'hivem1nd-service-local-v1');
+  assert.equal(local.format, 'hivem1nd-service-local-v1'); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   assert.equal(active.mindPath, fixture.paths.mind);
   const missing = await requestJson(httpPort, 'POST', '/api/v1/auth/local', { body: {} });
   assert.equal(missing.status, 401);
@@ -311,7 +311,7 @@ test('local login requires the protected bootstrap secret and binds only the vie
     body: { embedded: false, hostOrigin: null, look: 'high-contrast', language: 'es' },
   });
   assert.equal(opened.status, 201);
-  assert.equal(opened.json.contract, 'hivem1nd-gui-v3');
+  assert.equal(opened.json.contract, 'hivem1nd-gui-v3'); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   assert.equal(opened.json.meta.sync, 'local');
   assert.equal(opened.json.token, undefined);
   assert.equal(typeof opened.json.data.token, 'string');
@@ -378,7 +378,7 @@ test('windows acl tools come from System32', async () => {
   });
   assert.equal(runner.userSid(), 'S-1-5-21-1-2-3-1001');
   assert.equal(calls[0].command, path.join('C:\\Windows', 'System32', 'whoami.exe'));
-  const target = path.join(os.tmpdir(), `hivem1nd-acl-${randomBytes(4).toString('hex')}`);
+  const target = path.join(os.tmpdir(), `onem1nd-acl-${randomBytes(4).toString('hex')}`);
   await writeFile(target, 'acl');
   const user = 'S-1-5-21-1-2-3-1001';
   let aclText = `O:${user}G:DU\r\nD:P(A;;FA;;;SY)(A;;FA;;;${user})\r\n`;
@@ -389,8 +389,8 @@ test('windows acl tools come from System32', async () => {
   runner.check(target);
   aclText = `O:BAG:DU\r\nD:P(A;;FA;;;BA)(A;;FA;;;SY)(A;;FA;;;${user})\r\n`;
   assert.throws(() => runner.check(target), (error) => error.code === 'bootstrap_unavailable');
-  const directory = path.join(os.tmpdir(), `hivem1nd-acl-dir-${randomBytes(4).toString('hex')}`);
-  const link = path.join(os.tmpdir(), `hivem1nd-acl-link-${randomBytes(4).toString('hex')}`);
+  const directory = path.join(os.tmpdir(), `onem1nd-acl-dir-${randomBytes(4).toString('hex')}`);
+  const link = path.join(os.tmpdir(), `onem1nd-acl-link-${randomBytes(4).toString('hex')}`);
   await mkdir(directory);
   await symlink(directory, link, 'junction');
   assert.throws(() => runner.check(link), (error) => error.code === 'bootstrap_unavailable');
@@ -583,7 +583,7 @@ test('ending a watch, logging out and opening the event stream refuse unknown fi
 test('a private folder already limited to its owner is not protected again, and one that is not gets protected', { skip: process.platform !== 'win32' }, async (t) => {
   const { mkdtemp, rm } = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');
-  const directory = await mkdtemp(path.join(tmpdir(), 'hivem1nd-acl-'));
+  const directory = await mkdtemp(path.join(tmpdir(), 'onem1nd-acl-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const file = path.join(directory, 'bootstrap.json');
   await writeFile(file, '{}\n');

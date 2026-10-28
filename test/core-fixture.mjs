@@ -15,7 +15,7 @@ function assertDescendant(root, target) {
 }
 
 export async function makeCoreFixture(options = {}) {
-  const created = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  const created = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-core-'));
   const root = await realpath(created);
   const platform = options.platform ?? 'win32';
   const home = path.join(root, 'home');

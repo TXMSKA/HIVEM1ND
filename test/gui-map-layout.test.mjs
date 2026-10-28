@@ -23,7 +23,7 @@ function box(count) {
 // The user's real mind in numbers: 92 units, 26 groups. Two folders (Web with Nebula's 39 members, Unity), three loose repositories,
 // seventy clustered agents, twenty-one agents that belong to no group and the Overseer.
 function realMind() {
-  const web = { Nebula: 39, HIVEM1ND: 6, MyOS: 2, Blueprint: 2, 'coffee-cat-page': 2, Horizon: 1, Lyra: 1, Void: 1, TXMSKA: 1, NTK: 1, AtomOS: 1, Nova: 1, Quantum: 1, Vault: 1, atom: 0, 'atom-epoch': 0 };
+  const web = { Nebula: 39, HIVEM1ND: 6, MyOS: 2, Blueprint: 2, 'coffee-cat-page': 2, Horizon: 1, Lyra: 1, Void: 1, TXMSKA: 1, NTK: 1, AtomOS: 1, Nova: 1, Quantum: 1, Vault: 1, atom: 0, 'atom-epoch': 0 }; // Compatibility: existing project names remain personal data.
   const games = { Quark: 3, vigilum: 3, 'guest-or-ghost': 2, 'vr-painter': 1, 'e-pet': 0 };
   const loose = { 'ntk.solutions': 1, 'The-Tour': 0, Cosmic: 0 };
   const groups = [cluster('folder-web', 'Web', null, [], 'folder'), cluster('folder-unity', 'Unity', null, [], 'folder')], units = [];

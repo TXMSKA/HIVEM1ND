@@ -192,7 +192,7 @@ test('own saves and incoming application do not create outside history or republ
   assert.equal((await readFile(history, 'utf8')).includes('"by":"outside"'), false);
   const incoming = Buffer.from(JSON.stringify({ ...own.document, pages: [{ k: 'p', en: 'Imported' }] }));
   const change = {
-    format: 'hivem1nd-change-v1', id: randomUUID(), machine: 'OTHER',
+    format: 'hivem1nd-change-v1', id: randomUUID(), machine: 'OTHER', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     at: new Date(fixture.clock.now + 1000).toISOString(), target: { kind: 'project', project: 'shop', path: 'docs/note.json' },
     operation: 'put', hash: hashBytes(incoming), size: incoming.length, baseHash: own.revision, messageId: null, transactionId: null,
   };
@@ -241,7 +241,7 @@ for (const existing of [false, true]) test(`restart stages an imported ${existin
   const bytes = Buffer.from('Received from another machine.\n');
   const target = { kind: 'mind', path: 'user/imported-offline.md' };
   const change = {
-    format: 'hivem1nd-change-v1', id: randomUUID(), machine: 'OTHER', at: new Date(fixture.clock.now).toISOString(),
+    format: 'hivem1nd-change-v1', id: randomUUID(), machine: 'OTHER', at: new Date(fixture.clock.now).toISOString(), // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     target, operation: 'put', hash: hashBytes(bytes), size: bytes.length, baseHash: null, messageId: null, transactionId: null,
   };
   await withLocalChanges(fixture.store, async () => {
@@ -266,7 +266,7 @@ test('a bulk of observed files at boot announces one view change instead of rebu
       const sessionId = randomUUID();
       const directory = path.join(context.paths.mind, 'user', 'relay', 'session-status', sessionId);
       await mkdir(directory, { recursive: true });
-      await writeFile(path.join(directory, `${randomUUID()}.json`), JSON.stringify({ format: 'hivem1nd-session-status-v1', sessionId, state: 'stopped' }));
+      await writeFile(path.join(directory, `${randomUUID()}.json`), JSON.stringify({ format: 'hivem1nd-session-status-v1', sessionId, state: 'stopped' })); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     }
     fsPromises.readFile = function (target, ...rest) {
       if (String(target).endsWith(path.join('user', 'gui', 'resources.json'))) projections += 1;
@@ -311,7 +311,7 @@ test('a restart reads only the M1ND files that changed since the last pass, and 
   await core.runtime.unwatchProject?.baseline?.();
   await core.http.close();
   const signatures = JSON.parse(await readFile(path.join(fixture.paths.localDirectory, 'local-watch-signatures.json'), 'utf8'));
-  assert.equal(signatures.format, 'hivem1nd-local-signatures-v1');
+  assert.equal(signatures.format, 'hivem1nd-local-signatures-v1'); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   assert.ok(Object.hasOwn(signatures.entries, targetKey({ kind: 'mind', path: 'user/kept.md' })));
   fixture.clock.now += 1000;
   await writeFile(edited, 'Changed while the service was stopped.\n');

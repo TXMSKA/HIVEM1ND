@@ -28,7 +28,7 @@ const REASON_KEYS = {
   'Two setup operations produce different content for this path.': 'reasonDifferentContent',
   'The rules path is a symbolic link or is not a regular file.': 'reasonRulesNotRegular',
   'The destination is a symbolic link or is not a regular file.': 'reasonDestinationNotRegular',
-  'The HIVEM1ND-managed file was modified after installation.': 'reasonManagedFileModified',
+  'The ONEM1ND-managed file was modified after installation.': 'reasonManagedFileModified',
   'An unowned file already exists at this path.': 'reasonUnownedFile',
   'Selected agents require different content at the same shared path.': 'reasonAgentsConflict',
 };
@@ -52,7 +52,7 @@ function localizeReason(reason, language) {
 export const OWNED_RULE_MODES = new Set(['cursor', 'copilot']);
 
 export function autoRuleLine(mindPath) {
-  return `HIVEM1ND: the mind is at ${mindPath}. Read ${path.join(mindPath, 'rules.md')} first, then the role or command asked for.`;
+  return `ONEM1ND: the mind is at ${mindPath}. Read ${path.join(mindPath, 'rules.md')} first, then the role or command asked for.`;
 }
 
 // A chat that Relay resumes in the Cursor CLI has nobody to ask, and the MCP process of that turn starts unregistered.
@@ -505,7 +505,7 @@ async function removalReason(filePath, root, recordedHashes) {
   const snapshot = await currentSnapshot(filePath);
   if (snapshot.kind === 'missing') return null;
   if (snapshot.kind !== 'file') return 'The destination is a symbolic link or is not a regular file.';
-  if (!matchesRecord(snapshot, recordedHashes)) return 'The HIVEM1ND-managed file was modified after installation.';
+  if (!matchesRecord(snapshot, recordedHashes)) return 'The ONEM1ND-managed file was modified after installation.';
   return null;
 }
 
@@ -522,7 +522,7 @@ async function sharedContentExclusions(mindPath, excluded, kitPath) {
   const source = await readFile(file, 'utf8').catch(error => { if (error.code === 'ENOENT') return null; throw error; });
   if (source === null) return excluded;
   const settings = JSON.parse(source);
-  if (settings.format !== 'hivem1nd-content-settings-v1' || !Array.isArray(settings.includedFeatures) || !Array.isArray(settings.includedKnowledge)) throw new Error('The shared Content selection is not valid.');
+  if (settings.format !== 'hivem1nd-content-settings-v1' || !Array.isArray(settings.includedFeatures) || !Array.isArray(settings.includedKnowledge)) throw new Error('The shared Content selection is not valid.'); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   const catalog = [...await discoverContent(kitPath ?? mindPath), ...await discoverContent(mindPath), ...await discoverContent(path.join(mindPath, 'user'))];
   const contentIds = new Set(catalog.flatMap(item => [item.id, item.name]));
   const retained = excluded.filter(item => item !== 'knowledge' && !contentIds.has(item));
@@ -636,7 +636,7 @@ export async function applyInstallPlan(plan, conflictChoices = {}) {
       const snapshot = await currentSnapshot(item.path, true);
       if (snapshot.kind === 'missing') continue;
       if (!matchesRecord(snapshot, item.recordedHashes)) {
-        kept.push({ path: item.path, reason: 'The HIVEM1ND-managed file was modified after installation.' });
+        kept.push({ path: item.path, reason: 'The ONEM1ND-managed file was modified after installation.' });
         continue;
       }
       await unlink(item.path);
@@ -767,7 +767,7 @@ export async function listInstallableAssets(roots, excludedNames = new Set(), re
       const file = path.join(directory, name), info = await lstat(file);
       if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1) throw new Error('Imported Content ownership is unavailable.');
       const imported = JSON.parse(await readFile(file));
-      if (imported.format !== 'hivem1nd-addition-v1') throw new Error('Imported Content ownership is invalid.');
+      if (imported.format !== 'hivem1nd-addition-v1') throw new Error('Imported Content ownership is invalid.'); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
       if (imported.kind === 'skill') scoped.add(`feature:${imported.name}`);
       if (imported.kind === 'docs') scoped.add(`knowledge:${imported.name}`);
     }
@@ -910,7 +910,7 @@ async function planRuleFile(adapter, destination, root, line, managedFiles, agen
   if (OWNED_RULE_MODES.has(adapter.rules.mode)) {
     const scope = adapter.rules.mode === 'cursor' ? 'alwaysApply: true' : 'applyTo: "**"';
     const wake = adapter.rules.mode === 'cursor' ? `\n${CURSOR_WAKE_CONTRACT}\n` : '';
-    const content = `---\ndescription: Loads HIVEM1ND before every request.\n${scope}\n---\n\n${line}\n${wake}`;
+    const content = `---\ndescription: Loads ONEM1ND before every request.\n${scope}\n---\n\n${line}\n${wake}`;
     return singlePlannedFile({
       destination,
       content,
@@ -1027,7 +1027,7 @@ async function addPlannedFile({
     else {
       action = 'conflict';
       reason = managedHash
-        ? 'The HIVEM1ND-managed file was modified after installation.'
+        ? 'The ONEM1ND-managed file was modified after installation.'
         : 'An unowned file already exists at this path.';
     }
   }

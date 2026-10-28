@@ -14,7 +14,7 @@ import { WAKE_ADAPTERS } from "../engine/relay/wake-adapters.mjs";
 const execFileAsync = promisify(execFile);
 
 async function temporaryDirectory(t) {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "hivem1nd-measure-"));
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "onem1nd-measure-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true, maxRetries: 3 }));
   return directory;
 }
@@ -32,7 +32,7 @@ async function makeMind(root) {
     path.join(mindPath, "user", "machines", "TEST.md"),
     `machine: TEST\nmind: ${mindPath}\nupdate-check: off\nlast-check: \nsetup: done\n\n## Agents\n\n## Paths\n\n## Excluded\n`,
   );
-  await write(path.join(root, "kit", "package.json"), `${JSON.stringify({ name: "hivem1nd-test", version: "0.1.0" })}\n`);
+  await write(path.join(root, "kit", "package.json"), `${JSON.stringify({ name: "onem1nd-test", version: "0.1.0" })}\n`);
   return mindPath;
 }
 

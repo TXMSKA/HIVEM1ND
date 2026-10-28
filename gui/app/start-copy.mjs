@@ -83,7 +83,7 @@ export const START_COPY=Object.freeze({
   addTask:['Add task','Agregar tarea'],fromVoid:['From a Void text','Desde un texto de Void'],
   noTasksYet:['No tasks yet: write the first one, or take them from a Void text.','Todavía no hay tareas: escribir la primera o tomarlas de un texto de Void.'],
   noVoidTexts:['There are no Void texts yet.','Todavía no hay textos de Void.'],tasksTruncated:['Only the first 50 items were taken.','Solo se tomaron los primeros 50 elementos.'],
-  supervisedWarning:['HIVEM1ND cannot confine this agent on Windows. By default it asks you before every file change and command.','HIVEM1ND no puede confinar a este agente en Windows. De forma predeterminada, consulta antes de cada cambio de archivos y de cada comando.'],
+  supervisedWarning:['ONEM1ND cannot confine this agent on Windows. By default it asks you before every file change and command.','ONEM1ND no puede confinar a este agente en Windows. De forma predeterminada, consulta antes de cada cambio de archivos y de cada comando.'],
   workAutomatically:["Work automatically: it changes files and runs commands without asking, and can write outside its cluster's folder. You can turn this off in Settings, Permissions.",'Trabajar de forma automática: modifica archivos y ejecuta comandos sin consultar, y puede escribir fuera de la carpeta de su clúster. Se puede desactivar en Configuración, Permisos.'],
   asksFirst:['Asks first','Consulta antes'],automaticNotConfined:['Automatic, not confined','Automático, sin confinamiento'],
   automaticPermission:['Works automatically in {client}, not confined','Trabaja de forma automática en {client}, sin confinamiento'],

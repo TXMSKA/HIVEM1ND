@@ -31,12 +31,12 @@ const BOARD = '6b1d2c3e-4f5a-8b6c-9d7e-0f1a2b3c4d5e';
 test('a message shows only the parts whose target has the shape of its kind', () => {
   const { images, actions } = messageParts([
     { kind: 'image', path: ID(0), label: 'Checkout' }, { kind: 'image', path: '../secret.png' },
-    { kind: 'link', path: 'https://github.com/TXMSKA/HIVEM1ND/pull/61', label: 'Pull request' }, { kind: 'link', path: 'javascript:alert(1)' },
+    { kind: 'link', path: 'https://github.com/TXMSKA/HIVEM1ND/pull/61', label: 'Pull request' }, { kind: 'link', path: 'javascript:alert(1)' }, // Compatibility: repository URLs retain their existing hosting location.
     { kind: 'link', path: 'https://user@evil.example/' }, { kind: 'board', path: BOARD }, { kind: 'text', path: 'notes' },
     { kind: 'task', path: 'project:shop:029' }, 'docs/notes.md', { path: 'docs/a.md', kind: null }, null,
   ]);
   assert.deepEqual(images, [{ id: ID(0), label: 'Checkout' }]);
-  assert.deepEqual(actions.map((action) => [action.kind, action.target]), [['link', 'https://github.com/TXMSKA/HIVEM1ND/pull/61'], ['board', BOARD], ['task', 'project:shop:029']]);
+  assert.deepEqual(actions.map((action) => [action.kind, action.target]), [['link', 'https://github.com/TXMSKA/HIVEM1ND/pull/61'], ['board', BOARD], ['task', 'project:shop:029']]); // Compatibility: repository URLs retain their existing hosting location.
   assert.deepEqual(messageParts(undefined), { images: [], actions: [] });
   assert.deepEqual(composerPart('link', ' https://example.com/a ', ' Docs '), { kind: 'link', path: 'https://example.com/a', label: 'Docs' });
   assert.equal(composerPart('link', 'ftp://example.com'), null);
@@ -112,12 +112,12 @@ test('one picture is shown alone, without strip, arrows or view switch', () => {
 
 test('a link opens outside the app and the other buttons open their board, text or task', () => {
   const opened = [];
-  const actions = messageParts([{ kind: 'link', path: 'https://github.com/TXMSKA/HIVEM1ND/pull/61' }, { kind: 'link', path: 'mailto:team@example.com', label: 'Write' },
+  const actions = messageParts([{ kind: 'link', path: 'https://github.com/TXMSKA/HIVEM1ND/pull/61' }, { kind: 'link', path: 'mailto:team@example.com', label: 'Write' }, // Compatibility: repository URLs retain their existing hosting location.
     { kind: 'board', path: BOARD }, { kind: 'task', path: 'project:shop:029' }]).actions;
   const row = renderActions(document, actions, { t, titleOf: (action) => action.kind === 'board' ? 'Checkout flow' : '', onOpen: (action) => opened.push(action.target) });
   const [link, mail, board, task] = row.children;
   assert.equal(link.tagName, 'A');
-  assert.deepEqual([link.getAttribute('href'), link.getAttribute('target'), link.getAttribute('rel'), link.textContent], ['https://github.com/TXMSKA/HIVEM1ND/pull/61', '_blank', 'noopener noreferrer', 'github.com']);
+  assert.deepEqual([link.getAttribute('href'), link.getAttribute('target'), link.getAttribute('rel'), link.textContent], ['https://github.com/TXMSKA/HIVEM1ND/pull/61', '_blank', 'noopener noreferrer', 'github.com']); // Compatibility: repository URLs retain their existing hosting location.
   assert.equal(mail.textContent, 'Write');
   assert.equal(board.tagName, 'BUTTON');
   assert.equal(board.textContent, 'Checkout flow');

@@ -8,14 +8,14 @@ import { applyShortcuts, shortcutPlan } from '../engine/shortcuts.mjs';
 
 // The one test that runs the real Windows Script Host: it writes a shortcut in a temporary folder and reads it back.
 test('the Windows Script Host writes a real shortcut that quotes its arguments and keeps accented folders', { skip: process.platform !== 'win32' }, async context => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-lnk-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-lnk-'));
   context.after(() => rm(root, { recursive: true, force: true }));
   const folder = path.join(root, 'Desktop');
   await mkdir(folder);
   const mind = 'C:\\Users\\Tom Ás\\M1ND';
   const node = 'C:\\Program Files\\nodejs\\node.exe';
   const items = shortcutPlan({ platform: 'win32', mindPath: mind, nodePath: node, cosmicPath: '', folders: { desktop: folder },
-    message: 'It could not start.', description: 'Open HIVEM1ND', env: process.env });
+    message: 'It could not start.', description: 'Open ONEM1ND', env: process.env });
   const [result] = await applyShortcuts(items);
   assert.equal(result.status, 'applied');
   const reader = [
@@ -30,7 +30,7 @@ test('the Windows Script Host writes a real shortcut that quotes its arguments a
   const script = path.join(root, 'read.vbs');
   const out = path.join(root, 'link.txt');
   await writeFile(script, reader);
-  execFileSync(path.join(process.env.SystemRoot, 'System32', 'cscript.exe'), ['//nologo', script, result.file, out]);
+  execFileSync(path.join(process.env.SystemRoot, 'System32', 'cscript.exe'), ['//nologo', script, result.file, out], { timeout: 15000 });
   const lines = (await readFile(out)).toString('utf16le').replace(/^\uFEFF/, '').split(/\r?\n/);
   assert.match(lines[0], /wscript\.exe$/i);
   const quoted = [path.join(mind, 'gui', 'launch.vbs'), node, path.join(mind, 'cli', 'index.mjs'), mind, 'It could not start.', ''].map(part => `"${part}"`);

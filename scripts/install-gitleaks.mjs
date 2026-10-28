@@ -25,7 +25,7 @@ if (!response.ok) fail(`gitleaks download failed: ${response.status}`);
 const bytes = Buffer.from(await response.arrayBuffer());
 const actual = createHash('sha256').update(bytes).digest('hex');
 if (actual !== sha256) fail('gitleaks download failed checksum');
-const folder = mkdtempSync(path.join(os.tmpdir(), 'hivem1nd-gitleaks-install-'));
+const folder = mkdtempSync(path.join(os.tmpdir(), 'onem1nd-gitleaks-install-'));
 try {
   const archive = path.join(folder, name);
   await writeFile(archive, bytes);

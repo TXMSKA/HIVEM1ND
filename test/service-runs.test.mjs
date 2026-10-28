@@ -215,7 +215,7 @@ test('approved branch and per-task commit reconcile once, preserve foreign stagi
   const report = await readMachineSettings(state.context, state.machine, 'projects');
   const mapping = await createClusterLink(state.context, { machine: state.machine, kind: 'repository', path: directory, expectedReportRevision: report.revision });
   const cluster = await patchCluster(state.context, state.cluster.id, { machine: state.machine, link: mapping.link, expectedRevision: state.cluster.revision });
-  await writeFile(path.join(state.paths.localDirectory, 'client-permissions.json'), JSON.stringify({ permissions: [{ id: randomUUID(), machine: state.machine, client: 'codex', actions: ['git.commit', 'git.push'], scope: 'hivem1nd-started-sessions', grantedAt: new Date(state.clock.now).toISOString(), grantedBy: 'root:master' }] }));
+  await writeFile(path.join(state.paths.localDirectory, 'client-permissions.json'), JSON.stringify({ permissions: [{ id: randomUUID(), machine: state.machine, client: 'codex', actions: ['git.commit', 'git.push'], scope: 'hivem1nd-started-sessions', grantedAt: new Date(state.clock.now).toISOString(), grantedBy: 'root:master' }] })); // Compatibility: existing permission grants retain their scope identity.
   state.input.mode = 'execution'; state.input.expectedChatRevision = (await readDetail(state.context, 'chats', cluster.chatId)).revision;
   const plan = await createPlan(state.context, state.input); assert.equal(git.switches, 0);
   const started = await startPlan(state.context, plan.id, { confirmed: true, expectedRevision: plan.revision }); await drainRunLaunches(state.context);
@@ -254,7 +254,7 @@ test('real Git commits only changed reviewed text, binary and deleted paths and 
   const report = await readMachineSettings(state.context, state.machine, 'projects');
   const mapping = await createClusterLink(state.context, { machine: state.machine, kind: 'repository', path: directory, expectedReportRevision: report.revision });
   const cluster = await patchCluster(state.context, state.cluster.id, { machine: state.machine, link: mapping.link, expectedRevision: state.cluster.revision });
-  await writeFile(path.join(state.paths.localDirectory, 'client-permissions.json'), JSON.stringify({ permissions: [{ id: randomUUID(), machine: state.machine, client: 'codex', actions: ['git.commit', 'git.push'], scope: 'hivem1nd-started-sessions', grantedAt: new Date(state.clock.now).toISOString(), grantedBy: 'root:master' }] }));
+  await writeFile(path.join(state.paths.localDirectory, 'client-permissions.json'), JSON.stringify({ permissions: [{ id: randomUUID(), machine: state.machine, client: 'codex', actions: ['git.commit', 'git.push'], scope: 'hivem1nd-started-sessions', grantedAt: new Date(state.clock.now).toISOString(), grantedBy: 'root:master' }] })); // Compatibility: existing permission grants retain their scope identity.
   const taskFile = path.join(state.paths.mind, 'user', 'tasks', '001.md');
   await writeFile(taskFile, (await readFile(taskFile, 'utf8')).replace('files: ["result.txt"]', 'files: ["result.txt","stable.txt","removed.bin","new.bin"]'));
   state.input.mode = 'execution'; state.input.expectedChatRevision = (await readDetail(state.context, 'chats', cluster.chatId)).revision;
@@ -310,7 +310,7 @@ test('Claude, Cursor and Lyra structured initialization bind real attempts; loca
         discover: async () => ({ pid: 10, port: 1, home: state.root, startedAt: new Date(state.clock.now).toISOString() }),
         fetch: async (url, options) => {
           const route = new URL(url).pathname;
-          if (route === '/v1/apps/current') return Response.json({ id: 'hivem1nd', kind: 'app', status: 'granted', scopes: ['chat', 'models', 'tools'] });
+          if (route === '/v1/apps/current') return Response.json({ id: 'hivem1nd', kind: 'app', status: 'granted', scopes: ['chat', 'models', 'tools'] }); // Compatibility: Lyra app grants retain their registered identity.
           if (route === '/v1/models') return Response.json(status);
           if (route === '/v1/tools') { assert.equal(options.method, 'PUT'); return new Response(null, { status: 204 }); }
           if (route === '/v1/chat') {

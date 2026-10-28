@@ -195,7 +195,7 @@ export function matches(filters, record) {
 function present(principal, record) {
   const data = structuredClone(record.data);
   return {
-    contract: 'hivem1nd-events-v3',
+    contract: 'hivem1nd-events-v3', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     id: record.id ?? null,
     cursor: record.id ?? null,
     at: record.at,

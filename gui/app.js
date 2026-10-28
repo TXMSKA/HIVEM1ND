@@ -1,8 +1,8 @@
 const elements = Object.fromEntries(['progress', 'step-form', 'fields', 'preview', 'step-title', 'step-description', 'status-message', 'live-status', 'back-button', 'continue-button', 'mode-dialog', 'mode-dialog-title', 'mode-dialog-copy', 'mode-dialog-close'].map(id => [id, document.getElementById(id)]));
 const fragment = new URLSearchParams(location.hash.slice(1));
 const tokenFromHash = fragment.get('session');
-if (tokenFromHash) sessionStorage.setItem('hivem1nd.session', tokenFromHash);
-const sessionToken = tokenFromHash ?? sessionStorage.getItem('hivem1nd.session');
+if (tokenFromHash) sessionStorage.setItem('hivem1nd.session', tokenFromHash); // Compatibility: retain the existing setup session and preload bridge identifiers.
+const sessionToken = tokenFromHash ?? sessionStorage.getItem('hivem1nd.session'); // Compatibility: retain the existing setup session and preload bridge identifiers.
 history.replaceState({}, '', '/');
 let currentStep;
 let busy = false;
@@ -68,7 +68,7 @@ function setBusy(value, button) {
   elements['step-form'].setAttribute('aria-busy', String(value));
 }
 async function api(path, { method = 'GET', body } = {}) {
-  if (!sessionToken) throw new Error(ui().sessionMissing ?? 'The local session link is incomplete. Open the wizard again from the HIVEM1ND command.');
+  if (!sessionToken) throw new Error(ui().sessionMissing ?? 'The local session link is incomplete. Open the wizard again from the ONEM1ND command.');
   const response = await fetch('/api/v1/' + path, {
     method, headers: { Authorization: 'Bearer ' + sessionToken, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -147,8 +147,8 @@ async function browseFolder(input, button) {
   if (busy) return;
   setBusy(true, button); setError();
   try {
-    const chosen = typeof window.hivem1nd?.browseFolder === 'function'
-      ? await window.hivem1nd.browseFolder()
+    const chosen = typeof window.hivem1nd?.browseFolder === 'function' // Compatibility: retain the existing setup session and preload bridge identifiers.
+      ? await window.hivem1nd.browseFolder() // Compatibility: retain the existing setup session and preload bridge identifiers.
       : (await api('browse', { method: 'POST', body: {} })).path;
     if (chosen) { input.value = chosen; await reviewFolder(); }
   } catch (error) {

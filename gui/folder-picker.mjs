@@ -51,7 +51,7 @@ function cleanPath(value) {
 }
 
 export async function pickFolder({ title = 'Choose a folder', platform = process.platform, run = runProgram, env = process.env } = {}) {
-  const scratch = platform === 'win32' ? await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-pick-')) : null;
+  const scratch = platform === 'win32' ? await mkdtemp(path.join(os.tmpdir(), 'onem1nd-pick-')) : null;
   try {
     const output = scratch ? path.join(scratch, 'folder.txt') : null;
     for (const attempt of pickerAttempts(platform, { title, env, output })) {

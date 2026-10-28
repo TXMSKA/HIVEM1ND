@@ -21,7 +21,7 @@ const MALFORMED = [
 ].map((name) => `user/projects/shop/tasks/${name}.md`);
 
 async function temporaryDirectory(t, name) {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), `hivem1nd-${name}-`));
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), `onem1nd-${name}-`));
   t.after(async () => {
     await fs.rm(directory, { recursive: true, force: true, maxRetries: 3 });
   });
@@ -62,7 +62,7 @@ test("the fixture reads into every key of the contract, with the right types", a
   const result = await view();
   assert.deepEqual(keys(result), ["contract", "readAt", "mind", "chats", "squads", "waiting", "tasks", "inbox", "products", "counts", "issues"]);
   assert.equal(result.contract, VIEW_CONTRACT);
-  assert.equal(result.contract, "hivem1nd-view-v1");
+  assert.equal(result.contract, "hivem1nd-view-v1"); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   assert.equal(result.readAt, NOW);
   assert.deepEqual(result.mind, { version: "2.0.0", machine: "LAPTOP", machines: ["DESKTOP", "LAPTOP"], project: null });
 
@@ -539,7 +539,7 @@ test("the view command prints the contract as JSON and writes nothing", async ()
   assert.equal(code, 0);
   assert.equal(errors.read(), "");
   const result = JSON.parse(output.read());
-  assert.equal(result.contract, "hivem1nd-view-v1");
+  assert.equal(result.contract, "hivem1nd-view-v1"); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   assert.equal(result.mind.machine, "LAPTOP");
   assert.deepEqual(result.counts, { chats: 10, waiting: 6, open: 3, review: 4, done: 2, closed: 1, unread: 4, issues: 8 });
   assert.equal(result.issues.length, 8, "issues do not change the exit code");
@@ -576,5 +576,5 @@ test("the view command fails only when the mind itself cannot be read, and takes
   assert.throws(() => parseArgs(["swarm", "--project", "myapp"]), /not valid for swarm/);
   assert.throws(() => parseArgs(["view", "--state", "main"]), /not valid for view/);
   assert.deepEqual(parseArgs(["view", "--json", "--project", "myapp"]).options, { json: true, project: "myapp" });
-  assert.match(await helpText(), /hivem1nd view \[--project <name>\]/);
+  assert.match(await helpText(), /onem1nd view \[--project <name>\]/);
 });

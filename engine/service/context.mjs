@@ -61,7 +61,7 @@ export async function createContext(context, registration, adapter, bootstrap) {
   return withLocks(context.store, [`context:${registration.sessionId}`], async () => {
     const file = statePath(context, registration.sessionId), before = await readBytes(context.store, file);
     if (before) return projected(JSON.parse(before), before);
-    const value = { format: 'hivem1nd-context-v1', sessionId: registration.sessionId, unitId: registration.unitId,
+    const value = { format: 'hivem1nd-context-v1', sessionId: registration.sessionId, unitId: registration.unitId, // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
       client: registration.client, generationId: randomUUID(), dismissed: false, meter: contextMeter(await adapter.readContext?.(registration)),
       operation: null, bootstrap: bootstrap ?? await contextBootstrap(context, registration.unitId, { client: registration.client }) };
     return save(context, file, null, value);

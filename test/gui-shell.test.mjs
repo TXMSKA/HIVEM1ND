@@ -109,7 +109,7 @@ test('the browser launcher restores a stopped singleton without losing a draft o
   let releaseMessageReads;
   const messageReads = new Promise(resolve => { releaseMessageReads = resolve; });
   t.after(async () => { releaseMessageReads(); if (desktop) dispose(desktop.app); await host?.stop(); await closeGuiHost(); await disposeCoreFixture(fixture); });
-  await writeFile(fixture.paths.configFile, JSON.stringify({ format: 'hivem1nd-service-config-v1', mindPath: fixture.paths.mind,
+  await writeFile(fixture.paths.configFile, JSON.stringify({ format: 'hivem1nd-service-config-v1', mindPath: fixture.paths.mind, // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     machine: fixture.machine, origin: { kind: 'folder', path: join(fixture.root, 'origin') }, stagingPath: fixture.paths.staging, port: 0 }));
   host = await startGui({ mindPath: fixture.paths.mind, env: fixture.env, home: fixture.home, platform: fixture.platform,
     machine: fixture.machine, aclRunner: fixture.store.aclRunner, confineRoot: fixture.root });
@@ -186,7 +186,7 @@ test('reconnection never infers a stopped service from a slow response and Detai
   renderShell(desktop.app);
   click(desktop.root.querySelector('[data-action="service-details"]'));
   const details = [...desktop.document.querySelector('[data-service-details]').querySelectorAll('p')].map(node => node.textContent).join(' ');
-  assert.match(details, /hivem1nd service install --mind-path/);
+  assert.match(details, /onem1nd service install --mind-path/);
   assert.equal(details.includes(desktop.app.api.token), false);
   desktop.document.querySelector('[data-service-details]').close();
   desktop.app.language = 'es'; desktop.app.serviceStopped = true; renderShell(desktop.app);
@@ -379,7 +379,7 @@ test("Settings Content uses discovered items, preserves preferences and retains 
   typeInput(root.querySelector("[data-preference-instructions]"), "Retained instructions.\nSecond line.", 3, 3);
   click(root.querySelector("[data-action='settings-save-content']"));
   await waitFor(() => !app.settingsState.contentDirty && !app.settingsState.loading && app.activity.get("settings:PATCH:/settings/content")?.phase === "success", "Content did not save.");
-  const preferences = await readFile(join(fixture.root, "Cosmic", "hivem1nd", "user", "preferences.md"), "utf8");
+  const preferences = await readFile(join(fixture.root, "Cosmic", "onem1nd", "user", "preferences.md"), "utf8");
   assert.equal(preferences.startsWith("Existing user preference."), true);
   assert.match(preferences, /Retained instructions\.\nSecond line\./);
   assert.equal(app.settingsState.content.features.find(item => item.id === "feature:tribunal").included, false);
@@ -389,7 +389,7 @@ test("Settings Content uses discovered items, preserves preferences and retains 
   await waitFor(() => app.activity.get("settings:PATCH:/settings/content")?.phase === "error", "The revision conflict was hidden.");
   assert.equal(root.querySelector("[data-preference-instructions]").value, "Draft after conflict.");
   assert.equal(app.settingsState.contentDirty, true);
-  assert.equal(await readFile(join(fixture.root, "Cosmic", "hivem1nd", "user", "preferences.md"), "utf8"), preferences);
+  assert.equal(await readFile(join(fixture.root, "Cosmic", "onem1nd", "user", "preferences.md"), "utf8"), preferences);
   click(root.querySelector("[data-action='settings-reload-content']"));
   assert.equal(app.settingsState.contentDirty, false);
   assert.equal(root.querySelector("[data-preference-instructions]").value, "Retained instructions.\nSecond line.");
@@ -830,7 +830,7 @@ async function endFixtureHome(desktop) {
 }
 
 test("known language prefers the stored viewer language, then a Spanish browser", () => {
-  const storage = { getItem: (key) => key === "hivem1nd:language" ? "es" : null };
+  const storage = { getItem: (key) => key === "hivem1nd:language" ? "es" : null }; // Compatibility: browser storage and desktop bridge names remain stable.
   assert.equal(knownLanguage(storage, ["en-US"]), "es");
   assert.equal(knownLanguage({ getItem: () => null }, ["es-AR", "en"]), "es");
   assert.equal(knownLanguage({ getItem: () => "fr" }, ["es-MX"]), "es");
@@ -893,7 +893,7 @@ test("the shell has no remote assets, no token storage beyond the tab session, a
   assert.match(html, /rel="icon" href="\/app\/favicon\.svg"/);
   assert.equal(html.includes("data:image"), false);
   const icon = sources[1][1];
-  assert.equal(icon.includes("#bdcd79"), true);
+  assert.equal(icon.includes("#ff2d55"), true);
   assert.ok(Buffer.byteLength(icon) < 2048);
   await assert.rejects(readFile("gui/app/mark.svg"), (error) => error.code === "ENOENT");
   assert.match(html, /src="\/app\/main\.mjs"/);
@@ -904,9 +904,9 @@ test("the shell has no remote assets, no token storage beyond the tab session, a
   const imports = [...new Set([...main.matchAll(/from "([^"]+)"/g)].map((match) => match[1]))].sort();
   assert.deepEqual(imports, ["./actions.mjs", "./api.mjs", "./blueprint.mjs", "./chat-media.mjs", "./chats.mjs", "./components.mjs", "./editors.mjs", "./embed.mjs", "./hierarchy.mjs", "./i18n.mjs", "./inspector.mjs", "./lists.mjs", "./map.mjs", "./markup.mjs", "./phone.mjs", "./settings.mjs", "./state.mjs", "./stream.mjs", "./void.mjs"]);
   const css = sources[4][1];
-  assert.match(css, /--bg:\s*#0f0b13/);
+  assert.match(css, /--bg:\s*#07040a/);
   assert.match(css, /--bg:\s*#050505/);
-  assert.match(css, /--accent:\s*#bdcd79/);
+  assert.match(css, /--accent:\s*#ff2d55/);
   assert.match(css, /--accent:\s*#d4b06a/);
   assert.match(css, /--bar:\s*52px/);
   assert.match(css, /--footer:\s*30px/);
@@ -1239,7 +1239,7 @@ test("home grants are replaced, expired and kept out of settings storage", async
   const fixture = await createGuiFixture();
   t.after(() => fixture.close());
   const api = apiFrom(fixture.desktopUrl);
-  const settingsFile = join(fixture.root, "Cosmic", "hivem1nd", "user", "gui", "settings.json");
+  const settingsFile = join(fixture.root, "Cosmic", "onem1nd", "user", "gui", "settings.json");
   const before = await readFile(settingsFile);
   const current = await request(api, "GET", "/settings");
   assert.equal(Object.hasOwn(current.data.home, "key"), false);
@@ -1707,7 +1707,7 @@ test("embedded viewers accept only their parent and logout is idempotent", async
   publishReady(channel);
   publishDirty(channel, 1);
   assert.deepEqual(parent.parent.sent.data, {
-    contract: "hivem1nd-embed-v1",
+    contract: "hivem1nd-embed-v1", // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     viewerId: "viewer-a",
     type: "dirty",
     value: true,
@@ -1717,20 +1717,20 @@ test("embedded viewers accept only their parent and logout is idempotent", async
   assert.equal(other.parent.sent.data.viewerId, "viewer-b");
   assert.equal(parent.parent.sent.data.viewerId, "viewer-a");
   const forged = [
-    { source: other.parent, origin: "http://127.0.0.1:9", data: { contract: "hivem1nd-embed-v1", viewerId: "viewer-a", type: "set-look", value: "modern" } },
-    { source: parent.parent, origin: "https://evil.example", data: { contract: "hivem1nd-embed-v1", viewerId: "viewer-a", type: "set-look", value: "modern" } },
-    { source: parent.parent, origin: "http://127.0.0.1:9", data: { contract: "hivem1nd-embed-v1", viewerId: "viewer-b", type: "set-look", value: "modern" } },
+    { source: other.parent, origin: "http://127.0.0.1:9", data: { contract: "hivem1nd-embed-v1", viewerId: "viewer-a", type: "set-look", value: "modern" } }, // Compatibility: stored schemas and wire contracts retain their existing identifiers.
+    { source: parent.parent, origin: "https://evil.example", data: { contract: "hivem1nd-embed-v1", viewerId: "viewer-a", type: "set-look", value: "modern" } }, // Compatibility: stored schemas and wire contracts retain their existing identifiers.
+    { source: parent.parent, origin: "http://127.0.0.1:9", data: { contract: "hivem1nd-embed-v1", viewerId: "viewer-b", type: "set-look", value: "modern" } }, // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     { source: parent.parent, origin: "http://127.0.0.1:9", data: { contract: "other", viewerId: "viewer-a", type: "set-look", value: "modern" } },
-    { source: parent.parent, origin: "http://127.0.0.1:9", data: { contract: "hivem1nd-embed-v1", viewerId: "viewer-a", type: "set-look", value: "neon" } },
-    { source: parent.parent, origin: "http://127.0.0.1:9", data: { contract: "hivem1nd-embed-v1", viewerId: "viewer-a", type: "close", value: false } },
+    { source: parent.parent, origin: "http://127.0.0.1:9", data: { contract: "hivem1nd-embed-v1", viewerId: "viewer-a", type: "set-look", value: "neon" } }, // Compatibility: stored schemas and wire contracts retain their existing identifiers.
+    { source: parent.parent, origin: "http://127.0.0.1:9", data: { contract: "hivem1nd-embed-v1", viewerId: "viewer-a", type: "close", value: false } }, // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   ];
   for (const event of forged) await handleParentMessage(channel, event);
   assert.deepEqual(calls, []);
-  await handleParentMessage(channel, { source: parent.parent, origin: "http://127.0.0.1:9", data: { contract: "hivem1nd-embed-v1", viewerId: "viewer-a", type: "set-language", value: "es" } });
-  await handleParentMessage(sibling, { source: other.parent, origin: "http://127.0.0.1:9", data: { contract: "hivem1nd-embed-v1", viewerId: "viewer-b", type: "set-look", value: "high-contrast" } });
+  await handleParentMessage(channel, { source: parent.parent, origin: "http://127.0.0.1:9", data: { contract: "hivem1nd-embed-v1", viewerId: "viewer-a", type: "set-language", value: "es" } }); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
+  await handleParentMessage(sibling, { source: other.parent, origin: "http://127.0.0.1:9", data: { contract: "hivem1nd-embed-v1", viewerId: "viewer-b", type: "set-look", value: "high-contrast" } }); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   assert.deepEqual(calls[0], { language: "es" });
   assert.deepEqual(calls[1], ["b", { look: "high-contrast" }]);
-  await handleParentMessage(channel, { source: parent.parent, origin: "http://127.0.0.1:9", data: { contract: "hivem1nd-embed-v1", viewerId: "viewer-a", type: "close", value: null } });
+  await handleParentMessage(channel, { source: parent.parent, origin: "http://127.0.0.1:9", data: { contract: "hivem1nd-embed-v1", viewerId: "viewer-a", type: "close", value: null } }); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   assert.equal(calls.at(-1), "logout");
   disposeEmbed(channel);
   publishDirty(channel, false);
@@ -2967,6 +2967,7 @@ test("Find controls navigate source matches replace one or all texts and Undo th
   assert.equal(root.querySelector('[data-action="replace-all"]').textContent, 'Replace all 4');
   click(root.querySelector('[data-action="find-next"]'));
   await waitFor(() => app.editors.current.authoritative.title === 'Other text', 'Next did not open the matching text.');
+  await waitFor(() => !app.voidFind.pending && app.voidFind.matches.length === 4, 'Find did not finish after opening the matching text.');
   assert.equal(app.voidFind.matches.length, 4);
   click(root.querySelector('[data-action="find-next"]')); click(root.querySelector('[data-action="find-next"]'));
   assert.equal(app.editors.current.page, 'Two');
@@ -3265,8 +3266,8 @@ test("action notes use bilingual outcomes and keep wire codes for diagnostics", 
 });
 
 test("request expiry stays separate from reopening guidance and comments require text", async (t) => {
-  assert.equal(text("en", "sessionExpired"), "This session ended. Open HIVEM1ND again.");
-  assert.equal(text("es", "sessionExpired"), "Esta sesión terminó. Abrir HIVEM1ND de nuevo.");
+  assert.equal(text("en", "sessionExpired"), "This session ended. Open ONEM1ND again.");
+  assert.equal(text("es", "sessionExpired"), "Esta sesión terminó. Abrir ONEM1ND de nuevo.");
   assert.equal(text("en", "sessionRequestExpired"), "The session request expired.");
   assert.equal(text("es", "sessionRequestExpired"), "La solicitud de sesión expiró.");
 
@@ -3301,7 +3302,7 @@ test("request expiry stays separate from reopening guidance and comments require
     error: null,
   });
   await waitFor(() => noteText(desktop) === "The session request expired.", "Request expiry reused the reopening sentence.");
-  assert.notEqual(noteText(desktop), "This session ended. Open HIVEM1ND again.");
+  assert.notEqual(noteText(desktop), "This session ended. Open ONEM1ND again.");
 
   navigate(desktop.app, "blueprint");
   await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");
@@ -3570,7 +3571,7 @@ test("phone navigation stays compact and focus can leave the source", async (t) 
   await waitFor(() => phone.root.querySelector("h1")?.textContent === (group.title || group.id), "The phone heading did not follow the group.");
   click(phone.root.querySelector("[data-phone-mode='waiting']"));
   await waitFor(() => phone.root.querySelector("h1")?.textContent === "Waiting", "Waiting kept the conversation title.");
-  assert.equal(phone.document.title, "Waiting · HIVEM1ND");
+  assert.equal(phone.document.title, "Waiting · ONEM1ND");
   assert.equal(phone.root.querySelector("[data-stage-title]")?.textContent, "Waiting");
   assert.equal(phone.root.querySelector(".side"), null);
   assert.equal(phone.root.querySelector("[data-phone-mode='waiting']")?.getAttribute("aria-pressed"), "true");
@@ -3581,7 +3582,7 @@ test("phone navigation stays compact and focus can leave the source", async (t) 
   click(phone.root.querySelector("[data-phone-mode='hierarchy']"));
   await waitFor(() => phone.root.querySelector("h1")?.textContent === "Hierarchy", "Hierarchy did not restore its title.");
   assert.equal(phone.root.querySelector("[data-phone-mode='hierarchy']")?.getAttribute("aria-pressed"), "true");
-  assert.equal(phone.document.title, "Hierarchy · HIVEM1ND");
+  assert.equal(phone.document.title, "Hierarchy · ONEM1ND");
   const css = await readFile("gui/app/styles.css", "utf8");
   assert.match(css, /\.shell\[data-layout="phone"\] \.phone-nav button\[aria-pressed="true"\]/);
   assert.match(css, /env\(safe-area-inset-bottom\)/);
@@ -3775,7 +3776,7 @@ test("the shell has one heading, a skip link, and stable live regions", async (t
   const headings = desktop.root.querySelectorAll("h1");
   assert.equal(headings.length, 1);
   assert.equal(headings[0].textContent, "Map");
-  assert.equal(desktop.document.title, "Map · HIVEM1ND");
+  assert.equal(desktop.document.title, "Map · ONEM1ND");
   assert.equal(desktop.document.title.includes("\u2014"), false);
   const skip = desktop.root.querySelector("a.skip");
   assert.equal(skip?.getAttribute("href"), "#workspace");
@@ -3802,7 +3803,7 @@ test("the shell has one heading, a skip link, and stable live regions", async (t
   desktop.app.language = "es";
   renderShell(desktop.app);
   assert.equal(desktop.root.querySelector("h1").textContent, "Mapa");
-  assert.equal(desktop.document.title, "Mapa · HIVEM1ND");
+  assert.equal(desktop.document.title, "Mapa · ONEM1ND");
   assert.equal(desktop.document.querySelectorAll("[data-live='status']").length, 1);
   dispose(desktop.app);
   assert.equal(desktop.document.querySelectorAll("[data-live='status']").length, 0);
@@ -3954,7 +3955,7 @@ test("phone pairing uses a stored or browser language before a viewer exists", a
   assert.equal(root.querySelector("h1").textContent, "Abrir la M1ND");
   assert.equal(document.documentElement.lang, "es");
   dispose(app);
-  const storage = new Map([["hivem1nd:language", "en"]]);
+  const storage = new Map([["hivem1nd:language", "en"]]); // Compatibility: browser storage and desktop bridge names remain stable.
   const english = createTestDocument(390);
   const stored = await mount(english.root, {
     location: { origin: "http://127.0.0.1:43123", pathname: "/", search: "", hash: "" },
@@ -3988,7 +3989,7 @@ test("the opening frame uses a stored or browser language before the read, then 
   });
   assert.equal(root.querySelector("h2").textContent, "Leyendo la M1ND");
   assert.equal(document.documentElement.lang, "es");
-  const stored = new Map([["hivem1nd:language", "es"]]);
+  const stored = new Map([["hivem1nd:language", "es"]]); // Compatibility: browser storage and desktop bridge names remain stable.
   const storedRoot = createTestDocument(1440).root;
   const storedBoot = mount(storedRoot, {
     location: url, history: { replaceState() {} },
@@ -4008,8 +4009,8 @@ test("the opening frame uses a stored or browser language before the read, then 
     && mounted.store.snapshotReady && mounted.store.viewer), 'The authoritative viewer presentation did not finish.');
   assert.equal(app.language, "en");
   assert.equal(document.documentElement.lang, "en");
-  assert.equal(storage.get("hivem1nd:language"), "en");
-  assert.equal(stored.get("hivem1nd:language"), "en");
+  assert.equal(storage.get("hivem1nd:language"), "en"); // Compatibility: browser storage and desktop bridge names remain stable.
+  assert.equal(stored.get("hivem1nd:language"), "en"); // Compatibility: browser storage and desktop bridge names remain stable.
 });
 
 test("settings do not replace the opening language before the viewer can be read", async (t) => {
@@ -4019,7 +4020,7 @@ test("settings do not replace the opening language before the viewer can be read
   const gate = new Promise((resolve) => { release = resolve; });
   t.after(() => release());
   let settled = 0;
-  const storage = new Map([["hivem1nd:language", "es"]]);
+  const storage = new Map([["hivem1nd:language", "es"]]); // Compatibility: browser storage and desktop bridge names remain stable.
   const { root } = createTestDocument(1440);
   const pending = mount(root, {
     location: new URL(fixture.desktopUrl), history: { replaceState() {} },
@@ -4035,7 +4036,7 @@ test("settings do not replace the opening language before the viewer can be read
   });
   await patient(() => settled === 2, "The settings read did not finish.");
   assert.equal(root.querySelector("h2").textContent, "Leyendo la M1ND");
-  assert.equal(storage.get("hivem1nd:language"), "es");
+  assert.equal(storage.get("hivem1nd:language"), "es"); // Compatibility: browser storage and desktop bridge names remain stable.
   release();
   const app = await pending;
   t.after(() => dispose(app));
@@ -4046,7 +4047,7 @@ test("the opening frame shows a stored view, and the shell opens when the view a
   t.after(() => fixture.close());
   const live = (await request(apiFrom(fixture.desktopUrl), "GET", "/view")).data;
   const liveBoards = (live.editors ?? []).filter((editor) => editor.kind === "blueprint").length;
-  const storage = new Map([["hivem1nd:opening-view", JSON.stringify({ counts: { units: 424242, chats: 2 }, groupCount: 1, boardCount: 3 })]]);
+  const storage = new Map([["hivem1nd:opening-view", JSON.stringify({ counts: { units: 424242, chats: 2 }, groupCount: 1, boardCount: 3 })]]); // Compatibility: browser storage and desktop bridge names remain stable.
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
   t.after(() => release());
@@ -4069,7 +4070,7 @@ test("the opening frame shows a stored view, and the shell opens when the view a
   release();
   const app = await pending;
   t.after(() => dispose(app));
-  assert.deepEqual(JSON.parse(storage.get("hivem1nd:opening-view")), { counts: { units: live.counts.units, chats: live.counts.chats }, groupCount: live.groups?.length ?? 0, boardCount: liveBoards });
+  assert.deepEqual(JSON.parse(storage.get("hivem1nd:opening-view")), { counts: { units: live.counts.units, chats: live.counts.chats }, groupCount: live.groups?.length ?? 0, boardCount: liveBoards }); // Compatibility: browser storage and desktop bridge names remain stable.
 });
 
 test("a delayed initial read keeps the desktop frame and skeleton panels visible", async (t) => {
@@ -4080,7 +4081,7 @@ test("a delayed initial read keeps the desktop frame and skeleton panels visible
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
   const pending = mount(root, {
-    location: url, history: { replaceState() {} }, mindPath: join(fixture.root, "Cosmic", "hivem1nd"),
+    location: url, history: { replaceState() {} }, mindPath: join(fixture.root, "Cosmic", "onem1nd"),
     fetch: async (input, init) => {
       if (new URL(input).pathname === "/api/v1/view") await gate;
       return fetch(input, init);
@@ -4137,7 +4138,7 @@ test("the initial read ends at 30000 milliseconds with its selected folder and R
 test("an inaccessible-folder cause exposes no credential and choosing another folder retains drafts", async (t) => {
   const fixture = await createGuiFixture();
   t.after(() => fixture.close());
-  const selected = join(fixture.root, "Cosmic", "hivem1nd");
+  const selected = join(fixture.root, "Cosmic", "onem1nd");
   let handoff = null;
   const booted = await bootWithFetch(fixture.desktopUrl, 1440, async (input, init) => {
     if (new URL(input).pathname === "/api/v1/view") return new Response(JSON.stringify({ error: { code: "folder_unreadable", message: `Access is denied. ${init.headers.Authorization}` } }), { status: 403, headers: { "content-type": "application/json" } });
@@ -4184,7 +4185,7 @@ test("the owned folder handoff protects its authority and preserves the host and
   t.after(async () => { await host?.stop(); await closeGuiHost(); await disposeCoreFixture(fixture); });
   const origin = join(fixture.root, "gui-origin");
   await mkdir(origin, { recursive: true });
-  await writeFile(fixture.paths.configFile, JSON.stringify({ format: "hivem1nd-service-config-v1", mindPath: fixture.paths.mind, machine: fixture.machine, origin: { kind: "folder", path: origin }, stagingPath: fixture.paths.staging, port: 0 }));
+  await writeFile(fixture.paths.configFile, JSON.stringify({ format: "hivem1nd-service-config-v1", mindPath: fixture.paths.mind, machine: fixture.machine, origin: { kind: "folder", path: origin }, stagingPath: fixture.paths.staging, port: 0 })); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   const draft = join(fixture.paths.localDirectory, "setup-draft.json");
   const checkpoint = join(fixture.paths.localDirectory, "setup.json");
   const before = Buffer.from('{"sentinel":"retain the existing setup"}\n');
@@ -4337,7 +4338,7 @@ test('first-open Later persists without a launch and explicit Overseer creation 
   const beforeDismissal = storage.size;
   click(dialog.querySelector("[data-action='cancel-agent']"));
   assert.equal(storage.size, beforeDismissal + 1);
-  assert.equal(storage.get(`hivem1nd:overseer:${desktop.app.selectedFolder}`), 'dismissed');
+  assert.equal(storage.get(`hivem1nd:overseer:${desktop.app.selectedFolder}`), 'dismissed'); // Compatibility: browser storage and desktop bridge names remain stable.
   renderShell(desktop.app); assert.equal(desktop.document.querySelector("[data-start-dialog='overseer']"), null);
   click(desktop.root.querySelector("[data-action='create-overseer']"));
   await waitFor(() => desktop.document.querySelector("[data-start-dialog='overseer']"), 'The Overseer choice did not reopen.');
@@ -4805,9 +4806,9 @@ async function supervisedDesktop(t) {
 const nodeText = node => [node.textContent, ...(node.children ?? []).map(nodeText)].filter(Boolean).join(' ');
 const permissionWrites = calls => calls.filter(call => call.method === 'POST' && call.path.endsWith('/settings/permissions'));
 const SUPERVISED_COPY = {
-  en: ['HIVEM1ND cannot confine this agent on Windows. By default it asks you before every file change and command.',
+  en: ['ONEM1ND cannot confine this agent on Windows. By default it asks you before every file change and command.',
     "Work automatically: it changes files and runs commands without asking, and can write outside its cluster's folder. You can turn this off in Settings, Permissions."],
-  es: ['HIVEM1ND no puede confinar a este agente en Windows. De forma predeterminada, consulta antes de cada cambio de archivos y de cada comando.',
+  es: ['ONEM1ND no puede confinar a este agente en Windows. De forma predeterminada, consulta antes de cada cambio de archivos y de cada comando.',
     'Trabajar de forma automática: modifica archivos y ejecuta comandos sin consultar, y puede escribir fuera de la carpeta de su clúster. Se puede desactivar en Configuración, Permisos.'],
 };
 async function chooseSupervised(desktop, { automatic, client = 'claude', language = 'en' }) {
@@ -5207,7 +5208,7 @@ async function exchangeRaw(fixture, key) {
 
 function jsonEnvelope(status, data) {
   const body = JSON.stringify({
-    contract: "hivem1nd-gui-v3",
+    contract: "hivem1nd-gui-v3", // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     data,
     meta: { requestId: "req", readAt: "2026-10-10T12:00:00.000Z", eventCursor: "0", sync: "local" },
   });
@@ -5289,7 +5290,7 @@ async function until(check) {
 
 function sseFrame(name, id, data) {
   const envelope = {
-    contract: "hivem1nd-events-v3",
+    contract: "hivem1nd-events-v3", // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     at: "2026-10-11T12:00:00.000Z",
     machine: "QA",
     source: { kind: "service", id: "fixture", unitId: "root:master" },
@@ -5895,7 +5896,7 @@ for (const end of ['Cancel', 'timeout']) test(`ordinary waiting reports elapsed 
     requests.push(key);
     const data = commits.get(key) ?? { settings: { ...desktop.app.store.settings.settings, look: 'high-contrast' }, revision: 'b'.repeat(64) };
     commits.set(key, data);
-    const payload = JSON.stringify({ contract: 'hivem1nd-gui-v3', data, meta: { requestId: key, readAt: '2026-10-13T00:00:00.000Z', eventCursor: 'fixture:1', sync: 'local' } });
+    const payload = JSON.stringify({ contract: 'hivem1nd-gui-v3', data, meta: { requestId: key, readAt: '2026-10-13T00:00:00.000Z', eventCursor: 'fixture:1', sync: 'local' } }); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     if (requests.length > 1) return new Response(payload, { status: 200 });
     return new Response(new ReadableStream({ start(controller) { finish = () => { controller.enqueue(new TextEncoder().encode(payload)); controller.close(); }; } }), { status: 200 });
   };
@@ -7278,17 +7279,30 @@ test('T094 actual-core Add selects one repository cluster, creates only an expli
   owner.additionTransport = async url => ({ status: 200, bytes: url.pathname.includes('/commits/')
     ? Buffer.from(JSON.stringify({ sha: pin, commit: { committer: { date: '2026-10-01T00:00:00.000Z' } } })) : archive });
   owner.additionRunner = async (_command, _args, _options, input) => Buffer.from(createHash('sha1').update(`blob ${input.length}\0`).update(input).digest('hex') + '\n');
+  const waitForAddition = (check, label) => waitFor(check, label).catch(error => {
+    const model = app.addController?.model;
+    error.message += ` (errorCode=${model?.errorCode ?? 'none'}, stage=${model?.stage ?? 'none'}, busy=${model?.busy ?? 'none'})`;
+    throw error;
+  });
   const inspect = async () => {
     click(root.querySelector('[data-action="add-to-mind"]'));
+    // Reopening can revalidate the retained preview before another inspection is accepted.
+    await waitForAddition(() => {
+      const input = document.querySelector('[id="add-link"]');
+      return input && !input.disabled && input.getAttribute('disabled') === null
+        && !app.addController.model.busy && !app.addController.state.operation;
+    }, 'The actual source input did not become ready.');
+    const previousPreviewId = app.addController.model.preview?.id;
     const input = document.querySelector('[id="add-link"]'); typeInput(input, 'https://github.com/acme/landing-site', 0, 0);
     for (const handler of input.listeners.get('keydown') ?? []) handler({ key: 'Enter', preventDefault() {} });
-    await waitFor(() => app.addController.model.preview?.state === 'ready', 'The actual source check did not finish.');
+    await waitForAddition(() => !app.addController.model.busy && app.addController.model.preview?.id !== previousPreviewId
+      && app.addController.model.preview?.state === 'ready', 'The actual source check did not finish.');
   };
   const choose = kind => {
     const candidate = app.addController.model.preview.candidates.find(item => item.kind === kind);
     changeControl(document.querySelector(`[data-candidate-id="${candidate.id}"]`).querySelector('input'), true);
   };
-  const check = async () => { await clickAndWait(document.querySelector('[data-action="add-continue"]')); await waitFor(() => app.addController.model.stage === 'check', 'The immutable check did not open.'); };
+  const check = async () => { await clickAndWait(document.querySelector('[data-action="add-continue"]')); await waitForAddition(() => !app.addController.model.busy && app.addController.model.stage === 'check', 'The immutable check did not open.'); };
   await inspect(); choose('repository'); await check(); await clickAndWait(document.querySelector('[data-action="add-confirm"]'));
   await waitFor(() => app.store.selected.groupId && !document.querySelector('.add-dialog'), 'The accepted repository was not selected.').catch(() => {
     throw new Error(`Repository acceptance: ${app.addController.model.errorCode ?? app.addController.model.preview?.state}, reports: ${app.startError?.code ?? 'ready'}`);
@@ -7310,7 +7324,7 @@ test('T094 actual-core Add selects one repository cluster, creates only an expli
   const { scopeAddition } = await import('../gui/app/add-controller.mjs');
   for (const id of app.addController.model.selected) scopeAddition(app.addController, id, 'group', clusterId, true);
   await clickAndWait(document.querySelector('[data-action="add-confirm"]'));
-  await waitFor(() => app.store.additions.report?.items.length === 3 && !document.querySelector('.add-dialog'), 'Content was not accepted.');
+  await waitForAddition(() => app.store.additions.report?.items.length === 3 && !document.querySelector('.add-dialog'), 'Content was not accepted.');
   navigate(app, 'settings'); await app.settingsState.pending; await waitFor(() => app.settingsState?.loaded && !app.settingsState.loading, 'Content reports did not load.');
   click(root.querySelector('[data-action="settings-tab-content"]'));
   await waitFor(() => root.querySelectorAll('[data-addition-id]').length === 2, 'Imported Content was not placed beside kit items.');
@@ -7569,11 +7583,11 @@ function seedCheckout({ reading = null, stopped = false } = {}) {
     }
     if (reading) {
       await mkdir(join(local, 'sessions', SHOP_SESSION), { recursive: true });
-      await writeFile(join(local, 'sessions', SHOP_SESSION, 'checkout.json'), JSON.stringify({ format: 'hivem1nd-session-checkout-v1', sessionId: SHOP_SESSION, ...reading }));
+      await writeFile(join(local, 'sessions', SHOP_SESSION, 'checkout.json'), JSON.stringify({ format: 'hivem1nd-session-checkout-v1', sessionId: SHOP_SESSION, ...reading })); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     }
     if (stopped) {
       await mkdir(join(tree.user, 'relay', 'session-status', SHOP_SESSION), { recursive: true });
-      await writeFile(join(tree.user, 'relay', 'session-status', SHOP_SESSION, 'closed.json'), JSON.stringify({ format: 'hivem1nd-session-status-v1',
+      await writeFile(join(tree.user, 'relay', 'session-status', SHOP_SESSION, 'closed.json'), JSON.stringify({ format: 'hivem1nd-session-status-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
         sessionId: SHOP_SESSION, state: 'stopped', machine: 'DESKTOP', at: '2026-10-10T11:59:00.000Z', reason: 'native-acknowledged' }));
     }
   };
@@ -7668,7 +7682,7 @@ test('the folder rows are read again on a session change, not on every work even
   const reads = () => urls.filter(url => url.endsWith(`/sessions/${SHOP_SESSION}/checkout`)).length;
   await waitFor(() => facts().Branch?.text === 'main', 'The first reading did not appear.');
   assert.equal(reads(), 1);
-  await writeFile(join(local, 'sessions', SHOP_SESSION, 'checkout.json'), JSON.stringify({ format: 'hivem1nd-session-checkout-v1', sessionId: SHOP_SESSION, ...reading, branch: 'later' }));
+  await writeFile(join(local, 'sessions', SHOP_SESSION, 'checkout.json'), JSON.stringify({ format: 'hivem1nd-session-checkout-v1', sessionId: SHOP_SESSION, ...reading, branch: 'later' })); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   const cursor = desktop.app.store.cursor;
   await fixture.control.emit('session.work', { sessionId: SHOP_SESSION, sequence: 1 });
   await waitFor(() => desktop.app.store.cursor !== cursor, 'The work event was not consumed.');
@@ -8246,19 +8260,23 @@ test("a chat message shows its pictures as a carousel with its buttons, and the 
 });
 
 async function startMenuDesktop(t) {
+  let desktop, server;
+  t.after(async () => {
+    if (desktop?.app) dispose(desktop.app);
+    if (server) await server.close();
+  });
   const state = await makePlanFixture(t, { count: 2, task: false });
   state.context.ledger = openLedger({ store: state.store, paths: state.context.paths, now: state.context.now, machine: state.machine });
   state.context.projects = [];
   const credentials = createCredentialStore({ now: state.context.now });
   state.context.settingsOwner = createSettingsOwner({ ...state.context, probeAgents: async () => ({}) });
-  const server = await createHttpServer({ ...state.context, credentials }); state.context.bus = server.bus;
+  server = await createHttpServer({ ...state.context, credentials }); state.context.bus = server.bus;
   const token = credentials.issue({ audience: 'desktop', capabilities: DESKTOP.filter(capability => capability !== 'viewer.write') }).token;
   const calls = [];
-  const desktop = await bootWithFetch(`http://127.0.0.1:${server.port}/#session=${token}`, 1440, (input, init) => {
+  desktop = await bootWithFetch(`http://127.0.0.1:${server.port}/#session=${token}`, 1440, (input, init) => {
     calls.push({ method: init?.method ?? 'GET', path: new URL(String(input)).pathname, body: init?.body ? JSON.parse(init.body) : null });
     return fetch(input, init);
   }, { clock: state.context.now });
-  t.after(async () => { dispose(desktop.app); await server.close(); });
   await waitFor(() => desktop.app.unitList?.catalog?.length && desktop.app.activeHandlers && desktop.app.mapState, 'The actual core tree did not load.');
   desktop.app.startDialog?.dialog.close();
   return { ...desktop, state, calls };
@@ -8555,10 +8573,12 @@ test('the right-click menu of an agent and of a cluster lists only what the stat
   // A cluster: open, add an agent, rename, collapse on the Map and delete.
   assert.deepEqual(openMenu({ kind: 'cluster', id: clusterId }), ['open', 'new-agent', 'rename', 'collapse', 'delete']);
   await choose('collapse');
+  await waitFor(() => !app.mapState.inFlight && !app.mapState.refreshing && app.mapState.pendingGroups.size === 0, 'The collapsed Map cluster did not finish saving.');
   assert.equal(app.mapState.saved.groups[`cluster:${clusterId}`].collapsed, true);
   assert.equal(openMenu({ kind: 'cluster', id: clusterId }).includes('collapse'), true);
   assert.equal([...menu().children].find(child => child.getAttribute('data-action') === 'context-collapse').textContent, 'Expand');
   await choose('collapse');
+  await waitFor(() => !app.mapState.inFlight && !app.mapState.refreshing && app.mapState.pendingGroups.size === 0, 'The expanded Map cluster did not finish saving.');
   assert.equal(app.mapState.saved.groups[`cluster:${clusterId}`].collapsed, false);
   openMenu({ kind: 'cluster', id: clusterId }); await choose('rename');
   await waitFor(() => document.querySelector('[data-form="cluster-rename"]'), 'Rename did not open.');
@@ -8774,7 +8794,7 @@ test('a tab whose service stopped says so and how to open it again instead of a 
   await waitFor(() => app.bootStopped === true, 'The stopped service was not recognised.');
   assert.equal(root.querySelector('.opening-failure').children[1].textContent, 'The service stopped');
   const cause = root.querySelector('[data-opening-cause]').textContent;
-  assert.match(cause, /hivem1nd service install --mind-path "C:\Minds\Shop"/);
+  assert.match(cause, /onem1nd service install --mind-path "C:\Minds\Shop"/);
   assert.equal(cause.includes('30 s'), false);
 });
 
@@ -9099,7 +9119,7 @@ test("at 1024 px the bar keeps Add, what waits and Details, and the rest sits in
   assert.match(pill.getAttribute("aria-label"), /^\d+ waiting on you$/);
   assert.match(pill.querySelector(".pill-count").textContent, /^\d+$/);
   assert.ok(pill.querySelector(".pill-label"));
-  assert.equal(desktop.root.querySelector(".brand-name").textContent, "HIVEM1ND");
+  assert.equal(desktop.root.querySelector(".brand-name").textContent, "ONEM1ND");
   // Details opens the drawer; its header closes it; Escape closes it.
   const inspector = () => desktop.root.querySelector(".inspector");
   assert.equal(inspector().className.includes("is-open"), false);

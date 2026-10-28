@@ -22,7 +22,7 @@ test('guessEnvironment detects each environment type in priority order', async (
     { name: 'none', files: {}, expected: '' },
   ];
 
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-guess-env-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-guess-env-'));
   context.after(() => rm(root, { recursive: true, force: true }));
   for (const scenario of cases) {
     const repository = path.join(root, scenario.name);
@@ -37,7 +37,7 @@ test('guessEnvironment detects each environment type in priority order', async (
 });
 
 test('the home scan skips AppData, Library and hidden directories but still finds nested repositories', async (context) => {
-  const homeDir = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-home-scan-'));
+  const homeDir = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-home-scan-'));
   context.after(() => rm(homeDir, { recursive: true, force: true }));
   await mkdir(path.join(homeDir, 'AppData', 'excluded', '.git'), { recursive: true });
   await mkdir(path.join(homeDir, 'Library', 'excluded', '.git'), { recursive: true });
@@ -50,7 +50,7 @@ test('the home scan skips AppData, Library and hidden directories but still find
 });
 
 test('the home scan tolerates a directory it cannot list', async (t) => {
-  const homeDir = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-home-scan-unreadable-'));
+  const homeDir = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-home-scan-unreadable-'));
   t.after(() => rm(homeDir, { recursive: true, force: true }));
   const blocked = path.join(homeDir, 'blocked');
   await mkdir(blocked, { recursive: true });
@@ -75,7 +75,7 @@ test('the home scan tolerates a directory it cannot list', async (t) => {
 });
 
 test('feature categories come from frontmatter, and a missing or unknown category is preserved as-is', async (context) => {
-  const kitPath = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-categories-'));
+  const kitPath = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-categories-'));
   context.after(() => rm(kitPath, { recursive: true, force: true }));
   const featuresDir = path.join(kitPath, 'features');
   await mkdir(featuresDir, { recursive: true });
@@ -98,7 +98,7 @@ test('feature categories come from frontmatter, and a missing or unknown categor
 // Setup has four steps (docs/3.0/final.md, decision 3): content is detected with defaults and changed
 // in Settings, so a feature without a known category must still be part of those defaults.
 test('setup still includes a feature with a missing or unknown category in its content defaults', async (context) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-categories-session-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-categories-session-'));
   context.after(() => rm(root, { recursive: true, force: true }));
   const kitPath = path.join(root, 'kit');
   const homeDir = path.join(root, 'home');
@@ -106,7 +106,7 @@ test('setup still includes a feature with a missing or unknown category in its c
   await mkdir(path.join(kitPath, 'features'), { recursive: true });
   await mkdir(homeDir, { recursive: true });
   await mkdir(path.join(mindPath, 'user'), { recursive: true });
-  await writeFile(path.join(kitPath, 'package.json'), '{"name":"hivem1nd-fixture","version":"3.0.0","files":["features/"]}\n');
+  await writeFile(path.join(kitPath, 'package.json'), '{"name":"onem1nd-fixture","version":"3.0.0","files":["features/"]}\n');
   await writeFile(path.join(kitPath, 'features', 'alpha.md'), '---\nname: alpha\ndescription: Alpha.\ncategory: planning\n---\n\n# Alpha\n');
   await writeFile(path.join(kitPath, 'features', 'gamma.md'), '---\nname: gamma\ndescription: Gamma.\n---\n\n# Gamma\n');
   await writeFile(path.join(kitPath, 'features', 'delta.md'), '---\nname: delta\ndescription: Delta.\ncategory: mystery\n---\n\n# Delta\n');

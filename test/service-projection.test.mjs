@@ -156,7 +156,7 @@ test('a view larger than 16 MB asks for the lists', async (t) => {
 test('a service beat projects answers and an inaccessible mind is unavailable', async (t) => {
   const fixture = await mind(t);
   await writeFile(path.join(fixture.paths.origin, 'machines', 'DESKTOP', 'service.json'), JSON.stringify({
-    format: 'hivem1nd-service-v1', machine: 'DESKTOP', state: 'running', version: '3.0.0', heartbeatAt: '2026-10-10T12:00:00.000Z', startedAt: '2026-10-10T12:00:00.000Z',
+    format: 'hivem1nd-service-v1', machine: 'DESKTOP', state: 'running', version: '3.0.0', heartbeatAt: '2026-10-10T12:00:00.000Z', startedAt: '2026-10-10T12:00:00.000Z', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   }));
   await writeFile(path.join(fixture.paths.mind, 'user', 'relay', 'sessions', 'one.json'), JSON.stringify({
     sessionId: '20c58b80-4d93-88cd-83b3-39d78f1d9d5d', unitId: 'project:shop:executor-shop', client: 'codex', machine: 'DESKTOP',
@@ -258,7 +258,7 @@ async function answeringMachine(fixture) {
   fixture.paths.origin = path.join(fixture.root, 'origin');
   await mkdir(path.join(fixture.paths.origin, 'machines', 'DESKTOP'), { recursive: true });
   await writeFile(path.join(fixture.paths.origin, 'machines', 'DESKTOP', 'service.json'), JSON.stringify({
-    format: 'hivem1nd-service-v1', machine: 'DESKTOP', state: 'running', version: '3.0.0',
+    format: 'hivem1nd-service-v1', machine: 'DESKTOP', state: 'running', version: '3.0.0', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     heartbeatAt: new Date(fixture.clock.now).toISOString(), startedAt: new Date(fixture.clock.now).toISOString(),
   }));
 }
@@ -406,10 +406,10 @@ test('unit, lead, layout, and settings writes are validated before any file chan
   const settings = await patchSettings(context, { look: 'high-contrast', expectedRevision: null });
   assert.equal(settings.replayed, false);
   const settingsPath = path.join(fixture.paths.mind, 'user', 'gui', 'settings.json');
-  const newer = Buffer.from(`${JSON.stringify({ format: 'hivem1nd-settings-v1', look: 'modern', language: 'es' })}\n`);
+  const newer = Buffer.from(`${JSON.stringify({ format: 'hivem1nd-settings-v1', look: 'modern', language: 'es' })}\n`); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   await writeFile(settingsPath, newer);
   await assert.rejects(
-    () => patchSettings(context, { language: 'en', expectedRevision: revisionOf(Buffer.from('{"format":"hivem1nd-settings-v1","look":"high-contrast","language":"en"}\n')) }),
+    () => patchSettings(context, { language: 'en', expectedRevision: revisionOf(Buffer.from('{"format":"hivem1nd-settings-v1","look":"high-contrast","language":"en"}\n')) }), // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     (error) => error.code === 'revision_conflict',
   );
   assert.equal(await readFile(settingsPath, 'utf8'), newer.toString('utf8'));
@@ -479,7 +479,7 @@ test('scoped records, terminal sessions and chat fields stay in the projection',
   await mkdir(path.join(root, 'user', 'relay', 'session-status', sessionId), { recursive: true });
   await mkdir(path.join(root, 'user', 'relay', 'chats', 'room'), { recursive: true });
   await mkdir(path.join(root, 'user', 'relay', 'chats', 'room', 'read', 'master'), { recursive: true });
-  await writeFile(path.join(root, 'user', 'projects', 'shop', 'product.json'), JSON.stringify({ format: 'hivem1nd-product-v1', title: 'Shop' }));
+  await writeFile(path.join(root, 'user', 'projects', 'shop', 'product.json'), JSON.stringify({ format: 'hivem1nd-product-v1', title: 'Shop' })); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   await writeFile(path.join(root, 'user', 'projects', 'shop', 'state', 'builder.md'), stateFile({
     unit: 'builder', role: 'executor', state: 'in', machine: 'DESKTOP', 'lead-id': 'root:overseer',
   }));
@@ -504,7 +504,7 @@ test('scoped records, terminal sessions and chat fields stay in the projection',
   }));
   await writeFile(path.join(root, 'user', 'relay', 'sessions', 'blank.json'), '{}\n');
   await writeFile(path.join(root, 'user', 'relay', 'session-status', sessionId, 'stop.json'), JSON.stringify({
-    format: 'hivem1nd-session-status-v1', sessionId, state: 'stopped', machine: 'DESKTOP', at: '2026-10-10T11:40:00.000Z',
+    format: 'hivem1nd-session-status-v1', sessionId, state: 'stopped', machine: 'DESKTOP', at: '2026-10-10T11:40:00.000Z', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   }));
   await writeFile(path.join(root, 'user', 'relay', 'chats', 'room', 'chat.md'), stateFile({
     id: 'room', title: 'Room', kind: 'group', members: '["root:master","project:shop:builder"]', created: '2026-10-10T10:00:00.000Z',
@@ -597,7 +597,7 @@ test('chat and mailbox reads stay with their reader, archive, and revisions', as
     pattern: { command: 'npm run build', cwd: 'project:shop' },
   }));
   await writeFile(path.join(root, 'user', 'gui', 'resources.json'), JSON.stringify({
-    format: 'hivem1nd-resources-v1',
+    format: 'hivem1nd-resources-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     resources: [{ id: 'board-1', kind: 'blueprint', project: 'shop', path: 'boards/one.md', title: 'One' }],
   }));
   await writeFile(path.join(root, 'user', 'relay', 'sessions', 'older.json'), JSON.stringify({
@@ -610,7 +610,7 @@ test('chat and mailbox reads stay with their reader, archive, and revisions', as
     kind: 'registration', sessionId: '30c58b80-4d93-88cd-83b3-39d78f1d9d5d', unitId: 'root:overseer', client: 'codex', machine: 'DESKTOP', registeredAt: '2026-10-10T09:00:00.000Z',
   }));
   await writeFile(path.join(root, 'user', 'relay', 'session-status', '20c58b80-4d93-88cd-83b3-39d78f1d9d5d', 'stop.json'), JSON.stringify({
-    format: 'hivem1nd-session-status-v1', sessionId: '20c58b80-4d93-88cd-83b3-39d78f1d9d5d', state: 'stopped', at: '2026-10-10T11:30:00.000Z',
+    format: 'hivem1nd-session-status-v1', sessionId: '20c58b80-4d93-88cd-83b3-39d78f1d9d5d', state: 'stopped', at: '2026-10-10T11:30:00.000Z', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   }));
 
   const direct = await readCollection(context, 'messages', { chatId: 'direct' });
@@ -753,7 +753,7 @@ test('pending sync work stays pending and a failure stays visible', async (t) =>
   const context = { store: fixture.store, paths: fixture.paths, now: () => NOW, sync, ledger };
   await stageTransaction(sync, [{ target: { kind: 'mind', path: 'user/note.txt' }, bytes: Buffer.from('local') }]);
   await writeFile(ledger.file, `${JSON.stringify({
-    format: 'hivem1nd-sync-ledger-v1',
+    format: 'hivem1nd-sync-ledger-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     admitted: [],
     outgoing: [],
     incoming: { LAPTOP: [{ id: 'pack-1', at: '2026-10-10T12:00:00.000Z', messages: 1, bytes: 20 }] },
@@ -926,7 +926,7 @@ test('a locally registered zero-unit project appears with provenance without cre
   let view = await readProjection(context);
   assert.deepEqual(view.projects[0].unitIds, []); assert.equal(view.projects[0].available, true);
   const directory = path.join(fixture.paths.mind, 'user', 'projects', 'empty'); await mkdir(directory, { recursive: true });
-  const provenance = { format: 'hivem1nd-product-v1', title: 'Empty repository', additionId: randomUUID(), origin: 'acme/empty', pin: { kind: 'commit', value: 'a'.repeat(40), digest: 'b'.repeat(64) } };
+  const provenance = { format: 'hivem1nd-product-v1', title: 'Empty repository', additionId: randomUUID(), origin: 'acme/empty', pin: { kind: 'commit', value: 'a'.repeat(40), digest: 'b'.repeat(64) } }; // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   await writeFile(path.join(directory, 'product.json'), JSON.stringify(provenance));
   view = await readProjection(context);
   assert.equal(view.projects[0].additionId, provenance.additionId); assert.deepEqual(view.projects[0].pin, provenance.pin);
@@ -1012,7 +1012,7 @@ test('the view reads only the delivery receipts that exist, not one file per mes
   for (const [index, id] of ids.entries()) await writeFile(path.join(root, 'user', 'inbox', 'master', `${index}-${id}.md`), inboxMessage(id, `Message ${index}`));
   await mkdir(path.join(root, 'user', 'relay', 'fanout'), { recursive: true });
   for (const id of ids.slice(0, 2)) {
-    await writeFile(path.join(root, 'user', 'relay', 'fanout', `${id}.json`), JSON.stringify({ format: 'hivem1nd-fanout-v1', messageId: id, notices: [{ key: `${id}:root:master`, unitId: 'root:master', state: 'submitted', resourceId: id, submittedAt: '2026-10-10T11:00:05.000Z' }] }));
+    await writeFile(path.join(root, 'user', 'relay', 'fanout', `${id}.json`), JSON.stringify({ format: 'hivem1nd-fanout-v1', messageId: id, notices: [{ key: `${id}:root:master`, unitId: 'root:master', state: 'submitted', resourceId: id, submittedAt: '2026-10-10T11:00:05.000Z' }] })); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   }
   await writeFile(path.join(root, 'user', 'relay', 'fanout', `${ids[2]}.json`), '{ not json');
   let view;
@@ -1087,7 +1087,7 @@ test('the clusters a unit leads are found with one projection, not one per membe
   const cluster = async (title, members, parentId = null) => {
     const id = randomUUID();
     await mkdir(path.join(root, 'user', 'gui', 'groups'), { recursive: true });
-    await writeFile(path.join(root, 'user', 'gui', 'groups', `${id}.json`), JSON.stringify({ format: 'hivem1nd-cluster-v1', id, title, members, parentId, link: { kind: 'none' }, chatId: id, deleted: false, createdAt: '2026-10-01T00:00:00.000Z' }));
+    await writeFile(path.join(root, 'user', 'gui', 'groups', `${id}.json`), JSON.stringify({ format: 'hivem1nd-cluster-v1', id, title, members, parentId, link: { kind: 'none' }, chatId: id, deleted: false, createdAt: '2026-10-01T00:00:00.000Z' })); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     return id;
   };
   const wide = await cluster('Wide', [units[0], units[1], units[2]]);

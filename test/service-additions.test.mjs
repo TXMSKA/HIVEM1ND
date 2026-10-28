@@ -194,7 +194,7 @@ test('an update binds kind name and origin and keeps prior accepted bytes active
   await mkdir(path.join(context.paths.mind, 'user', 'additions'), { recursive: true });
   await mkdir(path.join(context.paths.mind, 'user', 'features', 'pdf'), { recursive: true });
   await writeFile(path.join(context.paths.mind, 'user', 'features', 'pdf', 'SKILL.md'), 'Prior accepted bytes');
-  await writeFile(path.join(context.paths.mind, 'user', 'additions', `${id}.json`), JSON.stringify({ format: 'hivem1nd-addition-v1', id, kind: 'skill', name: 'pdf', title: 'pdf', machine: context.paths.machine,
+  await writeFile(path.join(context.paths.mind, 'user', 'additions', `${id}.json`), JSON.stringify({ format: 'hivem1nd-addition-v1', id, kind: 'skill', name: 'pdf', title: 'pdf', machine: context.paths.machine, // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     source: { kind: 'folder', display: 'folder', url: null }, sourcePath: '.', removed: false, pin: { kind: 'snapshot', value: 'a'.repeat(64), digest: 'a'.repeat(64) },
     license: 'MIT', publishedAt: '2026-10-01T00:00:00.000Z', requirements: [], scope: { everyUnit: true, units: [], groups: [] }, unitCount: 0, projectId: null,
     installedAt: new Date(context.now()).toISOString(), updatedAt: new Date(context.now()).toISOString(), files: [{ path: 'user/features/pdf/SKILL.md', hash: hashBytes(Buffer.from('Prior accepted bytes')), bytes: 20 }] }));
@@ -537,7 +537,7 @@ test('repository removal retains agents and rejects a running session before det
   // A persisted stopped session is the canonical boundary used by link removal.
   const statusDirectory = path.join(context.paths.mind, 'user', 'relay', 'session-status', session.sessionId);
   await mkdir(statusDirectory, { recursive: true });
-  await writeFile(path.join(statusDirectory, `${randomUUID()}.json`), JSON.stringify({ format: 'hivem1nd-session-status-v1', sessionId: session.sessionId,
+  await writeFile(path.join(statusDirectory, `${randomUUID()}.json`), JSON.stringify({ format: 'hivem1nd-session-status-v1', sessionId: session.sessionId, // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     machine: context.paths.machine, state: 'stopped', at: new Date(context.now()).toISOString(), reason: 'native-acknowledged' }));
   const removed = await remove();
   const retained = (await rawClusters(context)).find(item => item.cluster.id === cluster.id).cluster;

@@ -34,7 +34,7 @@ jobs:
       - run: npm run dist:win -- --node-zip "${{ runner.temp }}/node-v22.23.3-win-x64.zip"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: HIVEM1ND-Windows
+          name: ONEM1ND-Windows
           if-no-files-found: error
           path: |
             dist/*.zip
@@ -49,7 +49,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          name: HIVEM1ND-Windows
+          name: ONEM1ND-Windows
           path: dist
       - name: Prepare release notes
         env:

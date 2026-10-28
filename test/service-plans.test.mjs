@@ -179,7 +179,7 @@ test('new tasks of an execution plan create no branch before Run', async t => {
   const report = await readMachineSettings(state.context, state.machine, 'projects');
   const mapping = await createClusterLink(state.context, { machine: state.machine, kind: 'repository', path: directory, expectedReportRevision: report.revision });
   const cluster = await patchCluster(state.context, state.cluster.id, { machine: state.machine, link: mapping.link, expectedRevision: state.cluster.revision });
-  await writeFile(path.join(state.paths.localDirectory, 'client-permissions.json'), JSON.stringify({ permissions: [{ id: randomUUID(), machine: state.machine, client: 'codex', actions: ['git.commit', 'git.push'], scope: 'hivem1nd-started-sessions', grantedAt: new Date(state.clock.now).toISOString(), grantedBy: 'root:master' }] }));
+  await writeFile(path.join(state.paths.localDirectory, 'client-permissions.json'), JSON.stringify({ permissions: [{ id: randomUUID(), machine: state.machine, client: 'codex', actions: ['git.commit', 'git.push'], scope: 'hivem1nd-started-sessions', grantedAt: new Date(state.clock.now).toISOString(), grantedBy: 'root:master' }] })); // Compatibility: existing permission grants retain their scope identity.
   const input = { ...state.input, mode: 'execution', expectedChatRevision: (await readDetail(state.context, 'chats', cluster.chatId)).revision,
     tasks: [newTask('Change the result', state.input.roles.builder, 'files: ["result.txt"]')] };
   const plan = await createPlan(state.context, input);

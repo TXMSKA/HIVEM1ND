@@ -115,7 +115,7 @@ export async function removeUnit(context, unitId, input) {
     let membership = await prepareUnitMembershipRemoval(context, parsed.id);
     const newJournal = !journal || journal.phase === 'committed';
     if (newJournal) {
-      journal = { format: 'hivem1nd-unit-removal-v1', id: randomUUID(), unitId: parsed.id, expectedRevision: input.expectedRevision,
+      journal = { format: 'hivem1nd-unit-removal-v1', id: randomUUID(), unitId: parsed.id, expectedRevision: input.expectedRevision, // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
         phase: 'prepared', stoppedSessionIds: [], stoppingSessionId: null };
     }
     const journalEntry = (value) => ({ resource: `unit-removal:${key}`, recordPath: journalPath,
@@ -185,7 +185,7 @@ export async function patchLayout(context, input) {
   const groups = input?.groups ?? null;
   if (!nodes && !groups) throw new CoreError(422, 'invalid_body', 'A layout patch needs a node or a group.');
   const current = await readJson(context, 'user/gui/layout.json');
-  const layout = current.value ?? { format: 'hivem1nd-layout-v1', nodes: {}, groups: {} };
+  const layout = current.value ?? { format: 'hivem1nd-layout-v1', nodes: {}, groups: {} }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   const nextNodes = { ...(layout.nodes ?? {}) };
   const nextGroups = { ...(layout.groups ?? {}) };
   for (const [id, position] of Object.entries(nodes ?? {})) {
@@ -202,7 +202,7 @@ export async function patchLayout(context, input) {
     if (id.startsWith('cluster:') && group?.x === undefined && group?.y === undefined && Object.prototype.hasOwnProperty.call(group, 'collapsed')) nextGroups[id] = { ...prior, collapsed };
     else nextGroups[id] = { ...prior, x: coordinate(group?.x), y: coordinate(group?.y), collapsed };
   }
-  const next = { ...layout, format: 'hivem1nd-layout-v1', nodes: nextNodes, groups: nextGroups };
+  const next = { ...layout, format: 'hivem1nd-layout-v1', nodes: nextNodes, groups: nextGroups }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   const bytes = Buffer.from(`${canonicalJson(next)}\n`);
   const events = [
     { name: 'layout.changed', data: { layout: next, revision: hashBytes(bytes) } },
@@ -229,8 +229,8 @@ export async function patchSettings(context, input) {
   if (hasSendToAgent && typeof input.sendToAgent !== 'boolean') throw new CoreError(422, 'invalid_body', 'Send to agent must be a boolean.');
   const current = await readJson(context, 'user/gui/settings.json');
   const settings = {
-    ...(current.value ?? { format: 'hivem1nd-settings-v1', look: 'modern', language: 'en' }),
-    format: 'hivem1nd-settings-v1',
+    ...(current.value ?? { format: 'hivem1nd-settings-v1', look: 'modern', language: 'en' }), // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
+    format: 'hivem1nd-settings-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   };
   if (hasLook) settings.look = input.look;
   if (hasLanguage) settings.language = input.language;
@@ -280,9 +280,9 @@ async function prepareCreate(context, input) {
   const position = input.position ? { x: coordinate(input.position.x), y: coordinate(input.position.y) } : { x: 0, y: 0 };
   const state = Buffer.from(renderState({ unit, id: id.id, role, custom, scope, machine, leadId, job: input.job ?? null, model: input.model ?? null, clusterId: input.clusterId ?? null, runsIn, fresh: role === 'overseer' ? input.fresh ?? true : null }));
   const layoutFile = await readJson(context, 'user/gui/layout.json');
-  const layout = layoutFile.value ?? { format: 'hivem1nd-layout-v1', nodes: {}, groups: {} };
+  const layout = layoutFile.value ?? { format: 'hivem1nd-layout-v1', nodes: {}, groups: {} }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   layout.nodes = { ...(layout.nodes ?? {}), [id.id]: position };
-  const layoutBytes = Buffer.from(`${canonicalJson({ ...layout, format: 'hivem1nd-layout-v1' })}\n`);
+  const layoutBytes = Buffer.from(`${canonicalJson({ ...layout, format: 'hivem1nd-layout-v1' })}\n`); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   const events = [
     { name: 'unit.changed', data: { unit: { id: id.id, unit, role, roleName: custom?.name ?? null, machine, leadId } } },
     { name: 'layout.changed', data: { layout: JSON.parse(layoutBytes.toString('utf8')), revision: hashBytes(layoutBytes) } },

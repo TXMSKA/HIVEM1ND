@@ -95,7 +95,7 @@ test('relay configure defaults the kit path to the running kit and requires --mi
   const configured = await cli(['relay', 'configure', '--client', 'copilot', '--home-dir', home, '--mind-path', mind]);
   assert.equal(configured.code, 0, configured.stderr);
   const { mcpServers } = JSON.parse(await readFile(path.join(home, '.copilot', 'mcp-config.json'), 'utf8'));
-  assert.equal(mcpServers['hivem1nd-relay'].args[0], fileURLToPath(new URL('../cli/index.mjs', import.meta.url)));
+  assert.equal(mcpServers['onem1nd-relay'].args[0], fileURLToPath(new URL('../cli/index.mjs', import.meta.url)));
 });
 
 test('wake command parser requires explicit units and distinguishes bounded extension from unlimited consent', () => {

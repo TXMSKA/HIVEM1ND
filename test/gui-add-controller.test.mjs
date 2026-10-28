@@ -15,7 +15,7 @@ function fixture(respond) {
     const call = { path: new URL(url).pathname.replace('/api/v1', ''), method: options.method, key: options.headers['Idempotency-Key'], body: options.body && JSON.parse(options.body) };
     calls.push(call);
     const data = await respond(call, calls.length);
-    return new Response(JSON.stringify({ contract: 'hivem1nd-gui-v3', data, meta: { requestId: 'fixture', readAt: '2026-10-15T00:00:00Z', eventCursor: '', sync: 'local' } }), { status: 200 });
+    return new Response(JSON.stringify({ contract: 'hivem1nd-gui-v3', data, meta: { requestId: 'fixture', readAt: '2026-10-15T00:00:00Z', eventCursor: '', sync: 'local' } }), { status: 200 }); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   } }); api.token = 'public-fixture';
   const state = { machine: 'DESKTOP' }, accepted = [];
   const controller = createAddController(api, { state, schedule: (action, delay) => { jobs.set(++next, { action, delay }); return next; }, cancel: id => jobs.delete(id), onAccepted: async result => accepted.push(result) });

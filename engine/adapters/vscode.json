@@ -14,7 +14,7 @@
     "frontmatterKeys": ["name", "description", "license", "compatibility", "metadata", "argument-hint", "user-invocable", "disable-model-invocation", "context"]
   },
   "rules": {
-    "homePath": ".copilot/instructions/hivem1nd.instructions.md",
+    "homePath": ".copilot/instructions/onem1nd.instructions.md",
     "mode": "copilot"
   },
   "cli": {

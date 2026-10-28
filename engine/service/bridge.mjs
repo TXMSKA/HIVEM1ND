@@ -44,8 +44,8 @@ export async function openBridge(options = {}) {
   const credentials = options.credentials ?? createCredentialStore({ now: options.now ?? (() => Date.now()) });
   const agents = new Map();
   const endpoint = process.platform === 'win32'
-    ? `\\\\.\\pipe\\hivem1nd-${randomBytes(8).toString('hex')}`
-    : path.join(os.tmpdir(), `hivem1nd-${randomBytes(8).toString('hex')}.sock`);
+    ? `\\\\.\\pipe\\hivem1nd-${randomBytes(8).toString('hex')}` // Compatibility: wire identifiers keep existing native sessions and paired machines connected.
+    : path.join(os.tmpdir(), `hivem1nd-${randomBytes(8).toString('hex')}.sock`); // Compatibility: wire identifiers keep existing native sessions and paired machines connected.
   const bridge = {
     endpoint,
     secret,
@@ -115,9 +115,9 @@ export function createNativeLaunch(bridge, request) {
     contentReader: request.contentReader ?? null, planActor: request.planActor ?? null };
   bridge.launches.set(secret, launch);
   return {
-    env: { HIVEM1ND_SERVICE_BRIDGE: bridge.endpoint, HIVEM1ND_SERVICE_GRANT: secret },
+    env: { HIVEM1ND_SERVICE_BRIDGE: bridge.endpoint, HIVEM1ND_SERVICE_GRANT: secret }, // Compatibility: wire identifiers keep existing native sessions and paired machines connected.
     mcp: {
-      name: 'hivem1nd-relay',
+      name: 'onem1nd-relay',
       command: process.execPath,
       args: [fileURLToPath(new URL('../../cli/index.mjs', import.meta.url)), 'relay', 'mcp', '--mind-path', bridge.paths.mind, '--client', request.client],
       env: [],

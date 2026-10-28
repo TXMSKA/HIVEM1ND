@@ -5,7 +5,7 @@ import { cpaceGenerator, cpaceKey, cpaceMultiply } from './cpace.mjs';
 
 const ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 const WINDOW_MS = 600000;
-const VERSION = 'hivem1nd-relan-pair-v2';
+const VERSION = 'hivem1nd-relan-pair-v2'; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
 
 function refused(locked = false) {
   return new CoreError(locked ? 429 : 401, locked ? 'pairing_locked' : 'pairing_refused', locked ? 'Pairing is locked for 10 minutes.' : 'The ReLAN pairing was refused.');

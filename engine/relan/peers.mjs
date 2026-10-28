@@ -8,7 +8,7 @@ import { assertNoLinks } from '../service/paths.mjs';
 import { protectBootstrapFiles, protectLocalFile, verifyLocalPermissions } from '../service/security.mjs';
 import { parsePeerAddress } from './addresses.mjs';
 
-const FORMAT = 'hivem1nd-relan-peers-v1';
+const FORMAT = 'hivem1nd-relan-peers-v1'; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
 const writing = new Map();
 
 function peersFile(options) {

@@ -10,7 +10,7 @@ import { autoRuleLine, planAgentAssets } from '../engine/install.mjs';
 const KIT_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 test('adapter descriptors resolve only inside the supplied temporary home', async (context) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-adapters-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-adapters-'));
   context.after(() => rm(root, { recursive: true, force: true }));
   const homeDir = path.join(root, 'home');
   const claudeConfig = path.join(root, 'claude-profile');
@@ -32,7 +32,7 @@ test('adapter descriptors resolve only inside the supplied temporary home', asyn
 });
 
 test('discovery does not follow a fake binary outside the supplied PATH', async (context) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-path-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-path-'));
   context.after(() => rm(root, { recursive: true, force: true }));
   const homeDir = path.join(root, 'home');
   const binDir = path.join(root, 'bin');
@@ -47,7 +47,7 @@ test('discovery does not follow a fake binary outside the supplied PATH', async 
 });
 
 test('existing agent preferences can stay before or after the auto rule without content loss', async (context) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-preferences-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-preferences-'));
   context.after(() => rm(root, { recursive: true, force: true }));
   const homeDir = path.join(root, 'home');
   const mindPath = path.join(root, 'mind');
@@ -77,7 +77,7 @@ test('existing agent preferences can stay before or after the auto rule without 
 });
 
 test('content discovery ignores README placeholders and exposes future knowledge modules', async (context) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-content-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-content-'));
   context.after(() => rm(root, { recursive: true, force: true }));
   await mkdir(path.join(root, 'features'));
   await mkdir(path.join(root, 'knowledge', 'security'), { recursive: true });

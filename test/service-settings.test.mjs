@@ -317,7 +317,7 @@ test('Disconnect restores kept entries and credential bytes while preserving lat
   assert.equal(disconnected.body.state, 'disconnected');
   const restored = JSON.parse(await readFile(world.paths.mcp));
   assert.equal(restored.token === world.secret, true);
-  assert.equal(restored.mcpServers['hivem1nd-relay'], undefined);
+  assert.equal(restored.mcpServers['onem1nd-relay'], undefined);
   assert.deepEqual(restored.mcpServers.later, { command: 'later-foreign' });
   assert.equal(restored.newPreference, true);
   const restoredHooks = JSON.parse(await readFile(world.paths.hooks));
@@ -383,12 +383,12 @@ test('app connection and Auto/On demand changes have separate bindings and prese
   assert.equal(report.items.find(item => item.id === 'cursor').mode, 'on-demand');
   assert.equal(report.items.find(item => item.id === 'cursor').app.state, 'connected');
   const auto = await review(world, { mode: 'auto' });
-  assert.ok(auto.changes.some(item => item.path.endsWith('hivem1nd.mdc')));
+  assert.ok(auto.changes.some(item => item.path.endsWith('onem1nd.mdc')));
   await applyReview(world, auto);
   report = await readMachineSettings(world.domain, world.fixture.machine, 'agents');
   assert.equal(report.items.find(item => item.id === 'cursor').mode, 'auto');
   const demand = await review(world);
-  const rule = demand.changes.find(item => item.path.endsWith('hivem1nd.mdc'));
+  const rule = demand.changes.find(item => item.path.endsWith('onem1nd.mdc'));
   assert.ok(rule);
   await applyReview(world, demand);
   await assert.rejects(readFile(rule.path), { code: 'ENOENT' });
@@ -405,7 +405,7 @@ test('optional Git records only the reviewed machine and started-session scope w
   assert.deepEqual(await readFile(world.paths.hooks), world.originals.hooks);
   const report = await readMachineSettings(world.domain, world.fixture.machine, 'permissions');
   assert.equal(report.agentPermissions.length, 1);
-  assert.equal(report.agentPermissions[0].scope, 'hivem1nd-started-sessions');
+  assert.equal(report.agentPermissions[0].scope, 'hivem1nd-started-sessions'); // Compatibility: existing permission grants retain their scope identity.
   assert.equal(report.agentPermissions[0].machine, world.fixture.machine);
   assert.deepEqual(report.agentPermissions[0].actions, ['git.commit', 'git.push']);
   assert.equal(JSON.stringify(report).includes(world.secret), false);
@@ -478,7 +478,7 @@ test('remote permission revocation executes only on the selected authenticated o
   store.aclRunner = fixture.store.aclRunner;
   const laptop = createSettingsOwner({ ...owner, store, paths: { ...owner.paths, machine: 'LAPTOP', localDirectory: store.localDirectory, staging: path.join(store.localDirectory, 'staging') } });
   await mkdir(store.localDirectory, { recursive: true });
-  const permission = { id: randomUUID(), machine: 'LAPTOP', client: 'cursor', actions: ['git.commit', 'git.push'], scope: 'hivem1nd-started-sessions', grantedAt: new Date(fixture.clock.now).toISOString(), grantedBy: 'root:master' };
+  const permission = { id: randomUUID(), machine: 'LAPTOP', client: 'cursor', actions: ['git.commit', 'git.push'], scope: 'hivem1nd-started-sessions', grantedAt: new Date(fixture.clock.now).toISOString(), grantedBy: 'root:master' }; // Compatibility: existing permission grants retain their scope identity.
   await writeFile(path.join(store.localDirectory, 'client-permissions.json'), JSON.stringify({ permissions: [permission] }));
   await publishMachineSettings(owner);
   const report = await publishMachineSettings(laptop);
@@ -575,7 +575,7 @@ test('the GUI fixture lists a scoped permission, revokes it once and Disconnect 
   const report = (await call('GET', '/settings/permissions?machine=DESKTOP')).json.data;
   assert.equal(report.agentPermissions.length, 1);
   const permission = report.agentPermissions[0], input = { machine: 'DESKTOP', expectedRevision: report.revision }, key = randomUUID();
-  assert.equal(permission.scope, 'hivem1nd-started-sessions');
+  assert.equal(permission.scope, 'hivem1nd-started-sessions'); // Compatibility: existing permission grants retain their scope identity.
   assert.equal(permission.grantedBy, 'root:master');
   const revoked = await call('DELETE', `/settings/permissions/${permission.id}`, input, key);
   assert.equal(revoked.status, 200);

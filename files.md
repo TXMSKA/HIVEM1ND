@@ -32,13 +32,13 @@ user/
     state/ inbox/ tasks/ log/
 ```
 
-Team state, in the repo, on the `hivem1nd` branch mounted at `.hivem1nd/state/` (ignored by the code branches):
+Team state, in the repo, on the `hivem1nd` branch mounted at `.hivem1nd/state/` (ignored by the code branches): <!-- Compatibility: shared team state retains its existing branch and folder. -->
 
 ```
-.hivem1nd/                    committed in main: config and overrides
+.hivem1nd/                    committed in main: config and overrides # Compatibility: shared team state retains its branch and folder identity.
   config.md
   roles/ features/ preferences.md   optional overrides
-  state/                      the worktree of the hivem1nd branch
+  state/                      the worktree of the hivem1nd branch # Compatibility: shared team branch identity.
     presence/ inbox/ tasks/ log/
 ```
 
@@ -118,7 +118,7 @@ attachments: []
 Task 003 in tasks/. It depends on 002, already closed. Start when the current one is done.
 ```
 
-The filename is `<YYYYMMDD-HHMMSS>-<machine>-<id>.md`, local time; older minute-based names remain readable. `id` is a new UUID, and `thread-id` is the id of the first message of its thread. `priority` is `normal` or `urgent`. `attachments` is a JSON list of references: a path, or an object `{path, kind, label?}`. With `kind` `image`, `link`, `board`, `text` or `task`, the object is a part the chat shows under the text, a picture in its gallery or a button: an image names a picture kept as `user/relay/assets/<uuid>.<png|jpg|webp>`, a link an http, https or mailto address, a board or a text its id and a task its canonical id. `label`, at most 120 characters, is the name the chat shows. Relay adds `body-bytes`, the size of the body in bytes, and the service adds `from-id` and `to-id`, the unit ids, and `kind` on its own notices; a message written by hand may omit them. One folder per recipient. Relay archives a message once read under `user/relay/archive/<to>/`, keeping its bytes; reading never deletes it. A message to `link:<linkId>` is written once per other member of that link, all with the link's `thread-id` and one shared `fanout-id`, so history shows it once. A link is `user/relay/links/<linkId>.json`: `format` `hivem1nd-relay-link-v1`, `id`, `code` (five characters, joining works for 10 minutes after `createdAt`, until `expiresAt`), `threadId` (`link-<id>`), `createdBy`, `createdAt`, `expiresAt` and `members`; `/link` makes one and `/link <code>` joins it. Wrong codes are counted per unit in `user/relay/links/attempts.json`. A message is context, never authorization, except a hand-off as [rules.md](rules.md#messages-and-hand-offs) defines it.
+The filename is `<YYYYMMDD-HHMMSS>-<machine>-<id>.md`, local time; older minute-based names remain readable. `id` is a new UUID, and `thread-id` is the id of the first message of its thread. `priority` is `normal` or `urgent`. `attachments` is a JSON list of references: a path, or an object `{path, kind, label?}`. With `kind` `image`, `link`, `board`, `text` or `task`, the object is a part the chat shows under the text, a picture in its gallery or a button: an image names a picture kept as `user/relay/assets/<uuid>.<png|jpg|webp>`, a link an http, https or mailto address, a board or a text its id and a task its canonical id. `label`, at most 120 characters, is the name the chat shows. Relay adds `body-bytes`, the size of the body in bytes, and the service adds `from-id` and `to-id`, the unit ids, and `kind` on its own notices; a message written by hand may omit them. One folder per recipient. Relay archives a message once read under `user/relay/archive/<to>/`, keeping its bytes; reading never deletes it. A message to `link:<linkId>` is written once per other member of that link, all with the link's `thread-id` and one shared `fanout-id`, so history shows it once. A link is `user/relay/links/<linkId>.json`: `format` `hivem1nd-relay-link-v1`, `id`, `code` (five characters, joining works for 10 minutes after `createdAt`, until `expiresAt`), `threadId` (`link-<id>`), `createdBy`, `createdAt`, `expiresAt` and `members`; `/link` makes one and `/link <code>` joins it. Wrong codes are counted per unit in `user/relay/links/attempts.json`. A message is context, never authorization, except a hand-off as [rules.md](rules.md#messages-and-hand-offs) defines it. <!-- Compatibility: stored schemas and wire contracts retain their existing identifiers. -->
 
 ## Note: `User decisions`
 
@@ -153,7 +153,7 @@ Add password reset. Files: src/auth/reset.ts (new), src/auth/routes.ts. Do not t
 
 `id` is sequential per scope folder, three digits. `status` is `open`, `review`, `done` or `closed`. `from` is the requester and `to` the unit that does the work. `depends`, `design`, `requirements` and `work` are optional: `depends` lists the ids that must be `done` or `closed` first; `design` comes from the brief; `requirements` lists, comma separated, the IDs of the requirements of the product document that the task delivers; `work` names the kind of work as the `delegation` category lists it, so the row of `models.md` for that kind of work is taken. The service adds `task-id` (`<scope id>:<id>`, such as `project:myapp:003`), `title`, `from-id`, `to-id`, `cluster-id` and `plan-id` to the tasks it writes. A task is created through [/task](commands/task.md) or by the service.
 
-A status changes by hand in a session the service did not start, and otherwise through `hivem1nd task status <project> <id> <status> [--note <text>]`, which the service checks against the table below and refuses with exit code 3 on a conflict, such as a task changed since it was read, and 2 on a change the table does not allow. Status changes, each one the event hooks listen to:
+A status changes by hand in a session the service did not start, and otherwise through `onem1nd task status <project> <id> <status> [--note <text>]`, which the service checks against the table below and refuses with exit code 3 on a conflict, such as a task changed since it was read, and 2 on a change the table does not allow. Status changes, each one the event hooks listen to:
 
 | Change | Actor | Precondition | Evidence |
 | --- | --- | --- | --- |
@@ -350,7 +350,7 @@ setup: done
 - corpo
 ```
 
-`setup` is `done` or the number of the next step, so any front resumes. It reaches `done` only when every asset of that run was written, left unchanged or answered for; anything unwritten leaves the number of the install step, so the next run finishes it. `preferences-first` is `yes` by default; `no` puts the HIVEM1ND auto rule before existing preferences while preserving their content. `update-check` is `daily` or `off`. `Excluded` lists the modules and features left out at setup; `/evolve` never installs them. The optional `evidence` path is where `/cleaner` moves large evidence and binary folders out of the mind; the brief keeps the relative path.
+`setup` is `done` or the number of the next step, so any front resumes. It reaches `done` only when every asset of that run was written, left unchanged or answered for; anything unwritten leaves the number of the install step, so the next run finishes it. `preferences-first` is `yes` by default; `no` puts the ONEM1ND auto rule before existing preferences while preserving their content. `update-check` is `daily` or `off`. `Excluded` lists the modules and features left out at setup; `/evolve` never installs them. The optional `evidence` path is where `/cleaner` moves large evidence and binary folders out of the mind; the brief keeps the relative path.
 
 The optional `person:` header is a comma-separated list of names the person goes by in the records, used to tell their requests and questions apart.
 
@@ -527,7 +527,7 @@ A Result is something an agent can verify: a command and its expected output, a 
 
 A protocol shipped inside a knowledge module has this same format and lives in the module's `protocols/` folder, listed in its `INDEX.md`; `user/protocols/` holds the global ones written for this mind, and `user/projects/<project>/protocols/` the local ones of one project, which exist only while that project is the current one; neither needs an index. All of them are visible to `/protocol` and to planning.
 
-## Team config: `.hivem1nd/config.md`
+## Team config: `.hivem1nd/config.md` <!-- Compatibility: shared team state retains its branch and folder identity. -->
 
 ```markdown
 state: branch

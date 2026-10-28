@@ -56,10 +56,10 @@ export async function requestApproval(context, input) {
     const run = (await readRunRecord(context, planActor.runId)).record;
     const plan = (await readPlanRecord(context, run.planId)).record;
     const id = randomUUID(), requestedAt = stamp(context);
-    const request = { format: 'hivem1nd-approval-v1', id, unitId: planActor.actorId, sessionId: planActor.sessionId, chatId: plan.chatId,
+    const request = { format: 'hivem1nd-approval-v1', id, unitId: planActor.actorId, sessionId: planActor.sessionId, chatId: plan.chatId, // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
       action: normalized.action, pattern: normalized.pattern, display: input.display, alwaysAllowed: false, desktopOnly: false,
       operationId: input.operationId ?? null, requestedAt, expiresAt: new Date(context.now() + LIFETIME_MS).toISOString() };
-    const binding = { format: 'hivem1nd-approval-binding-v1', approvalId: id, unitId: planActor.actorId, sessionId: planActor.sessionId,
+    const binding = { format: 'hivem1nd-approval-binding-v1', approvalId: id, unitId: planActor.actorId, sessionId: planActor.sessionId, // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
       machine: context.paths.machine, runId: planActor.runId, attemptId: planActor.attemptId };
     await commitFiles(context, [entry(context, `user/relay/approvals/${id}/request.json`, null, jsonBytes(request)),
       entry(context, `user/relay/approvals/${id}/binding.json`, null, jsonBytes(binding)),
@@ -85,7 +85,7 @@ export async function requestApproval(context, input) {
   const id = randomUUID();
   const requestedAt = stamp(context);
   const request = {
-    format: 'hivem1nd-approval-v1',
+    format: 'hivem1nd-approval-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     id,
     unitId: parsed.id,
     sessionId,
@@ -100,7 +100,7 @@ export async function requestApproval(context, input) {
     expiresAt: new Date(context.now() + LIFETIME_MS).toISOString(),
   };
   const requestBytes = jsonBytes(request);
-  const bindingBytes = jsonBytes({ format: 'hivem1nd-approval-binding-v1', approvalId: id, unitId: parsed.id, sessionId, machine: context.paths.machine });
+  const bindingBytes = jsonBytes({ format: 'hivem1nd-approval-binding-v1', approvalId: id, unitId: parsed.id, sessionId, machine: context.paths.machine }); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   const entries = [
     entry(context, `user/relay/approvals/${id}/request.json`, null, requestBytes),
     entry(context, `user/relay/approvals/${id}/binding.json`, null, bindingBytes),
@@ -108,7 +108,7 @@ export async function requestApproval(context, input) {
   let result = null;
   if (existing) {
     result = {
-      format: 'hivem1nd-approval-result-v1',
+      format: 'hivem1nd-approval-result-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
       approvalId: id,
       state: 'approved',
       answerId: null,
@@ -211,10 +211,10 @@ export async function requestPlanExtensionApproval(context, run, actor, extensio
   const { readPlanRecord } = await import('./plans.mjs');
   const plan = (await readPlanRecord(context, run.planId)).record;
   const pattern = normalizeAction('plan.message.extend', { runId: run.id, extensionId: extension.extensionId, count: extension.count }).pattern;
-  const request = { format: 'hivem1nd-approval-v1', id, unitId: actor.actorId, sessionId: actor.sessionId, chatId: plan.chatId,
+  const request = { format: 'hivem1nd-approval-v1', id, unitId: actor.actorId, sessionId: actor.sessionId, chatId: plan.chatId, // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     action: 'plan.message.extend', pattern, display: 'Allow additional plan messages', alwaysAllowed: false, desktopOnly: true,
     operationId: extension.extensionId, requestedAt: stamp(context), expiresAt: new Date(context.now() + LIFETIME_MS).toISOString() };
-  const binding = { format: 'hivem1nd-approval-binding-v1', approvalId: id, unitId: actor.actorId, sessionId: actor.sessionId, machine: run.machine, runId: run.id };
+  const binding = { format: 'hivem1nd-approval-binding-v1', approvalId: id, unitId: actor.actorId, sessionId: actor.sessionId, machine: run.machine, runId: run.id }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   await commitFiles({ ...context, receipt: null }, [entry(context, `user/relay/approvals/${id}/request.json`, null, jsonBytes(request)),
     entry(context, `user/relay/approvals/${id}/binding.json`, null, jsonBytes(binding))], [ownedEvent(context, { request, binding }, 'approval.requested', projectApproval({ request, binding }))]);
   return id;
@@ -280,7 +280,7 @@ export async function revokeGrant(context, unitId, grantId, input) {
   if (revisionOf(state.bytes) !== input?.expectedRevision) throw new CoreError(409, 'revision_conflict', 'The unit changed before revocation.');
   const owner = headerValue(state.bytes, 'machine');
   const request = {
-    format: 'hivem1nd-grant-revocation-v1',
+    format: 'hivem1nd-grant-revocation-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     id: randomUUID(),
     unitId: parsed.id,
     grantId,
@@ -329,7 +329,7 @@ async function settle(context, loaded, answer, state, pending = null) {
   const grantId = state === 'approved' && answer?.decision === 'approve-always' ? freshGrantId(tombstones.ids) : null;
   const at = stamp(context);
   const result = {
-    format: 'hivem1nd-approval-result-v1',
+    format: 'hivem1nd-approval-result-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     approvalId: request.id,
     state,
     answerId: answer?.id ?? null,
@@ -342,7 +342,7 @@ async function settle(context, loaded, answer, state, pending = null) {
   for (const item of loaded.answers) {
     const outcome = !answer || item.id !== answer.id ? (state === 'expired' ? 'expired' : 'rejected') : 'applied';
     const record = {
-      format: 'hivem1nd-approval-answer-result-v1',
+      format: 'hivem1nd-approval-answer-result-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
       answerId: item.id,
       approvalId: request.id,
       state: outcome,
@@ -387,7 +387,7 @@ async function settle(context, loaded, answer, state, pending = null) {
 
 async function recordLateAnswer(context, loaded, decision) {
   const answer = {
-    format: 'hivem1nd-approval-answer-v1',
+    format: 'hivem1nd-approval-answer-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     id: randomUUID(),
     approvalId: loaded.request.id,
     decision,
@@ -400,7 +400,7 @@ async function recordLateAnswer(context, loaded, decision) {
   await commitFiles(context, [
     entry(context, answerPath(loaded.request.id, answer.id), null, jsonBytes(answer)),
     entry(context, `user/relay/approvals/${loaded.request.id}/answer-results/${answer.id}.json`, null, jsonBytes({
-      format: 'hivem1nd-approval-answer-result-v1',
+      format: 'hivem1nd-approval-answer-result-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
       answerId: answer.id,
       approvalId: loaded.request.id,
       state: outcome,
@@ -416,7 +416,7 @@ async function applyRevocation(context, state, request, { writeRequest }) {
   const grants = grantsOf(state.bytes).filter((grant) => !tombstones.ids.has(grant.id));
   const next = replaceHeader(state.bytes, 'approvals', canonicalJson(grants));
   const result = {
-    format: 'hivem1nd-grant-revocation-result-v1',
+    format: 'hivem1nd-grant-revocation-result-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     requestId: request.id,
     unitId: request.unitId,
     grantId: request.grantId,
@@ -642,14 +642,14 @@ function entry(context, relative, before, bytes) {
 }
 
 function tombstoneEntry(context, tombstones) {
-  const bytes = jsonBytes({ format: 'hivem1nd-grant-tombstones-v1', ids: [...tombstones.ids].sort() });
+  const bytes = jsonBytes({ format: 'hivem1nd-grant-tombstones-v1', ids: [...tombstones.ids].sort() }); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   const recordPath = path.join(context.paths.localDirectory, 'grant-tombstones.json');
   return { resource: 'grant-tombstones.json', recordPath, beforeRevision: revisionOf(tombstones.bytes), afterBytes: bytes };
 }
 
 function answerRecord(context, approvalId, decision) {
   return {
-    format: 'hivem1nd-approval-answer-v1',
+    format: 'hivem1nd-approval-answer-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     id: randomUUID(),
     approvalId,
     decision,

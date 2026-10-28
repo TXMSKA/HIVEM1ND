@@ -29,9 +29,9 @@ test('uninstall removes managed skills, the auto rule line and the machine recor
   await installFixture(fixture, 'TESTBOX', { reviewedClients: true });
 
   const rulesAfterInstall = await readFile(path.join(fixture.homeDir, '.codex', 'AGENTS.md'), 'utf8');
-  assert.match(rulesAfterInstall, /HIVEM1ND: the mind is at/);
-  const cursorRule = await readFile(path.join(fixture.homeDir, '.cursor', 'rules', 'hivem1nd.mdc'), 'utf8');
-  assert.match(cursorRule, /HIVEM1ND: the mind is at/);
+  assert.match(rulesAfterInstall, /ONEM1ND: the mind is at/);
+  const cursorRule = await readFile(path.join(fixture.homeDir, '.cursor', 'rules', 'onem1nd.mdc'), 'utf8');
+  assert.match(cursorRule, /ONEM1ND: the mind is at/);
   // The rule carries the contract of a woken turn, which has nobody to ask.
   assert.match(cursorRule, /woken and nobody is at the keyboard.*NOT_REGISTERED.*CURSOR_CONVERSATION_ID.*only on a hand-off defined in rules\.md/);
   assert.doesNotMatch(await readFile(path.join(fixture.homeDir, '.codex', 'AGENTS.md'), 'utf8'), /NOT_REGISTERED/);
@@ -105,7 +105,7 @@ test('a dry run reports the plan without removing anything', async (context) => 
   assert.ok(result.removed.length > 0);
 
   assert.equal(await readFile(path.join(fixture.homeDir, '.codex', 'AGENTS.md'), 'utf8'), rulesBefore);
-  await lstat(path.join(fixture.homeDir, '.cursor', 'rules', 'hivem1nd.mdc'));
+  await lstat(path.join(fixture.homeDir, '.cursor', 'rules', 'onem1nd.mdc'));
   await lstat(path.join(fixture.homeDir, '.agents', 'skills', 'executor', 'SKILL.md'));
   await lstat(path.join(fixture.mindPath, 'user', 'machines', 'TESTBOX.md'));
 });
@@ -182,7 +182,7 @@ test('the kit uninstaller script points at the local CLI and mind path', async (
 });
 
 async function makeFixture(context) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-uninstall-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-uninstall-'));
   context.after(() => rm(root, { recursive: true, force: true }));
   const mindPath = path.join(root, 'mind');
   const homeDir = path.join(root, 'home');

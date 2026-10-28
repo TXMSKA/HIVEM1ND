@@ -9,7 +9,7 @@ import test from 'node:test';
 import { createRelay, relayLocalStatePath } from '../engine/relay/store.mjs';
 
 async function fixture(context) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-relay-test-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-relay-test-'));
   context.after(() => rm(root, { recursive: true, force: true }));
   const mind = path.join(root, 'mind');
   await mkdir(path.join(mind, 'user', 'state'), { recursive: true });
@@ -1200,7 +1200,7 @@ test('a link makes a short code and joining with it puts both parties in one thr
   const lifetime = Date.parse(made.expiresAt) - Date.now();
   assert.ok(lifetime > 9 * 60_000 && lifetime <= 10 * 60_000, `lives about ten minutes, got ${lifetime} ms`);
   const record = await linkRecord(mind, made.linkId);
-  assert.equal(record.format, 'hivem1nd-relay-link-v1');
+  assert.equal(record.format, 'hivem1nd-relay-link-v1'); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   assert.equal(record.createdBy, 'executor-alpha');
   assert.equal(record.code, made.code);
   assert.equal((await alice.inbox()).unread, 0);

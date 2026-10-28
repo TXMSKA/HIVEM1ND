@@ -601,7 +601,7 @@ export async function enqueueStart(context, input) {
   const adapter = adapterFor(context, client);
   if (!adapter.capabilities.create) throw new CoreError(503, 'client_unavailable', 'The native client is not available.');
   const request = {
-    format: 'hivem1nd-session-request-v1',
+    format: 'hivem1nd-session-request-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     id,
     unitId: unit.id,
     targetMachine,
@@ -760,10 +760,10 @@ export async function reloadReviewedClient(context, { client, target, previewId,
   const journals = (await listJournals(context)).filter(item => item.client === client && !['failed', 'stopped'].includes(item.phase)
     && ownsSessionExecution(context, item));
   const adapter = context.adapters?.[client];
-  if (journals.length && typeof adapter?.reload !== 'function') throw new CoreError(409, 'client_reload_required', 'Close the running HIVEM1ND sessions, then apply the reviewed changes.');
+  if (journals.length && typeof adapter?.reload !== 'function') throw new CoreError(409, 'client_reload_required', 'Close the running ONEM1ND sessions, then apply the reviewed changes.');
   if (checkOnly || !journals.length) return;
   const result = await adapter.reload({ owned: true, target, previewId, sessions: journals.map(({ pid, sessionId }) => ({ pid, sessionId })) });
-  if (result?.acknowledged !== true) throw new CoreError(409, 'client_reload_required', 'The owned client did not confirm its reload; close its HIVEM1ND sessions and retry.');
+  if (result?.acknowledged !== true) throw new CoreError(409, 'client_reload_required', 'The owned client did not confirm its reload; close its ONEM1ND sessions and retry.');
 }
 
 async function stopOwnedSession(context, sessionId, input) {
@@ -797,7 +797,7 @@ async function stopOwnedSession(context, sessionId, input) {
   const stopped = await adapter.stop({ owned: true, pid: journal.pid, executionId: journal.executionId, sessionId });
   if (stopped.acknowledged !== true) throw new CoreError(409, 'stop_unavailable', 'The native process did not acknowledge the stop.');
   const status = {
-    format: 'hivem1nd-session-status-v1',
+    format: 'hivem1nd-session-status-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     sessionId,
     state: 'stopped',
     machine: context.paths.machine,
@@ -1128,7 +1128,7 @@ async function writeResult(context, request, state, sessionId, error) {
   if (previous && TERMINAL.has(previous.state) && state !== 'canceled') return previous;
   if (previous?.state === 'canceled') return previous;
   const result = {
-    format: 'hivem1nd-session-result-v1',
+    format: 'hivem1nd-session-result-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     id: randomUUID(),
     requestId: request.id,
     machine: context.paths.machine,
@@ -1338,9 +1338,9 @@ function launchArgs(client, request = {}) {
 }
 
 const EXPLICIT_EXECUTABLE = {
-  claude: 'HIVEM1ND_CLAUDE',
-  codex: 'HIVEM1ND_CODEX',
-  cursor: 'HIVEM1ND_CURSOR',
+  claude: 'ONEM1ND_CLAUDE',
+  codex: 'ONEM1ND_CODEX',
+  cursor: 'ONEM1ND_CURSOR',
 };
 
 function explicitExecutable(client, env) {
@@ -1926,7 +1926,7 @@ function openRpc(child, incoming, session, timeoutMs, request = {}) {
 
 async function codexHandshake(rpc, request) {
   if (!request.cwd) throw unavailable();
-  const init = await rpc.call('initialize', { clientInfo: { name: 'hivem1nd', title: 'HIVEM1ND', version: '3.0.0' } });
+  const init = await rpc.call('initialize', { clientInfo: { name: 'onem1nd', title: 'ONEM1ND', version: '3.0.0' } });
   if (init?.error) throw unavailable();
   rpc.notify('initialized');
   const account = await rpc.call('account/read', {});
@@ -1945,7 +1945,7 @@ function codexThreadParams(request) {
   const params = { cwd: request.cwd };
   if (request.nativeMcp) {
     const { name, command, args } = request.nativeMcp;
-    params.config = { mcp_servers: { [name]: { command, args, env_vars: ['HIVEM1ND_SERVICE_BRIDGE', 'HIVEM1ND_SERVICE_GRANT'] } } };
+    params.config = { mcp_servers: { [name]: { command, args, env_vars: ['HIVEM1ND_SERVICE_BRIDGE', 'HIVEM1ND_SERVICE_GRANT'] } } }; // Compatibility: wire identifiers keep existing native sessions and paired machines connected.
   }
   if (request.model) params.model = request.model;
   if (request.runsIn) {
@@ -2008,7 +2008,7 @@ export async function nativePermissionReply(message, request = {}) {
     const call = message.request ?? {};
     const input = call.input ?? {};
     const paths = typeof input.file_path === 'string' ? [input.file_path] : typeof input.notebook_path === 'string' ? [input.notebook_path] : [];
-    // Only a command or a file change can be approved. The launch's own HIVEM1ND tools enforce their own scope and need no approval;
+    // Only a command or a file change can be approved. The launch's own ONEM1ND tools enforce their own scope and need no approval;
     // every other tool, a Read outside the working folder included, stays denied (the agent reads through its scoped file tool).
     const approvable = call.tool_name === 'Bash' || ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(call.tool_name);
     const allow = call.subtype === 'can_use_tool' && (ownServerTool(request, call.tool_name) && bound()
@@ -2068,7 +2068,7 @@ async function probeCodexChoices(options) {
     incoming = readLines(child, options.timeoutMs ?? 3000);
     deadline = setTimeout(() => { incoming.close(); child.kill(); }, Math.min(options.timeoutMs ?? 5000, 10000));
     const rpc = openRpc(child, incoming, {}, options.timeoutMs ?? 3000);
-    await rpc.call('initialize', { clientInfo: { name: 'hivem1nd', title: 'HIVEM1ND', version: '3.0.0' } });
+    await rpc.call('initialize', { clientInfo: { name: 'onem1nd', title: 'ONEM1ND', version: '3.0.0' } });
     rpc.notify('initialized');
     if (!accountReady(await rpc.call('account/read', {}))) return unavailableReport;
     const models = [], cursors = new Set(); let cursor = null;

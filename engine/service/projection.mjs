@@ -69,7 +69,7 @@ export function paginate(items, { limit = 50, cursor = null, filters = {}, snaps
     position = decoded.position;
   }
   const slice = items.slice(position, position + bounded);
-  const next = position + bounded < items.length ? encodeCursor({ contract: 'hivem1nd-gui-v3', filters: filterHash, snapshot: snapshotHash, position: position + bounded }) : null;
+  const next = position + bounded < items.length ? encodeCursor({ contract: 'hivem1nd-gui-v3', filters: filterHash, snapshot: snapshotHash, position: position + bounded }) : null; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   return { items: slice, total: items.length, nextCursor: next, issues: [] };
 }
 
@@ -95,14 +95,14 @@ export function paginateMessages(messages, { limit = 50, cursor = null, before =
   }
   const bounded = boundLimit(limit);
   const start = Math.max(0, end - bounded);
-  const next = start > 0 ? encodeCursor({ contract: 'hivem1nd-gui-v3', filters: filterHash, snapshot: snapshotHash, position: start }) : null;
+  const next = start > 0 ? encodeCursor({ contract: 'hivem1nd-gui-v3', filters: filterHash, snapshot: snapshotHash, position: start }) : null; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   return { items: ordered.slice(start, end), total: ordered.length, nextCursor: next, issues: [] };
 }
 
 export async function readProjection(context, query = {}) {
   const view = await projectRecords(context, query);
   const envelope = {
-    contract: 'hivem1nd-gui-v3',
+    contract: 'hivem1nd-gui-v3', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     data: view,
     meta: { requestId: null, readAt: null, eventCursor: null, sync: 'local', replayed: false },
   };
@@ -458,7 +458,7 @@ async function loadMindFiles(context) {
   }
   await readApprovals(mind, issues);
   const approvals = await readPendingApprovals(mind, issues, now);
-  const catalog = await readJsonRecord(mind, 'user/gui/resources.json', 'hivem1nd-resources-v1', issues);
+  const catalog = await readJsonRecord(mind, 'user/gui/resources.json', 'hivem1nd-resources-v1', issues); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   const chats = await readChats(mind, messages, issues, context.principal?.unitId || 'root:master');
   let requestListing = null;
   const collect = (map, key, item) => map.has(key) ? map.get(key).push(item) : map.set(key, [item]);
@@ -473,7 +473,7 @@ async function loadMindFiles(context) {
     const requestFiles = requestListing.filter(file => file.endsWith(`/${marker.requestId}.json`));
     const requestBytes = requestFiles.length === 1 ? await readSafe(mind, requestFiles[0]) : null;
     let request; try { request = JSON.parse(requestBytes); } catch { continue; }
-    if (request.format !== 'hivem1nd-session-request-v1' || request.id !== marker.requestId) continue;
+    if (request.format !== 'hivem1nd-session-request-v1' || request.id !== marker.requestId) continue; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     for (const preload of (messagesById.get(marker.messageId) ?? []).filter(message => message.toId === request.unitId && message.requestId === request.id)) {
       preload.channel = 'bootstrap'; preload.body = ''; preload.subject = '';
     }
@@ -549,12 +549,12 @@ async function loadMindFiles(context) {
     unit.clusterAmbiguous = choices.length > 1 && unit.clusterId === null;
   }
   const machines = await readMachines(context, now, issues);
-  const layout = await readJsonRecord(mind, 'user/gui/layout.json', 'hivem1nd-layout-v1', issues);
-  const settings = await readJsonRecord(mind, 'user/gui/settings.json', 'hivem1nd-settings-v1', issues);
+  const layout = await readJsonRecord(mind, 'user/gui/layout.json', 'hivem1nd-layout-v1', issues); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
+  const settings = await readJsonRecord(mind, 'user/gui/settings.json', 'hivem1nd-settings-v1', issues); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   const registered = new Set((context.projects ?? []).filter((item) => item?.localPath).map((item) => item.name));
   const projects = [];
   for (const name of [...new Set([...await childNames(mind, 'user/projects'), ...registered])]) {
-    const product = await readJsonRecord(mind, `user/projects/${name}/product.json`, 'hivem1nd-product-v1', issues);
+    const product = await readJsonRecord(mind, `user/projects/${name}/product.json`, 'hivem1nd-product-v1', issues); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     if (!product?.value && !registered.has(name) && !units.some(unit => unit.scope?.kind === 'project' && unit.scope.name === name)) continue;
     if (!product?.value?.removed) projects.push(projectRecord(name, product?.value ?? null, units, registered.has(name)));
   }
@@ -665,9 +665,9 @@ function assemble(loaded, query, aliases = [], machine = null, editors = []) {
     waiting,
     counts: countsOf(visibleUnits, leads, squads, loaded, listedChats, waiting, issues),
     issues: collectIssues(issues),
-    layout: loaded.layout?.value ?? { format: 'hivem1nd-layout-v1', nodes: {}, groups: {} },
+    layout: loaded.layout?.value ?? { format: 'hivem1nd-layout-v1', nodes: {}, groups: {} }, // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     layoutRevision: loaded.layout?.revision ?? null,
-    settings: loaded.settings?.value ?? { format: 'hivem1nd-settings-v1', look: 'modern', language: 'en' },
+    settings: loaded.settings?.value ?? { format: 'hivem1nd-settings-v1', look: 'modern', language: 'en' }, // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     settingsRevision: loaded.settings?.revision ?? null,
     messages: loaded.messages,
     editors,
@@ -1586,8 +1586,8 @@ async function readReceipts(mind, issues) {
         }
       }
       byReader.set(reader, ids);
-      const scope = record.format === 'hivem1nd-chat-read-v1' && record.chatId && relative.startsWith(`user/relay/chats/${record.chatId}/read/${Buffer.from(reader).toString('base64url')}/`)
-        ? record.chatId : record.format === 'hivem1nd-mailbox-receipt-v1' && record.mailboxId === reader ? 'mailbox' : null;
+      const scope = record.format === 'hivem1nd-chat-read-v1' && record.chatId && relative.startsWith(`user/relay/chats/${record.chatId}/read/${Buffer.from(reader).toString('base64url')}/`) // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
+        ? record.chatId : record.format === 'hivem1nd-mailbox-receipt-v1' && record.mailboxId === reader ? 'mailbox' : null; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
       if (scope && validReceiptTime(record.at)) {
         const times = byReader.get(`${scope}:${reader}`) ?? new Map();
         for (const id of record.messageIds ?? []) {
@@ -1792,7 +1792,7 @@ function decodeCursor(cursor) {
   }
   try {
     const parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
-    if (parsed.contract !== 'hivem1nd-gui-v3' || typeof parsed.filters !== 'string' || typeof parsed.snapshot !== 'string') {
+    if (parsed.contract !== 'hivem1nd-gui-v3' || typeof parsed.filters !== 'string' || typeof parsed.snapshot !== 'string') { // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
       throw new Error('shape');
     }
     return parsed;

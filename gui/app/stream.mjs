@@ -109,7 +109,7 @@ export function decodeEvent(frame) {
   } catch {
     return { error: "invalid_event", id: frame.id, name: frame.event };
   }
-  if (envelope?.contract !== "hivem1nd-events-v3") return { error: "invalid_event", id: frame.id, name: frame.event };
+  if (envelope?.contract !== "hivem1nd-events-v3") return { error: "invalid_event", id: frame.id, name: frame.event }; // Compatibility: retain the event wire contract for existing clients.
   return { id: frame.id, name: frame.event || "message", envelope };
 }
 

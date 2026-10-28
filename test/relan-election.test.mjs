@@ -96,7 +96,7 @@ async function announceTo(sender, target) {
   const state = sender.status();
   const socket = createSocket('udp4');
   try {
-    const bytes = Buffer.from(JSON.stringify({ format: 'hivem1nd-relan-v1', relanId: state.relanId, host: state.machine, epoch: state.epoch, port: state.listeners[0].port }));
+    const bytes = Buffer.from(JSON.stringify({ format: 'hivem1nd-relan-v1', relanId: state.relanId, host: state.machine, epoch: state.epoch, port: state.listeners[0].port })); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     await new Promise((resolve, reject) => socket.send(bytes, target.status().discovery[0].port, '127.0.0.1', (error) => error ? reject(error) : resolve()));
   } finally {
     socket.close();
@@ -104,7 +104,7 @@ async function announceTo(sender, target) {
 }
 
 test('ReLAN discovery accepts exactly its five clear fields and refuses wildcard bindings', async () => {
-  const value = { format: 'hivem1nd-relan-v1', relanId: 'test-relan', host: 'MACHINE-A', epoch: 1, port: 43119 };
+  const value = { format: 'hivem1nd-relan-v1', relanId: 'test-relan', host: 'MACHINE-A', epoch: 1, port: 43119 }; // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   assert.deepEqual(parseDiscovery(Buffer.from(JSON.stringify(value))), value);
   for (const extra of [{ name: 'private mind' }, { preferred: true }, { uptime: 10 }, { key: 'secret' }]) {
     assert.equal(parseDiscovery(Buffer.from(JSON.stringify({ ...value, ...extra }))), null);
@@ -126,7 +126,7 @@ test('ReLAN discovery fallback reaches two interface-bound sockets without targe
     listeners.push(await openDiscovery({ addresses: [address], allowLoopback: true, port,
       onMessage: (packet) => received[index].push(packet), onError: (error) => errors.push(error) }));
   }
-  const packets = ['MACHINE-A', 'MACHINE-B'].map((host) => ({ format: 'hivem1nd-relan-v1', relanId: 'test-relan', host, epoch: 1, port: 43120 }));
+  const packets = ['MACHINE-A', 'MACHINE-B'].map((host) => ({ format: 'hivem1nd-relan-v1', relanId: 'test-relan', host, epoch: 1, port: 43120 })); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   listeners[0].send(packets[0]);
   listeners[1].send(packets[1]);
   await eventually(() => received[0].some((packet) => packet.host === 'MACHINE-B') && received[1].some((packet) => packet.host === 'MACHINE-A'), 'The private-interface discovery fallback did not deliver.');
@@ -148,7 +148,7 @@ test('ReLAN starts without eligible interfaces and keeps its local key and mirro
   const bytes = encodePack({ machine: fixture.machine, sequence: 1, changes: [], objects: [], encryption: runtime.encryption(), keyProvider: runtime.keyProvider });
   const folder = openFolderTransport({ directory: origin.paths.origin, store: fixture.store, keyProvider: runtime.keyProvider });
   await folder.writePack(fixture.machine, 1, bytes);
-  await folder.writeHead({ format: 'hivem1nd-head-v1', machine: fixture.machine, sequence: 1, updatedAt: new Date().toISOString(),
+  await folder.writeHead({ format: 'hivem1nd-head-v1', machine: fixture.machine, sequence: 1, updatedAt: new Date().toISOString(), // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     packs: [{ sequence: 1, file: packFileName(1), hash: hashBytes(bytes), bytes: bytes.length }] });
   assert.deepEqual(await folder.readPack(fixture.machine, 1), bytes);
   await runtime.host();
@@ -177,12 +177,12 @@ test('ReLAN opens and closes network bindings as interfaces return and catches u
   await writeFile(path.join(fixture.paths.mind, target), raw);
   const hash = hashBytes(raw);
   const bytes = encodePack({ machine: fixture.machine, sequence: 1, encryption: b.encryption(), keyProvider: b.keyProvider,
-    changes: [{ format: 'hivem1nd-change-v1', id: uuidV8(['interface-offline']), machine: fixture.machine, at: new Date(fixture.clock.now).toISOString(),
+    changes: [{ format: 'hivem1nd-change-v1', id: uuidV8(['interface-offline']), machine: fixture.machine, at: new Date(fixture.clock.now).toISOString(), // Compatibility: stored schemas and wire contracts retain their existing identifiers.
       target: { kind: 'mind', path: target }, operation: 'put', hash, size: raw.length, baseHash: null, messageId: null, transactionId: null }],
     objects: [{ hash, raw }] });
   const local = openFolderTransport({ directory: group.origins.get(fixture.machine).paths.origin, store: fixture.store, keyProvider: b.keyProvider });
   await local.writePack(fixture.machine, 1, bytes);
-  await local.writeHead({ format: 'hivem1nd-head-v1', machine: fixture.machine, sequence: 1, updatedAt: new Date(fixture.clock.now).toISOString(),
+  await local.writeHead({ format: 'hivem1nd-head-v1', machine: fixture.machine, sequence: 1, updatedAt: new Date(fixture.clock.now).toISOString(), // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     packs: [{ sequence: 1, file: packFileName(1), hash: hashBytes(bytes), bytes: bytes.length }] });
   assert.deepEqual(b.status().listeners, []);
   assert.deepEqual(await readFile(path.join(fixture.paths.mind, target)), raw);
@@ -271,7 +271,7 @@ test('ReLAN follows a restarted host at the same endpoint without waiting for an
   let startedAt = now() - 10000;
   let published = false;
   const bytes = encodePack({ machine: 'MACHINE-A', sequence: 1, changes: [], objects: [], encryption: member.encryption(), keyProvider: member.keyProvider });
-  const head = { format: 'hivem1nd-head-v1', machine: 'MACHINE-A', sequence: 1, updatedAt: new Date().toISOString(),
+  const head = { format: 'hivem1nd-head-v1', machine: 'MACHINE-A', sequence: 1, updatedAt: new Date().toISOString(), // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     packs: [{ sequence: 1, file: packFileName(1), hash: hashBytes(bytes), bytes: bytes.length }] };
   const transport = { listHeads: async () => published ? [head] : [], readPack: async () => bytes };
   const open = (port = 0) => openRelanListener({ transport, keyProvider: member.keyProvider, getKey: () => group.material,
@@ -281,7 +281,7 @@ test('ReLAN follows a restarted host at the same endpoint without waiting for an
   const port = listener.listeners[0].port;
   const discovery = await openDiscovery({ addresses: ['127.0.0.1'], interfaces: [], allowLoopback: true, port: 0,
     targets: [{ address: '127.0.0.1', port: member.status().discovery[0].port }] });
-  const announce = () => discovery.send({ format: 'hivem1nd-relan-v1', relanId: group.material.relanId, host: 'MACHINE-A', epoch: 1, port });
+  const announce = () => discovery.send({ format: 'hivem1nd-relan-v1', relanId: group.material.relanId, host: 'MACHINE-A', epoch: 1, port }); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   const timer = setInterval(announce, TIMERS.announceMs);
   t.after(async () => { clearInterval(timer); await discovery.close(); await listener.close(); });
   announce();
@@ -309,7 +309,7 @@ test('ReLAN migration breaks equal uptime ties by name despite delayed state res
       response.end = (...parts) => {
         if (missingHostUpdates && server.address()?.port === hostPort) {
           const state = initialHost.status();
-          if (Number(request.headers['x-hivem1nd-time']) < state.startedAt + state.uptimeMs - 10000) {
+          if (Number(request.headers['x-hivem1nd-time']) < state.startedAt + state.uptimeMs - 10000) { // Compatibility: paired machines retain their signed wire headers.
             response.destroy();
             return response;
           }
@@ -391,13 +391,13 @@ test('ReLAN keeps offline edits on two members and converges encrypted mirrors a
     const hash = hashBytes(raw);
     const bytes = encodePack({
       machine, sequence: 1, encryption, keyProvider,
-      changes: [{ format: 'hivem1nd-change-v1', id: uuidV8(['offline', machine]), machine, at: new Date(fixture.clock.now).toISOString(),
+      changes: [{ format: 'hivem1nd-change-v1', id: uuidV8(['offline', machine]), machine, at: new Date(fixture.clock.now).toISOString(), // Compatibility: stored schemas and wire contracts retain their existing identifiers.
         target: { kind: 'mind', path: target }, operation: 'put', hash, size: raw.length, baseHash: null, messageId: null, transactionId: null }],
       objects: [{ hash, raw }],
     });
     const folder = openFolderTransport({ directory: group.origins.get(machine).paths.origin, store: fixture.store, keyProvider });
     await folder.writePack(machine, 1, bytes);
-    await folder.writeHead({ format: 'hivem1nd-head-v1', machine, sequence: 1, updatedAt: new Date(fixture.clock.now).toISOString(),
+    await folder.writeHead({ format: 'hivem1nd-head-v1', machine, sequence: 1, updatedAt: new Date(fixture.clock.now).toISOString(), // Compatibility: stored schemas and wire contracts retain their existing identifiers.
       packs: [{ sequence: 1, file: packFileName(1), hash: hashBytes(bytes), bytes: bytes.length }] });
     written.set(machine, { raw, target, bytes });
     assert.deepEqual(await folder.listHeads().then((heads) => heads.map((head) => head.machine)), [machine]);
@@ -433,7 +433,7 @@ test('ReLAN leave persists across restart and Host reuses the key for historical
   const folder = openFolderTransport({ directory: origin.paths.origin, store: origin.store, keyProvider: previous.keyProvider });
   const bytes = encodePack({ machine: 'MACHINE-B', sequence: 1, changes: [], objects: [], encryption, keyProvider: previous.keyProvider });
   await folder.writePack('MACHINE-B', 1, bytes);
-  await folder.writeHead({ format: 'hivem1nd-head-v1', machine: 'MACHINE-B', sequence: 1, updatedAt: new Date().toISOString(),
+  await folder.writeHead({ format: 'hivem1nd-head-v1', machine: 'MACHINE-B', sequence: 1, updatedAt: new Date().toISOString(), // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     packs: [{ sequence: 1, file: packFileName(1), hash: hashBytes(bytes), bytes: bytes.length }] });
   await eventually(async () => (await openFolderTransport({ directory: group.origins.get('MACHINE-A').paths.origin }).listHeads()).length === 1, 'The historical pack was not replicated.');
   await Promise.all([previous.host(), previous.leave()]);
@@ -473,7 +473,7 @@ test('ReLAN join refuses replacing its local key before and after publishing imm
   assert.deepEqual(runtime.encryption(), encryption);
   const bytes = encodePack({ machine: 'MACHINE-A', sequence: 1, changes: [], objects: [], encryption, keyProvider: runtime.keyProvider });
   await folder.writePack('MACHINE-A', 1, bytes);
-  await folder.writeHead({ format: 'hivem1nd-head-v1', machine: 'MACHINE-A', sequence: 1, updatedAt: new Date().toISOString(),
+  await folder.writeHead({ format: 'hivem1nd-head-v1', machine: 'MACHINE-A', sequence: 1, updatedAt: new Date().toISOString(), // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     packs: [{ sequence: 1, file: packFileName(1), hash: hashBytes(bytes), bytes: bytes.length }] });
   await assert.rejects(runtime.join(code, host.status().listeners[0]), { code: 'relan_history_conflict' });
   assert.deepEqual(runtime.encryption(), encryption);

@@ -35,8 +35,8 @@ function createLockTable() {
   const tails = new Map();
   const holders = new Map();
   let ticketSeq = 0;
-  // HIVEM1ND_DEBUG_LOCKS=1 records who holds and who waits for each lock, readable as globalThis.__hivemindLocks.
-  const debug = process.env.HIVEM1ND_DEBUG_LOCKS === '1' ? (globalThis.__hivemindLocks ??= { held: new Map(), waiting: new Map(), next: 0 }) : null;
+  // ONEM1ND_DEBUG_LOCKS=1 records who holds and who waits for each lock, readable as globalThis.__onemindLocks.
+  const debug = process.env.ONEM1ND_DEBUG_LOCKS === '1' ? (globalThis.__onemindLocks ??= { held: new Map(), waiting: new Map(), next: 0 }) : null;
   return {
     longHeld(minimumMs, now = Date.now()) {
       return [...holders.entries()].filter(([, entry]) => now - entry.at >= minimumMs)
@@ -770,7 +770,7 @@ export async function prepareChangeUndo(context, { id, permission, resourceIds, 
   await mkdir(transactions, { recursive: true });
   await protectLocalFile(transactions, { store: context.store });
   const undoUntil = new Date(context.now() + 10000).toISOString();
-  const record = { format: 'hivem1nd-change-undo-v1', id, permission, resourceIds, undoUntil, undone: false,
+  const record = { format: 'hivem1nd-change-undo-v1', id, permission, resourceIds, undoUntil, undone: false, // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     entries: entries.map((entry) => {
       // A record inside the M1ND stays a M1ND record even when a registered project folder contains the M1ND.
       const mindRecord = (item) => Boolean(context.store.mindPath) && isInside(context.store.mindPath, entry.recordPath) && isInside(item.localPath, context.store.mindPath);
@@ -785,7 +785,7 @@ export async function prepareChangeUndo(context, { id, permission, resourceIds, 
 
 export function prepareReplaceUndo(context, id, resourceIds, entries) {
   const recordPath = path.join(context.store.localDirectory, 'replace-undo', `${id}.json`);
-  const record = { format: 'hivem1nd-replace-undo-v1', id, resourceIds, undone: false,
+  const record = { format: 'hivem1nd-replace-undo-v1', id, resourceIds, undone: false, // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     entries: entries.map((entry) => ({ resource: entry.resource, recordPath: entry.recordPath, target: entry.target,
       afterRevision: revisionOf(entry.afterBytes), beforeBytesBase64: entry.beforeBytes?.toString('base64') ?? null })) };
   return { resource: `replace-undo:${id}`, recordPath, beforeRevision: null, afterBytes: journalBytes(record), private: true };
@@ -797,7 +797,7 @@ export async function readReplaceUndo(context, changeId) {
   const bytes = await readBytes(context.store, file);
   if (!bytes) throw new CoreError(404, 'change_not_found', 'The replace operation does not exist.');
   const record = JSON.parse(bytes);
-  if (record.format !== 'hivem1nd-replace-undo-v1' || record.id !== changeId || record.undone) {
+  if (record.format !== 'hivem1nd-replace-undo-v1' || record.id !== changeId || record.undone) { // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     throw new CoreError(409, 'undo_conflict', 'The replace operation cannot be undone.');
   }
   const entries = [];
@@ -822,7 +822,7 @@ export async function undoChange(context, changeId) {
     const bytes = await readBytes(context.store, recordPath);
     if (!bytes) throw new CoreError(404, 'change_not_found', 'The change does not exist.');
     const record = JSON.parse(bytes);
-    if (record.format !== 'hivem1nd-change-undo-v1' || record.id !== changeId) throw new CoreError(409, 'undo_conflict', 'The undo record is not valid.');
+    if (record.format !== 'hivem1nd-change-undo-v1' || record.id !== changeId) throw new CoreError(409, 'undo_conflict', 'The undo record is not valid.'); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     if (context.principal.capabilities && !context.principal.capabilities.includes(record.permission)) throw new CoreError(403, 'forbidden', 'The originating change permission is required.');
     if (context.now() >= Date.parse(record.undoUntil)) throw new CoreError(410, 'undo_expired', 'The ten-second undo period ended.');
     if (record.undone) throw new CoreError(409, 'undo_conflict', 'The change was already undone.');

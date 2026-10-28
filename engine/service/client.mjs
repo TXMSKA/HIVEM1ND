@@ -115,7 +115,7 @@ export async function connectService(options = {}) {
           session.pending = Promise.resolve(session.handle);
         }
         const current = session.handle.bootstrapState?.record ?? session.handle.bootstrap;
-        if (!current?.origin || new URL(current.origin).origin !== origin.origin) throw new CoreError(503, 'service_unavailable', 'Reopen HIVEM1ND using the local launcher.');
+        if (!current?.origin || new URL(current.origin).origin !== origin.origin) throw new CoreError(503, 'service_unavailable', 'Reopen ONEM1ND using the local launcher.');
         return { origin: new URL(current.origin), secret: session.handle.bootstrapState?.secret ?? current.secret, handle: session.handle };
       })().finally(() => { session.recovery = null; });
       return session.recovery;
@@ -162,7 +162,7 @@ export async function openRelayOperations(options = {}) {
   const direct = () => createRelay(Object.fromEntries(Object.entries(options).filter(([key]) => ['mindPath', 'hostname', 'sessionId', 'client', 'scopeLock', 'pinnedRegistration', 'proveBinding', 'commitFile', 'nativeSessionId', 'sessionLive'].includes(key))));
   if (options.pinnedRegistration || options.internal === true) return direct();
   const env = options.env ?? process.env;
-  if (env.HIVEM1ND_SERVICE_BRIDGE || env.HIVEM1ND_SERVICE_GRANT) return nativeOperations(options, env);
+  if (env.HIVEM1ND_SERVICE_BRIDGE || env.HIVEM1ND_SERVICE_GRANT) return nativeOperations(options, env); // Compatibility: wire identifiers keep existing native sessions and paired machines connected.
   if (await serviceMind(options)) {
     if (options.client === 'master') return personOperations(options);
     throw new CoreError(503, 'native_login_unverified', 'This 3.0 command needs its verified native service binding.');
@@ -176,7 +176,7 @@ export async function serviceMind(options) {
   if (Number(/^\s*(\d+)\./.exec(version)?.[1]) >= 3) return true;
   try {
     const cosmic = options.cosmicPath ?? localCosmic({ platform: options.platform ?? process.platform, env: options.env ?? process.env, home: options.home ?? options.homeDir ?? os.homedir() });
-    const root = path.join(cosmic, 'hivem1nd-service');
+    const root = path.join(cosmic, 'onem1nd-service');
     const key = mindKeyFor(options.mindPath, options.platform ?? process.platform);
     if ((await lstat(path.join(root, key)).catch(() => null))?.isDirectory()) return true;
     const active = JSON.parse(await readFile(path.join(root, 'active.json'), 'utf8').catch(() => 'null'));
@@ -186,8 +186,8 @@ export async function serviceMind(options) {
 
 export async function relayPolicy(options, input) {
   const env = options.env ?? process.env;
-  if (env.HIVEM1ND_SERVICE_BRIDGE || env.HIVEM1ND_SERVICE_GRANT) {
-    return dispatchNative(env.HIVEM1ND_SERVICE_BRIDGE, env.HIVEM1ND_SERVICE_GRANT, 'policy', input);
+  if (env.HIVEM1ND_SERVICE_BRIDGE || env.HIVEM1ND_SERVICE_GRANT) { // Compatibility: wire identifiers keep existing native sessions and paired machines connected.
+    return dispatchNative(env.HIVEM1ND_SERVICE_BRIDGE, env.HIVEM1ND_SERVICE_GRANT, 'policy', input); // Compatibility: wire identifiers keep existing native sessions and paired machines connected.
   }
   const { readOwnedServiceBridge } = await import('./service.mjs');
   const owned = await readOwnedServiceBridge(options);
@@ -269,8 +269,8 @@ function personOperations(options) {
 }
 
 export async function connectNativeService({ env = process.env, nativeSessionId = null, client = null } = {}) {
-  const endpoint = env.HIVEM1ND_SERVICE_BRIDGE;
-  const grant = env.HIVEM1ND_SERVICE_GRANT;
+  const endpoint = env.HIVEM1ND_SERVICE_BRIDGE; // Compatibility: wire identifiers keep existing native sessions and paired machines connected.
+  const grant = env.HIVEM1ND_SERVICE_GRANT; // Compatibility: wire identifiers keep existing native sessions and paired machines connected.
   const { hostSessionOf } = await import('../relay/carry-over.mjs');
   nativeSessionId ??= client === 'claude' ? env.CLAUDE_CODE_SESSION_ID : null;
   const hostSessionId = client === 'claude' ? hostSessionOf(env) : null;
@@ -314,7 +314,7 @@ export async function connectNativeService({ env = process.env, nativeSessionId 
 const TOOL_TIMEOUT_MS = 60000;
 
 export function nativeHook({ env = process.env, nativeSessionId, client, event, evidence = null }) {
-  return dispatchNative(env.HIVEM1ND_SERVICE_BRIDGE, env.HIVEM1ND_SERVICE_GRANT, 'hook', { nativeSessionId, client, event, ...(evidence ? { evidence } : {}) });
+  return dispatchNative(env.HIVEM1ND_SERVICE_BRIDGE, env.HIVEM1ND_SERVICE_GRANT, 'hook', { nativeSessionId, client, event, ...(evidence ? { evidence } : {}) }); // Compatibility: wire identifiers keep existing native sessions and paired machines connected.
 }
 
 // The native side of the owner bridge, kept here so a hook or MCP process does not load the bridge's service closure to speak to it.

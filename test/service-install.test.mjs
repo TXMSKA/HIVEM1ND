@@ -25,18 +25,18 @@ import { assertReleaseAssets, assertZipBounds, BROWSER_ASSETS, browserReferences
 const base = {
   nodePath: 'C:\\Program Files\\node\\node.exe',
   cliPath: 'C:\\kit\\cli\\index.mjs',
-  mindPath: 'C:\\Users\\Ada\\AppData\\Local\\Cosmic\\hivem1nd',
+  mindPath: 'C:\\Users\\Ada\\AppData\\Local\\Cosmic\\onem1nd',
   workingDirectory: 'C:\\kit',
-  localDirectory: 'C:\\Users\\Ada\\AppData\\Local\\Cosmic\\hivem1nd-service\\key\\DESKTOP',
+  localDirectory: 'C:\\Users\\Ada\\AppData\\Local\\Cosmic\\onem1nd-service\\key\\DESKTOP',
   sid: 'S-1-5-21-1',
 };
 
 async function startupFixture(t, platform) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-startup-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-startup-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const mindPath = path.join(root, 'mind');
   const cosmicPath = path.join(root, 'Cosmic');
-  const directory = path.join(cosmicPath, 'hivem1nd-service', mindKeyFor(mindPath, platform), 'TESTBOX');
+  const directory = path.join(cosmicPath, 'onem1nd-service', mindKeyFor(mindPath, platform), 'TESTBOX');
   const commands = [];
   const aclRunner = stubAclRunner();
   let plan = null;
@@ -196,7 +196,7 @@ test('macOS startup toggles keep the loaded owned runtime', async t => {
 });
 
 test('offline legacy ownership blocks wake adoption until closure', async t => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-closure-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-closure-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const source = path.join(root, 'legacy');
   const mind = path.join(root, 'destination');
@@ -207,13 +207,13 @@ test('offline legacy ownership blocks wake adoption until closure', async t => {
   await writeFile(path.join(source, 'user', 'private.txt'), 'Original private record.\n');
   const sourceBefore = await legacyTreeInventory(source);
   await copyLegacyTree(source, mind);
-  const directory = path.join(cosmic, 'hivem1nd-service', mindKeyFor(mind, process.platform), machine);
+  const directory = path.join(cosmic, 'onem1nd-service', mindKeyFor(mind, process.platform), machine);
   const config = bootstrapConfig({ mindPath: mind, machine, origin: { kind: 'folder', path: path.join(root, 'origin') }, stagingPath: path.join(directory, 'staging') });
   await mkdir(directory, { recursive: true });
   await writeFile(path.join(directory, 'config.json'), JSON.stringify(config));
   const binding = { registrationId: '11111111-1111-4111-8111-111111111111', unit: 'executor', unitId: 'root:executor',
     client: 'host', machine, nativeSessionId: 'offline-native' };
-  await writeLegacyClosure(mind, { format: 'hivem1nd-legacy-closure-v1', sourcePath: source, sessions: [{ binding, status: 'required' }] });
+  await writeLegacyClosure(mind, { format: 'hivem1nd-legacy-closure-v1', sourcePath: source, sessions: [{ binding, status: 'required' }] }); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   let forks = 0;
   const forkProcess = () => {
     forks += 1;
@@ -248,11 +248,11 @@ test('offline legacy ownership blocks wake adoption until closure', async t => {
 });
 
 test('the real wizard retries only service startup and opens its authenticated viewer', async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-core-'));
   const home = path.join(root, 'home');
   const local = path.join(root, 'local');
   const cosmic = path.join(root, 'custom', 'Cosmic');
-  const mind = path.join(root, 'OneDrive', 'HIVEM1ND');
+  const mind = path.join(root, 'OneDrive', 'ONEM1ND');
   const origin = path.join(root, 'origin');
   const aclRunner = stubAclRunner();
   const env = { PATH: '', HOME: home, USERPROFILE: home, APPDATA: path.join(home, 'AppData', 'Roaming'), LOCALAPPDATA: local, CODEX_HOME: path.join(home, '.codex') };
@@ -274,7 +274,7 @@ test('the real wizard retries only service startup and opens its authenticated v
     serviceSetup: true, serviceDryRun: false, serviceProtect: false, aclRunner,
     serviceQuery: async (plan) => {
       if (commands.length === 0) return { present: false };
-      const file = path.join(cosmic, 'hivem1nd-service', mindKeyFor(mind, process.platform), 'TESTBOX', 'registration.json');
+      const file = path.join(cosmic, 'onem1nd-service', mindKeyFor(mind, process.platform), 'TESTBOX', 'registration.json');
       const current = await readFile(file, 'utf8').then(JSON.parse, () => null);
       return { present: true, digest: plan.digest, executable: plan.executable, arguments: plan.arguments, installationId: current?.installationId };
     },
@@ -282,7 +282,7 @@ test('the real wizard retries only service startup and opens its authenticated v
     serviceStart: async (config) => {
       starts += 1;
       assert.match(await readFile(path.join(mind, 'user', 'machines', 'TESTBOX.md'), 'utf8'), /^setup: 7$/m);
-      const directory = path.join(cosmic, 'hivem1nd-service', mindKeyFor(mind, process.platform), 'TESTBOX');
+      const directory = path.join(cosmic, 'onem1nd-service', mindKeyFor(mind, process.platform), 'TESTBOX');
       assert.equal(JSON.parse(await readFile(path.join(directory, 'config.json'), 'utf8')).startWithWindows, false);
       await assert.rejects(readFile(path.join(directory, 'registration.json')), { code: 'ENOENT' });
       assert.equal(commands.length, 0);
@@ -331,7 +331,7 @@ test('the real wizard retries only service startup and opens its authenticated v
   assert.equal(starts, 1);
   assert.deepEqual(opened, []);
   const before = await stat(path.join(mind, 'rules.md'));
-  const configFile = path.join(cosmic, 'hivem1nd-service', mindKeyFor(mind, process.platform), 'TESTBOX', 'config.json');
+  const configFile = path.join(cosmic, 'onem1nd-service', mindKeyFor(mind, process.platform), 'TESTBOX', 'config.json');
   const configBefore = await stat(configFile);
   const registered = commands.length;
   const finished = await call('install', { confirm: true, conflicts: {} });
@@ -356,7 +356,7 @@ test('the real wizard retries only service startup and opens its authenticated v
   const token = new URLSearchParams(url.hash.slice(1)).get('session');
   const view = await fetch(`${url.origin}/api/v1/view`, { headers: { authorization: `Bearer ${token}` } });
   assert.equal(view.status, 200);
-  assert.equal((await view.json()).contract, 'hivem1nd-gui-v3');
+  assert.equal((await view.json()).contract, 'hivem1nd-gui-v3'); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   await server.close();
   wizardClosed = true;
   assert.equal((await fetch(url)).status, 200);
@@ -407,7 +407,7 @@ test('the real wizard retries only service startup and opens its authenticated v
 });
 
 test('evolve keeps its previous completion markers until owned service setup succeeds', async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-core-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const mind = path.join(root, 'mind');
   const kit = path.join(root, 'kit');
@@ -457,14 +457,14 @@ test('the completed installer signs into the real HTTP viewer on startup and rea
     assert.ok(token);
     const response = await fetch(`${url.origin}/api/v1/view`, { headers: { authorization: `Bearer ${token}` } });
     assert.equal(response.status, 200);
-    assert.equal((await response.json()).contract, 'hivem1nd-gui-v3');
+    assert.equal((await response.json()).contract, 'hivem1nd-gui-v3'); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   }
 });
 
 test('owned configuration uses the user SID and retains an installed legacy mind and origin', async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-core-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const mind = path.join(root, 'OneDrive', 'HIVEM1ND');
+  const mind = path.join(root, 'OneDrive', 'ONEM1ND');
   const cosmic = path.join(root, 'local', 'Cosmic');
   const origin = path.join(root, 'chosen-origin');
   const aclRunner = stubAclRunner();
@@ -490,7 +490,7 @@ test('owned configuration uses the user SID and retains an installed legacy mind
   assert.equal(second.status, 'started');
   assert.equal(second.state.configBody.origin.path, origin);
   assert.equal(calls.every((argv) => argv[0] === 'schtasks.exe'), true);
-  const legacy = { ...registered, name: 'HIVEM1ND-legacy-owned' };
+  const legacy = { ...registered, name: 'HIVEM1ND-legacy-owned' }; // Compatibility: an explicitly selected owned legacy registration retains its identity.
   const retained = await configureOwnedService({ ...options, current: legacy, query: async (plan) => {
     assert.equal(plan.name, legacy.name);
     return { present: true, digest: legacy.actualDigest ?? legacy.digest, executable: legacy.executable, arguments: legacy.arguments, installationId: legacy.installationId };
@@ -500,7 +500,7 @@ test('owned configuration uses the user SID and retains an installed legacy mind
 });
 
 test('registration query preserves the actual scheduler XML and a modified task is never replaced', async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-core-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const plan = planRegistration({ ...base, platform: 'win32', localDirectory: root });
   const actualXml = plan.body.replace('<Settings>', '<Settings>\n  ');
@@ -536,7 +536,7 @@ test('registration query preserves the actual scheduler XML and a modified task 
 });
 
 test('user manager queries verify loaded registrations and fail closed on unavailable managers', async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-core-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   for (const platform of ['darwin', 'linux']) {
     const plan = planRegistration({ ...base, platform, home: root, uid: 501, localDirectory: root });
@@ -593,7 +593,7 @@ test('user manager queries verify loaded registrations and fail closed on unavai
 });
 
 test('an unverified successful registration command does not complete the registration phase', async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-core-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const result = await runServicePhases({
     config: { mindPath: path.join(root, 'mind'), stagingPath: path.join(root, 'staging'), machine: 'TESTBOX', origin: { kind: 'folder', path: path.join(root, 'origin') }, startWithWindows: true },
@@ -607,12 +607,12 @@ test('an unverified successful registration command does not complete the regist
 });
 
 test('a successful registration with a transient query failure retries verification without replacing the task', async t => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-core-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   for (const modified of [false, 'parallel', 'disabled']) {
     const cosmic = path.join(root, String(modified), 'Cosmic');
     const mind = path.join(root, String(modified), 'mind');
-    const ownershipFile = path.join(cosmic, 'hivem1nd-service', mindKeyFor(mind, 'win32'), 'TESTBOX', 'registration.json');
+    const ownershipFile = path.join(cosmic, 'onem1nd-service', mindKeyFor(mind, 'win32'), 'TESTBOX', 'registration.json');
     let registered;
     let unavailable = true;
     let commands = 0;
@@ -659,9 +659,9 @@ test('registration plans stay dry and quote the current user', async () => {
   assert.match(windows.body, /LeastPrivilege/);
   assert.equal(windows.body.includes('SYSTEM'), false);
   assert.match(windows.body, /S-1-5-21-1/);
-  const mac = planRegistration({ ...base, platform: 'darwin', home: '/Users/ada', uid: 501, nodePath: '/usr/local/bin/node', cliPath: '/kit/cli/index.mjs', mindPath: '/Users/ada/Library/Application Support/Cosmic/hivem1nd', workingDirectory: '/kit' });
+  const mac = planRegistration({ ...base, platform: 'darwin', home: '/Users/ada', uid: 501, nodePath: '/usr/local/bin/node', cliPath: '/kit/cli/index.mjs', mindPath: '/Users/ada/Library/Application Support/Cosmic/onem1nd', workingDirectory: '/kit' });
   assert.match(mac.commands[0], /launchctl bootstrap gui\/501/);
-  const linux = planRegistration({ ...base, platform: 'linux', home: '/home/ada', nodePath: '/usr/bin/node', cliPath: '/kit/cli/index.mjs', mindPath: '/home/ada/.local/share/Cosmic/hivem1nd', workingDirectory: '/kit' });
+  const linux = planRegistration({ ...base, platform: 'linux', home: '/home/ada', nodePath: '/usr/bin/node', cliPath: '/kit/cli/index.mjs', mindPath: '/home/ada/.local/share/Cosmic/onem1nd', workingDirectory: '/kit' });
   assert.match(linux.body, /Restart=on-failure/);
   assert.match(linux.commands[0], /systemctl --user daemon-reload/);
   const removed = uninstallService(windows);
@@ -675,7 +675,7 @@ test('registration plans stay dry and quote the current user', async () => {
     stagingPath: 'C:\\local\\staging',
     origin: { kind: 'folder', path: 'D:\\origin' },
   });
-  assert.equal(config.format, 'hivem1nd-service-config-v1');
+  assert.equal(config.format, 'hivem1nd-service-config-v1'); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   assert.equal(config.port, 0);
   await assert.rejects(async () => bootstrapConfig({
     mindPath: 'C:\\mind',
@@ -722,7 +722,7 @@ test('registration quoting, reinstall, and failed phase recovery stay off the op
   }), { code: 'service_unavailable' });
 
   const calls = [];
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-core-'));
   context.after(() => rm(root, { recursive: true, force: true }));
   const input = {
     config: {
@@ -795,7 +795,7 @@ test('registration quoting, reinstall, and failed phase recovery stay off the op
 });
 
 test('a mismatched operating system registration is left in place', async (context) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-core-'));
   context.after(() => rm(root, { recursive: true, force: true }));
   const localDirectory = path.join(root, 'local');
   const acl = stubAclRunner();
@@ -819,10 +819,10 @@ test('a mismatched operating system registration is left in place', async (conte
   assert.equal(blocked.conflict, true);
   assert.equal(calls.includes('again'), false);
   const mind = path.join(root, 'mind');
-  const directory = path.join(root, 'Cosmic', 'hivem1nd-service', mindKeyFor(mind, 'win32'), 'TESTBOX');
+  const directory = path.join(root, 'Cosmic', 'onem1nd-service', mindKeyFor(mind, 'win32'), 'TESTBOX');
   await mkdir(directory, { recursive: true });
   const record = {
-    format: 'hivem1nd-registration-v1',
+    format: 'hivem1nd-registration-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     installationId: 'ours',
     executable: created.executable,
     arguments: created.arguments,
@@ -856,7 +856,7 @@ test('a mismatched operating system registration is left in place', async (conte
 });
 
 test('uninstall describes an owned registration and keeps a modified one', async (context) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-core-'));
   context.after(() => rm(root, { recursive: true, force: true }));
   const mind = path.join(root, 'mind');
   const home = path.join(root, 'home');
@@ -871,14 +871,14 @@ test('uninstall describes an owned registration and keeps a modified one', async
     : platform === 'darwin'
       ? path.join(home, 'Library', 'Application Support', 'Cosmic')
       : path.join(env.XDG_DATA_HOME, 'Cosmic');
-  const directory = path.join(cosmic, 'hivem1nd-service', mindKeyFor(mind, platform), 'TESTBOX');
+  const directory = path.join(cosmic, 'onem1nd-service', mindKeyFor(mind, platform), 'TESTBOX');
   await mkdir(directory, { recursive: true });
   const body = '<Task>owned</Task>';
   const record = {
-    format: 'hivem1nd-registration-v1',
+    format: 'hivem1nd-registration-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     executable: platform === 'win32' ? 'C:\\node.exe' : '/usr/bin/node',
     arguments: [platform === 'win32' ? 'C:\\cli.mjs' : '/kit/cli.mjs'],
-    name: 'HIVEM1ND-service',
+    name: 'ONEM1ND-service',
     path: path.join(directory, 'service-task.xml'),
     body,
     digest: createHash('sha256').update(body).digest('hex'),
@@ -900,11 +900,11 @@ test('uninstall describes an owned registration and keeps a modified one', async
 });
 
 test('owned macOS removal uses the current UID and removes only the matching launch file', async t => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-core-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const mind = path.join(root, 'mind');
   const cosmic = path.join(root, 'Cosmic');
-  const directory = path.join(cosmic, 'hivem1nd-service', mindKeyFor(mind, 'darwin'), 'TESTBOX');
+  const directory = path.join(cosmic, 'onem1nd-service', mindKeyFor(mind, 'darwin'), 'TESTBOX');
   const plan = planRegistration({ ...base, platform: 'darwin', home: root, uid: 731, mindPath: mind });
   const record = { ...plan, installationId: 'owned', path: plan.file, name: plan.label };
   await mkdir(directory, { recursive: true });
@@ -928,7 +928,7 @@ test('owned macOS removal uses the current UID and removes only the matching lau
 });
 
 test('service install dry-run is a plan and the wizard opens one viewer', async (context) => {
-  const parsed = parseArgs(['service', 'install', '--dry-run', '--origin-kind', 'folder', '--origin-path', 'D:\\origin', '--cosmic-path', 'D:\\Cosmic', '--mind-path', 'D:\\Cosmic\\hivem1nd']);
+  const parsed = parseArgs(['service', 'install', '--dry-run', '--origin-kind', 'folder', '--origin-path', 'D:\\origin', '--cosmic-path', 'D:\\Cosmic', '--mind-path', 'D:\\Cosmic\\onem1nd']);
   assert.equal(parsed.command, 'service');
   assert.equal(parsed.options.action, 'install');
   assert.equal(parsed.options.dryRun, true);
@@ -1051,7 +1051,7 @@ test('installer archives are reproducible and reject malicious containers', asyn
   assert.equal(Object.hasOwn(manifest, 'user'), false);
   assert.equal(JSON.stringify(manifest).includes('C:\\'), false);
 
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-core-'));
   context.after(() => rm(root, { recursive: true, force: true }));
   const stage = path.join(root, 'stage');
   const child = path.join(stage, 'child');
@@ -1091,7 +1091,7 @@ test('installer archives are reproducible and reject malicious containers', asyn
   assert.equal(packages.some((item) => item.name === '@clack/prompts'), true);
   assert.equal(packages.some((item) => item.name === 'electron'), false);
   await verifyInstalled(packageRoot, packages);
-  const cached = [process.env.HIVEM1ND_NODE_ZIP, path.join(os.homedir(), 'Downloads', 'node-v22.23.3-win-x64.zip')].filter(Boolean);
+  const cached = [process.env.ONEM1ND_NODE_ZIP, path.join(os.homedir(), 'Downloads', 'node-v22.23.3-win-x64.zip')].filter(Boolean);
   let runtime = 'pinned node-v22.23.3-win-x64.zip unavailable';
   for (const candidate of cached) {
     try {
@@ -1109,7 +1109,7 @@ test('installer archives are reproducible and reject malicious containers', asyn
 test('the Windows build names its command when the runtime is missing and always saves a release archive', async () => {
   await assert.rejects(() => main([]), /npm run dist:win -- --node-zip <file>/);
   const packageRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-  assert.equal(outputFor({ output: null, dryRun: false }, '3.0.0'), path.join(packageRoot, 'dist', 'hivem1nd-3.0.0-win-x64.zip'));
+  assert.equal(outputFor({ output: null, dryRun: false }, '3.0.0'), path.join(packageRoot, 'dist', 'onem1nd-3.0.0-win-x64.zip'));
   assert.equal(outputFor({ output: null, dryRun: true }, '3.0.0'), null);
   assert.equal(outputFor({ output: 'artifact.zip', dryRun: true }, '3.0.0'), path.resolve('artifact.zip'));
 });
@@ -1164,7 +1164,7 @@ test('the runtime reader accepts the pinned NTFS extra and a dry-run stages offl
   assert.equal(manifest.label, 'dry-run');
   assert.equal(manifest.files.some((file) => file.name === 'installer.mjs'), true);
 
-  const stageRoot = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  const stageRoot = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-core-'));
   context.after(() => rm(stageRoot, { recursive: true, force: true }));
   const planned = await dryRun({
     files: [{ name: 'runtime/node.exe', data: Buffer.from('runtime') }, { name: 'notes.txt', data: Buffer.from('staged') }],
@@ -1186,7 +1186,7 @@ test('the runtime reader accepts the pinned NTFS extra and a dry-run stages offl
 });
 
 test('activation keeps the previous payload and refuses a junction stage', async (context) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-core-'));
   context.after(() => rm(root, { recursive: true, force: true }));
   const outside = path.join(root, 'outside');
   const kit = path.join(root, 'kit');
@@ -1253,7 +1253,7 @@ test('activation keeps the previous payload and refuses a junction stage', async
 });
 
 test('release packaging uses the served browser modules', async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-core-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const app = path.join(root, 'app');
   await mkdir(app);
@@ -1313,7 +1313,7 @@ test('the actual installer payload archives all four byte-identical local font f
 });
 
 test('runtime ownership survives absent registration.json', async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-core-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-core-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const local = path.join(root, 'local');
   const payload = path.join(root, 'payload');
@@ -1343,20 +1343,20 @@ test('runtime ownership survives absent registration.json', async (t) => {
   const recorder = path.join(root, 'record.mjs');
   const recordFile = path.join(root, 'recorded.txt');
   await writeFile(recorder, "import { writeFile } from 'node:fs/promises';\nawait writeFile(process.env.RECORD_PATH, process.argv.slice(2).join('\\n'));\n");
-  const env = { ...process.env, LOCALAPPDATA: local, RECORD_PATH: recordFile, HIVEM1ND_REGISTRATION_RUNNER: recorder };
+  const env = { ...process.env, LOCALAPPDATA: local, RECORD_PATH: recordFile, ONEM1ND_REGISTRATION_RUNNER: recorder };
   const dry = spawnSync(process.execPath, [path.join(payload, 'installer.mjs'), '--dry-run'], { env, shell: false, windowsHide: true, encoding: 'utf8' });
   assert.equal(dry.status, 0, dry.stderr);
   assert.match(dry.stdout, /dry-run/);
   assert.match(dry.stdout, /action: plan/);
-  assert.match(dry.stdout, /hivem1nd-kit/);
-  await assert.rejects(() => access(path.join(local, 'Cosmic', 'hivem1nd-kit')), { code: 'ENOENT' });
+  assert.match(dry.stdout, /onem1nd-kit/);
+  await assert.rejects(() => access(path.join(local, 'Cosmic', 'onem1nd-kit')), { code: 'ENOENT' });
   const installed = spawnSync(process.execPath, [path.join(payload, 'installer.mjs')], { env, shell: false, windowsHide: true, encoding: 'utf8' });
   assert.equal(installed.status, 0, installed.stderr);
-  assert.equal(await readFile(path.join(local, 'Cosmic', 'hivem1nd-kit', 'cli', 'index.mjs'), 'utf8'), cli);
+  assert.equal(await readFile(path.join(local, 'Cosmic', 'onem1nd-kit', 'cli', 'index.mjs'), 'utf8'), cli);
   const recorded = await readFile(recordFile, 'utf8');
   assert.match(recorded, /init/);
   assert.match(recorded, /--gui/);
-  await assert.rejects(() => access(path.join(local, 'Cosmic', '.m1nd')), { code: 'ENOENT' });
+  await assert.rejects(() => access(path.join(local, 'Cosmic', 'onem1nd')), { code: 'ENOENT' });
   const target = path.join(root, 'junction-target');
   const linked = path.join(root, 'linked-local');
   await mkdir(target, { recursive: true });
@@ -1369,13 +1369,13 @@ test('runtime ownership survives absent registration.json', async (t) => {
     encoding: 'utf8',
   });
   assert.notEqual(blocked.status, 0);
-  await assert.rejects(() => access(path.join(target, 'hivem1nd-kit')), { code: 'ENOENT' });
+  await assert.rejects(() => access(path.join(target, 'onem1nd-kit')), { code: 'ENOENT' });
   const mindPath = path.join(local, 'Cosmic', 'mind');
   const machine = 'DESKTOP';
-  const ownedDirectory = path.join(local, 'Cosmic', 'hivem1nd-service', mindKeyFor(mindPath, 'win32'), machine);
+  const ownedDirectory = path.join(local, 'Cosmic', 'onem1nd-service', mindKeyFor(mindPath, 'win32'), machine);
   await mkdir(ownedDirectory, { recursive: true });
   await writeFile(path.join(ownedDirectory, 'config.json'), `${JSON.stringify({
-    format: 'hivem1nd-service-config-v1',
+    format: 'hivem1nd-service-config-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     mindPath,
     machine,
     origin: { kind: 'folder', path: path.join(local, 'Cosmic', 'origin') },
@@ -1383,17 +1383,17 @@ test('runtime ownership survives absent registration.json', async (t) => {
     port: 0,
   })}\n`);
   await writeFile(path.join(ownedDirectory, 'service.json'), `${JSON.stringify({
-    format: 'hivem1nd-service-local-v1', pid: 9, origin: 'http://127.0.0.1:43123', startedAt: '2026-10-10T12:00:00.000Z',
+    format: 'hivem1nd-service-local-v1', pid: 9, origin: 'http://127.0.0.1:43123', startedAt: '2026-10-10T12:00:00.000Z', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   })}\n`);
   await assert.rejects(readFile(path.join(ownedDirectory, 'registration.json')), { code: 'ENOENT' });
-  await mkdir(path.join(local, 'Cosmic', 'hivem1nd-service'), { recursive: true });
+  await mkdir(path.join(local, 'Cosmic', 'onem1nd-service'), { recursive: true });
   const userKey = process.platform === 'win32' ? 'S-1-5-21-1-2-3-1001' : String(process.getuid());
   const port = 49152 + (createHash('sha256').update(userKey).digest().readUInt16BE(0) % 16384);
-  const lockFile = path.join(local, 'Cosmic', 'hivem1nd-service', 'service.lock');
-  const descriptor = { format: 'hivem1nd-service-descriptor-v1', machine, mind: path.resolve(mindPath), pid: 9, port, userKey };
+  const lockFile = path.join(local, 'Cosmic', 'onem1nd-service', 'service.lock');
+  const descriptor = { format: 'hivem1nd-service-descriptor-v1', machine, mind: path.resolve(mindPath), pid: 9, port, userKey }; // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   const lock = { nonce: 'fixture-owner', pid: 9, digest: createHash('sha256').update(JSON.stringify(descriptor)).digest('hex') };
   await writeFile(lockFile, JSON.stringify(lock));
-  const activeFile = path.join(local, 'Cosmic', 'hivem1nd-service', 'active.json');
+  const activeFile = path.join(local, 'Cosmic', 'onem1nd-service', 'active.json');
   await writeFile(activeFile, JSON.stringify({
     pid: 9,
     mindPath,
@@ -1404,13 +1404,13 @@ test('runtime ownership survives absent registration.json', async (t) => {
   const failRunner = path.join(root, 'fail.mjs');
   await writeFile(failRunner, 'process.exit(1);\n');
   const rolled = spawnSync(process.execPath, [path.join(payload, 'installer.mjs')], {
-    env: { ...env, HIVEM1ND_REGISTRATION_RUNNER: failRunner },
+    env: { ...env, ONEM1ND_REGISTRATION_RUNNER: failRunner },
     shell: false,
     windowsHide: true,
     encoding: 'utf8',
   });
   assert.notEqual(rolled.status, 0);
-  assert.equal(await readFile(path.join(local, 'Cosmic', 'hivem1nd-kit', 'cli', 'index.mjs'), 'utf8'), cli);
+  assert.equal(await readFile(path.join(local, 'Cosmic', 'onem1nd-kit', 'cli', 'index.mjs'), 'utf8'), cli);
   const matched = spawnSync(process.execPath, [path.join(payload, 'installer.mjs')], { env, shell: false, windowsHide: true, encoding: 'utf8' });
   assert.equal(matched.status, 0, matched.stderr);
   assert.match(matched.stdout, /installed:/);
@@ -1422,17 +1422,17 @@ test('runtime ownership survives absent registration.json', async (t) => {
   const tampered = spawnSync(process.execPath, [path.join(payload, 'installer.mjs')], { env, shell: false, windowsHide: true, encoding: 'utf8' });
   assert.notEqual(tampered.status, 0);
   await writeFile(lockFile, JSON.stringify(lock));
-  assert.equal(await readFile(path.join(local, 'Cosmic', 'hivem1nd-kit', 'cli', 'index.mjs'), 'utf8'), cli);
+  assert.equal(await readFile(path.join(local, 'Cosmic', 'onem1nd-kit', 'cli', 'index.mjs'), 'utf8'), cli);
   await writeFile(activeFile, JSON.stringify({ pid: 9 }));
   const malformed = spawnSync(process.execPath, [path.join(payload, 'installer.mjs')], { env, shell: false, windowsHide: true, encoding: 'utf8' });
   assert.notEqual(malformed.status, 0);
   assert.match(`${malformed.stderr}\n${malformed.stdout}`, /does not match/);
-  assert.equal(await readFile(path.join(local, 'Cosmic', 'hivem1nd-kit', 'cli', 'index.mjs'), 'utf8'), cli);
-  const mind = path.join(local, 'Cosmic', '.m1nd');
+  assert.equal(await readFile(path.join(local, 'Cosmic', 'onem1nd-kit', 'cli', 'index.mjs'), 'utf8'), cli);
+  const mind = path.join(local, 'Cosmic', 'onem1nd');
   await mkdir(mind, { recursive: true });
   await writeFile(path.join(mind, 'keep.txt'), 'mind');
-  await mkdir(path.join(local, 'Cosmic', 'hivem1nd-service'), { recursive: true });
-  await writeFile(path.join(local, 'Cosmic', 'hivem1nd-service', 'active.json'), JSON.stringify({
+  await mkdir(path.join(local, 'Cosmic', 'onem1nd-service'), { recursive: true });
+  await writeFile(path.join(local, 'Cosmic', 'onem1nd-service', 'active.json'), JSON.stringify({
     pid: 9,
     mindPath: path.join(local, 'Cosmic', 'foreign-mind'),
     machine: 'DESKTOP',
@@ -1443,7 +1443,7 @@ test('runtime ownership survives absent registration.json', async (t) => {
   assert.notEqual(refused.status, 0);
   assert.match(`${refused.stderr}\n${refused.stdout}`, /does not match/);
   assert.equal(await readFile(path.join(mind, 'keep.txt'), 'utf8'), 'mind');
-  assert.equal(await readFile(path.join(local, 'Cosmic', 'hivem1nd-kit', 'cli', 'index.mjs'), 'utf8'), cli);
+  assert.equal(await readFile(path.join(local, 'Cosmic', 'onem1nd-kit', 'cli', 'index.mjs'), 'utf8'), cli);
 });
 
 test('CI pins action commits and the install policy ignores scripts', async () => {

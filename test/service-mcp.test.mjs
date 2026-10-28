@@ -67,7 +67,7 @@ test('HTTP MCP accepts only the pinned protocol and lists the editor tools', asy
     headers: { accept: 'application/json, text/event-stream' },
   });
   assert.equal(ready.json.result.capabilities.tools.listChanged, false);
-  assert.equal(ready.json.result.serverInfo.name, 'hivem1nd-relay');
+  assert.equal(ready.json.result.serverInfo.name, 'onem1nd-relay');
   assert.equal(ready.json.result.serverInfo.version, '3.0.0');
   const ping = await call(port, 'POST', '/mcp', {
     token,
@@ -413,7 +413,7 @@ async function bindUnit(fixture, resourceId, unitId) {
   const directory = path.join(fixture.paths.mind, 'user', 'relay', 'editors');
   await mkdir(directory, { recursive: true });
   await writeFile(path.join(directory, `${resourceId}.json`), `${JSON.stringify({
-    format: 'hivem1nd-editor-binding-v1',
+    format: 'hivem1nd-editor-binding-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     resourceId,
     attached: [unitId],
   })}\n`);

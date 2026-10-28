@@ -7,8 +7,8 @@ import { atomicWriteFile, hashContent, machineManagedPath, machineReportPath, re
 import { removeOwnedRegistration } from './service/install.mjs';
 import { defaultMind, mindKeyFor } from './service/paths.mjs';
 
-const MANAGED_FILE_MODIFIED_REASON = 'The HIVEM1ND-managed file was modified after installation.';
-const SYMLINK_REASON = 'The path is a symbolic link and is not managed by HIVEM1ND.';
+const MANAGED_FILE_MODIFIED_REASON = 'The ONEM1ND-managed file was modified after installation.';
+const SYMLINK_REASON = 'The path is a symbolic link and is not managed by ONEM1ND.';
 // Setup keeps its checkpoint, proof and draft for one M1ND in this machine's local service folder.
 const SETUP_STATE_FILES = ['setup.json', 'setup-proof.json', 'setup-draft.json'];
 // A migrated copy records the 2.x M1ND it came from; that M1ND is never written, so nothing inside it is removed.
@@ -59,6 +59,7 @@ export async function uninstall(options = {}) {
 
   const managedFiles = record.managedFiles ?? {};
   const cleanupDirectories = new Set();
+  const startMenuRoots = new Set();
   const legacySource = await migrationSource(mindPath);
   let legacyKept = 0;
 
@@ -69,8 +70,15 @@ export async function uninstall(options = {}) {
       legacyKept += 1;
       continue;
     }
+    const folder = path.dirname(resolved), parent = path.dirname(folder);
+    const startMenuShortcut = path.basename(resolved).toLowerCase() === 'onem1nd.lnk' && path.basename(folder).toLowerCase() === 'cosmic'
+      && path.basename(parent).toLowerCase() === 'programs';
+    if (startMenuShortcut) startMenuRoots.add(normalizePath(parent));
     const outcome = await planFileRemoval(resolved, expectedHash);
-    if (outcome === 'missing') continue;
+    if (outcome === 'missing') {
+      if (startMenuShortcut) cleanupDirectories.add(folder);
+      continue;
+    }
     if (outcome === 'symlink') {
       kept.push({ path: resolved, reason: SYMLINK_REASON });
       continue;
@@ -86,7 +94,7 @@ export async function uninstall(options = {}) {
 
   const adapters = await loadAdapters({});
   const adaptersById = new Map(adapters.map((adapter) => [adapter.id, adapter]));
-  const bases = new Set([normalizePath(homeDir)]);
+  const bases = new Set([normalizePath(homeDir), ...startMenuRoots]);
   for (const agent of record.agents ?? []) {
     const adapter = adaptersById.get(agent.name);
     if (!adapter) continue;
@@ -108,7 +116,7 @@ export async function uninstall(options = {}) {
 
   if (legacyKept > 0) warnings.push(`${legacyKept} files inside the previous M1ND at ${legacySource} were left untouched.`);
   const relay = await removeRelayEntries({ homeDir, env, mindPath, dryRun });
-  if (!dryRun) await removeEmptyDirectories(cleanupDirectories, bases);
+  if (!dryRun) await removeEmptyDirectories(cleanupDirectories, bases, startMenuRoots);
 
   const eligibility = removeMindRequested ? await checkMindRemovable(mindPath, hostname, record) : null;
   if (eligibility?.removable) {
@@ -155,7 +163,7 @@ async function removeSetupState({ mindPath, hostname, env, homeDir, cosmicPath, 
     if (error?.code === 'invalid_path') return result;
     throw error;
   }
-  const directory = path.join(cosmic, 'hivem1nd-service', mindKeyFor(mindPath, process.platform), hostname);
+  const directory = path.join(cosmic, 'onem1nd-service', mindKeyFor(mindPath, process.platform), hostname);
   for (const name of SETUP_STATE_FILES) {
     const file = path.join(directory, name);
     if (await findSymlinkAncestor(file)) {
@@ -219,7 +227,7 @@ function removeExactLine(content, line) {
   return output;
 }
 
-async function removeEmptyDirectories(directories, bases) {
+async function removeEmptyDirectories(directories, bases, stopAt) {
   // Deepest first, so a folder is looked at after the folders inside it are gone.
   const queue = [...directories].sort((left, right) => path.resolve(right).length - path.resolve(left).length);
   const processed = new Set();
@@ -228,6 +236,7 @@ async function removeEmptyDirectories(directories, bases) {
     const key = normalizePath(directory);
     if (processed.has(key)) continue;
     processed.add(key);
+    if (stopAt.has(key)) continue;
     const withinBase = [...bases].some((base) => key !== base && isWithin(base, directory));
     if (!withinBase) continue;
     const state = await lstatIfPresent(directory);

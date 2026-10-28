@@ -29,7 +29,7 @@ async function linkRepository(context, directory) {
   await git('git', ['init', '--initial-branch=main'], { cwd: directory, timeout: 10000, windowsHide: true });
   await git('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--allow-empty', '-m', 'Fixture baseline'], { cwd: directory, timeout: 10000, windowsHide: true });
   const identity = await readRepositoryIdentity(directory);
-  await writeFile(path.join(context.paths.localDirectory, 'cluster-links.json'), JSON.stringify({ format: 'hivem1nd-cluster-links-v1', machine: 'DESKTOP', links: {
+  await writeFile(path.join(context.paths.localDirectory, 'cluster-links.json'), JSON.stringify({ format: 'hivem1nd-cluster-links-v1', machine: 'DESKTOP', links: { // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     'repository:shop': { machine: 'DESKTOP', localPath: directory, identity: await directoryIdentity(directory), repositoryId: identity.id },
   } }));
   return createCluster(context, { title: 'Shop', members: [UNIT], machine: 'DESKTOP', parentId: null, link: { kind: 'repository', projectId: 'shop' }, confirmed: true });
@@ -39,7 +39,7 @@ async function scopedPackage(context, requirements = []) {
   const id = randomUUID(), content = Buffer.from('---\nname: pdf\nruntime: none\n---\nPDF support\n');
   const file = path.join(context.paths.mind, 'user', 'features', 'pdf', 'SKILL.md');
   await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, content);
-  const record = { format: 'hivem1nd-addition-v1', id, kind: 'skill', name: 'pdf', title: 'pdf', source: { kind: 'git', display: 'acme/pdf', url: 'https://github.com/acme/pdf' },
+  const record = { format: 'hivem1nd-addition-v1', id, kind: 'skill', name: 'pdf', title: 'pdf', source: { kind: 'git', display: 'acme/pdf', url: 'https://github.com/acme/pdf' }, // Compatibility: repository URLs retain their existing hosting location.
     sourcePath: '.', pin: { kind: 'commit', value: 'a'.repeat(40), digest: 'b'.repeat(64) }, license: 'MIT', publishedAt: '2026-10-01T00:00:00.000Z', requirements,
     scope: { everyUnit: false, units: [UNIT], groups: [] }, unitCount: 1, machine: 'DESKTOP', projectId: null, installedAt: new Date(context.now()).toISOString(), updatedAt: new Date(context.now()).toISOString(), removed: false,
     files: [{ path: 'user/features/pdf/SKILL.md', hash: hashBytes(content), bytes: content.length }] };
@@ -73,7 +73,7 @@ test('two canonical units on one client receive different native scoped channels
     const launch = createNativeLaunch(bridge, { unitId: session.unitId, client: 'codex', contentReader: proof => readScopedAdditions(context, proof) });
     launch.ready(session.nativeSessionId); grants.push(launch);
   }
-  const scopedCall = (index, input = {}) => dispatchNative(bridge.endpoint, grants[index].env.HIVEM1ND_SERVICE_GRANT, 'content', input);
+  const scopedCall = (index, input = {}) => dispatchNative(bridge.endpoint, grants[index].env.HIVEM1ND_SERVICE_GRANT, 'content', input); // Compatibility: native bridge environment names match attached sessions.
   assert.equal((await scopedCall(0))[0].addition.id, imported.id); assert.deepEqual(await scopedCall(1), []);
   assert.deepEqual(Buffer.from((await scopedCall(0, { additionId: imported.id, path: 'SKILL.md', offset: 0 })).bytesBase64, 'base64'), imported.content);
   await assert.rejects(scopedCall(1, { additionId: imported.id, path: 'SKILL.md' }), { code: 'forbidden' });
@@ -110,7 +110,7 @@ test('unsupported scope and missing runtimes refuse a launch before a native pro
 
 const UNIT = 'project:shop:executor-shop';
 const CODEX = [
-  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"hivem1nd","title":"HIVEM1ND","version":"3.0.0"}}}',
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"onem1nd","title":"ONEM1ND","version":"3.0.0"}}}',
   '{"jsonrpc":"2.0","id":2,"method":"thread/start","params":{"cwd":"C:/work","model":"strong"}}',
   '{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thread-1"}}}',
 ];
@@ -169,7 +169,7 @@ test('reviewed Git capability reaches only newly owned sessions and is rechecked
   };
   const earlier = await start(context, file, { runMode: 'chat' });
   assert.deepEqual(launches[0].agentPermissions, []);
-  const permission = { id: randomUUID(), machine: fixture.machine, client: 'codex', actions: ['git.commit', 'git.push'], scope: 'hivem1nd-started-sessions', grantedAt: new Date(fixture.clock.now).toISOString(), grantedBy: 'root:master' };
+  const permission = { id: randomUUID(), machine: fixture.machine, client: 'codex', actions: ['git.commit', 'git.push'], scope: 'hivem1nd-started-sessions', grantedAt: new Date(fixture.clock.now).toISOString(), grantedBy: 'root:master' }; // Compatibility: existing permission grants retain their scope identity.
   await writeFile(permissionFile, JSON.stringify({ permissions: [permission] }));
   const binding = { unitId: UNIT, client: 'codex', repository: fixture.root };
   assert.deepEqual(await sessionGitPermissions(context, earlier.result.sessionId, binding), []);
@@ -236,7 +236,7 @@ test('an npm wrapper probes the client version through its script prefix', async
   const script = path.join(fixture.root, 'client.js');
   await writeFile(script, 'if (process.argv[2] !== "--version") process.exit(1); console.log("codex-cli fixture-version");');
   await writeFile(wrapper, `@echo off\n"${process.execPath}" "${script}" %*\n`);
-  const reports = await probeClients({ env: { ...fixture.env, PATH: '', HIVEM1ND_CODEX: wrapper }, spawnVersion: true });
+  const reports = await probeClients({ env: { ...fixture.env, PATH: '', ONEM1ND_CODEX: wrapper }, spawnVersion: true });
   assert.equal(reports.codex.version, 'codex-cli fixture-version');
 });
 
@@ -325,7 +325,7 @@ test('spawned work stays ambiguous and only one of two claims creates a session'
 });
 
 test('a wrapper resolves to the executable and a missing login does not register', async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-native-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-native-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const bin = path.join(root, 'bin');
   await mkdir(bin, { recursive: true });
@@ -445,7 +445,7 @@ test('installed Codex is discovered off PATH and notifications are not replies',
   assert.equal(probe.codex.command, executable);
   assert.equal(probe.codex.capabilities.create, false);
   assert.equal(JSON.stringify(clientRecords(probe)).includes(executable), false);
-  const blocked = await probeClients({ env: { ...env, HIVEM1ND_CODEX: 'codex.exe' }, platform: 'win32' });
+  const blocked = await probeClients({ env: { ...env, ONEM1ND_CODEX: 'codex.exe' }, platform: 'win32' });
   assert.equal(blocked.codex.installed, false);
 
   const shop = path.join(fixture.root, 'shop-project');
@@ -753,8 +753,8 @@ test('owned native startup passes only its launch capability in the child enviro
     createNativeLaunch(request) {
       assert.equal(request.unitId, UNIT);
       return {
-        env: { HIVEM1ND_SERVICE_BRIDGE: 'synthetic-endpoint', HIVEM1ND_SERVICE_GRANT: grant },
-        mcp: { name: 'hivem1nd-relay', command: process.execPath, args: ['owned-cli.mjs'], env: [] },
+        env: { HIVEM1ND_SERVICE_BRIDGE: 'synthetic-endpoint', HIVEM1ND_SERVICE_GRANT: grant }, // Compatibility: native bridge environment names match attached sessions.
+        mcp: { name: 'onem1nd-relay', command: process.execPath, args: ['owned-cli.mjs'], env: [] },
         ready(id) { ready = id; },
         close() { revoked = true; },
       };
@@ -764,9 +764,9 @@ test('owned native startup passes only its launch capability in the child enviro
   t.after(() => adapter.close());
   await adapter.create({ cwd: fixture.root, unitId: UNIT });
   assert.equal(ready, 'thread-1');
-  assert.equal(receivedEnv.HIVEM1ND_SERVICE_GRANT, grant);
+  assert.equal(receivedEnv.HIVEM1ND_SERVICE_GRANT, grant); // Compatibility: native bridge environment names match attached sessions.
   const started = rpcMethods(child).find((message) => message.method === 'thread/start');
-  assert.deepEqual(started.params.config.mcp_servers['hivem1nd-relay'].env_vars, ['HIVEM1ND_SERVICE_BRIDGE', 'HIVEM1ND_SERVICE_GRANT']);
+  assert.deepEqual(started.params.config.mcp_servers['onem1nd-relay'].env_vars, ['HIVEM1ND_SERVICE_BRIDGE', 'HIVEM1ND_SERVICE_GRANT']); // Compatibility: native bridge environment names match attached sessions.
   assert.equal(JSON.stringify(rpcMethods(child)).includes(grant), false);
   await adapter.close();
   assert.equal(revoked, true);

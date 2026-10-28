@@ -14,7 +14,7 @@ export function launchChoice(unit, clients) {
   if(!unit.runsIn)throw new CoreError(409,'scope_unresolved','Choose Runs in before launching this agent.');
   return validateRunsIn(unit.runsIn,clients);
 }
-// How a connected client is held to its boundary: 'confined' (it confines itself, or HIVEM1ND does)
+// How a connected client is held to its boundary: 'confined' (it confines itself, or ONEM1ND does)
 // or 'supervised' (Claude Code and Cursor, which cannot be confined on Windows; every native change asks first).
 // A report that names no boundary keeps the older meaning of scopeEnforced. Anything else, or a client that is
 // not connected, has no boundary and fails closed.

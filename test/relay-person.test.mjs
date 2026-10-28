@@ -10,7 +10,7 @@ import { makeRelayMind } from './relay-test-fixture.mjs';
 const HOST = 'PERSONBOX';
 
 async function fixture(context) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-person-test-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-person-test-'));
   context.after(() => rm(root, { recursive: true, force: true }));
   const mind = await makeRelayMind(root);
   await writeFile(path.join(mind, 'user', 'routes.md'), '## Environments\n- web: shop, blog\n\n## Projects\n- shop (web)\n- blog (web)\n');

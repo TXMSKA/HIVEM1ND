@@ -36,7 +36,7 @@ export async function readRunRecord(context, id) {
   const bytes = await readBytes(context.store, runFile(context, id));
   if (!bytes) runError('run_not_found', 404);
   const record = JSON.parse(bytes);
-  if (record.id !== id || record.format !== 'hivem1nd-run-v1' || planRevision(record).revision !== record.revision) runError('corrupt_resource');
+  if (record.id !== id || record.format !== 'hivem1nd-run-v1' || planRevision(record).revision !== record.revision) runError('corrupt_resource'); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   return { record, bytes };
 }
 export function publicRun(record) { const { format, sequence, ...run } = record; return structuredClone(run); }
@@ -96,10 +96,10 @@ export async function createRunIntent(context, planId, input) {
     const runId = randomUUID(), attemptId = randomUUID(), requestId = context.receipt?.requestId ?? randomUUID();
     const attempt = { id: attemptId, role: 'coordinator', taskId: null, sentAt: stamp(context), confirmedAt: null, resolved: false, sessionId: null, notifications: [] };
     const ledger = createRunBudget(approved.tasks.length);
-    const run = planRevision({ format: 'hivem1nd-run-v1', id: runId, planId, clusterId: approved.clusterId, machine: approved.machine, mode: approved.mode,
+    const run = planRevision({ format: 'hivem1nd-run-v1', id: runId, planId, clusterId: approved.clusterId, machine: approved.machine, mode: approved.mode, // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
       state: 'open', startedAt: stamp(context), closedAt: null, taskIndex: 0, lastCheckedAt: null, summarySlot: 0, budget: projectRunBudget(ledger),
       attempts: [attempt], watches: [], messages: [], alerts: [], sequence: 0 });
-    const approval = { format: 'hivem1nd-plan-approval-v1', runId, plan: publicPlan(approved), sourceRevision: plan.record.revision,
+    const approval = { format: 'hivem1nd-plan-approval-v1', runId, plan: publicPlan(approved), sourceRevision: plan.record.revision, // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
       clusterRevision: resolved.cluster.revision, taskWitnesses: resolved.witnesses, unitRevisions: resolved.unitRevisions, git,
       commits: approved.mode === 'execution', push: false, messageBase: ledger.base, confirmedBy: 'root:master', confirmedAt: stamp(context) };
     const intent = { requestId, runId, attemptId, assignment: approved.roles.coordinator, role: 'coordinator', taskId: null, state: 'prepared', sessionId: null };
@@ -619,7 +619,7 @@ async function appendLeadReport(context, run, binding, text) {
 export async function appendRun(context, record, event, extra = [], response = null) {
   const current = await readBytes(context.store, runFile(context, record.id));
   const run = planRevision({ ...record, sequence: record.sequence + 1 });
-  const log = { format: 'hivem1nd-run-log-v1', runId: run.id, machine: run.machine, id: randomUUID(), sequence: run.sequence, eventId: event.eventId,
+  const log = { format: 'hivem1nd-run-log-v1', runId: run.id, machine: run.machine, id: randomUUID(), sequence: run.sequence, eventId: event.eventId, // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     at: event.at ?? stamp(context), role: event.role ?? null, taskId: event.taskId ?? null, kind: event.kind, key: `run.${event.kind}`,
     state: event.state ?? (event.kind.includes('failed') ? 'fail' : ['start', 'step_start'].includes(event.kind) ? 'busy'
       : ['bound', 'dispatch', 'stop_requested', 'launch_ambiguous'].includes(event.kind) ? 'wait' : 'done'), values: event.values ?? {}, source: event.source ?? 'service' };
@@ -853,13 +853,13 @@ export async function validatePlanRunBundle(context, entries, machine) {
       /^(?:pid|nativeSessionId|executionId|credential|credentials|token|environment|rawOutput|native|lease|bootstrap|secret)$/i.test(key) || forbidden(child));
     if (forbidden(record)) runError('invalid_pack', 422);
     if (match[3].startsWith('log/')) {
-      if (record.format !== 'hivem1nd-run-log-v1' || record.runId !== match[2] || !Number.isSafeInteger(record.sequence)
+      if (record.format !== 'hivem1nd-run-log-v1' || record.runId !== match[2] || !Number.isSafeInteger(record.sequence) // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
         || match[3] !== `log/${String(record.sequence).padStart(12, '0')}.json` || currentBytes && !currentBytes.equals(item.bytes)) runError('corrupt_resource', 422);
       const runPath = `user/gui/runs/${match[2]}/run.json`, runBytes = incoming.get(runPath) ?? await readBytes(context.store, path.join(context.paths.mind, runPath));
       if (!runBytes || JSON.parse(runBytes).machine !== machine) runError('invalid_record_owner', 422);
     } else {
-      if (record.id !== match[2] || planRevision(record).revision !== record.revision || !['hivem1nd-plan-v1', 'hivem1nd-run-v1'].includes(record.format)) runError('invalid_pack', 422);
-      if (record.format === 'hivem1nd-plan-v1') {
+      if (record.id !== match[2] || planRevision(record).revision !== record.revision || !['hivem1nd-plan-v1', 'hivem1nd-run-v1'].includes(record.format)) runError('invalid_pack', 422); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
+      if (record.format === 'hivem1nd-plan-v1') { // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
         if (!Array.isArray(record.tasks) || record.tasks.length < 1 || record.tasks.length > 10000 || !isUuid(record.chatId) || !isUuid(record.clusterId)) runError('invalid_pack', 422);
       } else if (!Array.isArray(record.attempts) || record.attempts.length > 4 || record.watches.length > 4) runError('invalid_pack', 422);
     }
@@ -915,7 +915,7 @@ async function budgetTool(context, name, input) {
       const plan = (await readPlanRecord(context, run.planId)).record;
       const receiptFile = path.join(context.paths.mind, 'user', 'relay', 'chats', plan.chatId, 'read', Buffer.from(binding.actorId).toString('base64url'), run.machine, `${input.requestId}.json`);
       const acknowledged = input.messageIds.filter(id => run.messages.find(m => m.id === id)?.recipients.find(r => r.actorId === binding.actorId)?.readAt);
-      entries.push(entry(receiptFile, null, { format: 'hivem1nd-chat-read-v1', chatId: plan.chatId, unitId: binding.actorId, machine: run.machine, messageIds: acknowledged, at: stamp(context) }));
+      entries.push(entry(receiptFile, null, { format: 'hivem1nd-chat-read-v1', chatId: plan.chatId, unitId: binding.actorId, machine: run.machine, messageIds: acknowledged, at: stamp(context) })); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
       result = { messageIds: input.messageIds };
     } else if (name === 'plan_extend') {
       revision(run, input.expectedRevision);

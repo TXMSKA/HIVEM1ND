@@ -412,7 +412,7 @@ export async function dispatch(context, message) {
   if (method.startsWith('notifications/')) return { notification: true };
   if (method === 'initialize') {
     if (params.protocolVersion !== PROTOCOL) return schemaError(rpcId, 'Unsupported protocol version');
-    return { jsonrpc: '2.0', id: rpcId, result: { protocolVersion: PROTOCOL, capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'hivem1nd-relay', version: '3.0.0' } } };
+    return { jsonrpc: '2.0', id: rpcId, result: { protocolVersion: PROTOCOL, capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'onem1nd-relay', version: '3.0.0' } } };
   }
   if (method === 'ping') return { jsonrpc: '2.0', id: rpcId, result: {} };
   if (method === 'tools/list') return { jsonrpc: '2.0', id: rpcId, result: { tools: await listedTools() } };
@@ -438,7 +438,7 @@ export async function dispatch(context, message) {
 }
 
 function toolSuccess(rpcId, value) {
-  return { jsonrpc: '2.0', id: rpcId, result: { content: [{ type: 'text', text: JSON.stringify({ contract: 'hivem1nd-gui-v3', data: value }) }], isError: false } };
+  return { jsonrpc: '2.0', id: rpcId, result: { content: [{ type: 'text', text: JSON.stringify({ contract: 'hivem1nd-gui-v3', data: value }) }], isError: false } }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
 }
 
 function toolFailure(rpcId, args, error) {

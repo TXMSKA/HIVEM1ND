@@ -213,7 +213,7 @@ async function commitChangeLocked(context, task, change) {
   const id = randomUUID();
   const after = change.bytes;
   const record = {
-    format: 'hivem1nd-task-change-v1',
+    format: 'hivem1nd-task-change-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     id,
     kind: change.kind,
     taskId: task.id,

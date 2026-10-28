@@ -33,9 +33,9 @@ const LEGACY_UNITS = [
   { unit: 'executor-blog', client: 'codex', machine: REMOTE_MACHINE, native: 'native-blog', id: '33333333-3333-4333-8333-333333333333', session: '33333333-3333-4333-8333-333333333334' },
 ];
 
-// A temporary home, Cosmic folder and (optionally) a detected HIVEM1ND 2.x tree, all under one temporary root.
+// A temporary home, Cosmic folder and (optionally) a detected ONEM1ND 2.x tree, all under one temporary root.
 export async function makeSetupSandbox(ctx, { legacy = false, sessions = false, populated = false } = {}) {
-  // A short root name keeps the whole default folder (root/Cosmic/.m1nd) visible in the wizard's Folder field.
+  // A short root name keeps the whole default folder (root/Cosmic/onem1nd) visible in the wizard's Folder field.
   const root = await mkdtemp(path.join(os.tmpdir(), 'hm-'));
   ctx.defer(() => rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 }));
   const home = path.join(root, 'home');
@@ -47,13 +47,13 @@ export async function makeSetupSandbox(ctx, { legacy = false, sessions = false, 
   await mkdir(local, { recursive: true });
   // The repositories the wizard counts on the ready step (four in Web, one in Unity).
   for (const name of ['Web/shop', 'Web/blog', 'Web/site', 'Web/docs', 'Unity/arena']) await makeRepository(path.join(home, name));
-  const sandbox = { root, home, local, cosmic, env, mind: path.join(cosmic, '.m1nd'), legacyPath: null, joinPath: null, origin: path.join(root, 'origin') };
+  const sandbox = { root, home, local, cosmic, env, mind: path.join(cosmic, 'onem1nd'), legacyPath: null, joinPath: null, origin: path.join(root, 'origin') };
   if (legacy) {
-    sandbox.legacyPath = path.join(home, 'HIVEM1ND');
+    sandbox.legacyPath = path.join(home, 'HIVEM1ND'); // Historical: the 2.x source fixture retains its original package identity.
     await writeLegacyTree(sandbox.legacyPath, { sessions });
   }
   if (populated) {
-    sandbox.joinPath = path.join(root, 'shared', 'HIVEM1ND');
+    sandbox.joinPath = path.join(root, 'shared', 'ONEM1ND');
     await writePopulatedMind(sandbox.joinPath);
   }
   return sandbox;

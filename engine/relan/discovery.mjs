@@ -3,7 +3,7 @@ import { networkInterfaces } from 'node:os';
 import { CoreError, validateMachineName } from '../service/identity.mjs';
 import { eligibleAddresses, isRelanAddress, parsePeerAddress } from './addresses.mjs';
 
-const FORMAT = 'hivem1nd-relan-v1';
+const FORMAT = 'hivem1nd-relan-v1'; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
 const FIELDS = ['epoch', 'format', 'host', 'port', 'relanId'];
 
 export function parseDiscovery(bytes) {

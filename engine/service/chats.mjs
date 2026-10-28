@@ -95,7 +95,7 @@ export async function postChat(context, chatId, input) {
   const notices = fanoutFor(message, message.projected.recipientIds, fromId);
   const relative = `user/relay/chats/${chatId}/${message.id}.md`;
   const fanout = `user/relay/fanout/${message.id}.json`;
-  const fanoutBytes = Buffer.from(`${canonicalJson({ format: 'hivem1nd-fanout-v1', messageId: message.id, notices })}\n`);
+  const fanoutBytes = Buffer.from(`${canonicalJson({ format: 'hivem1nd-fanout-v1', messageId: message.id, notices })}\n`); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   await charge(context, message.id, message.bytes);
   context.receiptBody = { message: message.projected, notifications: notices.map(({ unitId, state }) => ({ unitId, state })) };
   context.receiptStatus = 201;
@@ -139,7 +139,7 @@ export async function postMailbox(context, unitId, input) {
   const notices = fanoutFor(message, [unitId], author(context));
   await commitMany(context, [
     { relative: file, before: null, bytes: message.bytes },
-    { relative: `user/relay/fanout/${message.id}.json`, before: null, bytes: Buffer.from(`${canonicalJson({ format: 'hivem1nd-fanout-v1', messageId: message.id, notices })}\n`) },
+    { relative: `user/relay/fanout/${message.id}.json`, before: null, bytes: Buffer.from(`${canonicalJson({ format: 'hivem1nd-fanout-v1', messageId: message.id, notices })}\n`) }, // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   ], [
     { name: 'message.created', data: { chatId: null, mailboxId: unitId, message: message.projected } },
   ]);
@@ -172,7 +172,7 @@ export async function readChat(context, chatId, input) {
     }
   }
   const receiptId = randomUUID();
-  const record = { format: 'hivem1nd-chat-read-v1', chatId, unitId: reader, machine: context.paths.machine, messageIds: ids, at: stamp(context) };
+  const record = { format: 'hivem1nd-chat-read-v1', chatId, unitId: reader, machine: context.paths.machine, messageIds: ids, at: stamp(context) }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   const relative = `user/relay/chats/${chatId}/read/${Buffer.from(reader).toString('base64url')}/${context.paths.machine}/${receiptId}.json`;
   let deliveries;
   const unread = await unreadChat(context, chatId, reader, ids, view);
@@ -238,7 +238,7 @@ export async function readMailbox(context, unitId, input) {
     bytes: item.bytes,
   }));
   const journal = {
-    format: 'hivem1nd-mailbox-read-v1',
+    format: 'hivem1nd-mailbox-read-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     id: batchId,
     unitId: parsed.id,
     machine: context.paths.machine,
@@ -246,13 +246,13 @@ export async function readMailbox(context, unitId, input) {
     archives: entries.map((item) => item.relative),
   };
   entries.push({ relative: `user/relay/mailbox-reads/${batchId}.json`, before: null, bytes: Buffer.from(`${canonicalJson(journal)}\n`) });
-  const receipt = { format: 'hivem1nd-mailbox-receipt-v1', unitId: author(context), mailboxId: parsed.id, messageIds: moving.map((item) => item.id), at: stamp(context) };
+  const receipt = { format: 'hivem1nd-mailbox-receipt-v1', unitId: author(context), mailboxId: parsed.id, messageIds: moving.map((item) => item.id), at: stamp(context) }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   entries.push({ relative: `user/relay/archive/by-unit/${Buffer.from(parsed.id).toString('base64url')}/read/${batchId}.json`, before: null, bytes: Buffer.from(`${canonicalJson(receipt)}\n`) });
   for (const item of moving) {
     entries.push({
       relative: `user/relay/tombstones/${item.id}.json`,
       before: null,
-      bytes: Buffer.from(`${canonicalJson({ format: 'hivem1nd-tombstone-v1', id: item.id, unitId: parsed.id, machine: context.paths.machine, source: item.relative })}\n`),
+      bytes: Buffer.from(`${canonicalJson({ format: 'hivem1nd-tombstone-v1', id: item.id, unitId: parsed.id, machine: context.paths.machine, source: item.relative })}\n`), // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     });
   }
   const unread = Math.max(0, (await inboxCount(context, parsed)) - moving.length);
@@ -267,7 +267,7 @@ export async function queueNotice(context, notice) {
   const key = `${notice.messageId}:${notice.unitId}`;
   const relative = `user/relay/fanout/${notice.messageId}.json`;
   const current = await readBytes(context.store, absolute(context, relative));
-  const parsed = current ? JSON.parse(current.toString('utf8')) : { format: 'hivem1nd-fanout-v1', messageId: notice.messageId, notices: [] };
+  const parsed = current ? JSON.parse(current.toString('utf8')) : { format: 'hivem1nd-fanout-v1', messageId: notice.messageId, notices: [] }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   const existing = parsed.notices.find((item) => item.key === key);
   if (existing) return existing;
   parsed.notices.push({ key, unitId: notice.unitId, state: notice.state ?? 'pending', resourceId: notice.resourceId ?? notice.messageId,
@@ -395,7 +395,7 @@ async function builtInNotice(context, notice) {
     // Starting the session runs behind the answer, so sending a message never waits for an agent to start.
     if (chat.kind === 'direct' && context.chatAutoStart !== false) setTimeout(() => {
       withoutLocalChanges(() => startOnMessage({ ...context, receipt: null }, notice.unitId))
-        .catch((error) => { process.stderr.write(`HIVEM1ND: ${notice.unitId} did not start on its message: ${error?.code ?? 'error'} ${error?.message ?? ''}\n`); });
+        .catch((error) => { process.stderr.write(`ONEM1ND: ${notice.unitId} did not start on its message: ${error?.code ?? 'error'} ${error?.message ?? ''}\n`); });
     }, 0).unref?.();
     return { state: outcome?.state ?? 'submitted', error: null };
   } catch (error) {
@@ -436,7 +436,7 @@ async function rememberNotice(context, notice) {
   const current = await readBytes(context.store, absolute(context, relative));
   const record = {
     ...(current ? JSON.parse(current.toString('utf8')) : {}),
-    format: 'hivem1nd-notice-v1',
+    format: 'hivem1nd-notice-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     key: notice.key,
     messageId: notice.resourceId ?? notice.key.split(':')[0],
     recipientId: notice.unitId,

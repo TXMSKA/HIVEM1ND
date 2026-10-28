@@ -149,7 +149,7 @@ test('the 255-member limit includes master only in the linked chat and corrupt g
   assert.equal(group.members.length, 255);
   assert.equal((await projectChat(context, group.id)).members.length, 256);
   const id = randomUUID();
-  await writeFile(groupFile(context, id), JSON.stringify({ format: 'hivem1nd-group-v1', id, chatId: id, members: ['root:one'], deleted: false }));
+  await writeFile(groupFile(context, id), JSON.stringify({ format: 'hivem1nd-group-v1', id, chatId: id, members: ['root:one'], deleted: false })); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   const view = await readProjection(context);
   assert.equal(view.groups.length, 1);
   assert.ok(view.issues.some((issue) => issue.path.endsWith(`${id}.json`) && issue.code === 'corrupt_resource'));

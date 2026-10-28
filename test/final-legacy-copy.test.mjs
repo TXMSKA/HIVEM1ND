@@ -6,7 +6,7 @@ import test from 'node:test';
 import { copyLegacyTree } from '../engine/legacy-copy.mjs';
 
 test('legacy copying preserves source bytes and timestamps and refuses an existing target', async (t) => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-copy-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-copy-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const source = path.join(root, 'legacy');
   const destination = path.join(root, 'copy');

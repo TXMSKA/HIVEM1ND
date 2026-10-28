@@ -502,11 +502,11 @@ test('worker leases and locks live in a machine-local folder keyed by the mind, 
 test('the machine-local folder follows the profile on Windows, XDG_STATE_HOME elsewhere and the override, keyed by the mind path', () => {
   const key = (value) => createHash('sha256').update(value).digest('hex').slice(0, 16);
   assert.equal(relayLocalStatePath('C:\\Mind\\Shared', { env: { USERPROFILE: 'C:\\Users\\tom', LOCALAPPDATA: 'C:\\Users\\tom\\AppData\\Local\\Packages\\App\\LocalCache\\Local' }, platform: 'win32', homeDir: 'C:\\Users\\other' }),
-    `C:\\Users\\tom\\.hivem1nd-relay\\${key('c:\\mind\\shared')}`);
-  assert.equal(relayLocalStatePath('C:\\mind', { env: {}, platform: 'win32', homeDir: 'C:\\Users\\tom' }), `C:\\Users\\tom\\.hivem1nd-relay\\${key('c:\\mind')}`);
-  assert.equal(relayLocalStatePath('/home/tom/mind', { env: { XDG_STATE_HOME: '/var/state' }, platform: 'linux', homeDir: '/home/tom' }), `/var/state/hivem1nd/relay/${key('/home/tom/mind')}`);
-  assert.equal(relayLocalStatePath('/home/tom/mind', { env: { XDG_STATE_HOME: 'relative' }, platform: 'linux', homeDir: '/home/tom' }), `/home/tom/.local/state/hivem1nd/relay/${key('/home/tom/mind')}`);
-  assert.equal(relayLocalStatePath('/mind', { env: {}, platform: 'darwin', homeDir: '/Users/tom' }), `/Users/tom/.local/state/hivem1nd/relay/${key('/mind')}`);
+    `C:\\Users\\tom\\.hivem1nd-relay\\${key('c:\\mind\\shared')}`); // Compatibility: machine-local leases and holders retain their cache identity.
+  assert.equal(relayLocalStatePath('C:\\mind', { env: {}, platform: 'win32', homeDir: 'C:\\Users\\tom' }), `C:\\Users\\tom\\.hivem1nd-relay\\${key('c:\\mind')}`); // Compatibility: machine-local leases and holders retain their cache identity.
+  assert.equal(relayLocalStatePath('/home/tom/mind', { env: { XDG_STATE_HOME: '/var/state' }, platform: 'linux', homeDir: '/home/tom' }), `/var/state/hivem1nd/relay/${key('/home/tom/mind')}`); // Compatibility: machine-local leases and holders retain their cache identity.
+  assert.equal(relayLocalStatePath('/home/tom/mind', { env: { XDG_STATE_HOME: 'relative' }, platform: 'linux', homeDir: '/home/tom' }), `/home/tom/.local/state/hivem1nd/relay/${key('/home/tom/mind')}`); // Compatibility: machine-local leases and holders retain their cache identity.
+  assert.equal(relayLocalStatePath('/mind', { env: {}, platform: 'darwin', homeDir: '/Users/tom' }), `/Users/tom/.local/state/hivem1nd/relay/${key('/mind')}`); // Compatibility: machine-local leases and holders retain their cache identity.
   assert.equal(relayLocalStatePath('/mind', { env: { RELAY_LOCAL_STATE_DIR: '/tmp/relay-test' }, platform: 'linux', homeDir: '/home/tom' }), `/tmp/relay-test/${key('/mind')}`);
   assert.notEqual(relayLocalStatePath('/mind-a', { env: {}, platform: 'linux', homeDir: '/h' }), relayLocalStatePath('/mind-b', { env: {}, platform: 'linux', homeDir: '/h' }));
 });

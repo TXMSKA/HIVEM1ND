@@ -18,7 +18,7 @@ import {
 } from '../engine/records.mjs';
 
 async function temporaryMind(t) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-records-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-records-'));
   t.after(() => rm(root, { recursive: true, force: true, maxRetries: 3 }));
   const mindPath = path.join(root, 'mind');
   await mkdir(path.join(mindPath, 'user', 'machines'), { recursive: true });
@@ -108,7 +108,7 @@ test('an install moves a machine file written with the Managed Files section to 
   const homeDir = path.join(root, 'home');
   const env = { ...process.env, CODEX_HOME: path.join(homeDir, '.codex') };
   await mkdir(path.join(kitPath, 'roles'), { recursive: true });
-  await writeFile(path.join(kitPath, 'package.json'), `${JSON.stringify({ name: 'hivem1nd-test', version: '1.0.0' })}\n`);
+  await writeFile(path.join(kitPath, 'package.json'), `${JSON.stringify({ name: 'onem1nd-test', version: '1.0.0' })}\n`);
   await writeFile(path.join(kitPath, 'roles', 'executor.md'), '---\nname: executor\ndescription: Executor\n---\n\n# /executor\n');
   const filePath = machineRecordPath(mindPath, 'BOX');
   await writeFile(filePath, `machine: BOX\nmind: ${mindPath}\nlanguage: en\nupdate-check: off\nlast-check: \nsetup: done\n\n## Agents\n- codex: on-demand\n\n## Paths\n\n## Excluded\n`);

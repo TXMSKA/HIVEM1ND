@@ -21,7 +21,7 @@ const start = (mode = 'normal', model = 'lyra-base', fellBack = false) => ({ typ
 const stream = events => new Response(events.map(event => typeof event === 'string' ? event : JSON.stringify(event)).join('\n') + '\n', { headers: { 'content-type': 'application/x-ndjson' } });
 
 function transport() {
-  const state = { calls: [], app: { id: 'hivem1nd', name: 'HIVEM1ND', kind: 'app', status: 'granted', scopes: ['chat', 'models', 'tools'] },
+  const state = { calls: [], app: { id: 'hivem1nd', name: 'ONEM1ND', kind: 'app', status: 'granted', scopes: ['chat', 'models', 'tools'] }, // Compatibility: Lyra app grants retain their registered identity.
     status: models(), port: 8171, token: undefined, reads: 0, stream: () => stream([start(), { type: 'text', text: 'Ready' }, { type: 'done' }]) };
   state.options = {
     discover: async () => { state.reads++; return state.offline ? null : { home: 'fixture-lyra-' + state.id, port: state.port, pid: 7777, startedAt: '2026-10-14T00:00:00Z' }; },
@@ -53,7 +53,7 @@ test('application registration is exact and pending, revoked, missing scopes and
   const state = transport(), adapter = openLyraAdapter(state.options); t.after(() => adapter.close());
   state.app.status = 'pending';
   assert.equal((await adapter.describe()).availability, 'lyra_pending');
-  assert.deepEqual(state.calls[0].body, { id: 'hivem1nd', name: 'HIVEM1ND', kind: 'app' });
+  assert.deepEqual(state.calls[0].body, { id: 'hivem1nd', name: 'ONEM1ND', kind: 'app' }); // Compatibility: Lyra app grants retain their registered identity.
   state.app.status = 'revoked'; assert.equal((await adapter.describe()).availability, 'lyra_revoked');
   state.app.status = 'granted'; state.app.scopes = ['chat', 'models'];
   assert.equal((await adapter.describe()).availability, 'lyra_scopes_required');

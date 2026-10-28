@@ -170,7 +170,7 @@ export function mindKey(mindPath) {
 }
 
 export function localDirectory(mindPath, machine = LOCAL_MACHINE) {
-  return join(dirname(mindPath), "hivem1nd-service", mindKey(mindPath), machine);
+  return join(dirname(mindPath), "onem1nd-service", mindKey(mindPath), machine);
 }
 
 export function isInsideRoot(rootReal, targetReal) {
@@ -193,10 +193,10 @@ export async function removeOwned(root, target) {
 }
 
 export async function createFixtureTree() {
-  const root = await mkdtemp(join(tmpdir(), "hivem1nd-gui-"));
-  const mind = join(root, "Cosmic", "hivem1nd");
+  const root = await mkdtemp(join(tmpdir(), "onem1nd-gui-"));
+  const mind = join(root, "Cosmic", "onem1nd");
   const user = join(mind, "user");
-  const cosmicService = join(root, "Cosmic", "hivem1nd-service");
+  const cosmicService = join(root, "Cosmic", "onem1nd-service");
   const origin = join(root, "origin");
   const repo = join(root, "repositories", "shop");
   await mkdir(user, { recursive: true });
@@ -289,12 +289,12 @@ export function scenarioData(size, scenario = "standard", now = DEFAULT_NOW) {
   const empty = scenario === "empty";
   const firstRun = scenario === "first-run";
   const settings = {
-    format: "hivem1nd-settings-v1",
+    format: "hivem1nd-settings-v1", // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     look: scenario === "high-contrast" ? "high-contrast" : "modern",
     language: scenario === "spanish" ? "es" : "en",
   };
   const layout = {
-    format: "hivem1nd-layout-v1",
+    format: "hivem1nd-layout-v1", // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     nodes: {
       "root:master": { x: 380, y: 56 },
       "root:overseer": { x: 380, y: 160 },
@@ -433,7 +433,7 @@ export async function seedRecords(tree, options = {}) {
   }
 
   await writeOwned(paths, join(local, "config.json"), stableJson({
-    format: "hivem1nd-service-config-v1",
+    format: "hivem1nd-service-config-v1", // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     mindPath: tree.mind,
     machine: LOCAL_MACHINE,
     origin: { kind: "folder", path: tree.origin },
@@ -619,7 +619,7 @@ async function writeMail(paths, user, now) {
     body: "Already read.",
   }));
   await writeOwned(paths, join(user, "relay", "read", LOCAL_MACHINE, "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee2.json"), stableJson({
-    format: "hivem1nd-read-v1",
+    format: "hivem1nd-read-v1", // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     messageId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee2",
     unitId: "root:master",
     readAt: now,
@@ -646,7 +646,7 @@ async function writeApprovals(paths, user, now, scenario) {
   for (const [id, state, expiresAt, decision, result] of approvalSet(now, scenario)) {
     index += 1;
     const request = {
-      format: "hivem1nd-approval-v1",
+      format: "hivem1nd-approval-v1", // Compatibility: stored schemas and wire contracts retain their existing identifiers.
       id,
       unitId: "project:shop:executor-shop",
       sessionId: "20c58b80-4d93-88cd-83b3-39d78f1d9d5d",
@@ -662,7 +662,7 @@ async function writeApprovals(paths, user, now, scenario) {
     await writeOwned(paths, join(dir, "request.json"), stableJson(request));
     if (decision) {
       const answer = {
-        format: "hivem1nd-approval-answer-v1",
+        format: "hivem1nd-approval-answer-v1", // Compatibility: stored schemas and wire contracts retain their existing identifiers.
         id: deterministicUuid(["answer", id]),
         approvalId: id,
         decision,
@@ -672,7 +672,7 @@ async function writeApprovals(paths, user, now, scenario) {
       };
       await writeOwned(paths, join(dir, "answers", `${answer.id}.json`), stableJson(answer));
       await writeOwned(paths, join(dir, "answer-results", `${answer.id}.json`), stableJson({
-        format: "hivem1nd-approval-answer-result-v1",
+        format: "hivem1nd-approval-answer-result-v1", // Compatibility: stored schemas and wire contracts retain their existing identifiers.
         answerId: answer.id,
         approvalId: id,
         state: result === "approved" ? "applied" : result === "expired" ? "expired" : "rejected",
@@ -682,7 +682,7 @@ async function writeApprovals(paths, user, now, scenario) {
     }
     if (result) {
       await writeOwned(paths, join(dir, "result.json"), stableJson({
-        format: "hivem1nd-approval-result-v1",
+        format: "hivem1nd-approval-result-v1", // Compatibility: stored schemas and wire contracts retain their existing identifiers.
         approvalId: id,
         state: result,
         answerId: decision ? deterministicUuid(["answer", id]) : null,
@@ -723,7 +723,7 @@ async function writeMachines(paths, user, now, scenario) {
   const offlineBeat = new Date(Date.parse(now) - 3600_000).toISOString();
   const desktopBeat = scenario === "offline" ? offlineBeat : now;
   await writeOwned(paths, join(user, "machines", LOCAL_MACHINE, "service.json"), stableJson({
-    format: "hivem1nd-service-v1",
+    format: "hivem1nd-service-v1", // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     machine: LOCAL_MACHINE,
     state: "running",
     version: "3.0.0",
@@ -731,7 +731,7 @@ async function writeMachines(paths, user, now, scenario) {
     startedAt: new Date(Date.parse(now) - 3600_000).toISOString(),
   }));
   await writeOwned(paths, join(user, "machines", "OFFLINE", "service.json"), stableJson({
-    format: "hivem1nd-service-v1",
+    format: "hivem1nd-service-v1", // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     machine: "OFFLINE",
     state: "stopped",
     version: "3.0.0",
@@ -774,7 +774,7 @@ async function writeSessions(paths, user, local, now) {
   await writeOwned(paths, join(user, "relay", "sessions", `${live.registrationId}.json`), stableJson(live));
   await writeOwned(paths, join(user, "relay", "sessions", `${stopped.registrationId}.json`), stableJson(stopped));
   await writeOwned(paths, join(user, "relay", "session-status", stopped.sessionId, "status.json"), stableJson({
-    format: "hivem1nd-session-status-v1",
+    format: "hivem1nd-session-status-v1", // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     sessionId: stopped.sessionId,
     state: "stopped",
     machine: "OFFLINE",
@@ -1013,7 +1013,7 @@ export async function writeEditors(paths, tree, user, now) {
     }],
   }));
   await writeOwned(paths, join(user, "gui", "resources.json"), stableJson({
-    format: "hivem1nd-resources-v1",
+    format: "hivem1nd-resources-v1", // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     resources: [
       { id: boardId, kind: "blueprint", project: "shop", path: boardPath, legacyId: "cart" },
       { id: legacyId, kind: "blueprint", project: "shop", path: legacyPath, legacyId: "legacy-cart" },
@@ -1025,7 +1025,7 @@ export async function writeEditors(paths, tree, user, now) {
     [textId, "void", ["project:shop:executor-shop"]],
   ]) {
     await writeOwned(paths, join(user, "relay", "editors", `${id}.json`), stableJson({
-      format: "hivem1nd-editor-binding-v1",
+      format: "hivem1nd-editor-binding-v1", // Compatibility: stored schemas and wire contracts retain their existing identifiers.
       resourceId: id,
       kind,
       attached,

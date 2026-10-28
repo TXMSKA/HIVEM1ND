@@ -109,7 +109,7 @@ test('invalid worker readiness tears down the child and rejects without claiming
 });
 
 test('real child process sends auth and pointer over an isolated Windows named pipe', { skip: process.platform !== 'win32' }, async () => {
-  const pipePath = `\\\\.\\pipe\\hivem1nd-relay-test-${randomUUID()}\\scope\\session`;
+  const pipePath = `\\\\.\\pipe\\onem1nd-relay-test-${randomUUID()}\\scope\\session`;
   const token = `ephemeral-${randomUUID()}`;
   const nativeSessionId = `native-${randomUUID()}`;
   let resolveFrames;

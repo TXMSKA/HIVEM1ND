@@ -8,7 +8,7 @@ import { createAppTokenStore, protectLocalFile, verifyLocalPermissions } from '.
 import { atomicWrite, commitTransaction, readBytes, revisionOf } from './store.mjs';
 import { contextBootstrap } from './chats.mjs';
 
-const APP = Object.freeze({ id: 'hivem1nd', name: 'HIVEM1ND', kind: 'app' });
+const APP = Object.freeze({ id: 'hivem1nd', name: 'ONEM1ND', kind: 'app' }); // Compatibility: Lyra app identity preserves existing registrations, tokens and grants.
 const MODES = ['fast', 'normal', 'thinking'];
 const alias = name => typeof name === 'string' ? name.replace(/:latest$/, '') : '';
 const fail = (code, status = 503) => { throw new CoreError(status, code, code === 'unsupported_launch_choice'

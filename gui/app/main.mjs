@@ -107,7 +107,7 @@ const RECOVERY_COPY = {
   stopped: ['The Relay service stopped on {machine}.', 'El servicio Relay se detuvo en {machine}.'],
   details: ['Details', 'Detalles'],
   restart: ['Restart service', 'Reiniciar el servicio'],
-  instructions: ['Reopen HIVEM1ND on this machine, or run: {command}', 'Volver a abrir HIVEM1ND en esta máquina o ejecutar: {command}'],
+  instructions: ['Reopen ONEM1ND on this machine, or run: {command}', 'Volver a abrir ONEM1ND en esta máquina o ejecutar: {command}'],
   unavailable: ['The service connection could not be restored. Your work is kept.', 'No se pudo restablecer la conexión con el servicio. El trabajo se conserva.'],
 };
 
@@ -203,7 +203,7 @@ const OPENING_COPY = {
   read: ["Reading", "Leyendo"],
   notRead: ["M1ND not read", "M1ND sin leer"],
   stoppedTitle: ["The service stopped", "El servicio se detuvo"],
-  stopped: ["HIVEM1ND is not answering on this machine. Reopen HIVEM1ND, or run: {command}", "HIVEM1ND no responde en esta máquina. Volver a abrir HIVEM1ND o ejecutar: {command}"],
+  stopped: ["ONEM1ND is not answering on this machine. Reopen ONEM1ND, or run: {command}", "ONEM1ND no responde en esta máquina. Volver a abrir ONEM1ND o ejecutar: {command}"],
 };
 
 function openingText(app, key, variables = {}) {
@@ -236,7 +236,7 @@ export function presentation(viewer, settings) {
 // already kept is used; otherwise the browser's first language, Spanish when that is es-*.
 export function knownLanguage(storage, languages) {
   let stored = null;
-  try { stored = storage?.getItem?.("hivem1nd:language") ?? null; } catch { stored = null; }
+  try { stored = storage?.getItem?.("hivem1nd:language") ?? null; } catch { stored = null; } // Compatibility: retain persisted viewer preferences and the preload bridge identity.
   if (stored === "es" || stored === "en") return stored;
   const first = String(Array.isArray(languages) ? languages[0] ?? "" : "").toLowerCase();
   return first.startsWith("es") ? "es" : "en";
@@ -250,7 +250,7 @@ function browserLanguages(env, document) {
 function applyChoice(app, choice) {
   app.look = LOOK_IDS.includes(choice.look) ? choice.look : "modern";
   app.language = choice.language === "es" ? "es" : "en";
-  try { app.startStorage?.setItem("hivem1nd:language", app.language); } catch { /* Storage can be unavailable in a private viewer. */ }
+  try { app.startStorage?.setItem("hivem1nd:language", app.language); } catch { /* Storage can be unavailable in a private viewer. */ } // Compatibility: retain persisted viewer preferences and the preload bridge identity.
 }
 
 export function shellLayout(capabilities, audience) {
@@ -294,7 +294,7 @@ export async function mount(root, env = globalThis) {
     selectedFolder: env.mindPath ?? new URLSearchParams(api.location.search ?? "").get("mind") ?? "",
     chooseFolder: env.chooseFolder ?? null,
     startStorage: env.storage ?? viewStorage(document),
-    recovery: env.recovery ?? ((env.hivem1nd ?? globalThis.hivem1nd)?.recoverService ? (env.hivem1nd ?? globalThis.hivem1nd) : null),
+    recovery: env.recovery ?? ((env.hivem1nd ?? globalThis.hivem1nd)?.recoverService ? (env.hivem1nd ?? globalThis.hivem1nd) : null), // Compatibility: retain persisted viewer preferences and the preload bridge identity.
   };
   // Slow actions run here in the background, one after another; their notices and the bell's list draw from it.
   app.queue = createQueue({ now: () => api.now(), onChange: () => {
@@ -572,11 +572,11 @@ function paintShell(app) {
   const empty = !opening && emptyMind(app);
   const shell = element(document, "div", { class: `shell${opening ? " shell-opening" : empty ? " shell-empty" : ""}`, "data-layout": app.layout === "phone" ? "phone" : "desktop", "data-mode": app.mode, "data-tab": app.tab, "data-boot": opening ? app.bootFailed ? "failed" : "reading" : "ready" });
   const heading = viewTitle(app, t);
-  document.title = `${heading} · HIVEM1ND`;
+  document.title = `${heading} · ONEM1ND`;
   const workspace = renderWorkspace(app, t, view, counts);
   workspace.setAttribute("id", "workspace");
   workspace.setAttribute("tabindex", "-1");
-  if (app.layout === 'phone') shell.append(element(document, 'div', { class: 'phone-status' }, element(document, 'span', { text: formatClock(app.language, app.api.now()) }), 'HIVEM1ND'));
+  if (app.layout === 'phone') shell.append(element(document, 'div', { class: 'phone-status' }, element(document, 'span', { text: formatClock(app.language, app.api.now()) }), 'ONEM1ND'));
   shell.append(
     element(document, "a", { class: "skip", href: "#workspace", text: t("skipToContent"), onclick: () => app.root.querySelector("[id='workspace']")?.focus() }),
     element(document, "h1", { class: "sr", text: heading }),
@@ -1506,13 +1506,13 @@ function openingViewRecord(view) {
 function rememberOpeningView(app) {
   const record = openingViewRecord(app.store.view);
   if (!record) return;
-  try { app.startStorage?.setItem("hivem1nd:opening-view", JSON.stringify(record)); } catch { /* Storage can be unavailable in a private viewer. */ }
+  try { app.startStorage?.setItem("hivem1nd:opening-view", JSON.stringify(record)); } catch { /* Storage can be unavailable in a private viewer. */ } // Compatibility: retain persisted viewer preferences and the preload bridge identity.
 }
 
 function restoreOpeningView(app) {
   if (app.store.view?.counts) return;
   let parsed = null;
-  try { parsed = JSON.parse(app.startStorage?.getItem?.("hivem1nd:opening-view") ?? "null"); } catch { parsed = null; }
+  try { parsed = JSON.parse(app.startStorage?.getItem?.("hivem1nd:opening-view") ?? "null"); } catch { parsed = null; } // Compatibility: retain persisted viewer preferences and the preload bridge identity.
   const record = openingViewRecord(parsed);
   if (record) app.store.view = record;
 }
@@ -1526,7 +1526,7 @@ function openingWorkspace(app, t) {
     const path = app.selectedFolder || "M1ND";
     // A stopped service is said to be stopped, with how to open it again; only a service that is up but slow reads as a slow drive.
     content.append(element(document, "h2", { text: openingText(app, app.bootStopped ? "stoppedTitle" : "failure") }));
-    const command = `hivem1nd service install${app.selectedFolder ? ` --mind-path "${String(app.selectedFolder).replace(/[\p{Cc}"]/gu, "")}"` : ""}`;
+    const command = `onem1nd service install${app.selectedFolder ? ` --mind-path "${String(app.selectedFolder).replace(/[\p{Cc}"]/gu, "")}"` : ""}`;
     const cause = app.bootStopped ? openingText(app, "stopped", { command })
       : app.bootError?.code === "timeout" ? openingText(app, "timeout", { path }) : `${path}: ${safeOpeningCause(app)}`;
     content.append(element(document, "p", { "data-opening-cause": "true", text: cause }));
@@ -4273,7 +4273,7 @@ function refreshPermissions(app) {
 
 function rememberOverseerOffer(app) {
   app.overseerOffered = true;
-  try { app.startStorage?.setItem(`hivem1nd:overseer:${app.selectedFolder}`, 'dismissed'); } catch { /* Storage can be unavailable in a private viewer. */ }
+  try { app.startStorage?.setItem(`hivem1nd:overseer:${app.selectedFolder}`, 'dismissed'); } catch { /* Storage can be unavailable in a private viewer. */ } // Compatibility: retain persisted viewer preferences and the preload bridge identity.
 }
 
 function overseerListed(units) {
@@ -4314,7 +4314,7 @@ export function maybeStartDiscovery(app) {
   }
   const exists = overseerExists(app);
   let dismissed = app.overseerOffered;
-  try { dismissed ||= app.startStorage?.getItem(`hivem1nd:overseer:${app.selectedFolder}`) === 'dismissed'; } catch { /* In-memory dismissal still applies. */ }
+  try { dismissed ||= app.startStorage?.getItem(`hivem1nd:overseer:${app.selectedFolder}`) === 'dismissed'; } catch { /* In-memory dismissal still applies. */ } // Compatibility: retain persisted viewer preferences and the preload bridge identity.
   if (!exists && !dismissed) openStartAgent(app, null, true);
 }
 
@@ -5893,7 +5893,7 @@ function restartSelectedService(app, machine) {
 function showServiceDetails(app) {
   const document = app.root.ownerDocument;
   const path = String(app.selectedFolder ?? '').replace(/[\r\n"\u0000]/g, '');
-  const command = `hivem1nd service install${path ? ` --mind-path "${path}"` : ''}`;
+  const command = `onem1nd service install${path ? ` --mind-path "${path}"` : ''}`;
   const dialog = showDialog(document, { title: recoveryText(app, 'details'), body: recoveryText(app, 'unavailable'), cancel: text(app.language, 'close') });
   dialog.setAttribute('data-service-details', 'true');
   dialog.append(element(document, 'p', { text: recoveryText(app, 'instructions', { command }) }));
@@ -7163,7 +7163,7 @@ function renderSignedOut(app) {
   // open the app again instead of being asked for a phone code.
   if (/^\/gui\/[^/]+/.test(String(app.api.location?.pathname ?? '')) && !app.api.homeKey) {
     const gate = element(document, 'section', { class: 'gate desktop-gate', 'data-desktop-signed-out': 'true' });
-    document.title = `${t('desktopReopenTitle')} · HIVEM1ND`;
+    document.title = `${t('desktopReopenTitle')} · ONEM1ND`;
     gate.append(element(document, 'div', { class: 'phone-gate-content' }, brand(document).querySelector('.mark'),
       element(document, 'h1', { text: t('desktopReopenTitle') }), element(document, 'p', { role: 'status', text: t('desktopReopenBody') })));
     app.root.replaceChildren(gate);
@@ -7173,14 +7173,14 @@ function renderSignedOut(app) {
   const locked = app.phoneLockDeadline > app.api.now();
   const state = app.phoneEnded ? 'ended' : locked ? 'locked' : app.phoneError === 'phoneCodeMismatch' ? 'error' : 'pair';
   const gate = element(document, "section", { class: "gate phone-gate", "data-phone-state": state });
-  gate.append(element(document, 'header', { class: 'phone-status' }, element(document, 'span', { text: formatClock(app.language, app.api.now()) }), 'HIVEM1ND'));
+  gate.append(element(document, 'header', { class: 'phone-status' }, element(document, 'span', { text: formatClock(app.language, app.api.now()) }), 'ONEM1ND'));
   const content = element(document, 'div', { class: 'phone-gate-content', id: 'phone-gate-workspace', tabindex: '-1' });
   gate.append(element(document, 'a', { class: 'skip', href: '#phone-gate-workspace', text: t('skipToContent'), onclick: () => content.focus() }));
   if (state === 'locked' || state === 'ended') {
     const title = state === 'locked' ? 'phonePairingLocked' : 'phoneAccessEnded';
     const stateIcon = icon(document, 'alert');
     if (state === 'ended') stateIcon.querySelector('path').setAttribute('d', 'M3 9a15 15 0 0 1 18 0M6 12a10 10 0 0 1 12 0M9 15a5 5 0 0 1 6 0M12 18h.01');
-    document.title = `${t(title)} · HIVEM1ND`;
+    document.title = `${t(title)} · ONEM1ND`;
     content.append(element(document, 'div', { class: 'phone-state-icon' }, stateIcon),
       element(document, 'h1', { text: t(title) }), element(document, 'p', { text: t(`${title}Body`), role: 'status' }));
     if (locked) {
@@ -7192,7 +7192,7 @@ function renderSignedOut(app) {
       app.phoneEnded = false; app.phoneError = null; app.phoneLockedUntil = null; renderSignedOut(app); app.root.querySelector('[data-home-code]')?.focus();
     } }));
   } else {
-    document.title = `${t('phoneOpenMind')} · HIVEM1ND`;
+    document.title = `${t('phoneOpenMind')} · ONEM1ND`;
     content.append(brand(document).querySelector('.mark'), element(document, 'h1', { text: t('phoneOpenMind') }),
       element(document, 'p', { id: 'phone-code-guidance', text: t('phoneCodePrompt') }));
     const feedback = element(document, 'div', { class: 'phone-code-feedback', id: 'phone-code-error', role: app.phoneError ? 'alert' : null, 'aria-atomic': 'true' });
@@ -7405,7 +7405,7 @@ function brand(document) {
   two.setAttribute("class", "two");
   two.setAttribute("d", "M30 18 42 25 42 39 30 46 18 39 18 25 Z");
   svg.append(one, two);
-  return element(document, "div", { class: "brand" }, svg, element(document, "span", { class: "brand-name", text: "HIVEM1ND" }));
+  return element(document, "div", { class: "brand" }, svg, element(document, "span", { class: "brand-name", text: "ONEM1ND" }));
 }
 
 function syncCopy(sync) {

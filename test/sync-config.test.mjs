@@ -29,7 +29,7 @@ test('transport kinds validate with a local mirror and retain the Cosmic default
     });
     assert.equal(configured.status, 'planned');
     assert.deepEqual(configured.state.configBody.origin, {
-      kind, path: path.join(fixture.paths.cosmic, 'hivem1nd-origin', fixture.paths.mindKey),
+      kind, path: path.join(fixture.paths.cosmic, 'onem1nd-origin', fixture.paths.mindKey),
     });
   }
   assert.throws(() => bootstrapConfig({ ...configOf(fixture), origin: { kind: 'quantum', path: path.join(fixture.root, 'origin') } }), { code: 'invalid_body' });

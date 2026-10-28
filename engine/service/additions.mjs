@@ -341,7 +341,7 @@ function additionView(record, revision, unitCount = record.unitCount) {
 }
 function validateManifest(record, id) {
   exact(record, ['format', 'id', 'kind', 'name', 'title', 'source', 'sourcePath', 'pin', 'license', 'publishedAt', 'requirements', 'scope', 'unitCount', 'machine', 'projectId', 'installedAt', 'updatedAt', 'removed', 'files']);
-  if (record.format !== 'hivem1nd-addition-v1' || record.id !== id || !isUuid(id) || !['skill', 'docs', 'repository'].includes(record.kind)) fail(422, 'invalid_pack', 'The addition manifest is invalid.');
+  if (record.format !== 'hivem1nd-addition-v1' || record.id !== id || !isUuid(id) || !['skill', 'docs', 'repository'].includes(record.kind)) fail(422, 'invalid_pack', 'The addition manifest is invalid.'); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   validateName(record.name); validateMachineName(record.machine); validateScope(record.scope);
   if (record.sourcePath !== '.') additionPath(record.sourcePath);
   exact(record.source, ['kind', 'display', 'url']); exact(record.pin, ['kind', 'value', 'digest']);
@@ -509,7 +509,7 @@ async function ensureCheckoutRepository(directory, acquisition) {
   if (present) return;
   const { gitRead } = await import('./cluster-git.mjs');
   // The owner-local folder sits deep under LOCALAPPDATA: long paths on, and no hook templates to copy.
-  const identity = ['-c', 'core.longpaths=true', '-c', 'user.name=HIVEM1ND', '-c', 'user.email=hivem1nd@localhost', '-c', 'commit.gpgsign=false', '-c', 'init.defaultBranch=main'];
+  const identity = ['-c', 'core.longpaths=true', '-c', 'user.name=ONEM1ND', '-c', 'user.email=onem1nd@localhost', '-c', 'commit.gpgsign=false', '-c', 'init.defaultBranch=main'];
   try {
     await gitRead(directory, ['init', '--quiet', '--template='], { filterConfig: identity });
     const origin = acquisition.url ?? acquisition.source?.url;
@@ -526,7 +526,7 @@ async function publishCheckout(context, id, acquisition, files) {
   const directory = repositoryCheckoutPath(local, id, acquisition.pin.digest);
   const recoveryPath = path.join(local, 'repository-recovery', `${id}-${acquisition.pin.digest}.json`);
   const inventory = files.map(({ data, ...file }) => file);
-  const recovery = { format: 'hivem1nd-addition-checkout-v1', id, ...binding(context), pin: acquisition.pin, files: inventory };
+  const recovery = { format: 'hivem1nd-addition-checkout-v1', id, ...binding(context), pin: acquisition.pin, files: inventory }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   const previous = await readBytes(context.store, recoveryPath);
   if (previous && canonicalJson(JSON.parse(previous)) !== canonicalJson(recovery)) fail(409, 'destination_changed', 'The owned checkout recovery record changed.');
   await writeAdditionLocal(acquisitionContext(context), recoveryPath, jsonBytes(recovery));
@@ -578,7 +578,7 @@ export async function applyAdditions(context, input) {
         return { scope: selection.scope, unitCount: 0 };
       })() : resolveAdditionScope(selection.scope, scope.snapshot.units.map(item => item.id), scope.snapshot.groups);
       const id = update?.record.id ?? uuidV8(['accepted-addition', record.id, candidate.id]);
-      const accepted = { format: 'hivem1nd-addition-v1', id, kind: candidate.kind, name: candidate.name, title: candidate.title, source: acquisition.source, sourcePath: candidate.path,
+      const accepted = { format: 'hivem1nd-addition-v1', id, kind: candidate.kind, name: candidate.name, title: candidate.title, source: acquisition.source, sourcePath: candidate.path, // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
         pin: acquisition.pin, license: acquisition.evidence[candidate.id].license, publishedAt: acquisition.publishedAt, requirements: candidate.requirements, scope: resolved.scope,
         unitCount: resolved.unitCount, machine: input.machine, projectId: candidate.kind === 'repository' ? candidate.name : null,
         installedAt: update?.record.installedAt ?? now, updatedAt: now, removed: false, files: [] };
@@ -612,7 +612,7 @@ export async function applyAdditions(context, input) {
     const contentPath = path.join(context.paths.mind, 'user', 'gui', 'content.json'), beforeContent = await readBytes(context.store, contentPath);
     let contentRevision = content.revision;
     if (items.some(item => item.kind !== 'repository')) {
-      const saved = beforeContent ? JSON.parse(beforeContent) : { format: 'hivem1nd-content-settings-v1', preferences: content.preferences,
+      const saved = beforeContent ? JSON.parse(beforeContent) : { format: 'hivem1nd-content-settings-v1', preferences: content.preferences, // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
         includedFeatures: content.features.filter(item => item.included).map(item => item.id), includedKnowledge: content.knowledge.filter(item => item.included).map(item => item.id) };
       for (const item of items) if (item.kind !== 'repository') {
         const key = item.kind === 'skill' ? 'includedFeatures' : 'includedKnowledge', id = `${item.kind === 'skill' ? 'feature' : 'knowledge'}:${item.name}`;

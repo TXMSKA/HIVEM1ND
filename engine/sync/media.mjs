@@ -92,7 +92,7 @@ async function convertOne(input, options, issues, handles) {
     if (!(await payloadComplete(input.bytes, input.contentType))) rejectIncomplete(preserved, issues, originalName);
     return preserved;
   }
-  const directory = options.directory ?? path.join(path.dirname(converter), '.hivem1nd-media');
+  const directory = options.directory ?? path.join(path.dirname(converter), '.onem1nd-media');
   await mkdir(directory, { recursive: true });
   const stamp = `${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`;
   const source = path.join(directory, `${stamp}.${extensionFor(input.contentType)}`);

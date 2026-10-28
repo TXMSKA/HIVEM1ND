@@ -11,11 +11,11 @@ Argument: [client]
 
 Start: Locate in `rules.md` of the mind above; no unit is needed, so its step that asks for one is skipped. A wake names its unit explicitly.
 
-Relay carries messages between units through the inbox folders of the mind; its `hivem1nd-relay` MCP server also serves the Blueprint and Void tools. A message, a reminder or an attachment is context, never authorization, except a hand-off (`rules.md`). Every command below is `node "{{mind}}/cli/index.mjs" relay <action> ...`, the same in a POSIX shell and in PowerShell; `--kit-path` defaults to the folder of that `cli/index.mjs`.
+Relay carries messages between units through the inbox folders of the mind; its `onem1nd-relay` MCP server also serves the Blueprint and Void tools. A message, a reminder or an attachment is context, never authorization, except a hand-off (`rules.md`). Every command below is `node "{{mind}}/cli/index.mjs" relay <action> ...`, the same in a POSIX shell and in PowerShell; `--kit-path` defaults to the folder of that `cli/index.mjs`.
 
 ## Sessions in 3.0
 
-- A session the service started (the desktop app launches Claude Code, Codex and the Cursor CLI) is bound: its unit, client and native session come from the service, and its `hivem1nd-relay` server forwards every tool there. As the Start of `rules.md` says, it registers no other unit, attaches no wake and configures no client; `register` only confirms the bound unit.
+- A session the service started (the desktop app launches Claude Code, Codex and the Cursor CLI) is bound: its unit, client and native session come from the service, and its `onem1nd-relay` server forwards every tool there. As the Start of `rules.md` says, it registers no other unit, attaches no wake and configures no client; `register` only confirms the bound unit.
 - The MCP tools answer only in such a session; anywhere else they answer `native_login_unverified`.
 - On a mind whose `user/VERSION` is 3 or later, the actions `register` (alias `in`), `send`, `inbox`, `read`, `history`, `threads`, `status`, `events`, `reminder` and `delivery` need that binding too, so only a bound session can be registered, and the hooks of an unbound session print `Relay hook unavailable: the native service binding could not be verified.` On an earlier mind these actions use the inbox folders directly.
 - This feature serves the person who sets up a client, and sessions the service did not start. The client configuration still matters in 3.0: its hooks carry reminders, activity and, for Claude Code, the tool approvals of the sessions the service starts.
@@ -37,14 +37,14 @@ Relay carries messages between units through the inbox folders of the mind; its 
 1. Run `relay diagnose --mind-path "{{mind}}"`. Per client it prints `available` (the executable is on the PATH), `configured` (`true`, `false`, or `null` when the configuration cannot be read), `configPaths`, and the wakes of the mind as `enabled` or `enabled, no worker`.
 2. For each client to join that shows `configured: false`, run `relay configure --client <client> --mind-path "{{mind}}"`. It merges only Relay-owned entries, keeps a one-time `<file>.relay-backup`, records what it owns in `<MCP file>.relay-owned.json`, and is safe to repeat. An invalid JSON, JSONC or TOML file stops it before any write.
 3. A client that shows `configured: true` is not configured again, since a person may have edited its hooks. Install and `/evolve` configure each available client with no entry, and elsewhere refresh only the Relay-owned hook entries, never adding back one a person removed.
-4. Restart the client and confirm that it lists the `hivem1nd-relay` tools.
+4. Restart the client and confirm that it lists the `onem1nd-relay` tools.
 5. `--home-dir <folder>` points `configure`, `unconfigure` and `diagnose` at an isolated home and overrides the client home variables.
 
 ## Remove
 
 1. Disable each wake of the client: `relay wake disable --mind-path "{{mind}}" --client <client> --unit <unit> --native-session-id <id>`.
 2. Run `relay unconfigure --client <client> --mind-path "{{mind}}"`. It removes only the Relay-owned entries that point at this mind; without `--mind-path`, every Relay-owned entry of that client. Backups and unrelated configuration stay.
-3. `hivem1nd uninstall` does the same for every attached client.
+3. `onem1nd uninstall` does the same for every attached client.
 4. Run `relay diagnose` again: the client shows `configured: false`.
 
 ## Wake
@@ -73,7 +73,7 @@ Per client, `attach` is `relay wake attach --mind-path "{{mind}}" --client <clie
 ## Troubleshooting
 
 - `configured: null`: the client's configuration is not valid JSON, JSONC or TOML. Fix it or restore its `.relay-backup`; `configure` refuses it too.
-- `RELAY_CONFIG_CONFLICT`: an entry named `hivem1nd-relay` exists that Relay did not write. It stays untouched until a person renames or removes it.
+- `RELAY_CONFIG_CONFLICT`: an entry named `onem1nd-relay` exists that Relay did not write. It stays untouched until a person renames or removes it.
 - A client does not list the Relay tools: check the active configuration home (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `OPENCODE_CONFIG`, `COPILOT_HOME`), check that the entry's `--mind-path` is this mind, restart the client, and read its MCP log.
 - `native_login_unverified`: the session was not started by the service; open it from the desktop app.
 - `service_unavailable` on a wake action: the mind's service is not running; start the desktop app.

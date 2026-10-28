@@ -19,7 +19,7 @@ test('removing an addition while the settings publisher holds its report lock st
   t.after(async () => { await core.http.close(); await dispose(fixture); });
   clearInterval(core.runtime.beatTimer); core.runtime.beatTimer = null;
   const id = randomUUID();
-  const record = { format: 'hivem1nd-addition-v1', id, kind: 'repository', name: 'example', title: 'example',
+  const record = { format: 'hivem1nd-addition-v1', id, kind: 'repository', name: 'example', title: 'example', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     source: { kind: 'git', display: 'acme/example', url: 'https://github.com/acme/example' }, sourcePath: '.',
     pin: { kind: 'commit', value: 'a'.repeat(40), digest: 'b'.repeat(64) }, license: 'MIT', publishedAt: '2026-10-01T00:00:00.000Z',
     requirements: [], scope: { everyUnit: false, units: [], groups: [] }, unitCount: 0, machine: fixture.machine, projectId: 'example',
@@ -28,7 +28,7 @@ test('removing an addition while the settings publisher holds its report lock st
   await mkdir(path.join(fixture.paths.mind, 'user/additions'), { recursive: true });
   await writeFile(path.join(fixture.paths.mind, 'user/additions', id + '.json'), bytes);
   await mkdir(path.join(fixture.paths.mind, 'user/projects/example'), { recursive: true });
-  await writeFile(path.join(fixture.paths.mind, 'user/projects/example/product.json'), JSON.stringify({ format: 'hivem1nd-product-v1', title: 'example', additionId: id }));
+  await writeFile(path.join(fixture.paths.mind, 'user/projects/example/product.json'), JSON.stringify({ format: 'hivem1nd-product-v1', title: 'example', additionId: id })); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   const token = core.credentials.issue({ audience: 'desktop', unitId: 'root:master' }).token;
   const call = (method, target, body) => new Promise((resolve, reject) => {
     const payload = Buffer.from(JSON.stringify(body));

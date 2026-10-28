@@ -1,21 +1,21 @@
 # Command line interface
 
-`hivem1nd init` opens the ten-step terminal setup. `--gui` opens the same
+`onem1nd init` opens the ten-step terminal setup. `--gui` opens the same
 setup in a secured local browser session, and `--resume` continues saved work.
 
 ```text
-hivem1nd init [--gui] [--resume] [--language en|es]
-hivem1nd evolve [--check-only]
-hivem1nd check
-hivem1nd pylon <repo> [--state branch|main] [--environment <name>]
-hivem1nd swarm
-hivem1nd view [--json] [--project <name>]
+onem1nd init [--gui] [--resume] [--language en|es]
+onem1nd evolve [--check-only]
+onem1nd check
+onem1nd pylon <repo> [--state branch|main] [--environment <name>]
+onem1nd swarm
+onem1nd view [--json] [--project <name>]
 ```
 
 Every command also accepts `--kit-path`, `--mind-path`, `--home-dir` and
-`--hostname`. Run `hivem1nd --help` for the complete reference.
+`--hostname`. Run `onem1nd --help` for the complete reference.
 
-`hivem1nd check` writes nothing. It reports, one line each, the roles, commands
+`onem1nd check` writes nothing. It reports, one line each, the roles, commands
 and features in the mind that are not installed for an attached agent, a missing
 machine record, a newer version, a Git repository that is not a registered
 project, and the unread messages and open tasks of the current project and of

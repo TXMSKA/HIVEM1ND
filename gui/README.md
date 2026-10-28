@@ -5,13 +5,13 @@ and call the same setup engine. The HTTP server binds to `127.0.0.1`, uses a
 random session token, checks the exact origin and host, and serves only the
 three bundled interface assets.
 
-New Windows minds default to `%LOCALAPPDATA%\Cosmic\hivem1nd`. An explicitly
+New Windows minds default to `%LOCALAPPDATA%\Cosmic\onem1nd`. An explicitly
 selected existing mind keeps its location, including a OneDrive folder; its
 service configuration and staging stay in the local Cosmic directory.
 Browser development can use the CLI path overrides:
 
 ```text
-hivem1nd init --gui --home-dir <temporary-home> --mind-path <temporary-mind>
+onem1nd init --gui --home-dir <temporary-home> --mind-path <temporary-mind>
 ```
 
 After setup, the configured service serves the bundled `gui/app` interface.

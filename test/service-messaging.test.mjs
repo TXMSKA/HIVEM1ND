@@ -454,7 +454,7 @@ test('verified legacy preload is folded outside authored chat without rewriting 
   await mkdir(path.dirname(archive), { recursive: true }); await writeFile(archive, original);
   for (const [relative, record] of [
     [`user/relay/preloads/${id}.json`, { requestId: id, messageId: id, sessionId }],
-    [`user/relay/requests/${fixture.machine}/${id}.json`, { format: 'hivem1nd-session-request-v1', id, unitId, taskId: null }],
+    [`user/relay/requests/${fixture.machine}/${id}.json`, { format: 'hivem1nd-session-request-v1', id, unitId, taskId: null }], // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     [`user/relay/sessions/${sessionId}.json`, { sessionId, unitId, client: 'codex', machine: fixture.machine, nativeSessionId: 'native', registeredAt: new Date(fixture.clock.now).toISOString() }],
   ]) { const target = path.join(fixture.paths.mind, relative); await mkdir(path.dirname(target), { recursive: true }); await writeFile(target, JSON.stringify(record)); }
   const view = await readProjection(context);

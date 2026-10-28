@@ -35,7 +35,7 @@ export async function loadRelanKey(options = {}) {
     await verifyLocalPermissions(options.localDirectory, options);
     await verifyLocalPermissions(file, options);
     const value = JSON.parse(await handle.readFile('utf8'));
-    if (value.format !== 'hivem1nd-relan-key-v1' || typeof value.key !== 'string'
+    if (value.format !== 'hivem1nd-relan-key-v1' || typeof value.key !== 'string' // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
       || !/^[A-Za-z0-9_-]{43}$/.test(value.key)) throw new CoreError(422, 'invalid_relan_key', 'The saved ReLAN key is not valid.');
     const result = material({ ...value, key: Buffer.from(value.key, 'base64url') });
     await assertNoLinks(file, { root: options.store?.confineRoot });
@@ -61,7 +61,7 @@ export async function saveRelanKey(options = {}, value) {
   try {
     const handle = await open(temporary, 'wx', 0o600);
     try {
-      await handle.writeFile(`${JSON.stringify({ format: 'hivem1nd-relan-key-v1', ...saved, key: saved.key.toString('base64url') })}\n`);
+      await handle.writeFile(`${JSON.stringify({ format: 'hivem1nd-relan-key-v1', ...saved, key: saved.key.toString('base64url') })}\n`); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
       await handle.sync();
     } finally {
       await handle.close();

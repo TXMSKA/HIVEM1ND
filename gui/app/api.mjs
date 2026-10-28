@@ -120,7 +120,7 @@ export async function request(api, method, path, options = {}) {
     }
     if (response.status === 401 || json?.error?.code === "home_expired") forgetSession(api);
     if (response.ok) {
-      if (json?.contract !== "hivem1nd-gui-v3" || !json.meta?.requestId || !json.meta.readAt || json.meta.eventCursor == null || !["local", "pending", "published"].includes(json.meta?.sync)) {
+      if (json?.contract !== "hivem1nd-gui-v3" || !json.meta?.requestId || !json.meta.readAt || json.meta.eventCursor == null || !["local", "pending", "published"].includes(json.meta?.sync)) { // Compatibility: retain the service wire contract and existing viewer session key.
         throw new ApiError(response.status, "invalid_response", "The response envelope is not valid.", {}, null, retryAfter);
       }
       return { status: response.status, data: json.data, meta: json.meta };
@@ -235,7 +235,7 @@ export function encodeRoute(path, params = {}) {
 function readFragment(location, history, storage) {
   const params = new URLSearchParams(String(location.hash ?? "").replace(/^#/, ""));
   const viewer = /^\/gui\/([^/]+)\//.exec(String(location.pathname ?? ""))?.[1] ?? null;
-  const storageKey = viewer ? `hivem1nd.viewer.${viewer}` : null;
+  const storageKey = viewer ? `hivem1nd.viewer.${viewer}` : null; // Compatibility: retain the service wire contract and existing viewer session key.
   let token = params.get("session");
   const homeKey = params.get("home");
   try {

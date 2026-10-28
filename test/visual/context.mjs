@@ -19,7 +19,7 @@ export function makeContext({ task, world, page, browser, spec }) {
     // earlier "Later" is recorded in the page storage first, which is what that dialog's own Later button writes.
     async open({ url = world.url, ready = true, overseerExists = false } = {}) {
       if (overseerExists) {
-        await page.send('Page.addScriptToEvaluateOnNewDocument', { source: `try { localStorage.setItem('hivem1nd:overseer:' + ${JSON.stringify(world.mind)}, 'dismissed'); } catch {}` });
+        await page.send('Page.addScriptToEvaluateOnNewDocument', { source: `try { localStorage.setItem('hivem1nd:overseer:' + ${JSON.stringify(world.mind)}, 'dismissed'); } catch {}` }); // Compatibility: browser storage and desktop bridge names remain stable.
       }
       await page.navigate(url);
       if (ready) await ctx.shellReady();

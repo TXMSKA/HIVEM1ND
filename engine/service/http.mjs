@@ -31,7 +31,7 @@ import { dispatch as dispatchMcp } from './mcp.mjs';
 import { mutateMachineSettings, readContent, readMachineSettings, validateSettingsBody, writeContent } from './settings.mjs';
 import { applyAdditions, assertAdditionRequest, cancelAdditionPreview, cancelAdditionUpload, closeAdditionJobs, inspectAddition, openAdditionUpload, readAdditions, readAdditionPreview, removeAddition, retryAdditionPreview, writeAdditionChunk } from './additions.mjs';
 
-const MARK_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><path fill="#18121d" d="M8 8h240v240H8Z"/><path fill="none" stroke="#81648c" stroke-width="8" d="M20 20h216v216H20Z"/><path fill="#bdcd79" d="M72 65h28v47h56V65h28v126h-28v-51h-56v51H72Z"/></svg>\n';
+const MARK_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="-44 -44 88 88"><path fill="none" stroke="#e0103a" stroke-width="4.5" stroke-linecap="round" d="M9.3 -16.0L11.5 -19.9M18.5 0.0L23.0 0.0M9.3 16.0L11.5 19.9M-9.2 16.0L-11.5 19.9M-18.5 0.0L-23.0 0.0M-9.3 -16.0L-11.5 -19.9"/><path fill="#a30c2c" d="M16.5 -20.1 9.1 -24.3 9.1 -32.8 16.5 -37.1 23.9 -32.8 23.9 -24.3ZM33.0 8.5 25.6 4.2 25.6 -4.3 33.0 -8.5 40.4 -4.3 40.4 4.2ZM16.5 37.1 9.1 32.8 9.1 24.3 16.5 20.1 23.9 24.3 23.9 32.8ZM-16.5 37.1 -23.9 32.8 -23.9 24.3 -16.5 20.1 -9.1 24.3 -9.1 32.8ZM-33.0 8.5 -40.4 4.3 -40.4 -4.2 -33.0 -8.5 -25.6 -4.2 -25.6 4.3ZM-16.5 -20.1 -23.9 -24.3 -23.9 -32.8 -16.5 -37.1 -9.1 -32.8 -9.1 -24.3Z"/><path fill="#ff2d55" d="M0.0 17.0 -14.7 8.5 -14.7 -8.5 0.0 -17.0 14.7 -8.5 14.7 8.5Z"/></svg>\n';
 
 export const EMBEDDED_BROWSER_FILES = Object.freeze({
   'mark.svg': MARK_SVG,
@@ -268,7 +268,7 @@ function applySync(outcome, domain) {
 
 function successEnvelope(outcome, meta) {
   return {
-    contract: 'hivem1nd-gui-v3',
+    contract: 'hivem1nd-gui-v3', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     data: outcome.body,
     meta: {
       requestId: meta.requestId,
@@ -1770,7 +1770,7 @@ async function requireBootstrap(req, options, listener) {
   const expectedOrigin = `http://${listener.address}:${listener.port}`;
   const record = state.record;
   const intact = keys === 'format,origin,secret,startedAt'
-    && parsed.format === 'hivem1nd-bootstrap-v1'
+    && parsed.format === 'hivem1nd-bootstrap-v1' // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     && parsed.origin === expectedOrigin
     && parsed.origin === record.origin
     && parsed.startedAt === record.startedAt

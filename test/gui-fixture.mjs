@@ -22,8 +22,8 @@ import {
 // The home listener is a loopback transport simulation, not a production subnet check.
 // Stdin commands: advance <ms>, emit <name> <json>, disconnect, quit.
 
-const CONTRACT = "hivem1nd-gui-v3";
-const EVENTS = "hivem1nd-events-v3";
+const CONTRACT = "hivem1nd-gui-v3"; // Compatibility: stored schemas and wire contracts retain their existing identifiers.
+const EVENTS = "hivem1nd-events-v3"; // Compatibility: stored schemas and wire contracts retain their existing identifiers.
 const HOST = "127.0.0.1";
 const HOME_ADDRESSES = ["192.168.1.23", "192.168.1.24"];
 const HOME_CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
@@ -639,7 +639,7 @@ async function loadGroups(fx, issues) {
     try {
       const bytes = await readFile(join(directory, entry.name));
       const record = JSON.parse(bytes);
-      if (!['hivem1nd-group-v1', 'hivem1nd-cluster-v1'].includes(record.format) || `${record.id}.json` !== entry.name || record.chatId !== record.id) throw new Error("format");
+      if (!['hivem1nd-group-v1', 'hivem1nd-cluster-v1'].includes(record.format) || `${record.id}.json` !== entry.name || record.chatId !== record.id) throw new Error("format"); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
       groups.push(publicGroup(record, sha256(bytes)));
     } catch {
       issues.push({ path: relMind(fx.tree.mind, join(directory, entry.name)), code: "corrupt_resource", message: "The group could not be read." });
@@ -865,7 +865,7 @@ async function loadLayout(fx) {
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
     return {
-      layout: { format: "hivem1nd-layout-v1", nodes: {}, groups: {}, updatedAt: null, machine: null },
+      layout: { format: "hivem1nd-layout-v1", nodes: {}, groups: {}, updatedAt: null, machine: null }, // Compatibility: stored schemas and wire contracts retain their existing identifiers.
       revision: null,
     };
   }
@@ -878,7 +878,7 @@ async function loadSettings(fx) {
     return { settings: value, revision: hash };
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
-    return { settings: { format: "hivem1nd-settings-v1", look: "modern", language: "en" }, revision: null };
+    return { settings: { format: "hivem1nd-settings-v1", look: "modern", language: "en" }, revision: null }; // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   }
 }
 
@@ -1208,7 +1208,7 @@ async function ledger(fx) {
     return { file, value: (await readJsonFile(file)).value };
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
-    return { file, value: { format: "hivem1nd-fixture-ledger-v1", records: [] } };
+    return { file, value: { format: "hivem1nd-fixture-ledger-v1", records: [] } }; // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   }
 }
 
@@ -1523,7 +1523,7 @@ function validateLayout(body) {
 
 async function prepareSettings(fx, body) {
   const current = await loadSettings(fx);
-  const next = { ...current.settings, format: "hivem1nd-settings-v1" };
+  const next = { ...current.settings, format: "hivem1nd-settings-v1" }; // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   if (body.look) next.look = body.look;
   if (body.language) next.language = body.language;
   next.sendToAgent = body.sendToAgent ?? next.sendToAgent ?? true;
@@ -1603,7 +1603,7 @@ function homeCode() {
 async function prepareLayout(fx, body) {
   const current = await loadLayout(fx);
   const next = structuredClone(current.layout);
-  next.format = "hivem1nd-layout-v1";
+  next.format = "hivem1nd-layout-v1"; // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   next.nodes ??= {};
   next.groups ??= {};
   const snap = await projection(fx);
@@ -1665,7 +1665,7 @@ async function prepareChatPost(fx, body, principal, chatId, operationId) {
     operationId, delivery: { state: "stored", deliveredAt: null, readAt: null },
   };
   const notices = chat.members.filter((unitId) => unitId !== principal.unitId).map((unitId) => ({ key: `${id}:${unitId}`, unitId, resourceId: id, state: fx.noticeFailure === unitId ? "failed" : "pending" }));
-  const fanoutBytes = Buffer.from(stableJson({ format: "hivem1nd-fanout-v1", messageId: id, notices }));
+  const fanoutBytes = Buffer.from(stableJson({ format: "hivem1nd-fanout-v1", messageId: id, notices })); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   writes.push({ path: join(fx.tree.user, "relay", "fanout", `${id}.json`), beforeRevision: null, afterRevision: sha256(fanoutBytes), afterBytesBase64: fanoutBytes.toString("base64") });
   return {
     status: 201,
@@ -1698,7 +1698,7 @@ async function prepareChatRead(fx, body, principal, chatId) {
   if (body.messageIds.some((id) => !known.has(id))) throw new HttpError(422, "invalid_body", "A message was not found in the chat.");
   const receiptId = uuid();
   const record = {
-    format: "hivem1nd-chat-read-v1", chatId, unitId: principal.unitId, machine: LOCAL_MACHINE,
+    format: "hivem1nd-chat-read-v1", chatId, unitId: principal.unitId, machine: LOCAL_MACHINE, // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     messageIds: body.messageIds, at: clock(fx).toISOString(),
   };
   const bytes = Buffer.from(stableJson(record));
@@ -1909,7 +1909,7 @@ async function prepareFixtureAcceptance(fx, record, body, principal) {
     || body.expectedProjectRevision !== currentProjects.revision || body.expectedProjectRevision !== record.preview.projectRevision) throw new HttpError(409, "revision_conflict", "Content or projects changed since review.");
   const existing = await fixtureAcceptedAdditions(fx), items = [], writes = [], events = [];
   const priorReport = await readData(fx, snap, { pattern: "/settings/content", principal }, {}, new URLSearchParams());
-  const content = priorContent ? JSON.parse(priorContent) : { format: "hivem1nd-content-settings-v1", includedFeatures: priorReport.features.filter(item => item.included).map(item => item.id), includedKnowledge: priorReport.knowledge.filter(item => item.included).map(item => item.id),
+  const content = priorContent ? JSON.parse(priorContent) : { format: "hivem1nd-content-settings-v1", includedFeatures: priorReport.features.filter(item => item.included).map(item => item.id), includedKnowledge: priorReport.knowledge.filter(item => item.included).map(item => item.id), // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     preferences: { addressStyle: "impersonal", additionalInstructions: "", keepExistingPreferencesFirst: true, updateChecks: "off" } };
   for (const selection of body.selections) {
     const candidate = record.preview.candidates.find(item => item.id === selection.candidateId);
@@ -2221,9 +2221,9 @@ async function prepareContentSettings(fx, body) {
   }
   const file = join(fx.tree.user, "gui", "content.json");
   const source = await readOptional(file);
-  const payload = Buffer.from(stableJson({ format: "hivem1nd-content-settings-v1", includedFeatures: body.includedFeatures, includedKnowledge: body.includedKnowledge, preferences: body.preferences }));
+  const payload = Buffer.from(stableJson({ format: "hivem1nd-content-settings-v1", includedFeatures: body.includedFeatures, includedKnowledge: body.includedKnowledge, preferences: body.preferences })); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   const preferenceFile = join(fx.tree.user, "preferences.md"), previous = await readOptional(preferenceFile);
-  const block = value => `<!-- HIVEM1ND Settings preferences -->\nAddress style: ${value.addressStyle}\nKeep existing preferences first: ${value.keepExistingPreferencesFirst ? "yes" : "no"}\nCheck for updates: ${value.updateChecks}\n\n${value.additionalInstructions}\n<!-- /HIVEM1ND Settings preferences -->\n`;
+  const block = value => `<!-- ONEM1ND Settings preferences -->\nAddress style: ${value.addressStyle}\nKeep existing preferences first: ${value.keepExistingPreferencesFirst ? "yes" : "no"}\nCheck for updates: ${value.updateChecks}\n\n${value.additionalInstructions}\n<!-- /ONEM1ND Settings preferences -->\n`;
   let text = previous?.toString("utf8") ?? "";
   if (source) {
     const owned = block(JSON.parse(source).preferences);
@@ -2278,7 +2278,7 @@ async function preparePermissionGrant(fx, body) {
   if (unit.runsIn?.client !== body.client) throw new HttpError(409, "scope_unresolved", "The agent does not run in that client.");
   const present = report.agentPermissions.find(item => item.unitId === body.unitId && item.client === body.client && item.actions.includes("native.automatic"));
   if (present) return { status: 200, data: { permission: present, revision: report.revision }, writes: [], events: [] };
-  const permission = { id: uuid(), machine: LOCAL_MACHINE, client: body.client, actions: ["native.automatic"], scope: "hivem1nd-started-sessions", unitId: body.unitId, grantedAt: clock(fx).toISOString(), grantedBy: "root:master" };
+  const permission = { id: uuid(), machine: LOCAL_MACHINE, client: body.client, actions: ["native.automatic"], scope: "hivem1nd-started-sessions", unitId: body.unitId, grantedAt: clock(fx).toISOString(), grantedBy: "root:master" }; // Compatibility: existing permission grants retain their scope identity.
   const file = join(fx.local, "client-permissions.json"), before = await readOptional(file);
   const after = Buffer.from(stableJson({ permissions: [...report.agentPermissions, permission] }));
   const revision = sha256(Buffer.from(stableJson({ unitGrants: report.unitGrants, agentPermissions: [...report.agentPermissions, permission] })));
@@ -2319,9 +2319,9 @@ async function prepareClientReview(fx, operation, client, body) {
   if (operation === "preview") {
     const base = join(fx.local, "client-home", `.${client}`);
     const changes = await Promise.all([
-      change("mcp", join(base, "mcp.json"), stableJson({ mcpServers: { "hivem1nd-relay": { command: "fixture-relay" } } }), "Add the Relay server, so sessions read and send messages"),
+      change("mcp", join(base, "mcp.json"), stableJson({ mcpServers: { "onem1nd-relay": { command: "fixture-relay" } } }), "Add the Relay server, so sessions read and send messages"),
       change("hooks", join(base, "hooks.json"), stableJson({ hooks: { stop: [{ command: "fixture-relay-hook" }] } }), "Add the Relay hooks, so a session wakes when a message arrives"),
-      change("git", join(fx.local, "client-permissions.json"), stableJson({ id: uuid(), machine: LOCAL_MACHINE, client, actions: ["git.commit", "git.push"], scope: "hivem1nd-started-sessions", grantedAt: clock(fx).toISOString(), grantedBy: "root:master" }), "Allow git commit and git push only in HIVEM1ND-started sessions", true),
+      change("git", join(fx.local, "client-permissions.json"), stableJson({ id: uuid(), machine: LOCAL_MACHINE, client, actions: ["git.commit", "git.push"], scope: "hivem1nd-started-sessions", grantedAt: clock(fx).toISOString(), grantedBy: "root:master" }), "Allow git commit and git push only in ONEM1ND-started sessions", true), // Compatibility: existing permission grants retain their scope identity.
     ]);
     const previewId = uuid(), expiresAt = new Date(fx.nowMs + 600000).toISOString();
     return { status: 200, data: { previewId, revision: state.hash, expiresAt, restartRequired: true, changes: changes.map(({ before, after, ...item }) => item) }, writes: [], events: [],
@@ -3484,7 +3484,7 @@ async function prepareUnitRemoval(fx, unitId, body) {
     if (fx.stopNative) result = await fx.stopNative(session);
     else result = await new Promise((resolve) => { fx.sessionStops.set(session.id, { sessionId: session.id, state: "stopping", resolve }); });
     if (result?.acknowledged !== true) throw new HttpError(409, "stop_unavailable", "The native process did not acknowledge the stop.");
-    const status = { format: "hivem1nd-session-status-v1", sessionId: session.id, machine: LOCAL_MACHINE, state: "stopped", reason: "native-acknowledged", at: clock(fx).toISOString() };
+    const status = { format: "hivem1nd-session-status-v1", sessionId: session.id, machine: LOCAL_MACHINE, state: "stopped", reason: "native-acknowledged", at: clock(fx).toISOString() }; // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     await writeAtomic(join(fx.tree.user, "relay", "session-status", session.id, `${uuid()}.json`), Buffer.from(stableJson(status)));
     journal = { ...journal, phase: "prepared", stoppedSessionIds: [...journal.stoppedSessionIds, session.id] };
     await writeAtomic(journalFile, Buffer.from(stableJson(journal)));
@@ -3553,10 +3553,10 @@ async function prepareGroup(fx, groupId, body, pending = []) {
     chatBefore = await readFile(chat.file);
     prepared = await rewriteChat(fx, chat, body.confirmed ? { archived: true, listed: false } : { title, members: ["root:master", ...members].sort() });
   } else {
-    record = { format: "hivem1nd-group-v1", id, chatId: id, createdAt: clock(fx).toISOString(), deleted: false };
+    record = { format: "hivem1nd-group-v1", id, chatId: id, createdAt: clock(fx).toISOString(), deleted: false }; // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     prepared = writeNewChat(fx, { id, title, members: ["root:master", ...members].sort(), kind: "group", pinned: false, listed: true });
   }
-  const next = { ...record, ...(body.link ? { format: 'hivem1nd-cluster-v1', link: body.link, parentId: body.parentId ?? null } : {}), title, members, deleted: body.confirmed === true, chatRevision: prepared.data.revision };
+  const next = { ...record, ...(body.link ? { format: 'hivem1nd-cluster-v1', link: body.link, parentId: body.parentId ?? null } : {}), title, members, deleted: body.confirmed === true, chatRevision: prepared.data.revision }; // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   const bytes = Buffer.from(stableJson(next));
   const group = publicGroup(next, sha256(bytes));
   prepared.writes.unshift(fixtureWrite(file, groupBefore, bytes));
@@ -3894,7 +3894,7 @@ async function prepareAttachments(fx, resourceId, body) {
   const editor = requireEditor(snap, resourceId);
   if ((body.expectedRevision ?? null) !== editor.attachmentRevision) throw new HttpError(409, "revision_conflict", "The attachments were changed elsewhere.");
   if (body.attached.some((id) => !snap.units.some((unit) => unit.id === id && unit.revision))) throw new HttpError(422, "unknown_unit", "The unit is unknown.");
-  const record = { format: "hivem1nd-editor-binding-v1", resourceId, kind: editor.kind, attached: body.attached, updatedAt: clock(fx).toISOString() };
+  const record = { format: "hivem1nd-editor-binding-v1", resourceId, kind: editor.kind, attached: body.attached, updatedAt: clock(fx).toISOString() }; // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   const bytes = Buffer.from(stableJson(record));
   const revision = sha256(bytes);
   const failed = fx.noticeFailure && body.attached.includes(fx.noticeFailure) ? fx.noticeFailure : null;
@@ -4227,13 +4227,13 @@ async function prepareCreateEditor(fx, kind, body) {
   writes.push(fixtureWrite(library.file, library.bytes, Buffer.from(stableJson(library.value))));
   const historyId = uuid();
   const historyRoot = editorFile(fx, body.project, `docs/flows/history/${id}/${historyId}`);
-  writes.push(fixtureWrite(`${historyRoot}.json`, null, Buffer.from(stableJson({ format: "hivem1nd-editor-history-v1", id: historyId,
+  writes.push(fixtureWrite(`${historyRoot}.json`, null, Buffer.from(stableJson({ format: "hivem1nd-editor-history-v1", id: historyId, // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     resourceId: id, at: clock(fx).toISOString(), by: "root:master", operation: "create", documentPath: path, commentsPath: null, revision, commentsRevision: null }))),
     fixtureWrite(`${historyRoot}.document.json`, null, docBytes));
   if (kind === "void") writes.push(fixtureWrite(file.replace(/\.json$/, ".orig.json"), null, docBytes));
   let attachmentRevision = null;
   if (attached.length) {
-    const binding = { format: "hivem1nd-editor-binding-v1", resourceId: id, kind, attached, updatedAt: clock(fx).toISOString() };
+    const binding = { format: "hivem1nd-editor-binding-v1", resourceId: id, kind, attached, updatedAt: clock(fx).toISOString() }; // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     const bindingBytes = Buffer.from(stableJson(binding));
     attachmentRevision = sha256(bindingBytes);
     writes.push({ path: join(fx.tree.user, "relay", "editors", `${id}.json`), beforeRevision: null, afterRevision: attachmentRevision, afterBytesBase64: bindingBytes.toString("base64") });
@@ -4975,7 +4975,7 @@ async function fixtureLibrary(fx, project) {
   if (!stats?.isDirectory() || stats.isSymbolicLink()) throw new HttpError(409, "project_unavailable", "The repository is not available.");
   const file = editorFile(fx, project, "docs/flows/library.json");
   const bytes = await readFile(file).catch((error) => { if (error.code === "ENOENT") return null; throw error; });
-  return { file, bytes, revision: bytes ? sha256(bytes) : null, value: bytes ? JSON.parse(bytes) : { format: "hivem1nd-library-v1", folders: [], items: {} } };
+  return { file, bytes, revision: bytes ? sha256(bytes) : null, value: bytes ? JSON.parse(bytes) : { format: "hivem1nd-library-v1", folders: [], items: {} } }; // Compatibility: stored schemas and wire contracts retain their existing identifiers.
 }
 
 async function fixtureTouchLibrary(fx, prepared) {
@@ -5013,7 +5013,7 @@ async function fixtureHistory(fx, editor) {
   for (const entry of await listDir(directory)) {
     if (!entry.isFile() || !/^[0-9a-f-]{36}\.json$/.test(entry.name)) continue;
     const item = JSON.parse(await readFile(join(directory, entry.name), "utf8"));
-    if (item.format !== "hivem1nd-editor-history-v1" || item.resourceId !== editor.id) throw new HttpError(409, "corrupt_resource", "The history metadata is not valid.");
+    if (item.format !== "hivem1nd-editor-history-v1" || item.resourceId !== editor.id) throw new HttpError(409, "corrupt_resource", "The history metadata is not valid."); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     items.push(item);
   }
   return items.sort((a, b) => b.at.localeCompare(a.at) || (b.sequence ?? 0) - (a.sequence ?? 0) || b.id.localeCompare(a.id));
@@ -5022,7 +5022,7 @@ async function fixtureHistory(fx, editor) {
 function fixtureSnapshot(fx, editor, document, comments, operation, sequence, principal, provenance = {}) {
   for (const bytes of [document, comments]) if (bytes?.length > 16_000_000) throw new HttpError(413, "resource_too_large", "A history object exceeds 16 MB.");
   const id = uuid(), root = editorFile(fx, editor.project, `docs/flows/history/${editor.id}/${id}`);
-  const metadata = { format: "hivem1nd-editor-history-v1", id, resourceId: editor.id, at: clock(fx).toISOString(), by: principal.unitId ?? "root:master", operation,
+  const metadata = { format: "hivem1nd-editor-history-v1", id, resourceId: editor.id, at: clock(fx).toISOString(), by: principal.unitId ?? "root:master", operation, // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     documentPath: editor.path, commentsPath: comments ? relative(join(fx.tree.root, "repositories", editor.project), commentsPath(fx, editor)).replaceAll("\\", "/") : null,
     revision: sha256(document), commentsRevision: comments ? sha256(comments) : null, title: editor.title, sequence,
     source: { kind: principal.audience === "agent" ? "mcp" : "gui", id: LOCAL_MACHINE, unitId: principal.unitId ?? "root:master" }, ...provenance };
@@ -5261,7 +5261,7 @@ async function prepareFixtureEditorLibrary(fx, operation, id, body) {
       if (entry.file === commentsPath(fx, editor) || entry.file.startsWith(join(fx.tree.user, "relay", "editors"))
         || entry.file.includes("history") && !entry.file.endsWith(".document.json") && !entry.file.endsWith(".comments.json")) {
         const value = fixtureRemapResource(JSON.parse(bytes), id, nextId);
-        if (value.format === "hivem1nd-editor-history-v1") { value.documentPath = body.path; value.commentsPath = editor.kind === "void" ? body.path.replace(/\.json$/, ".comments.json") : value.commentsPath; }
+        if (value.format === "hivem1nd-editor-history-v1") { value.documentPath = body.path; value.commentsPath = editor.kind === "void" ? body.path.replace(/\.json$/, ".comments.json") : value.commentsPath; } // Compatibility: stored schemas and wire contracts retain their existing identifiers.
         if (entry.file === commentsPath(fx, editor) && editor.kind === "void") value.path = body.path.split("/").at(-1);
         bytes = Buffer.from(stableJson(value));
       }
@@ -5611,7 +5611,7 @@ async function listen(fx, kind) {
 async function writeBootstrap(fx) {
   const secret = randomBytes(32).toString("base64url");
   await writeAtomic(join(fx.local, "bootstrap.json"), Buffer.from(stableJson({
-    format: "hivem1nd-bootstrap-v1",
+    format: "hivem1nd-bootstrap-v1", // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     origin: fx.desktop?.origin ?? null,
     secret,
     startedAt: clock(fx).toISOString(),
@@ -5835,7 +5835,7 @@ export async function createGuiFixture(options = {}) {
           if (notice) Object.assign(notice, { state, submittedAt: state === "submitted" ? clock(fx).toISOString() : null });
           await writeAtomic(file, Buffer.from(stableJson(fanout)));
           if (read) {
-            const receipt = { format: "hivem1nd-chat-read-v1", chatId, unitId, messageIds: [messageId], at: clock(fx).toISOString() };
+            const receipt = { format: "hivem1nd-chat-read-v1", chatId, unitId, messageIds: [messageId], at: clock(fx).toISOString() }; // Compatibility: stored schemas and wire contracts retain their existing identifiers.
             await writeAtomic(join(fx.tree.user, "relay", "chats", chatId, "read", Buffer.from(unitId).toString("base64url"), LOCAL_MACHINE, `${uuid()}.json`), Buffer.from(stableJson(receipt)));
           }
           invalidate(fx);
@@ -5907,7 +5907,7 @@ export async function createGuiFixture(options = {}) {
             : (state === "expired" ? "expired" : null);
           if (state === "applied") current.resultAnswerId = answerId;
           const outcome = {
-            format: "hivem1nd-approval-answer-result-v1",
+            format: "hivem1nd-approval-answer-result-v1", // Compatibility: stored schemas and wire contracts retain their existing identifiers.
             answerId,
             approvalId: current.approvalId,
             state,
@@ -5917,7 +5917,7 @@ export async function createGuiFixture(options = {}) {
           await writeAtomic(join(fx.tree.user, "relay", "approvals", current.approvalId, "answer-results", `${answerId}.json`), Buffer.from(stableJson(outcome)));
           if (approvalState) {
             const result = {
-              format: "hivem1nd-approval-result-v1",
+              format: "hivem1nd-approval-result-v1", // Compatibility: stored schemas and wire contracts retain their existing identifiers.
               approvalId: current.approvalId,
               state: approvalState,
               answerId,

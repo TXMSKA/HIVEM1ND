@@ -128,9 +128,9 @@ test('canonical nested clusters keep aliases and exact lead links without a root
 });
 
 test('the cluster checkout is not listed again as a worktree row', () => {
-  const listed = listedWorktrees('C:\\temp\\hivem1nd\\shop', [
-    { id: 'main', path: 'C:\\temp\\hivem1nd\\shop', branch: 'main' },
-    { id: 'alt', path: 'C:\\temp\\hivem1nd\\shop-worktree', branch: 'alternate' },
+  const listed = listedWorktrees('C:\\temp\\onem1nd\\shop', [
+    { id: 'main', path: 'C:\\temp\\onem1nd\\shop', branch: 'main' },
+    { id: 'alt', path: 'C:\\temp\\onem1nd\\shop-worktree', branch: 'alternate' },
     { id: 'bare', path: '', branch: 'main' },
   ]);
   assert.deepEqual(listed.map(tree => [pathFolder(tree.path), tree.branch]), [['shop-worktree', 'alternate']]);
@@ -138,7 +138,7 @@ test('the cluster checkout is not listed again as a worktree row', () => {
 
 test('a worktree is named by its folder and folders start collapsed', () => {
   const web = cluster('Web', 'folder');
-  const shop = { ...cluster('shop', 'repository', 'Web'), worktrees: [{ id: 'wt', path: 'C:\\temp\\hivem1nd\\shop', branch: 'feature/cart-empty-state' }] };
+  const shop = { ...cluster('shop', 'repository', 'Web'), worktrees: [{ id: 'wt', path: 'C:\\temp\\onem1nd\\shop', branch: 'feature/cart-empty-state' }] };
   const tree = buildHierarchy([unit('root:overseer', 'overseer')], [], [web, shop]);
   const open = flattenVisibleHierarchy(tree, { shown: new Map(), collapsed: new Set() });
   const worktree = open.find(row => row.kind === 'worktree');
@@ -218,7 +218,7 @@ test('empty drag pans, Shift-drag selects agents and camera changes never persis
 test('cluster refresh replaces facts while keeping chat/editor drafts and selection identities', async () => {
   const store = createStore(), draft = { value: 'Retained text' }; store.drafts.set('editor', draft); store.selected.groupId = 'Ideas';
   await applyEvent(store, { token: 'fixture', location: { origin: 'http://127.0.0.1:9' }, controllers: new Set(), now: Date.now,
-    fetch: async () => new Response(JSON.stringify({ contract: 'hivem1nd-gui-v3', data: { items: [cluster('Ideas')], nextCursor: null }, meta: { requestId: 'fixture', readAt: '2026-10-14T00:00:00.000Z', eventCursor: '', sync: 'local' } }), { status: 200 }) },
+    fetch: async () => new Response(JSON.stringify({ contract: 'hivem1nd-gui-v3', data: { items: [cluster('Ideas')], nextCursor: null }, meta: { requestId: 'fixture', readAt: '2026-10-14T00:00:00.000Z', eventCursor: '', sync: 'local' } }), { status: 200 }) }, // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   { name: 'cluster.changed', envelope: { data: { clusterId: 'Ideas' } } });
   assert.equal(store.indexes.groups.size, 1); assert.equal(store.drafts.get('editor'), draft); assert.equal(store.selected.groupId, 'Ideas');
 });
@@ -317,9 +317,9 @@ test('inspector uses safe Git facts and an unlinked scope; six looks share bound
 
 const supervised = (id, title) => ({ id, title, connected: true, scopeEnforced: false, boundary: 'supervised', models: [{ id: 'observed', title: 'Observed', efforts: ['high'], modes: [] }], quota: { known: false, remainingPercent: null } });
 const NATIVE_COPY = {
-  en: ['HIVEM1ND cannot confine this agent on Windows. By default it asks you before every file change and command.',
+  en: ['ONEM1ND cannot confine this agent on Windows. By default it asks you before every file change and command.',
     "Work automatically: it changes files and runs commands without asking, and can write outside its cluster's folder. You can turn this off in Settings, Permissions."],
-  es: ['HIVEM1ND no puede confinar a este agente en Windows. De forma predeterminada, consulta antes de cada cambio de archivos y de cada comando.',
+  es: ['ONEM1ND no puede confinar a este agente en Windows. De forma predeterminada, consulta antes de cada cambio de archivos y de cada comando.',
     'Trabajar de forma automática: modifica archivos y ejecuta comandos sin consultar, y puede escribir fuera de la carpeta de su clúster. Se puede desactivar en Configuración, Permisos.'],
 };
 

@@ -25,7 +25,7 @@ test('the icon is added to a new desktop.ini and replaces only the icon lines of
 });
 
 test('the folder icon clears the attributes before writing and sets Hidden, System and ReadOnly after', async context => {
-  const mind = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-icon-'));
+  const mind = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-icon-'));
   context.after(() => rm(mind, { recursive: true, force: true }));
   const calls = [];
   const attrib = async args => { calls.push(args); };
@@ -54,12 +54,12 @@ test('the folder icon clears the attributes before writing and sets Hidden, Syst
 });
 
 async function kitFixture(context) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-icon-setup-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-icon-setup-'));
   context.after(() => rm(root, { recursive: true, force: true }));
   const kitPath = path.join(root, 'kit');
   await mkdir(path.join(kitPath, 'migrations'), { recursive: true });
   await mkdir(path.join(kitPath, 'assets'));
-  await writeFile(path.join(kitPath, 'package.json'), '{"name":"hivem1nd-fixture","version":"3.0.0","files":["rules.md","files.md","migrations/","assets/"]}\n');
+  await writeFile(path.join(kitPath, 'package.json'), '{"name":"onem1nd-fixture","version":"3.0.0","files":["rules.md","files.md","migrations/","assets/"]}\n');
   await writeFile(path.join(kitPath, 'rules.md'), 'Current rules.\n');
   await writeFile(path.join(kitPath, 'files.md'), 'Current formats.\n');
   await writeFile(path.join(kitPath, 'assets', 'installer.ico'), 'icon');

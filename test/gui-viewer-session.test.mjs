@@ -39,5 +39,5 @@ test('a session the service refuses is dropped from the tab', async () => {
   assert.equal(api.token, 'OLD');
   await assert.rejects(request(api, 'GET', '/view'));
   assert.equal(api.token, null);
-  assert.equal(storage.getItem('hivem1nd.viewer.viewer-1'), null);
+  assert.equal(storage.getItem('hivem1nd.viewer.viewer-1'), null); // Compatibility: browser storage and desktop bridge names remain stable.
 });

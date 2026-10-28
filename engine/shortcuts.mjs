@@ -1,14 +1,15 @@
 import { execFile } from 'node:child_process';
-import { lstat, readFile, unlink } from 'node:fs/promises';
+import { lstat, mkdir, readFile, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hashContent } from './records.mjs';
+import { assertNoLinks } from './service/paths.mjs';
 
 // The desktop and Start menu shortcuts of the app. A shortcut runs the Windows Script Host with gui/launch.vbs, which
 // runs `service launch` with no console window, so no black window stays open and no address is ever printed.
 // Windows Script Host also writes the .lnk files (engine/make-shortcut.vbs); nothing here starts PowerShell.
 
-const NAME = 'HIVEM1ND.lnk';
+const NAME = 'ONEM1ND.lnk';
 const MAKER = fileURLToPath(new URL('./make-shortcut.vbs', import.meta.url));
 
 const system32 = env => path.join(env.SystemRoot ?? env.windir ?? 'C:\\Windows', 'System32');
@@ -47,14 +48,17 @@ export function shortcutPlan({ platform = process.platform, mindPath, kitPath = 
     icon: `${path.join(kitPath, 'assets', 'installer.ico')},0`,
     description,
   };
-  return [folders?.desktop, folders?.startMenu].filter(Boolean).map(folder => ({ file: path.join(folder, NAME), ...common }));
+  return [
+    folders?.desktop && { file: path.join(folders.desktop, NAME), ...common },
+    folders?.startMenu && { file: path.join(folders.startMenu, 'Cosmic', NAME), startMenuRoot: folders.startMenu, ...common },
+  ].filter(Boolean);
 }
 
 function runMaker(item, env) {
   return new Promise((resolve, reject) => {
     execFile(path.join(system32(env), 'wscript.exe'),
       ['//Nologo', MAKER, item.file, item.target, item.workingDirectory, item.icon, item.description, ...item.args],
-      { windowsHide: true }, error => error ? reject(error) : resolve());
+      { windowsHide: true, timeout: 15000 }, error => error ? reject(error) : resolve());
   });
 }
 
@@ -66,10 +70,17 @@ async function bytesOf(file) {
 }
 
 // A shortcut is written when none exists or the one there is the one setup made (its bytes still match the record);
-// any other file with that name is the person's and stays. The parent folder must exist.
+// any other file with that name is the person's and stays. Only Cosmic is created inside an existing Start menu root.
 export async function applyShortcuts(plan, { managed = {}, run = runMaker, env = process.env } = {}) {
   const results = [];
   for (const item of plan) {
+    if (item.startMenuRoot) {
+      if (path.resolve(path.dirname(item.file)) !== path.resolve(item.startMenuRoot, 'Cosmic')) throw new Error('The Start menu shortcut must stay inside Cosmic.');
+      await assertNoLinks(item.file);
+      const root = await lstat(item.startMenuRoot).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+      if (!root?.isDirectory()) { results.push({ file: item.file, status: 'skipped', reason: 'folder-missing' }); continue; }
+      await mkdir(path.dirname(item.file)).catch(error => { if (error.code !== 'EEXIST') throw error; });
+    }
     const existing = await bytesOf(item.file);
     const folder = await lstat(path.dirname(item.file)).catch(() => null);
     if (!folder?.isDirectory()) { results.push({ file: item.file, status: 'skipped', reason: 'folder-missing' }); continue; }

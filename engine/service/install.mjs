@@ -53,7 +53,7 @@ export function planRegistration(input) {
 }
 
 function serviceNameFor(sid) {
-  return `HIVEM1ND-${createHash('sha256').update(String(sid)).digest('hex').slice(0, 16)}`;
+  return `ONEM1ND-${createHash('sha256').update(String(sid)).digest('hex').slice(0, 16)}`;
 }
 
 function registrationDigest(body) {
@@ -177,7 +177,7 @@ function planWindows(input) {
 }
 
 function planMac(input) {
-  const label = input.label ?? 'com.hivem1nd.service';
+  const label = input.label ?? 'com.onem1nd.service';
   const args = [input.nodePath, input.cliPath, 'service', 'run', '--mind-path', input.mindPath];
   const body = `<?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0"><dict><key>Label</key><string>${xml(label)}</string><key>ProgramArguments</key><array>${args.map((item) => `<string>${xml(item)}</string>`).join('')}</array><key>WorkingDirectory</key><string>${xml(input.workingDirectory)}</string><key>RunAtLoad</key><true/><key>ThrottleInterval</key><integer>5</integer></dict></plist>`;
@@ -198,7 +198,7 @@ function planMac(input) {
 
 function planLinux(input) {
   if (input.userManager === false) fail(503, 'service_unavailable', 'The user service manager is not available.');
-  const unit = input.unitName ?? 'hivem1nd.service';
+  const unit = input.unitName ?? 'onem1nd.service';
   const args = [input.nodePath, input.cliPath, 'service', 'run', '--mind-path', input.mindPath];
   const exec = args.map(escapeSystemd).join(' ');
   const body = `[Service]\nType=simple\nExecStart=${exec}\nWorkingDirectory=${escapeSystemd(input.workingDirectory)}\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n`;
@@ -391,7 +391,7 @@ export function bootstrapConfig(config) {
     if (isInside(root, config.stagingPath)) fail(422, 'invalid_path', 'Staging cannot sit inside a synced folder.');
   }
   return {
-    format: 'hivem1nd-service-config-v1',
+    format: 'hivem1nd-service-config-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     mindPath: path.resolve(config.mindPath),
     machine: config.machine,
     origin: { kind: origin.kind, path: path.resolve(origin.path) },
@@ -404,7 +404,7 @@ export function bootstrapConfig(config) {
 
 export function ownershipRecord(plan) {
   return {
-    format: 'hivem1nd-registration-v1',
+    format: 'hivem1nd-registration-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     installationId: plan.installationId ?? null,
     executable: plan.executable,
     arguments: plan.arguments,
@@ -510,7 +510,7 @@ export async function configureOwnedService(options = {}) {
   const machine = options.hostname ?? options.machine;
   await requireLegacyClosure(mindPath, { machine, control: options.legacyControl });
   const mindKey = mindKeyFor(mindPath, platform);
-  const localDirectory = path.join(cosmic, 'hivem1nd-service', mindKey, machine);
+  const localDirectory = path.join(cosmic, 'onem1nd-service', mindKey, machine);
   const configFile = path.join(localDirectory, 'config.json');
   const ownershipFile = path.join(localDirectory, 'registration.json');
   let existing = null;
@@ -525,7 +525,7 @@ export async function configureOwnedService(options = {}) {
   if (!existing && options.requireOrigin === true && !options.originPath) fail(422, 'invalid_body', 'An existing mind needs an explicit origin folder before service setup.');
   const origin = existing?.origin ?? {
     kind: options.originKind ?? 'folder',
-    path: options.originPath ?? path.join(cosmic, 'hivem1nd-origin', mindKey),
+    path: options.originPath ?? path.join(cosmic, 'onem1nd-origin', mindKey),
   };
   const config = bootstrapConfig({ mindPath, machine, origin, stagingPath, encryption: existing?.encryption,
     startWithWindows: Object.hasOwn(options, 'startWithWindows') ? options.startWithWindows : existing?.startWithWindows ?? false,
@@ -622,7 +622,7 @@ export async function removeOwnedRegistration(options = {}) {
     ? path.resolve(options.cosmicPath)
     : localCosmic({ platform, env: options.env ?? {}, home: options.homeDir });
   const mindKey = mindKeyFor(path.resolve(options.mindPath), platform);
-  const localDirectory = path.join(cosmic, 'hivem1nd-service', mindKey, options.hostname);
+  const localDirectory = path.join(cosmic, 'onem1nd-service', mindKey, options.hostname);
   const ownershipFile = path.join(localDirectory, 'registration.json');
   await assertNoLinks(ownershipFile);
   let current = null;

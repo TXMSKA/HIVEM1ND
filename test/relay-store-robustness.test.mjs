@@ -14,7 +14,7 @@ import { PassThrough } from 'node:stream';
 import { createPersonRelay } from '../engine/relay/person.mjs';
 
 async function fixture(context) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-relay-robust-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-relay-robust-'));
   context.after(() => rm(root, { recursive: true, force: true }));
   const mind = path.join(root, 'mind');
   await mkdir(path.join(mind, 'user', 'state'), { recursive: true });

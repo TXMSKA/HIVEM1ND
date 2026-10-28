@@ -324,7 +324,7 @@ test('two machines share an origin and limits pause at the hard window', async (
     machine: 'LAPTOP',
     sequence: 1,
     changes: [{
-      format: 'hivem1nd-change-v1', id: '11111111-1111-4111-8111-111111111111', machine: 'LAPTOP', at: LATER, target,
+      format: 'hivem1nd-change-v1', id: '11111111-1111-4111-8111-111111111111', machine: 'LAPTOP', at: LATER, target, // Compatibility: stored schemas and wire contracts retain their existing identifiers.
       operation: 'put', hash: hashBytes(newer), size: newer.length, baseHash: null, messageId: null, transactionId: null,
     }],
     objects: [{ hash: hashBytes(newer), raw: newer }],
@@ -339,7 +339,7 @@ test('two machines share an origin and limits pause at the hard window', async (
     machine: 'LAPTOP',
     sequence: 2,
     changes: [{
-      format: 'hivem1nd-change-v1', id: '22222222-2222-4222-8222-222222222222', machine: 'LAPTOP', at: AT, target,
+      format: 'hivem1nd-change-v1', id: '22222222-2222-4222-8222-222222222222', machine: 'LAPTOP', at: AT, target, // Compatibility: stored schemas and wire contracts retain their existing identifiers.
       operation: 'put', hash: hashBytes(older), size: older.length, baseHash: null, messageId: null, transactionId: null,
     }],
     objects: [{ hash: hashBytes(older), raw: older }],
@@ -353,7 +353,7 @@ test('two machines share an origin and limits pause at the hard window', async (
     machine: 'LAPTOP',
     sequence: 3,
     changes: [{
-      format: 'hivem1nd-change-v1', id: '33333333-3333-4333-8333-333333333333', machine: 'LAPTOP', at: '2026-10-10T12:00:06.000Z', target,
+      format: 'hivem1nd-change-v1', id: '33333333-3333-4333-8333-333333333333', machine: 'LAPTOP', at: '2026-10-10T12:00:06.000Z', target, // Compatibility: stored schemas and wire contracts retain their existing identifiers.
       operation: 'delete', hash: null, size: 0, baseHash: hashBytes(newer), messageId: null, transactionId: null,
     }],
     objects: [],
@@ -371,7 +371,7 @@ test('two machines share an origin and limits pause at the hard window', async (
     machine: 'LAPTOP',
     sequence: 9,
     changes: [{
-      format: 'hivem1nd-change-v1', id: '44444444-4444-4444-8444-444444444444', machine: 'LAPTOP', at: LATER,
+      format: 'hivem1nd-change-v1', id: '44444444-4444-4444-8444-444444444444', machine: 'LAPTOP', at: LATER, // Compatibility: stored schemas and wire contracts retain their existing identifiers.
       target: { kind: 'mind', path: 'user/later.txt' }, operation: 'put', hash: hashBytes(raw), size: raw.length,
       baseHash: null, messageId: null, transactionId: null,
     }],
@@ -383,7 +383,7 @@ test('two machines share an origin and limits pause at the hard window', async (
     ledger,
     provider: {
       async readHead() {
-        return { format: 'hivem1nd-head-v1', machine: 'LAPTOP', sequence: 1, updatedAt: AT, packs: [{ sequence: 1, file: '000000000001.pack', hash: hashBytes(base), bytes: base.length }] };
+        return { format: 'hivem1nd-head-v1', machine: 'LAPTOP', sequence: 1, updatedAt: AT, packs: [{ sequence: 1, file: '000000000001.pack', hash: hashBytes(base), bytes: base.length }] }; // Compatibility: stored schemas and wire contracts retain their existing identifiers.
       },
       async readPack() { return null; },
     },
@@ -412,7 +412,7 @@ test('an open stream receives imported chat, unit, and editor events once', asyn
   await writeFile(path.join(localPath, 'docs', 'note.json'), `${JSON.stringify({ rev: 1, pages: { en: 'local' } })}\n`);
   await writeFile(path.join(localPath, 'docs', 'flows', 'boards', 'home.json'), `${JSON.stringify({ id: 'home', title: 'Local' })}\n`);
   await writeFile(path.join(fixture.paths.mind, 'user', 'gui', 'resources.json'), `${JSON.stringify({
-    format: 'hivem1nd-resources-v1',
+    format: 'hivem1nd-resources-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     resources: [
       { id: voidId, kind: 'void', project: 'shop', path: voidPath, legacyId: 'note', readOnly: false, attached: [] },
       { id: boardId, kind: 'blueprint', project: 'shop', path: boardPath, legacyId: 'home', readOnly: false, attached: [] },
@@ -624,7 +624,7 @@ test('home access expires, native login stays unverified, and stdio rejects an u
 
 function importedChange(id, target, raw, transactionId, at = LATER) {
   return {
-    format: 'hivem1nd-change-v1',
+    format: 'hivem1nd-change-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     id,
     machine: 'LAPTOP',
     at,
@@ -798,7 +798,7 @@ test('T064 inventory preserves both boards, all 108 references, 14 replacements 
   assert.equal(new Set(captures.map(item => item.path)).size, 193);
   assert.ok(captures.every(item => /^docs\/3\.0\/verification\/(?:start-)?\d+\.\d+-(?:en|es)-(?:modern|high-contrast|nebula|txmska|coffee-cat|ntk)\.png$/.test(item.path)));
 
-  const flow = await readFile(new URL('../docs/flows/boards/hivem1nd-3-flow.mjs', import.meta.url), 'utf8');
+  const flow = await readFile(new URL('../docs/flows/boards/hivem1nd-3-flow.mjs', import.meta.url), 'utf8'); // Historical: immutable 3.0 board references retain their file names.
   const desk = flow.slice(flow.indexOf('const DESK ='), flow.indexOf('const PHONE ='));
   const flowIds = [];
   let row;
@@ -810,7 +810,7 @@ test('T064 inventory preserves both boards, all 108 references, 14 replacements 
   const phone = flow.slice(flow.indexOf('const PHONE ='), flow.indexOf('// Each screen'));
   flowIds.push(...[...phone.matchAll(/^  \["([^"]+)"/gm)].map(match => `phone-${match[1]}`));
   assert.deepEqual(cases.filter(item => item.board === 'flow').map(item => item.screenId), flowIds);
-  const start = await readFile(new URL('../docs/flows/boards/hivem1nd-3-start.mjs', import.meta.url), 'utf8');
+  const start = await readFile(new URL('../docs/flows/boards/hivem1nd-3-start.mjs', import.meta.url), 'utf8'); // Historical: immutable 3.0 board references retain their file names.
   const startRows = start.slice(start.indexOf('const ROWS ='), start.indexOf('const STEP_X'));
   const startIds = [];
   for (const line of startRows.split('\n')) {

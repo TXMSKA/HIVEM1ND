@@ -14,7 +14,7 @@ import { initializeNativeEntry } from '../engine/service/bridge.mjs';
 const HOST = 'TESTBOX';
 
 async function fixture(context) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-wake-robust-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-wake-robust-'));
   context.after(() => rm(root, { recursive: true, force: true }));
   const mind = path.join(root, 'mind');
   await mkdir(path.join(mind, 'user', 'state'), { recursive: true });

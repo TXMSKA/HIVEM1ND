@@ -1,4 +1,4 @@
-# HIVEM1ND service
+# ONEM1ND service
 
 `node cli/index.mjs service run` starts the configured mind's shared service.
 The service holds one lock per OS user, serves the bundled `gui/app` interface,
@@ -14,7 +14,7 @@ registration. Windows uses Task Scheduler, macOS uses a user LaunchAgent,
 and Linux uses a systemd user unit. Tests inject these managers; their success
 does not certify an actual login trigger.
 
-New minds default to the local Cosmic `hivem1nd` folder. An explicitly selected
+New minds default to the local Cosmic `onem1nd` folder. An explicitly selected
 existing mind retains its location, including OneDrive. The configured origin
 is preserved during later setup or evolve. Machine-local configuration, staging,
 and import journals remain outside the mind, origin, and synced roots.

@@ -32,7 +32,7 @@ export async function handleParentMessage(channel, event) {
   const message = event?.data;
   if (!viewer?.embedded || !viewer.hostOrigin || !parent) return;
   if (event.source !== parent || event.origin !== viewer.hostOrigin) return;
-  if (message?.contract !== "hivem1nd-embed-v1" || message.viewerId !== viewer.viewerId) return;
+  if (message?.contract !== "hivem1nd-embed-v1" || message.viewerId !== viewer.viewerId) return; // Compatibility: retain the embed wire contract for existing hosts.
   if (message.type === "set-look" && LOOK_IDS.includes(message.value)) {
     await channel.actions.patchViewer({ look: message.value });
   } else if (message.type === "set-language" && ["en", "es"].includes(message.value)) {
@@ -53,7 +53,7 @@ function publish(channel, type, value) {
   const parent = channel?.transport?.parent;
   if (!channel || channel.disposed || !viewer?.embedded || !viewer.hostOrigin || !parent?.postMessage) return;
   parent.postMessage({
-    contract: "hivem1nd-embed-v1",
+    contract: "hivem1nd-embed-v1", // Compatibility: retain the embed wire contract for existing hosts.
     viewerId: viewer.viewerId,
     type,
     value,

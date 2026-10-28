@@ -41,7 +41,7 @@ function file(context, id) { return path.join(context.paths.mind, 'user', 'gui',
 async function legacyGroup(context, title, members) {
   const group = await createGroup(context, { title, members });
   const record = JSON.parse(await readFile(file(context, group.id)));
-  delete record.link; delete record.parentId; record.format = 'hivem1nd-group-v1';
+  delete record.link; delete record.parentId; record.format = 'hivem1nd-group-v1'; // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   await writeFile(file(context, group.id), JSON.stringify(record));
   return projectGroup(await readFile(file(context, group.id)), group.id);
 }
@@ -57,7 +57,7 @@ test('migration retains active/deleted UUIDs, chats, messages, leads, ambiguity 
   await migrateClusters(context);
   const records = await rawClusters(context);
   assert.deepEqual(records.map(item => item.cluster.id).sort(), [one.id, two.id, deleted.id].sort());
-  assert.ok(records.every(item => item.record.format === 'hivem1nd-cluster-v1'));
+  assert.ok(records.every(item => item.record.format === 'hivem1nd-cluster-v1')); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   const view = await readProjection(context);
   assert.equal(view.units.find(unit => unit.id === 'root:one').clusterAmbiguous, true);
   await assert.rejects(resolveUnitCluster(context, 'root:one'), { code: 'scope_unresolved' });

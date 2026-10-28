@@ -33,7 +33,7 @@ export async function readPlanRecord(context, id) {
   const bytes = await readBytes(context.store, planFile(context, id));
   if (!bytes) planError('plan_not_found', 404);
   const record = JSON.parse(bytes);
-  if (record.format !== 'hivem1nd-plan-v1' || record.id !== id || planRevision(record).revision !== record.revision) planError('corrupt_resource', 409);
+  if (record.format !== 'hivem1nd-plan-v1' || record.id !== id || planRevision(record).revision !== record.revision) planError('corrupt_resource', 409); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   return { record, bytes };
 }
 export function publicPlan(record) { const { format, ...plan } = record; return structuredClone(plan); }
@@ -170,7 +170,7 @@ export async function createPlan(context, input) {
 // The owner write of a new draft: the plan, its chat and cluster records and the new task files in one transaction.
 async function draftPlan(context, input) {
   const id = randomUUID(), resolved = await resolvePlan(context, input, id);
-  const record = planRevision({ format: 'hivem1nd-plan-v1', id, clusterId: input.clusterId, chatId: input.chatId, machine: input.machine,
+  const record = planRevision({ format: 'hivem1nd-plan-v1', id, clusterId: input.clusterId, chatId: input.chatId, machine: input.machine, // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     title: input.title, branch: input.branch, mode: input.mode, tasks: resolved.tasks, roles: resolved.roles, approved: false });
   const chatPath = path.join(context.paths.mind, 'user', 'relay', 'chats', record.chatId, 'chat.md');
   const chatBytes = await readBytes(context.store, chatPath);

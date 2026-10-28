@@ -19,11 +19,11 @@ The one file to read first when writing, reviewing or accepting work against a p
 
 ## Met
 
-A requirement counts as met only as the task contract in [files.md](../../files.md#task-tasksid-slugmd) sets out: a `done` task cites its ID and every criterion has linked evidence in that task's Report. [requirement-acceptance](protocols/requirement-acceptance.md) is the check. The `met` count of `hivem1nd view` counts the `done` tasks that cite the ID, without the evidence, per [engine/README.md](../../engine/README.md#view-hivem1nd-view-v1); the protocol reports any difference between the two.
+A requirement counts as met only as the task contract in [files.md](../../files.md#task-tasksid-slugmd) sets out: a `done` task cites its ID and every criterion has linked evidence in that task's Report. [requirement-acceptance](protocols/requirement-acceptance.md) is the check. The `met` count of `onem1nd view` counts the `done` tasks that cite the ID, without the evidence, per [engine/README.md](../../engine/README.md#view); the protocol reports any difference between the two.
 
 ## Defaults
 
-- Requirement line: `- <CODE>-<A|B|R>-<NN>: <what the product does>. Accepted when: <criterion>.`, with the code fixed for the product, as [files.md](../../files.md#product-projectsprojectproductmd) sets out. The view also counts a line written `- <ID> <Title>: ...`, per [engine/README.md](../../engine/README.md#view-hivem1nd-view-v1), and the searches below accept both.
+- Requirement line: `- <CODE>-<A|B|R>-<NN>: <what the product does>. Accepted when: <criterion>.`, with the code fixed for the product, as [files.md](../../files.md#product-projectsprojectproductmd) sets out. The view also counts a line written `- <ID> <Title>: ...`, per [engine/README.md](../../engine/README.md#view), and the searches below accept both.
 - Criterion kinds: a screen state, a figure with its unit and the condition it is measured under, a file, or the output of a command, as [requirements](categories/requirements.md#requirement-lines) sets out.
 - Floor line: `- Local first: <condition>`, and the same for `Privacy`, `Weak devices` and `Platforms`, each condition of a criterion kind, such as `- Weak devices: the first screen shows its content within 3 seconds on a five-year-old phone over a mobile connection.`
 - Verdicts: the five of [files.md](../../files.md#verdicts); not run and not verifiable never count as pass.

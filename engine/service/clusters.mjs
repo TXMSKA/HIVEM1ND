@@ -51,8 +51,8 @@ export async function readClusterMappings(context) {
   const file = path.join(context.paths.localDirectory, 'cluster-links.json');
   await assertNoLinks(file, { root: context.paths.localDirectory });
   const source = await readBytes(context.store, file);
-  const record = source ? JSON.parse(source) : { format: 'hivem1nd-cluster-links-v1', machine: context.paths.machine, links: {} };
-  if (record.format !== 'hivem1nd-cluster-links-v1' || record.machine !== context.paths.machine || !record.links || typeof record.links !== 'object') fail(409, 'cluster_changed', 'The owner-local cluster mappings changed.');
+  const record = source ? JSON.parse(source) : { format: 'hivem1nd-cluster-links-v1', machine: context.paths.machine, links: {} }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
+  if (record.format !== 'hivem1nd-cluster-links-v1' || record.machine !== context.paths.machine || !record.links || typeof record.links !== 'object') fail(409, 'cluster_changed', 'The owner-local cluster mappings changed.'); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   return { file, bytes: source, record };
 }
 export function mappingKey(link) { return `${link.kind}:${link.projectId ?? link.folderId}`; }
@@ -101,7 +101,7 @@ async function checkedLink(context, link, machine, exclude = null) {
     || mapping.repositoryId && links[mappingKey(item.cluster.link)]?.repositoryId === mapping.repositoryId))) fail(409, 'cluster_changed', 'The link already belongs to a cluster.');
 }
 function recordFor(context, { id = randomUUID(), title, members = [], parentId = null, link = { kind: 'none' }, deleted = false }) {
-  return { format: 'hivem1nd-cluster-v1', id, title, members, parentId, link, chatId: id, deleted, createdAt: new Date(context.now()).toISOString() };
+  return { format: 'hivem1nd-cluster-v1', id, title, members, parentId, link, chatId: id, deleted, createdAt: new Date(context.now()).toISOString() }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
 }
 function newRecords(context, record) {
   const chat = groupChatBytes(context, record);
@@ -137,7 +137,7 @@ export async function patchCluster(context, id, input) {
     const current = (await rawClusters(context)).find(item => item.cluster.id === id && !item.cluster.deleted);
     if (!current) fail(404, 'cluster_not_found', 'The cluster does not exist.');
     checkRevision(current.bytes, input.expectedRevision);
-    const record = { ...current.record, format: 'hivem1nd-cluster-v1', parentId: current.cluster.parentId, link: current.cluster.link };
+    const record = { ...current.record, format: 'hivem1nd-cluster-v1', parentId: current.cluster.parentId, link: current.cluster.link }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     if (Object.hasOwn(input, 'title')) record.title = groupTitle(input.title);
     if (Object.hasOwn(input, 'members')) record.members = await groupMembers(context, input.members, true);
     if (Object.hasOwn(input, 'parentId')) {
@@ -276,7 +276,7 @@ export async function migrateClusters(context) {
     const previous = await readBytes(context.store, manifestPath);
     if (previous) {
       const record = JSON.parse(previous);
-      if (record.format !== 'hivem1nd-cluster-migration-v1' || record.machine !== context.paths.machine || record.phase !== 'complete') fail(409, 'cluster_changed', 'The cluster migration needs journal recovery.');
+      if (record.format !== 'hivem1nd-cluster-migration-v1' || record.machine !== context.paths.machine || record.phase !== 'complete') fail(409, 'cluster_changed', 'The cluster migration needs journal recovery.'); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
       if (!isUuid(record.transactionId)) fail(409, 'cluster_changed', 'The cluster migration has no verified journal.');
       const journalBytes = await readBytes(context.store, path.join(context.paths.localDirectory, 'transactions', `${record.transactionId}.json`));
       const journal = journalBytes ? JSON.parse(journalBytes) : null;
@@ -285,8 +285,8 @@ export async function migrateClusters(context) {
     }
     const records = await rawClusters(context), entries = [], upgrades = new Map();
     for (const item of records) {
-      if (item.record.format !== 'hivem1nd-group-v1') continue;
-      const after = bytes({ ...item.record, format: 'hivem1nd-cluster-v1', parentId: null, link: { kind: 'none' } });
+      if (item.record.format !== 'hivem1nd-group-v1') continue; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
+      const after = bytes({ ...item.record, format: 'hivem1nd-cluster-v1', parentId: null, link: { kind: 'none' } }); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
       entries.push(clusterEntry(context, item.relative, item.bytes, after));
       upgrades.set(path.resolve(absolute(context, item.relative)), { before: item.cluster.revision, after: revisionOf(after) });
     }
@@ -318,7 +318,7 @@ export async function migrateClusters(context) {
       if (changed) entries.push({ resource: `cluster-migration-undo:${name}`, recordPath: file, beforeRevision: revisionOf(source), beforeBytes: source, afterBytes: bytes(undo), private: true });
     }
     const transactionId = randomUUID();
-    const manifest = { format: 'hivem1nd-cluster-migration-v1', machine: context.paths.machine, transactionId, phase: 'complete', groupIds: records.map(item => item.cluster.id), at: new Date(context.now()).toISOString() };
+    const manifest = { format: 'hivem1nd-cluster-migration-v1', machine: context.paths.machine, transactionId, phase: 'complete', groupIds: records.map(item => item.cluster.id), at: new Date(context.now()).toISOString() }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     entries.push({ resource: 'cluster-migration', recordPath: manifestPath, beforeRevision: null, afterBytes: bytes(manifest), private: true });
     await commitChange({ ...context, receipt: null }, { id: transactionId, additionAcceptance: true, entries,
       events: [...prepared.events, { name: 'view.changed', data: { revision: null, collections: ['clusters', 'groups', 'units', 'chats'] } }], response: { status: 200, body: manifest } });

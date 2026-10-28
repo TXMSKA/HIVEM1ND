@@ -41,7 +41,7 @@ test('warning controls bind the original attempt, episode and unread pointer wit
     alerts: [{ id: 'episode', kind: 'unread', resolved: false, messageId: 'original', recipientId: 'agent', told: [{ target: 'coordinator' }] }] };
   const api = createApi({ location: { origin: 'http://127.0.0.1:9', hash: '' }, fetch: async (url, init) => {
     if (init.method === 'POST') bodies.push(JSON.parse(init.body));
-    return new Response(JSON.stringify({ contract: 'hivem1nd-gui-v3', data: new URL(url).pathname.includes('/plans/') ? plan : run,
+    return new Response(JSON.stringify({ contract: 'hivem1nd-gui-v3', data: new URL(url).pathname.includes('/plans/') ? plan : run, // Compatibility: stored schemas and wire contracts retain their existing identifiers.
       meta: { requestId: 'fixture', readAt: '2026-10-15T12:00:00Z', eventCursor: 'fixture:1', sync: 'local' } }));
   } }); api.token = 'fixture';
   const controller = createPlanController(api); controller.runs.set(run.id, run);

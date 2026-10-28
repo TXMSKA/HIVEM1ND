@@ -1,6 +1,6 @@
 # Genesis setup
 
-The setup Genesis runs while `setup` in `user/machines/<host>.md` is not `done`. Each step asks the question its number has in the Setup questions of [genesis.md](../genesis.md#setup-questions). After every step, the machine file is written with `setup:` set to the next step, so any front resumes there; the collected answers stay in its `Setup Draft` section, as [files.md](../../files.md#machine-machineshostmd) defines it, which every front preserves and the last step removes. The app and `hivem1nd init` run their own wizard; this file is the path for an agent with nothing installed.
+The setup Genesis runs while `setup` in `user/machines/<host>.md` is not `done`. Each step asks the question its number has in the Setup questions of [genesis.md](../genesis.md#setup-questions). After every step, the machine file is written with `setup:` set to the next step, so any front resumes there; the collected answers stay in its `Setup Draft` section, as [files.md](../../files.md#machine-machineshostmd) defines it, which every front preserves and the last step removes. The app and `onem1nd init` run their own wizard; this file is the path for an agent with nothing installed.
 
 ## Steps
 
@@ -15,7 +15,7 @@ The setup Genesis runs while `setup` in `user/machines/<host>.md` is not `done`.
 9. Install. List the files and paths, resolve each conflict, and ask the question of this step. On a yes:
    1. Write the files of files.md: `user/VERSION` with the version of the kit's `package.json`; `user/preferences.md` with one line per answer of step 8, each with the date and "Why: chosen at setup", left empty when the block was skipped; `user/routes.md`; and `user/machines/<host>.md`, with `language:` from step 1.
    2. Copy the commands into each selected agent by the Copy scope of [genesis.md](../genesis.md#copy-scope), recording each installed file with its SHA-256 hash in `machines/<host>.managed.json`.
-   3. For each agent in auto mode, add the rules line in the selected preference order: `HIVEM1ND: the mind is at <path>. Read <path>/rules.md first, then the role or command asked for.` The machine header records `preferences-first: yes` or `no`: yes places the line after existing preferences, no places it before them, and neither removes their content.
+   3. For each agent in auto mode, add the rules line in the selected preference order: `ONEM1ND: the mind is at <path>. Read <path>/rules.md first, then the role or command asked for.` The machine header records `preferences-first: yes` or `no`: yes places the line after existing preferences, no places it before them, and neither removes their content.
    4. Join the clients to Relay by the [Relay join](../genesis.md#relay-join).
    An existing command that is unowned or changed since installation is a conflict in the list, and it needs an explicit keep-or-replace choice before anything is written.
 10. Done. Show the question of this step, then the attach prompt for the agents without adapter, if any, then write `setup: done` and remove the `Setup Draft` section.

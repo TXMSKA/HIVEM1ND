@@ -27,7 +27,7 @@ test('ReLAN peers persist only in the private local directory without redundant 
     peers.list()[0].address = '8.8.8.8';
     assert.deepEqual(peers.list(), expected);
     assert.deepEqual((await openKnownPeers(options)).list(), expected);
-    assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), { format: 'hivem1nd-relan-peers-v1', peers: expected });
+    assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), { format: 'hivem1nd-relan-peers-v1', peers: expected }); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     const before = await lstat(file);
     assert.equal(await peers.add({ address: '100.64.0.2', port: 43119 }), false);
     assert.equal(await peers.remove({ address: '10.1.2.3' }), false);
@@ -91,7 +91,7 @@ test('ReLAN peers reject invalid saved data and stop mutations if the file becom
   try {
     const peers = await openKnownPeers(options);
     await peers.add({ address: '100.64.0.2' });
-    for (const value of ['{', '{}', JSON.stringify({ format: 'hivem1nd-relan-peers-v1', peers: [{ address: '8.8.8.8', port: 43119 }] })]) {
+    for (const value of ['{', '{}', JSON.stringify({ format: 'hivem1nd-relan-peers-v1', peers: [{ address: '8.8.8.8', port: 43119 }] })]) { // Compatibility: stored schemas and wire contracts retain their existing identifiers.
       await writeFile(file, value);
       await assert.rejects(openKnownPeers(options), { code: 'invalid_relan_peers' });
       await assert.rejects(peers.add({ address: '100.64.0.3' }), { code: 'invalid_relan_peers' });

@@ -64,7 +64,7 @@ export async function writeKit(fixture) {
 }
 
 // Connect a client's command line through the review and apply calls the dialog makes. `git` also takes the optional
-// permission (scoped git commit and git push for sessions HIVEM1ND starts).
+// permission (scoped git commit and git push for sessions ONEM1ND starts).
 export async function connectClient(world, client, mode = 'auto', { git = false } = {}) {
   const preview = await world.call('POST', `/settings/agents/${client}/preview`, { machine: LOCAL, mode, target: 'cli', allowGit: false }, { key: world.key() });
   const changeIds = preview.changes.filter(change => git || !change.optional).map(change => change.id);

@@ -11,5 +11,6 @@ test('every family look has a local palette and no remote asset requirement', as
     assert.ok(block.includes('--bg:'));
     assert.ok(block.includes('--mute:'));
   }
-  assert.equal(/@import\s+url|https?:\/\//i.test(css), false);
+  // A local SVG data URL may include its XML namespace without requesting it.
+  assert.equal(/@import\s+url|url\(\s*["']?https?:\/\//i.test(css), false);
 });

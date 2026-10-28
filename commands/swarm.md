@@ -10,5 +10,5 @@ Argument: none
 
 ## Steps
 
-1. Run `npx hivem1nd swarm --mind-path "{{mind}}"`.
+1. Run `npx onem1nd swarm --mind-path "{{mind}}"`.
 2. Print the units, tasks and inboxes from the result as three blocks, with nothing else.

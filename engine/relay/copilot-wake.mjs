@@ -123,7 +123,7 @@ export async function sendCopilotWake({ binding, text, env = process.env, spawnP
   const ok = (message) => Boolean(message && !message.error && message.result && typeof message.result === 'object');
   try {
     const initialized = await request('initialize', { protocolVersion: 1,
-      clientInfo: { name: 'hivem1nd-relay', version: '1.0.0' }, clientCapabilities: {} });
+      clientInfo: { name: 'onem1nd-relay', version: '1.0.0' }, clientCapabilities: {} });
     if (!ok(initialized) || initialized.result.protocolVersion !== 1 || initialized.result.agentCapabilities?.loadSession !== true) {
       finish(no('copilot_load_unavailable')); return result;
     }

@@ -39,7 +39,7 @@ async function world(t) {
 
 test('message parts keep the five kinds strict and every other reference as it was', () => {
   assert.deepEqual(messagePart({ kind: 'image', path: ASSET, label: '  Checkout  ' }, fail), { kind: 'image', path: ASSET, label: 'Checkout' });
-  assert.deepEqual(messagePart({ kind: 'link', path: 'https://github.com/TXMSKA/HIVEM1ND/pull/61', label: '' }, fail), { kind: 'link', path: 'https://github.com/TXMSKA/HIVEM1ND/pull/61' });
+  assert.deepEqual(messagePart({ kind: 'link', path: 'https://github.com/TXMSKA/HIVEM1ND/pull/61', label: '' }, fail), { kind: 'link', path: 'https://github.com/TXMSKA/HIVEM1ND/pull/61' }); // Compatibility: repository URLs retain their existing hosting location.
   assert.deepEqual(messagePart({ kind: 'link', path: 'mailto:team@example.com' }, fail), { kind: 'link', path: 'mailto:team@example.com' });
   assert.deepEqual(messagePart({ kind: 'board', path: BOARD }, fail), { kind: 'board', path: BOARD });
   assert.deepEqual(messagePart({ kind: 'task', path: 'project:shop:029' }, fail), { kind: 'task', path: 'project:shop:029' });
@@ -116,7 +116,7 @@ test('a picture an agent sent to the person shows in their direct chat', async (
 });
 
 async function relayWorld(context) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-chat-media-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-chat-media-'));
   context.after(() => rm(root, { recursive: true, force: true }));
   const mind = path.join(root, 'mind');
   await mkdir(path.join(mind, 'user', 'projects', 'alpha', 'state'), { recursive: true });

@@ -17,7 +17,7 @@ const keyProvider = keyId => keyId === KEY_ID ? KEY : null;
 
 function change(name, raw) {
   return {
-    format: 'hivem1nd-change-v1',
+    format: 'hivem1nd-change-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     id: uuidV8(['encrypted-change', name]),
     machine: 'LAPTOP',
     at: AT,
@@ -66,7 +66,7 @@ function rewrite(bytes, mutateHeader = () => {}, mutatePayload = () => {}, updat
 
 function headFor(packs) {
   return {
-    format: 'hivem1nd-head-v1', machine: 'LAPTOP', sequence: packs.length, updatedAt: AT,
+    format: 'hivem1nd-head-v1', machine: 'LAPTOP', sequence: packs.length, updatedAt: AT, // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     packs: packs.map((bytes, index) => ({ sequence: index + 1, file: packFileName(index + 1), hash: hashBytes(bytes), bytes: bytes.length })),
   };
 }
@@ -96,7 +96,7 @@ test('AES-256-GCM encrypts the complete index and compressed blobs with the cont
   assert.equal(header.payloadBytes, payload.length);
   assert.equal(payload.includes(Buffer.from('user/private.txt')), false);
   const decipher = createDecipheriv('aes-256-gcm', KEY, Buffer.from(header.encryption.nonce, 'base64url'), { authTagLength: 16 });
-  decipher.setAAD(Buffer.from(`hivem1nd-pack-v1:LAPTOP:1:${KEY_ID}`));
+  decipher.setAAD(Buffer.from(`hivem1nd-pack-v1:LAPTOP:1:${KEY_ID}`)); // Compatibility: encryption AAD must match existing packs.
   decipher.setAuthTag(Buffer.from(header.encryption.tag, 'base64url'));
   const plain = Buffer.concat([decipher.update(payload), decipher.final()]);
   assert.deepEqual(plain, readFramed(pack({ encryption: { algorithm: 'none' } })).payload);

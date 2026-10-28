@@ -11,10 +11,10 @@ import { writeDurable } from './origin.mjs';
 
 const FUTURE_MS = 30000;
 const RESULT_FORMATS = new Set([
-  'hivem1nd-session-result-v1',
-  'hivem1nd-approval-result-v1',
-  'hivem1nd-approval-answer-result-v1',
-  'hivem1nd-grant-revocation-result-v1',
+  'hivem1nd-session-result-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
+  'hivem1nd-approval-result-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
+  'hivem1nd-approval-answer-result-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
+  'hivem1nd-grant-revocation-result-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
 ]);
 
 export function compareVersions(left, right) {
@@ -30,27 +30,27 @@ export function compareVersions(left, right) {
 export function validateOwner({ packMachine, target, record = null, headers = null, bindings = {} } = {}) {
   const format = record?.format ?? null;
   if (/^user\/gui\/(plans|runs)\//.test(target?.path ?? '') && record?.machine !== packMachine) ownerError();
-  if (format === 'hivem1nd-session-result-v1') {
+  if (format === 'hivem1nd-session-result-v1') { // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     const owner = bindings.requests?.[record.requestId]?.targetMachine ?? null;
     if (!owner) return pendingOwner(`request:${record.requestId ?? ''}`);
     if (owner !== packMachine || claimedMachine(record) !== null && claimedMachine(record) !== packMachine) ownerError();
   }
-  if (format === 'hivem1nd-approval-result-v1' || format === 'hivem1nd-approval-answer-result-v1') {
+  if (format === 'hivem1nd-approval-result-v1' || format === 'hivem1nd-approval-answer-result-v1') { // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     const owner = bindings.approvals?.[record.approvalId]?.machine ?? null;
     if (!owner) return pendingOwner(`approval:${record.approvalId ?? ''}`);
     if (owner !== packMachine || claimedMachine(record) !== null && claimedMachine(record) !== packMachine) ownerError();
   }
-  if (format === 'hivem1nd-grant-revocation-result-v1') {
+  if (format === 'hivem1nd-grant-revocation-result-v1') { // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     const owner = bindings.revocations?.[record.requestId]?.machine ?? null;
     if (!owner) return pendingOwner(`revocation:${record.requestId ?? ''}`);
     if (owner !== packMachine || claimedMachine(record) !== null && claimedMachine(record) !== packMachine) ownerError();
   }
-  if (format === 'hivem1nd-session-status-v1') {
+  if (format === 'hivem1nd-session-status-v1') { // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     const owner = bindings.sessions?.[record.sessionId]?.machine ?? null;
     if (!owner) return pendingOwner(`session:${record.sessionId ?? ''}`);
     if (owner !== packMachine || claimedMachine(record) !== null && claimedMachine(record) !== packMachine) ownerError();
   }
-  if (format === 'hivem1nd-service-v1' && record.machine !== packMachine) ownerError();
+  if (format === 'hivem1nd-service-v1' && record.machine !== packMachine) ownerError(); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   if (isReadReceipt(target?.path)) {
     const reader = receiptMachine(target.path);
     if (!reader || reader !== packMachine || (record?.machine && record.machine !== packMachine)) ownerError();
@@ -162,7 +162,7 @@ async function applyPackLocked(sync, packBytes, { provider = { async readHead() 
       bytes: Buffer.isBuffer(packBytes) ? packBytes.length : Buffer.byteLength(packBytes),
     }];
     validateHead({
-      format: 'hivem1nd-head-v1',
+      format: 'hivem1nd-head-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
       machine: decoded.header.machine,
       sequence: decoded.header.sequence,
       updatedAt: new Date(sync.now()).toISOString(),
@@ -222,7 +222,7 @@ async function applyPackLocked(sync, packBytes, { provider = { async readHead() 
   const versions = await readVersions(sync);
   const tombstones = new Set(await readGrantTombstones(sync));
   for (const item of prepared) {
-    if (item.record?.format === 'hivem1nd-grant-revocation-result-v1' && item.record.grantId) tombstones.add(item.record.grantId);
+    if (item.record?.format === 'hivem1nd-grant-revocation-result-v1' && item.record.grantId) tombstones.add(item.record.grantId); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   }
   const staged = await readStaged(sync);
   const plans = [];
@@ -266,7 +266,7 @@ async function applyPackLocked(sync, packBytes, { provider = { async readHead() 
     const ops = [...group.ops];
     if (group.version) ops.push({ kind: 'write', file: versionPath(sync), bytes: versionBytes.toString('base64') });
     if (tombstones.size > 0) {
-      ops.push({ kind: 'write', file: grantPath(sync), bytes: Buffer.from(`${canonicalJson({ format: 'hivem1nd-grant-tombstones-v1', ids: [...tombstones].sort() })}\n`, 'utf8').toString('base64') });
+      ops.push({ kind: 'write', file: grantPath(sync), bytes: Buffer.from(`${canonicalJson({ format: 'hivem1nd-grant-tombstones-v1', ids: [...tombstones].sort() })}\n`, 'utf8').toString('base64') }); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     }
     await runGroup(sync, group.id, ops, group.events, roots, group.changes);
     completed += 1;
@@ -494,7 +494,7 @@ async function stageNotice(sync, event, roots) {
   const id = event.noticeId;
   const at = new Date(sync.now()).toISOString();
   const change = validateChange({
-    format: 'hivem1nd-change-v1',
+    format: 'hivem1nd-change-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     id,
     machine: sync.machine,
     at,
@@ -533,7 +533,7 @@ async function checkpoint(sync, decoded, packBytes, ledger) {
   }
   packs.sort((left, right) => left.sequence - right.sequence);
   const head = {
-    format: 'hivem1nd-head-v1',
+    format: 'hivem1nd-head-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     machine,
     sequence: packs.at(-1).sequence,
     updatedAt: new Date(sync.now()).toISOString(),
@@ -620,7 +620,7 @@ function resourcesInPack(prepared) {
   for (const item of prepared) {
     if (item.change.target.kind !== 'mind' || item.change.target.path !== 'user/gui/resources.json' || !item.raw) continue;
     const parsed = parseRecord(item.raw);
-    if (parsed?.format === 'hivem1nd-resources-v1' && Array.isArray(parsed.resources)) resources.push(...parsed.resources);
+    if (parsed?.format === 'hivem1nd-resources-v1' && Array.isArray(parsed.resources)) resources.push(...parsed.resources); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   }
   return resources;
 }
@@ -640,7 +640,7 @@ function isImmutable(item) {
   if (/^user\/gui\/runs\/[^/]+\/log\/\d{12}\.json$/.test(item.change.target.path)) return true;
   if (item.change.target.kind === 'project' && /^docs\/flows\/history\/[0-9a-f-]{36}\/[0-9a-f-]{36}\.(json|document\.json|comments\.json)$/.test(item.change.target.path)) return true;
   if (RESULT_FORMATS.has(item.record?.format)) return true;
-  if (item.record?.format === 'hivem1nd-session-request-v1' || item.record?.format === 'hivem1nd-approval-v1' || item.record?.format === 'hivem1nd-approval-answer-v1' || item.record?.format === 'hivem1nd-read-v1') return true;
+  if (item.record?.format === 'hivem1nd-session-request-v1' || item.record?.format === 'hivem1nd-approval-v1' || item.record?.format === 'hivem1nd-approval-answer-v1' || item.record?.format === 'hivem1nd-read-v1') return true; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   return /(^|\/)inbox\/[^/]+\/[^/]+\.md$/.test(item.change.target.path) || /(^|\/)archive\/[^/]+\/[^/]+\.md$/.test(item.change.target.path);
 }
 
@@ -688,7 +688,7 @@ async function readStaged(sync) {
 
 async function readVersions(sync) {
   const parsed = await readJsonAbsolute(versionPath(sync));
-  if (!parsed) return { format: 'hivem1nd-sync-versions-v1', targets: {} };
+  if (!parsed) return { format: 'hivem1nd-sync-versions-v1', targets: {} }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   parsed.targets ??= {};
   return parsed;
 }
@@ -700,7 +700,7 @@ async function readGrantTombstones(sync) {
 
 async function readLedgerFile(ledger) {
   const parsed = await readJsonAbsolute(ledger.file);
-  if (!parsed) return { format: 'hivem1nd-sync-ledger-v1', admitted: [], outgoing: [], incoming: {}, applied: {}, notices: [] };
+  if (!parsed) return { format: 'hivem1nd-sync-ledger-v1', admitted: [], outgoing: [], incoming: {}, applied: {}, notices: [] }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   parsed.applied ??= {};
   parsed.incoming ??= {};
   parsed.admitted ??= [];
@@ -822,11 +822,11 @@ async function mergeOwnerBindings(sync, supplied = {}) {
 
 function absorbOwnerRecord(bindings, record) {
   if (!record || typeof record !== 'object') return;
-  if (record.format === 'hivem1nd-session-request-v1' && record.id && record.targetMachine) {
+  if (record.format === 'hivem1nd-session-request-v1' && record.id && record.targetMachine) { // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     bindings.requests[record.id] = { targetMachine: record.targetMachine };
     bindings.revocations[record.id] = { machine: record.targetMachine };
   }
-  if ((record.format === 'hivem1nd-approval-v1' || record.format === 'hivem1nd-approval-binding-v1') && record.machine) {
+  if ((record.format === 'hivem1nd-approval-v1' || record.format === 'hivem1nd-approval-binding-v1') && record.machine) { // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     const id = record.approvalId ?? record.id;
     if (id) bindings.approvals[id] = { machine: record.machine };
   }

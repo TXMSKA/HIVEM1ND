@@ -11,11 +11,11 @@ Argument: [absolute path of a Void document]
 
 Start: Locate in `rules.md` of the mind above; no unit is needed to serve the reader, so its step that asks for one is skipped. The tools write as the session's own unit.
 
-A Void text holds a document or copy, one entry per page, in English and Spanish. Agents use the tools of the `hivem1nd-relay` server; Void Lite, the local reader on port 3302, keeps the person's browser view. When an agent may create or edit a text is in `rules.md` (Blueprint and Void).
+A Void text holds a document or copy, one entry per page, in English and Spanish. Agents use the tools of the `onem1nd-relay` server; Void Lite, the local reader on port 3302, keeps the person's browser view. When an agent may create or edit a text is in `rules.md` (Blueprint and Void).
 
 ## Tools
 
-Answers and attachment work as for Blueprint: `{"contract":"hivem1nd-gui-v3","data":...}`, or an `error` with `isError`, and only for a unit attached to the text.
+Answers and attachment work as for Blueprint: `{"contract":"hivem1nd-gui-v3","data":...}`, or an `error` with `isError`, and only for a unit attached to the text. <!-- Compatibility: stored schemas and wire contracts retain their existing identifiers. -->
 
 - Read: `void_open { resourceId }`. `data` holds `revision`, `commentsRevision`, `threads` and `document`, with `title`, `rev` and `pages`.
 - Create: `void_create { title, requestId }`, from a unit of a project, writes `docs/<slug of the title>-<first 8 characters of requestId>.json` with one empty page `Intro`, its `.orig.json` and `.comments.json`, and attaches the unit.

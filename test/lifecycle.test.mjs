@@ -12,7 +12,7 @@ import { check, checkForUpdates, evolve, pylon, swarm } from "../engine/lifecycl
 const execFileAsync = promisify(execFile);
 
 async function temporaryDirectory(t, name) {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), `hivem1nd-${name}-`));
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), `onem1nd-${name}-`));
   t.after(async () => {
     await fs.rm(directory, { recursive: true, force: true, maxRetries: 3 });
   });
@@ -42,7 +42,7 @@ async function makeMind(root, hostname = "TEST") {
 
 async function makeKit(root, version = "1.0.0") {
   const kitPath = path.join(root, "kit");
-  await write(path.join(kitPath, "package.json"), `${JSON.stringify({ name: "hivem1nd-test", version })}\n`);
+  await write(path.join(kitPath, "package.json"), `${JSON.stringify({ name: "onem1nd-test", version })}\n`);
   await fs.mkdir(path.join(kitPath, "migrations"), { recursive: true });
   return kitPath;
 }
@@ -67,7 +67,7 @@ async function makeRepositoryPair(t) {
   await git(seed, ["init", "--initial-branch=main"], env);
   await git(seed, ["config", "user.name", "Test User"], env);
   await git(seed, ["config", "user.email", "test@example.invalid"], env);
-  await write(path.join(seed, "package.json"), `${JSON.stringify({ name: "hivem1nd-test", version: "1.0.0" })}\n`);
+  await write(path.join(seed, "package.json"), `${JSON.stringify({ name: "onem1nd-test", version: "1.0.0" })}\n`);
   await write(path.join(seed, "app.txt"), "clean\n");
   await git(seed, ["add", "package.json", "app.txt"], env);
   await git(seed, ["commit", "-m", "Initial commit"], env);
@@ -221,12 +221,12 @@ test("evolve refuses to pull a dirty base before changing private data", async (
   await git(kitPath, ["init", "--initial-branch=main"], env);
   await git(kitPath, ["config", "user.name", "Test User"], env);
   await git(kitPath, ["config", "user.email", "test@example.invalid"], env);
-  await write(path.join(kitPath, "package.json"), `${JSON.stringify({ name: "hivem1nd-test", version: "1.0.0" })}\n`);
+  await write(path.join(kitPath, "package.json"), `${JSON.stringify({ name: "onem1nd-test", version: "1.0.0" })}\n`);
   await write(path.join(kitPath, ".gitignore"), "/user/\n");
   await git(kitPath, ["add", "package.json", ".gitignore"], env);
   await git(kitPath, ["commit", "-m", "Initial commit"], env);
   await makeMind(root);
-  await write(path.join(kitPath, "package.json"), `${JSON.stringify({ name: "hivem1nd-test", version: "2.0.0" })}\n`);
+  await write(path.join(kitPath, "package.json"), `${JSON.stringify({ name: "onem1nd-test", version: "2.0.0" })}\n`);
   let installerCalled = false;
 
   await assert.rejects(
@@ -259,7 +259,7 @@ test("evolve upgrades a copied mind through the real installer and keeps exclusi
   for (const [kitPath, version, marker] of [[oldKit, "0.1.0", "old"], [newKit, "1.0.0", "new"]]) {
     await write(
       path.join(kitPath, "package.json"),
-      `${JSON.stringify({ name: "hivem1nd-test", version, files: ["commands/", "features/", "migrations/", "rules.md"] })}\n`,
+      `${JSON.stringify({ name: "onem1nd-test", version, files: ["commands/", "features/", "migrations/", "rules.md"] })}\n`,
     );
     await write(path.join(kitPath, "rules.md"), `${marker} base rules\n`);
     await write(
@@ -319,7 +319,7 @@ test("evolve stops on a dangling junction, then replaces it and writes the run r
   );
   await write(
     path.join(kitPath, "package.json"),
-    `${JSON.stringify({ name: "hivem1nd-test", version: "1.0.0", files: ["features/"] })}\n`,
+    `${JSON.stringify({ name: "onem1nd-test", version: "1.0.0", files: ["features/"] })}\n`,
   );
   await write(
     path.join(kitPath, "features", "report.md"),
@@ -376,7 +376,7 @@ test("evolve preserves user-added kit files and warns only when the kit ships th
   for (const [kitPath, version, marker] of [[oldKit, "1.0.0", "old"], [newKit, "2.0.0", "new"]]) {
     await write(
       path.join(kitPath, "package.json"),
-      `${JSON.stringify({ name: "hivem1nd-test", version, files: ["features/"] })}\n`,
+      `${JSON.stringify({ name: "onem1nd-test", version, files: ["features/"] })}\n`,
     );
     await write(path.join(kitPath, "features", "report.md"), `${marker} report\n`);
   }
@@ -410,7 +410,7 @@ test("evolve stops before pulling when the kit ships a file the user added", asy
   await git(kitPath, ["config", "user.email", "test@example.invalid"], env);
   await write(
     path.join(kitPath, "package.json"),
-    `${JSON.stringify({ name: "hivem1nd-test", version: "1.0.0", files: ["features/"] })}\n`,
+    `${JSON.stringify({ name: "onem1nd-test", version: "1.0.0", files: ["features/"] })}\n`,
   );
   await write(path.join(kitPath, ".gitignore"), "/user/\n");
   await write(path.join(kitPath, "features", "report.md"), "old report\n");
@@ -426,7 +426,7 @@ test("evolve stops before pulling when the kit ships a file the user added", asy
   await git(upstreamClone, ["config", "user.email", "test@example.invalid"], env);
   await write(
     path.join(upstreamClone, "package.json"),
-    `${JSON.stringify({ name: "hivem1nd-test", version: "2.0.0", files: ["features/"] })}\n`,
+    `${JSON.stringify({ name: "onem1nd-test", version: "2.0.0", files: ["features/"] })}\n`,
   );
   await write(path.join(upstreamClone, "features", "report.md"), "new report\n");
   await write(path.join(upstreamClone, "features", "onboarding.md"), "kit onboarding\n");
@@ -522,23 +522,23 @@ test("pylon creates and reuses an isolated branch while preserving the dirty cod
     environment: "web",
     env: repository.env,
   });
-  assert.equal(result.branch, "hivem1nd");
+  assert.equal(result.branch, "hivem1nd"); // Compatibility: shared team state retains its branch and folder identity.
   assert.equal(result.pushed, true);
   assert.equal(await git(repository.first, ["branch", "--show-current"], repository.env), "main");
   assert.equal(await git(repository.first, ["rev-parse", "HEAD"], repository.env), originalHead);
-  await assert.rejects(execFileAsync("git", ["merge-base", "main", "hivem1nd"], {
+  await assert.rejects(execFileAsync("git", ["merge-base", "main", "hivem1nd"], { // Compatibility: shared team state retains its branch and folder identity.
     cwd: repository.first,
     env: repository.env,
     encoding: "utf8",
   }));
   assert.equal(await fs.readFile(path.join(repository.first, "app.txt"), "utf8"), "dirty and preserved\n");
-  assert.match(await fs.readFile(path.join(repository.first, ".gitignore"), "utf8"), /^\/\.hivem1nd\/state\/$/m);
+  assert.match(await fs.readFile(path.join(repository.first, ".gitignore"), "utf8"), /^\/\.hivem1nd\/state\/$/m); // Compatibility: shared team state retains its branch and folder identity.
   for (const directory of ["presence", "inbox", "tasks", "log"]) {
     await fs.access(path.join(result.statePath, directory, ".gitkeep"));
   }
 
-  await git(repository.second, ["fetch", "origin", "hivem1nd"], repository.env);
-  const remoteTree = await git(repository.second, ["ls-tree", "-r", "origin/hivem1nd"], repository.env);
+  await git(repository.second, ["fetch", "origin", "hivem1nd"], repository.env); // Compatibility: shared team state retains its branch and folder identity.
+  const remoteTree = await git(repository.second, ["ls-tree", "-r", "origin/hivem1nd"], repository.env); // Compatibility: shared team state retains its branch and folder identity.
   assert.match(remoteTree, /presence\/\.gitkeep/);
   assert.match(remoteTree, /inbox\/\.gitkeep/);
   const repeated = await pylon({
@@ -573,7 +573,7 @@ test("pylon creates and reuses an isolated branch while preserving the dirty cod
   await write(path.join(secondUser.statePath, "tasks", "remote-task.md"), "id: 001\nstatus: open\n");
   await git(secondUser.statePath, ["add", "tasks/remote-task.md"], repository.env);
   await git(secondUser.statePath, ["commit", "-m", "Add remote task"], repository.env);
-  await git(secondUser.statePath, ["push", "origin", "hivem1nd"], repository.env);
+  await git(secondUser.statePath, ["push", "origin", "hivem1nd"], repository.env); // Compatibility: shared team state retains its branch and folder identity.
   const localNote = path.join(result.statePath, "log", "local-note.md");
   await write(localNote, "uncommitted local state\n");
   const preserved = await pylon({
@@ -625,8 +625,8 @@ test("pylon main state remains visible for commit and preflight failures do not 
 
   await pylon({ repoPath, mindPath, kitPath: repoPath, homeDir: root, hostname: "TEST", state: "main", aiFiles: true, env });
   const ignore = await fs.readFile(path.join(repoPath, ".gitignore"), "utf8").catch(() => "");
-  assert.doesNotMatch(ignore, /\.hivem1nd\/state/);
-  assert.match(await git(repoPath, ["status", "--short"], env), /\.hivem1nd\//);
+  assert.doesNotMatch(ignore, /\.hivem1nd\/state/); // Compatibility: shared team state retains its branch and folder identity.
+  assert.match(await git(repoPath, ["status", "--short"], env), /\.hivem1nd\//); // Compatibility: shared team state retains its branch and folder identity.
 
   const untouchedRepo = path.join(root, "untouched");
   await fs.mkdir(untouchedRepo);
@@ -640,7 +640,7 @@ test("pylon main state remains visible for commit and preflight failures do not 
     pylon({ repoPath: untouchedRepo, mindPath, kitPath: untouchedRepo, homeDir: root, hostname: "MISSING", env }),
     (error) => error.code === "MACHINE_NOT_FOUND",
   );
-  await assert.rejects(fs.access(path.join(untouchedRepo, ".hivem1nd")));
+  await assert.rejects(fs.access(path.join(untouchedRepo, ".hivem1nd"))); // Compatibility: shared team state retains its branch and folder identity.
   await assert.rejects(
     pylon({ repoPath: untouchedRepo, mindPath, kitPath: untouchedRepo, homeDir: root, hostname: "..", env }),
     (error) => error.code === "INVALID_HOSTNAME",
@@ -657,9 +657,9 @@ test("pylon main state remains visible for commit and preflight failures do not 
     push: false,
   });
   const localExclude = await fs.readFile(path.join(untouchedRepo, ".git", "info", "exclude"), "utf8");
-  assert.match(localExclude, /^\/\.hivem1nd\/state\/$/m);
-  assert.doesNotMatch(localExclude, /^\/\.hivem1nd\/$/m);
-  assert.match(await git(untouchedRepo, ["status", "--short", "--untracked-files=all"], env), /\.hivem1nd\/config\.md/);
+  assert.match(localExclude, /^\/\.hivem1nd\/state\/$/m); // Compatibility: shared team state retains its branch and folder identity.
+  assert.doesNotMatch(localExclude, /^\/\.hivem1nd\/$/m); // Compatibility: shared team state retains its branch and folder identity.
+  assert.match(await git(untouchedRepo, ["status", "--short", "--untracked-files=all"], env), /\.hivem1nd\/config\.md/); // Compatibility: shared team state retains its branch and folder identity.
 
   const linkedRepo = path.join(root, "linked");
   const outside = path.join(root, "outside");
@@ -672,7 +672,7 @@ test("pylon main state remains visible for commit and preflight failures do not 
   await git(linkedRepo, ["add", "file.txt"], env);
   await git(linkedRepo, ["commit", "-m", "Initial commit"], env);
   try {
-    await fs.symlink(outside, path.join(linkedRepo, ".hivem1nd"), process.platform === "win32" ? "junction" : "dir");
+    await fs.symlink(outside, path.join(linkedRepo, ".hivem1nd"), process.platform === "win32" ? "junction" : "dir"); // Compatibility: shared team state retains its branch and folder identity.
     await assert.rejects(
       pylon({ repoPath: linkedRepo, mindPath, kitPath: linkedRepo, homeDir: root, hostname: "TEST", env }),
       (error) => error.code === "UNSAFE_SYMLINK",
@@ -686,7 +686,7 @@ test("pylon main state remains visible for commit and preflight failures do not 
 test("daily update checks read the upstream version without changing the checkout", async (t) => {
   const repository = await makeRepositoryPair(t);
   const mindPath = await makeMind(repository.root);
-  await write(path.join(repository.second, "package.json"), `${JSON.stringify({ name: "hivem1nd-test", version: "2.0.0" })}\n`);
+  await write(path.join(repository.second, "package.json"), `${JSON.stringify({ name: "onem1nd-test", version: "2.0.0" })}\n`);
   await git(repository.second, ["add", "package.json"], repository.env);
   await git(repository.second, ["commit", "-m", "Release 2.0.0"], repository.env);
   await git(repository.second, ["push", "origin", "main"], repository.env);
@@ -813,7 +813,7 @@ test("check reports a role added to the mind until evolve installs it and writes
   const homeDir = path.join(root, "home");
   const env = { ...process.env, CODEX_HOME: path.join(homeDir, ".codex") };
   await writeMachine(mindPath, { agents: "- codex: on-demand\n" });
-  await write(path.join(kitPath, "package.json"), `${JSON.stringify({ name: "hivem1nd-test", version: "1.0.0", files: ["roles/"] })}\n`);
+  await write(path.join(kitPath, "package.json"), `${JSON.stringify({ name: "onem1nd-test", version: "1.0.0", files: ["roles/"] })}\n`);
   await write(path.join(kitPath, "roles", "executor.md"), "---\nname: executor\ndescription: Executor\n---\n\n# /executor\n");
   await installAgentAssets({ kitPath, mindPath, homeDir, hostname: "TEST", env });
   await write(path.join(mindPath, "roles", "helper.md"), "---\nname: helper\ndescription: Helper\n---\n\n# /helper\n");
@@ -899,7 +899,7 @@ test("the evolve command without a terminal lists the conflicts, never waits and
   const kitPath = path.join(root, "kit");
   const cliPath = path.resolve(import.meta.dirname, "..", "cli", "index.mjs");
   const rulesPath = path.join(mindPath, "rules.md");
-  await write(path.join(kitPath, "package.json"), `${JSON.stringify({ name: "hivem1nd-test", version: "1.0.0", files: ["rules.md"] })}\n`);
+  await write(path.join(kitPath, "package.json"), `${JSON.stringify({ name: "onem1nd-test", version: "1.0.0", files: ["rules.md"] })}\n`);
   await write(path.join(kitPath, "rules.md"), "kit rules\n");
   await write(rulesPath, "locally written rules\n");
   const args = [cliPath, "evolve", "--kit-path", kitPath, "--mind-path", mindPath, "--home-dir", path.join(root, "home"), "--hostname", "TEST", "--dry-run", "--origin-path", path.join(root, "origin")];

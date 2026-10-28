@@ -32,7 +32,7 @@ const LEGACY_LOCK_AGE_MS = 10 * 60 * 1000;
 const MESSAGE_SETTLE_MS = 50;
 // A link joins sessions in one message thread through a short code. The code takes its characters from the alphabet of the home
 // pairing code, which leaves out the ones that read alike.
-const LINK_FORMAT = 'hivem1nd-relay-link-v1';
+const LINK_FORMAT = 'hivem1nd-relay-link-v1'; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
 const LINK_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 const LINK_CODE_LENGTH = 5;
 const LINK_LIFETIME_MS = 10 * 60 * 1000;
@@ -83,9 +83,9 @@ export function relayLocalStatePath(mindPath, { env = process.env, platform = pr
   const key = createHash('sha256').update(platform === 'win32' ? mindPath.toLowerCase() : mindPath).digest('hex').slice(0, 16);
   if (env[LOCAL_STATE_ENV]) return lib.join(lib.resolve(env[LOCAL_STATE_ENV]), key);
   // Packaged Windows apps such as the Codex desktop app redirect writes under AppData into their own package folder, so two clients on one machine would not see the same leases; the profile root is not redirected.
-  if (platform === 'win32') return lib.join(lib.isAbsolute(env.USERPROFILE ?? '') ? env.USERPROFILE : homeDir, '.hivem1nd-relay', key);
+  if (platform === 'win32') return lib.join(lib.isAbsolute(env.USERPROFILE ?? '') ? env.USERPROFILE : homeDir, '.hivem1nd-relay', key); // Compatibility: local leases and verified holders keep existing native wake bindings intact.
   const base = lib.isAbsolute(env.XDG_STATE_HOME ?? '') ? env.XDG_STATE_HOME : lib.join(homeDir, '.local', 'state');
-  return lib.join(base, 'hivem1nd', 'relay', key);
+  return lib.join(base, 'hivem1nd', 'relay', key); // Compatibility: local leases and verified holders keep existing native wake bindings intact.
 }
 
 function isoNow(value) {
@@ -1367,7 +1367,7 @@ export async function createRelay(options = {}) {
     const reader = target?.unitId ?? (target?.scope?.id ? `${appScopeId(target.scope.id)}:${unit}` : null);
     if (!reader) return;
     for (const [chatId, messageIds] of byChat) {
-      const record = { format: 'hivem1nd-chat-read-v1', chatId, unitId: reader, machine: hostname, messageIds, at: isoNow() };
+      const record = { format: 'hivem1nd-chat-read-v1', chatId, unitId: reader, machine: hostname, messageIds, at: isoNow() }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
       const destination = path.join(mindPath, 'user', 'relay', 'chats', chatId, 'read', Buffer.from(reader).toString('base64url'), hostname, `${randomUUID()}.json`);
       try { await publish(destination, Buffer.from(`${canonicalJson(record)}\n`)); } catch { /* the message was read; a missed receipt only keeps its badge */ }
     }
@@ -2499,7 +2499,7 @@ export async function queueChatNotice(context, notice) {
   const stampText = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}-${String(date.getHours()).padStart(2, '0')}${String(date.getMinutes()).padStart(2, '0')}${String(date.getSeconds()).padStart(2, '0')}`;
   const file = path.join(directory, `${stampText}-${context.paths.machine}-${id}.md`);
   const title = String(notice.chatTitle ?? '').replace(/[\r\n]+/g, ' ').slice(0, 120);
-  const body = `${notice.body ?? ''}\n\n---\nWritten in the chat "${title}" of the HIVEM1ND app. Answer in that chat with send_message to "chat:${notice.chatId}".\n`;
+  const body = `${notice.body ?? ''}\n\n---\nWritten in the chat "${title}" of the ONEM1ND app. Answer in that chat with send_message to "chat:${notice.chatId}".\n`;
   const bytes = serializeMessage({
     id, from: notice.fromUnit, to: recipient.unit, machine: context.paths.machine, timestamp: notice.at, date: formatLocalDate(date),
     priority: notice.priority === 'urgent' ? 'urgent' : 'normal', subject: String(notice.subject || `Chat: ${title}`).slice(0, MAX_SUBJECT_LENGTH),

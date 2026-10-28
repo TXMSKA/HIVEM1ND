@@ -17,7 +17,7 @@ import { makeContext } from './context.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const CASE_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'cases');
-const TASK_LIMIT = Number(process.env.HIVEM1ND_CAPTURE_TASK_MS ?? 180000);
+const TASK_LIMIT = Number(process.env.ONEM1ND_CAPTURE_TASK_MS ?? 180000);
 
 // Reasons and the report are stored. A session fragment or a bearer token must not be.
 function redact(value) {
@@ -80,8 +80,8 @@ async function runTask(task, { browser, spec, outDir }) {
     await Promise.race([work, limit]);
   } catch (error) {
     record.reason = redact(String(error?.message ?? error).split('\n')[0]).slice(0, 400);
-    // HIVEM1ND_CAPTURE_FAILED=1 keeps a picture of the page where the case stopped, beside the out folder's captures.
-    if (process.env.HIVEM1ND_CAPTURE_FAILED === '1' && page) await page.screenshot(file.replace(/\.png$/, '-failed.png'), task.viewport).catch(() => undefined);
+    // ONEM1ND_CAPTURE_FAILED=1 keeps a picture of the page where the case stopped, beside the out folder's captures.
+    if (process.env.ONEM1ND_CAPTURE_FAILED === '1' && page) await page.screenshot(file.replace(/\.png$/, '-failed.png'), task.viewport).catch(() => undefined);
   } finally {
     clearTimeout(timer);
     await ctx?.cleanup().catch(() => undefined);

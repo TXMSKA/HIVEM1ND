@@ -6,7 +6,7 @@ description: Installs the mind on a machine and maintains it afterward. Works wh
 # Genesis
 
 Mind: {{mind}}
-When the line above is not a path, this file was pasted raw: the kit is the folder whose `package.json` is named `hivem1nd`, in the working directory or where the person says, and the mind is the folder chosen in step 2 of the setup.
+When the line above is not a path, this file was pasted raw: the kit is the folder whose `package.json` is named `onem1nd`, in the working directory or where the person says, and the mind is the folder chosen in step 2 of the setup.
 Unit: genesis, at the root of `user/`, one session per mind.
 
 Start, work and exit follow `rules.md` of the mind, read first when the session did not receive it; this file adds only what is specific to the role.
@@ -55,9 +55,9 @@ Skills go into one folder per command, as the Copy scope says. In a rules file, 
 
 - Claude Code: detected by `~/.claude/` or the `claude` binary. Skills in `<CLAUDE_CONFIG_DIR>/skills/` when that variable is set, which wins, otherwise `~/.claude/skills/`. Rules file: `<CLAUDE_CONFIG_DIR>/CLAUDE.md` when set, otherwise `~/.claude/CLAUDE.md`.
 - Codex: detected by `~/.codex/`, `~/.agents/` or the `codex` binary. Skills in `~/.agents/skills/`. Rules file: `<CODEX_HOME>/AGENTS.md` when set, otherwise `~/.codex/AGENTS.md`.
-- Cursor: detected by `~/.cursor/` or the `cursor` or `cursor-agent` binary. It reads `~/.claude/skills` and `~/.agents/skills`, so the copy goes once to `~/.agents/skills/`, shared with Codex. The rules line goes into `~/.cursor/rules/hivem1nd.mdc`, under a frontmatter of `description:` (one line saying what the rule is) and `alwaysApply: true`.
+- Cursor: detected by `~/.cursor/` or the `cursor` or `cursor-agent` binary. It reads `~/.claude/skills` and `~/.agents/skills`, so the copy goes once to `~/.agents/skills/`, shared with Codex. The rules line goes into `~/.cursor/rules/onem1nd.mdc`, under a frontmatter of `description:` (one line saying what the rule is) and `alwaysApply: true`.
 - OpenCode: detected by `~/.config/opencode/` or the `opencode` binary. The same skills copy as Cursor. Rules file: `~/.config/opencode/AGENTS.md`.
-- VS Code: detected by the `code` binary or its user data folder. The same skills copy as Cursor. The rules line goes into `~/.copilot/instructions/hivem1nd.instructions.md`, under a frontmatter of `description:` (one line saying what the rule is) and `applyTo: "**"`.
+- VS Code: detected by the `code` binary or its user data folder. The same skills copy as Cursor. The rules line goes into `~/.copilot/instructions/onem1nd.instructions.md`, under a frontmatter of `description:` (one line saying what the rule is) and `applyTo: "**"`.
 - Antigravity: no install adapter, so setup writes no commands and no rules line for it. It is attached with the attach prompt, and joins Relay by the Relay join, which writes its permission rules, and by its wake, as the `relay-client-setup` feature describes.
 
 Model tiers. Each client fills the strong, mid and light tiers of the `delegation` category with the model families below, without version numbers, and its key in parentheses is what the Client column of `user/models.md` holds:
@@ -85,7 +85,7 @@ On setup, when `user/models.md` does not exist, the installing agent writes it, 
 
 ## Attach prompt
 
-Copy the Markdown files of the Copy scope from the mind, its `roles/`, `commands/`, `features/` and the `features/` of each included module in `knowledge/`, then the same folders under `user/`, except `README.md`, the entries of `Excluded` and the folders inside `roles/` and `commands/`, into the folder this agent reads commands from: one folder per command, named after the file's `name`, with the file inside as `SKILL.md`, keeping the frontmatter and replacing the placeholder of the `Mind:` line with the mind path. If there is no such folder, paste the body of a role file as the first message of a chat instead. For auto mode, add this line to the agent's rules file: `HIVEM1ND: the mind is at <path>. Read <path>/rules.md first, then the role or command asked for.`
+Copy the Markdown files of the Copy scope from the mind, its `roles/`, `commands/`, `features/` and the `features/` of each included module in `knowledge/`, then the same folders under `user/`, except `README.md`, the entries of `Excluded` and the folders inside `roles/` and `commands/`, into the folder this agent reads commands from: one folder per command, named after the file's `name`, with the file inside as `SKILL.md`, keeping the frontmatter and replacing the placeholder of the `Mind:` line with the mind path. If there is no such folder, paste the body of a role file as the first message of a chat instead. For auto mode, add this line to the agent's rules file: `ONEM1ND: the mind is at <path>. Read <path>/rules.md first, then the role or command asked for.`
 
 ## Procedures
 

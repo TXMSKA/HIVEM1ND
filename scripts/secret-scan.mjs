@@ -23,7 +23,7 @@ function fail(note) {
 }
 
 function gitleaksLaunch(args, cwd = root) {
-  const override = process.env.HIVEM1ND_GITLEAKS;
+  const override = process.env.ONEM1ND_GITLEAKS;
   if (override) return spawnSync(process.execPath, [override, ...args], { cwd, encoding: 'utf8', shell: false, windowsHide: true });
   const name = process.platform === 'win32' ? 'gitleaks.exe' : 'gitleaks';
   return spawnSync(path.join(scriptDir, '..', '.tools', name), args, { cwd, encoding: 'utf8', shell: false, windowsHide: true });
@@ -35,7 +35,7 @@ function gitleaksAvailable() {
 }
 
 function gitleaksReport(directory, args) {
-  const folder = mkdtempSync(path.join(os.tmpdir(), 'hivem1nd-gitleaks-'));
+  const folder = mkdtempSync(path.join(os.tmpdir(), 'onem1nd-gitleaks-'));
   const report = path.join(folder, 'report.json');
   try {
     const found = gitleaksLaunch([...args, '--redact', '--no-banner', '--report-format', 'json', '--report-path', report, '--exit-code', '1'], directory);

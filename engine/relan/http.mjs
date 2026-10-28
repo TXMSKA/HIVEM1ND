@@ -56,7 +56,7 @@ export async function openRelanListener({ transport, keyProvider, getKey, pairin
       if (res.destroyed || res.writableEnded) return;
       const body = value === null ? Buffer.alloc(0) : binary ? value : Buffer.from(JSON.stringify(value));
       const headers = { 'content-type': binary ? 'application/octet-stream' : 'application/json', 'content-length': body.length, 'cache-control': 'no-store' };
-      if (key) headers['x-hivem1nd-signature'] = responseSignature(key, nonce, status, body);
+      if (key) headers['x-hivem1nd-signature'] = responseSignature(key, nonce, status, body); // Compatibility: wire identifiers keep existing native sessions and paired machines connected.
       res.writeHead(status, headers); res.end(body);
     };
     try {
@@ -72,9 +72,9 @@ export async function openRelanListener({ transport, keyProvider, getKey, pairin
       const material = await getKey?.();
       key = Buffer.isBuffer(material) ? material : material?.key;
       if (!Buffer.isBuffer(key) || key.length !== 32) { key = null; throw unauthorized(); }
-      const timestamp = req.headers['x-hivem1nd-time'];
-      nonce = req.headers['x-hivem1nd-nonce'];
-      const presented = req.headers['x-hivem1nd-signature'];
+      const timestamp = req.headers['x-hivem1nd-time']; // Compatibility: wire identifiers keep existing native sessions and paired machines connected.
+      nonce = req.headers['x-hivem1nd-nonce']; // Compatibility: wire identifiers keep existing native sessions and paired machines connected.
+      const presented = req.headers['x-hivem1nd-signature']; // Compatibility: wire identifiers keep existing native sessions and paired machines connected.
       if (typeof timestamp !== 'string' || !/^[0-9]{1,16}$/.test(timestamp) || Math.abs(now() - Number(timestamp)) > 60000
         || typeof nonce !== 'string' || !/^[A-Za-z0-9_-]{22,64}$/.test(nonce)) throw unauthorized();
       for (const [value, until] of nonces) if (now() > until) nonces.delete(value);
@@ -169,8 +169,8 @@ export function openRelanTransport({ host, address = host, port, key, now = () =
     return new Promise((resolve, reject) => {
       const req = request({ hostname: address, port, path: route, method, timeout: timeoutMs, agent: false,
         signal: signal ? AbortSignal.any([controller.signal, signal]) : controller.signal,
-        headers: { 'content-length': body.length, 'x-hivem1nd-time': timestamp, 'x-hivem1nd-nonce': nonce,
-          'x-hivem1nd-signature': signature(key, method, route, body, timestamp, nonce) } }, response => {
+        headers: { 'content-length': body.length, 'x-hivem1nd-time': timestamp, 'x-hivem1nd-nonce': nonce, // Compatibility: wire identifiers keep existing native sessions and paired machines connected.
+          'x-hivem1nd-signature': signature(key, method, route, body, timestamp, nonce) } }, response => { // Compatibility: wire identifiers keep existing native sessions and paired machines connected.
         const chunks = []; let size = 0;
         response.on('data', chunk => {
           size += chunk.length;
@@ -179,7 +179,7 @@ export function openRelanTransport({ host, address = host, port, key, now = () =
         response.on('error', reject);
         response.on('end', () => {
           const packed = Buffer.concat(chunks); onWire?.(packed);
-          if (!equal(response.headers['x-hivem1nd-signature'], responseSignature(key, nonce, response.statusCode, packed))) return reject(unauthorized());
+          if (!equal(response.headers['x-hivem1nd-signature'], responseSignature(key, nonce, response.statusCode, packed))) return reject(unauthorized()); // Compatibility: wire identifiers keep existing native sessions and paired machines connected.
           if (response.statusCode === 404) { resolve(null); return; }
           if (response.statusCode !== 200) { reject(new CoreError(response.statusCode, 'relan_refused', 'The ReLAN request was refused.')); return; }
           resolve(packed);

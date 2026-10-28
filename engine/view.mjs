@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { assertSafePath, bodyFirstLine, collectScopes, headerValue, listDirectories, listFiles } from "./lifecycle.mjs";
 
-export const VIEW_CONTRACT = "hivem1nd-view-v1";
+export const VIEW_CONTRACT = "hivem1nd-view-v1"; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
 
 const FILE_MAX_BYTES = 128 * 1024;
 const FOLDER_MAX_ENTRIES = 2000;

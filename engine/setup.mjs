@@ -48,14 +48,14 @@ import { detectLanguage, LANGUAGES, option, relayLine, text } from './texts.mjs'
 
 const SETUP_PHASES = ['prepare', 'close-legacy', 'copy', 'migrate', 'configure', 'start', 'open', 'ready'];
 const SETUP_COPY = {
-  en: { joinTitle: 'Join this M1ND', join: 'Join', closeTitle: 'Close HIVEM1ND 2.x first', close: 'Sessions closed, migrate',
-    offline: 'A session on an offline machine closes the next time that machine starts HIVEM1ND.', review: 'Review changes in Settings' },
-  es: { joinTitle: 'Unirse a esta M1ND', join: 'Unirse', closeTitle: 'Cerrar HIVEM1ND 2.x primero', close: 'Sesiones cerradas, migrar',
-    offline: 'Una sesión en una máquina desconectada se cierra la próxima vez que esa máquina inicia HIVEM1ND.', review: 'Revisar cambios en Configuración' },
+  en: { joinTitle: 'Join this M1ND', join: 'Join', closeTitle: 'Close ONEM1ND 2.x first', close: 'Sessions closed, migrate',
+    offline: 'A session on an offline machine closes the next time that machine starts ONEM1ND.', review: 'Review changes in Settings' },
+  es: { joinTitle: 'Unirse a esta M1ND', join: 'Unirse', closeTitle: 'Cerrar ONEM1ND 2.x primero', close: 'Sesiones cerradas, migrar',
+    offline: 'Una sesión en una máquina desconectada se cierra la próxima vez que esa máquina inicia ONEM1ND.', review: 'Revisar cambios en Configuración' },
 };
 
 export async function createSetupSession(options = {}) {
-  const kitPath = path.resolve(requireValue(options.kitPath, 'kitPath'));
+  let kitPath = path.resolve(requireValue(options.kitPath, 'kitPath'));
   await requireDirectory(kitPath, 'kitPath');
   if (!options.env || typeof options.env === 'object') {
     // An omitted env intentionally uses this process environment.
@@ -66,6 +66,15 @@ export async function createSetupSession(options = {}) {
   const homeDir = path.resolve(options.homeDir ?? os.homedir());
   const hostname = String(options.hostname ?? os.hostname()).trim();
   if (!hostname) throw new Error('hostname is required');
+  const rebrandFile = path.join(kitPath, 'migrations', '3.0.0-onem1nd.mjs');
+  if (await lstat(rebrandFile).then(() => true, error => { if (error.code === 'ENOENT') return false; throw error; })) {
+    const { migrate } = await import(pathToFileURL(rebrandFile).href);
+    const result = await migrate({ ...options, kitPath, env, homeDir, hostname });
+    for (const move of result.relocatedPaths ?? []) {
+      if (options.mindPath && path.resolve(options.mindPath) === move.source) options = { ...options, mindPath: move.destination };
+      if (isWithin(move.source, kitPath)) kitPath = path.join(move.destination, path.relative(move.source, kitPath));
+    }
+  }
   const adapters = await loadAdapters({ kitPath });
   const presets = await computeMindPresets({ kitPath, homeDir, env });
   const defaultMindPath = options.mindPath
@@ -449,7 +458,7 @@ class SetupSession {
 
   localDirectory() {
     const directory = path.join(this.cosmicPath ?? path.dirname(defaultMind({ platform: process.platform, env: this.env, home: this.homeDir })),
-      'hivem1nd-service', mindKeyFor(this.mindPath, process.platform), this.hostname);
+      'onem1nd-service', mindKeyFor(this.mindPath, process.platform), this.hostname);
     if (isWithin(this.mindPath, directory) || isWithin(directory, this.mindPath)
       || this.legacySourcePath && (isWithin(this.legacySourcePath, directory) || isWithin(directory, this.legacySourcePath))) {
       throw new CoreError(422, 'invalid_path', 'Local setup storage must stay outside both M1ND trees.');
@@ -487,7 +496,7 @@ class SetupSession {
     const checkpoint = this.checkpoint;
     const fields = ['format', 'mode', 'sourcePath', 'destinationPath', 'phase', 'completed', 'error', 'updatedAt'];
     if (JSON.stringify(Object.keys(checkpoint).sort()) !== JSON.stringify(fields.sort())
-      || checkpoint.format !== 'hivem1nd-setup-v1' || !['create', 'join', 'migrate'].includes(checkpoint.mode)
+      || checkpoint.format !== 'hivem1nd-setup-v1' || !['create', 'join', 'migrate'].includes(checkpoint.mode) // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
       || checkpoint.destinationPath !== this.mindPath || !SETUP_PHASES.includes(checkpoint.phase)
       || !Array.isArray(checkpoint.completed) || checkpoint.completed.some((phase, index) => phase !== SETUP_PHASES[index])
       || checkpoint.completed.length > SETUP_PHASES.length || !Number.isFinite(Date.parse(checkpoint.updatedAt))
@@ -622,7 +631,7 @@ class SetupSession {
     if (/^2\./.test(selected?.version ?? '')) throw new SetupValidationError('Choose a separate destination for the legacy M1ND copy.');
     const mode = selected ? 'join' : this.legacySourcePath ? 'migrate' : 'create';
     this.answers.attach = mode === 'join';
-    this.checkpoint = { format: 'hivem1nd-setup-v1', mode, sourcePath: mode === 'migrate' ? this.legacySourcePath : null,
+    this.checkpoint = { format: 'hivem1nd-setup-v1', mode, sourcePath: mode === 'migrate' ? this.legacySourcePath : null, // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
       destinationPath: this.mindPath, phase: 'prepare', completed: [], error: null, updatedAt: new Date().toISOString() };
     this.checkpointProof = {};
     await this.saveCheckpoint();
@@ -631,7 +640,7 @@ class SetupSession {
   async prepareDestination() {
     if (this.checkpoint.mode === 'migrate') {
       const source = await this.inspectMind(this.legacySourcePath);
-      if (!/^2\./.test(source?.version ?? '')) throw new SetupValidationError('Migration requires a detected HIVEM1ND 2.x M1ND.');
+      if (!/^2\./.test(source?.version ?? '')) throw new SetupValidationError('Migration requires a detected ONEM1ND 2.x M1ND.');
       if (isWithin(this.legacySourcePath, this.mindPath) || isWithin(this.mindPath, this.legacySourcePath)) {
         throw new CoreError(422, 'invalid_path', 'The source and destination must be separate folders.');
       }
@@ -738,7 +747,7 @@ class SetupSession {
         const move = this.checkpointProof.pendingMove;
         await this.quarantineLegacy(path.join(this.mindPath, move.from), path.join(this.mindPath, move.to));
       }
-      await writeLegacyClosure(this.mindPath, { format: 'hivem1nd-legacy-closure-v1', sourcePath: this.legacySourcePath,
+      await writeLegacyClosure(this.mindPath, { format: 'hivem1nd-legacy-closure-v1', sourcePath: this.legacySourcePath, // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
         sessions: this.checkpointProof.sessions.map(({ binding, status }) => ({ binding, status })) });
       // Legacy registrations are evidence, never 3.0 live bindings. Quarantine
       // inside the destination before any service can adopt its copied policies.
@@ -863,8 +872,8 @@ class SetupSession {
         ? `La migración se detuvo: la M1ND anterior tiene un enlace o un elemento que no es un archivo en ${error.legacyPath}, y la migración no sigue enlaces. Quitarlo o moverlo fuera de la M1ND y reintentar. No se copió nada.`
         : `Migration stopped: the previous M1ND has a link or an entry that is not a file at ${error.legacyPath}, and migration does not follow links. Remove it or move it out of the M1ND, then retry. Nothing was copied.`)
         : error?.code === 'legacy_closure_required' ? (spanish
-          ? `La migración se detuvo: no se pudieron cerrar las sesiones de HIVEM1ND 2.x de esta máquina (${open.length}). No se cerró ninguna y no se copió nada.`
-          : `Migration stopped: the HIVEM1ND 2.x sessions on this machine (${open.length}) could not be closed. None was closed and nothing was copied.`)
+          ? `La migración se detuvo: no se pudieron cerrar las sesiones de ONEM1ND 2.x de esta máquina (${open.length}). No se cerró ninguna y no se copió nada.`
+          : `Migration stopped: the ONEM1ND 2.x sessions on this machine (${open.length}) could not be closed. None was closed and nothing was copied.`)
         : null;
       this.checkpoint.error = { code, message: error.safeSetupMessage ?? (denied ? deniedMessage : causeMessage ?? (spanish
         ? `No se pudo completar la fase ${this.checkpoint.phase} de la instalación.` : `Setup could not complete the ${this.checkpoint.phase} phase.`)) };
@@ -1328,7 +1337,7 @@ class SetupSession {
   async writeDisplaySettings() {
     if (this.answers.attach || this.checkpoint?.mode === 'join') return null;
     const file = path.join(this.mindPath, 'user', 'gui', 'settings.json');
-    const content = `${canonicalJson({ format: 'hivem1nd-settings-v1', look: 'modern', language: normalizeLanguage(this.answers.language), sendToAgent: true })}\n`;
+    const content = `${canonicalJson({ format: 'hivem1nd-settings-v1', look: 'modern', language: normalizeLanguage(this.answers.language), sendToAgent: true })}\n`; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     // A resumed setup finds the file it wrote before and still records it; any other existing file is the person's.
     const existing = await readTextIfPresent(file);
     if (existing !== null) return existing === content ? { file, hash: hashContent(content) } : null;
@@ -1433,7 +1442,9 @@ async function runSetupMigrations(session) {
   const toVersion = JSON.parse(await readFile(path.join(session.kitPath, 'package.json'), 'utf8')).version;
   const selected = names.filter(name => /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\.mjs$/.test(name))
     .map(name => ({ name, version: name.slice(0, -4) }))
-    .filter(entry => compareSetupVersions(entry.version, session.checkpointProof.sourceVersion) > 0 && compareSetupVersions(entry.version, toVersion) <= 0)
+    .filter(entry => (compareSetupVersions(entry.version, session.checkpointProof.sourceVersion) > 0
+      || entry.version === '3.0.0-onem1nd' && compareSetupVersions(session.checkpointProof.sourceVersion, '3.0.0') >= 0)
+      && compareSetupVersions(entry.version, toVersion) <= 0)
     .sort((a, b) => compareSetupVersions(a.version, b.version));
   session.checkpointProof.migrations ??= [];
   for (const entry of selected) {
@@ -1449,7 +1460,7 @@ async function runSetupMigrations(session) {
       await session.saveCheckpoint();
     }
     if (entry.version === '2.0.0-experimental.4') await verifyInterruptedCoordinatorMigration(session);
-    await (migration.migrate ?? migration.default)({ userPath: path.join(session.mindPath, 'user'),
+    await (migration.migrate ?? migration.default)({ kitPath: session.kitPath, mindPath: session.mindPath, homeDir: session.homeDir, env: session.env, cosmicPath: session.cosmicPath, hostname: session.hostname, userPath: path.join(session.mindPath, 'user'),
       progressDirectory: path.join(session.mindPath, '.migration'), legacySourcePath: session.legacySourcePath,
       destinationPath: session.mindPath, fromVersion: session.checkpointProof.sourceVersion, toVersion,
       faultAfterMoves: session.migrationFaultAfterMoves,
@@ -1707,11 +1718,11 @@ async function computeMindPresets({ kitPath, homeDir, env }) {
   const presets = [
     { id: 'cosmic', label: 'Cosmic', path: cosmicMind(env, homeDir) },
     { id: 'installer', labelKey: 'installer', path: kitPath },
-    { id: 'drive', labelKey: 'drive', path: path.join(driveRoot(env, homeDir), 'HIVEM1ND') },
-    { id: 'user', labelKey: 'user', path: path.join(homeDir, 'HIVEM1ND') },
+    { id: 'drive', labelKey: 'drive', path: path.join(driveRoot(env, homeDir), 'ONEM1ND') },
+    { id: 'user', labelKey: 'user', path: path.join(homeDir, 'ONEM1ND') },
   ];
   const oneDrive = await detectOneDrive(env);
-  if (oneDrive) presets.push({ id: 'oneDrive', labelKey: 'oneDrive', path: path.join(oneDrive, 'HIVEM1ND') });
+  if (oneDrive) presets.push({ id: 'oneDrive', labelKey: 'oneDrive', path: path.join(oneDrive, 'ONEM1ND') });
   return presets;
 }
 

@@ -23,7 +23,7 @@ test('forced mask 0 matches the primary reference digests', () => {
 
 test('every mask keeps function cells, format bits and a quiet SVG', () => {
   for (let mask = 0; mask < 8; mask += 1) {
-    const symbol = encodeQr('hivem1nd', { mask });
+    const symbol = encodeQr('onem1nd', { mask });
     assert.equal(symbol.modules[3][3], true);
     assert.equal(symbol.modules[5][5], false);
     assert.equal(symbol.modules[30][30], true);
@@ -31,10 +31,10 @@ test('every mask keeps function cells, format bits and a quiet SVG', () => {
     assert.equal(readFormat(symbol.modules).mask, mask);
     assert.equal(typeof penalty(symbol.modules), 'number');
   }
-  const svg = toSvg(encodeQr('hivem1nd', { mask: 0 }));
+  const svg = toSvg(encodeQr('onem1nd', { mask: 0 }));
   assert.match(svg, /^<svg xmlns="http:\/\/www.w3.org\/2000\/svg" width="180" height="180"/);
   assert.match(svg, /<rect x="0" y="0" width="180" height="180" fill="#ffffff"\/>/);
-  assert.equal(svg.includes('hivem1nd'), false);
+  assert.equal(svg.includes('onem1nd'), false);
 });
 
 test('home grants expire exactly, revoke tokens and hide secrets', async (t) => {

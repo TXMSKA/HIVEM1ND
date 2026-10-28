@@ -125,7 +125,7 @@ export async function createRelan(options = {}) {
 
   function announce() {
     if (closed || !material || !listener || !discovery) return;
-    discovery.send({ format: 'hivem1nd-relan-v1', relanId: material.relanId, host: machine, epoch, port: listener.listeners[0].port });
+    discovery.send({ format: 'hivem1nd-relan-v1', relanId: material.relanId, host: machine, epoch, port: listener.listeners[0].port }); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   }
 
   function destinations() {
@@ -517,7 +517,7 @@ export async function createRelan(options = {}) {
   async function leave() {
     assertOpen();
     if (retained) {
-      await writeDurable(store, leftFile, Buffer.from(`${JSON.stringify({ format: 'hivem1nd-relan-left-v1', relanId: retained.relanId })}\n`), [localDirectory]);
+      await writeDurable(store, leftFile, Buffer.from(`${JSON.stringify({ format: 'hivem1nd-relan-left-v1', relanId: retained.relanId })}\n`), [localDirectory]); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
       await protectLocalFile(leftFile, keyOptions);
     }
     assertOpen();
@@ -581,7 +581,7 @@ export async function createRelan(options = {}) {
       if (!info.isFile() || info.size > 4096 || info.nlink !== 1) throw new CoreError(422, 'unsafe_path', 'The ReLAN membership marker must be a regular file.');
       await verifyLocalPermissions(leftFile, keyOptions);
       const value = JSON.parse(await readFile(leftFile, 'utf8'));
-      if (value.format !== 'hivem1nd-relan-left-v1' || typeof value.relanId !== 'string') throw new CoreError(422, 'invalid_relan_membership', 'The ReLAN membership marker is not valid.');
+      if (value.format !== 'hivem1nd-relan-left-v1' || typeof value.relanId !== 'string') throw new CoreError(422, 'invalid_relan_membership', 'The ReLAN membership marker is not valid.'); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
       return retained?.relanId === value.relanId;
     } catch (error) {
       if (error?.code === 'ENOENT') return false;

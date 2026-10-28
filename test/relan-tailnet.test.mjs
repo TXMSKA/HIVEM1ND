@@ -140,7 +140,7 @@ test('tailnet unicast with injected 100.x interfaces elects, replicates, restart
   const folder = openFolderTransport({ directory: origin.paths.origin, store: origin.store, keyProvider: c.keyProvider });
   const bytes = encodePack({ machine: 'MACHINE-C', sequence: 1, changes: [], objects: [], encryption: c.encryption(), keyProvider: c.keyProvider });
   await folder.writePack('MACHINE-C', 1, bytes);
-  await folder.writeHead({ format: 'hivem1nd-head-v1', machine: 'MACHINE-C', sequence: 1, updatedAt: new Date().toISOString(),
+  await folder.writeHead({ format: 'hivem1nd-head-v1', machine: 'MACHINE-C', sequence: 1, updatedAt: new Date().toISOString(), // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     packs: [{ sequence: 1, file: packFileName(1), hash: hashBytes(bytes), bytes: bytes.length }] });
   await eventually(async () => (await Promise.all([...origins.values()].map(origin => openFolderTransport({ directory: origin.paths.origin, keyProvider: c.keyProvider }).listHeads()))).every(heads => heads.length === 1), 'Encrypted publication did not replicate over unicast.');
   for (const origin of origins.values()) assert.deepEqual(await openFolderTransport({ directory: origin.paths.origin, keyProvider: c.keyProvider }).readPack('MACHINE-C', 1), bytes);

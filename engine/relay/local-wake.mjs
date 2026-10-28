@@ -55,7 +55,7 @@ export async function legacySessions(sourcePath) {
       const statusFile = path.join(statuses, name);
       await assertNoLinks(statusFile);
       const status = JSON.parse(await readFile(statusFile, 'utf8'));
-      if (status.format === 'hivem1nd-session-status-v1' && status.sessionId === sessionId && status.machine === binding.machine
+      if (status.format === 'hivem1nd-session-status-v1' && status.sessionId === sessionId && status.machine === binding.machine // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
         && status.state === 'stopped' && status.reason === 'native-acknowledged' && Number.isFinite(Date.parse(status.at))
         && Date.parse(status.at) >= Date.parse(registeredAt)) ended = true;
     }
@@ -95,7 +95,7 @@ export async function requireLegacyClosure(mindPath, { machine = os.hostname(), 
   await assertNoLinks(file);
   const handoff = await readFile(file, 'utf8').then(JSON.parse).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
   if (!handoff) return;
-  if (handoff.format !== 'hivem1nd-legacy-closure-v1' || !Array.isArray(handoff.sessions)) throw closureError();
+  if (handoff.format !== 'hivem1nd-legacy-closure-v1' || !Array.isArray(handoff.sessions)) throw closureError(); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   for (const session of handoff.sessions) {
     if (!['closed', 'required'].includes(session.status) || !session.binding?.machine) throw closureError();
     if (session.binding.machine !== machine || session.status === 'closed') continue;
@@ -112,7 +112,7 @@ export function assertLegacyWakeClosure(mindPath, machine) {
   }
   if (!existsSync(file)) return;
   const handoff = JSON.parse(readFileSync(file, 'utf8'));
-  if (handoff.format !== 'hivem1nd-legacy-closure-v1' || !Array.isArray(handoff.sessions)
+  if (handoff.format !== 'hivem1nd-legacy-closure-v1' || !Array.isArray(handoff.sessions) // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     || handoff.sessions.some(session => !session.binding?.machine || !['required', 'closed'].includes(session.status)
       || session.binding.machine === machine && session.status !== 'closed')) throw closureError();
 }

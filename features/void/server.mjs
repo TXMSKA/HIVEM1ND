@@ -28,6 +28,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { PERSON, addReply, addThread, cleanText, commentMessage, createAnchor, emptyComments, findAnchor, place, setStatus } from './comments.mjs';
 import { createEdits, editsMessage } from './edits.mjs';
 import { projectOf } from './project.mjs';
+import { defaultMind } from '../../engine/service/paths.mjs';
 import { merge, plain, wordDiff } from './text.mjs';
 
 // The Void product serves on 3301 and Blueprint Lite on 3300, so Void Lite takes the next one and all three can run together.
@@ -164,7 +165,7 @@ function findMind() {
   const installed = path.resolve(here, '..', '..');
   if (isMind(installed)) return installed;
   if (isMind(process.cwd())) return process.cwd();
-  return path.join(homedir(), 'HIVEM1ND');
+  return defaultMind({ platform: process.platform, env: process.env, home: homedir() });
 }
 
 // `relay` and `timers` are for tests: a stand-in for the person's Relay channel

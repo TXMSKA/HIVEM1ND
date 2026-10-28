@@ -18,7 +18,7 @@ function syncOf(fixture, projects = []) {
 function change(target, raw, extra = {}) {
   const hash = raw ? hashBytes(raw) : null;
   return {
-    format: 'hivem1nd-change-v1',
+    format: 'hivem1nd-change-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     id: extra.id ?? uuidV8(['change', target, hash, extra.at ?? AT]),
     machine: extra.machine ?? 'DESKTOP',
     at: extra.at ?? AT,
@@ -54,7 +54,7 @@ function payloadOf(index, blobs) {
 function finish(index, blobs = [], mutate = (header) => header, suffix = Buffer.alloc(0)) {
   const body = Buffer.concat([payloadOf(index, blobs), suffix]);
   const header = mutate({
-    format: 'hivem1nd-pack-v1',
+    format: 'hivem1nd-pack-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     machine: 'DESKTOP',
     sequence: 1,
     payloadBytes: body.length,
@@ -70,7 +70,7 @@ function finish(index, blobs = [], mutate = (header) => header, suffix = Buffer.
 
 function emptyIndex(changes = [], extra = {}) {
   return {
-    format: 'hivem1nd-pack-index-v1',
+    format: 'hivem1nd-pack-index-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     compression: 'br',
     objects: [],
     changes,
@@ -146,7 +146,7 @@ test('pack framing round-trips text, shared bytes and tombstones', () => {
 test('a non-ASCII outer header is measured in bytes', () => {
   const json = canonicalJson({
     encryption: { algorithm: 'none' },
-    format: 'hivem1nd-pack-v1',
+    format: 'hivem1nd-pack-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     machine: 'CAFÉ',
     payloadBytes: 0,
     payloadHash: 'ab'.repeat(32),
@@ -186,7 +186,7 @@ test('an omitted object is loaded from a committed dependency and stays pending 
   assert.equal(decoded.objects.size, 0);
   assert.equal(decoded.dependencies[0].sequence, 1);
   const head = {
-    format: 'hivem1nd-head-v1',
+    format: 'hivem1nd-head-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     machine: 'DESKTOP',
     sequence: 1,
     updatedAt: AT,
@@ -240,7 +240,7 @@ test('a dependency cycle is rejected and does not become pending', async (t) => 
     dependencies: [{ hash: 'ef'.repeat(32), machine: 'DESKTOP', sequence: 2, packHash: hashBytes(packB) }],
   });
   const head = {
-    format: 'hivem1nd-head-v1',
+    format: 'hivem1nd-head-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     machine: 'DESKTOP',
     sequence: 2,
     updatedAt: AT,
@@ -273,7 +273,7 @@ test('invalid packs are rejected before any file is written', async (t) => {
     ['truncated length', Buffer.concat([Buffer.from('H1P3'), Buffer.from([0xff, 0xff, 0xff, 0xff])]), 'invalid_pack'],
     ['trailing blob', finish(framed.index, [framed.blobs], (header) => header, Buffer.from([0])), 'invalid_pack'],
     ['overlapping blobs', finish({
-      format: 'hivem1nd-pack-index-v1',
+      format: 'hivem1nd-pack-index-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
       compression: 'br',
       objects: [
         { hash: 'aa'.repeat(32), offset: 0, compressedBytes: 12, rawBytes: 4 },
@@ -376,16 +376,16 @@ test('logical message counts use canonical records and ignore forged notice clai
 
 test('a head rejects regression and a changed committed hash', () => {
   const packs = [{ sequence: 1, file: packFileName(1), hash: 'ab'.repeat(32), bytes: 40 }];
-  const head = validateHead({ format: 'hivem1nd-head-v1', machine: 'DESKTOP', sequence: 1, updatedAt: AT, packs });
+  const head = validateHead({ format: 'hivem1nd-head-v1', machine: 'DESKTOP', sequence: 1, updatedAt: AT, packs }); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   assert.throws(() => validateHead({
-    format: 'hivem1nd-head-v1',
+    format: 'hivem1nd-head-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     machine: 'DESKTOP',
     sequence: 1,
     updatedAt: AT,
     packs: [{ ...packs[0], hash: 'cd'.repeat(32) }],
   }, { previous: head }), (error) => error.code === 'corrupt_resource');
   assert.throws(() => validateHead({
-    format: 'hivem1nd-head-v1',
+    format: 'hivem1nd-head-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     machine: 'DESKTOP',
     sequence: 0,
     updatedAt: AT,
@@ -427,10 +427,10 @@ test('staging keeps distinct paths, baselines, eligible records and import marke
   await writeFile(path.join(shop, '.git', 'config'), 'git');
   await writeFile(path.join(shop, 'readme.md'), 'no');
   await writeFile(path.join(mind, 'user', 'gui', 'resources.json'), `${JSON.stringify({
-    format: 'hivem1nd-resources-v1',
+    format: 'hivem1nd-resources-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     resources: [{ id: uuidV8(['editor', 'blueprint', 'shop', 'docs/flows/boards/cart.json']), kind: 'blueprint', project: 'shop', path: 'docs/flows/boards/cart.json', legacyId: 'cart' }],
   })}\n`);
-  await writeFile(path.join(shop, 'gui', 'resources.json'), '{"format":"hivem1nd-resources-v1","resources":[{"project":"shop","path":"readme.md"}]}\n');
+  await writeFile(path.join(shop, 'gui', 'resources.json'), '{"format":"hivem1nd-resources-v1","resources":[{"project":"shop","path":"readme.md"}]}\n'); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   await writeFile(path.join(shop, 'docs', 'flows', 'boards', 'cart.json'), '{"src":"docs/flows/assets/logo.png"}\n');
   await writeFile(path.join(shop, 'docs', 'flows', 'comments', 'cart.json'), '{}\n');
   await writeFile(path.join(shop, 'docs', 'flows', 'assets', 'logo.png'), Buffer.from([137, 80, 78, 71]));
@@ -663,7 +663,7 @@ test('resolving the newest pack of a chain decodes each earlier pack once', asyn
     packs.push(body);
     heads.packs.push({ sequence, file: packFileName(sequence), hash: hashBytes(body), bytes: body.length });
   }
-  const head = { format: 'hivem1nd-head-v1', machine: 'DESKTOP', sequence: count, updatedAt: AT, packs: heads.packs };
+  const head = { format: 'hivem1nd-head-v1', machine: 'DESKTOP', sequence: count, updatedAt: AT, packs: heads.packs }; // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   const zlib = (await import('node:zlib')).default;
   const { syncBuiltinESMExports } = await import('node:module');
   const original = zlib.brotliDecompressSync;

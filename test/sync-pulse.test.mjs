@@ -273,7 +273,7 @@ async function publishedPacks(origin) {
 
 function serviceBeat(machine, at) {
   return {
-    format: 'hivem1nd-service-v1',
+    format: 'hivem1nd-service-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     machine,
     state: 'running',
     version: '2.0.0',
@@ -520,7 +520,7 @@ test('publication reuses another machine only after its committed pack and depen
         await writeFile(path.join(directory, 'packs', '000000000001.pack'), placed);
       }
       if (kind !== 'orphan') await writeFile(path.join(directory, 'head.json'), JSON.stringify({
-        format: 'hivem1nd-head-v1',
+        format: 'hivem1nd-head-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
         machine: 'LAPTOP',
         sequence: 1,
         updatedAt: stamp(clock.now()),

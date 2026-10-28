@@ -71,7 +71,7 @@ test('Content selections and preferences replicate together without changing a p
 test('accepted content hashes scopes and provenance sync as one bundle without local previews credentials or checkout bytes', async t => {
   const { fixture, desktop, laptop } = await world(t);
   const id = uuidV8(['accepted-pdf']), skill = Buffer.from('---\nname: pdf\nruntime: none\n---\nPDF support\n'), license = Buffer.from('MIT License\n');
-  const record = { format: 'hivem1nd-addition-v1', id, kind: 'skill', name: 'pdf', title: 'pdf', source: { kind: 'git', display: 'acme/pdf', url: 'https://github.com/acme/pdf' },
+  const record = { format: 'hivem1nd-addition-v1', id, kind: 'skill', name: 'pdf', title: 'pdf', source: { kind: 'git', display: 'acme/pdf', url: 'https://github.com/acme/pdf' }, // Compatibility: repository URLs retain their existing hosting location.
     sourcePath: '.', pin: { kind: 'commit', value: 'a'.repeat(40), digest: 'b'.repeat(64) }, license: 'MIT', publishedAt: '2026-10-01T00:00:00.000Z', requirements: [],
     scope: { everyUnit: false, units: ['root:executor'], groups: [] }, unitCount: 1, machine: 'LAPTOP', projectId: null, installedAt: AT, updatedAt: AT, removed: false,
     files: [{ path: 'user/features/pdf/SKILL.md', hash: hashBytes(skill), bytes: skill.length }, { path: 'user/features/pdf/LICENSE', hash: hashBytes(license), bytes: license.length }] };
@@ -103,7 +103,7 @@ test('accepted content hashes scopes and provenance sync as one bundle without l
 function put(target, raw, extra = {}) {
   const bytes = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
   return {
-    format: 'hivem1nd-change-v1',
+    format: 'hivem1nd-change-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     id: extra.id ?? uuidV8(['change', target.path, extra.at ?? AT, extra.machine ?? 'LAPTOP']),
     machine: extra.machine ?? 'LAPTOP',
     at: extra.at ?? AT,
@@ -249,8 +249,8 @@ test('a newer source revision prevents every logical write in an incoming librar
   const sourceId = uuidV8(['editor', 'void', 'shop', 'docs/source.json']);
   const destinationId = uuidV8(['editor', 'void', 'shop', 'docs/destination.json']);
   const catalogPath = path.join(desktop.paths.mind, 'user/gui/resources.json');
-  const catalog = Buffer.from(JSON.stringify({ format: 'hivem1nd-resources-v1', resources: [{ id: sourceId, project: 'shop', kind: 'void', path: 'docs/source.json' }] }));
-  const library = Buffer.from(JSON.stringify({ format: 'hivem1nd-library-v1', folders: [], items: {} }));
+  const catalog = Buffer.from(JSON.stringify({ format: 'hivem1nd-resources-v1', resources: [{ id: sourceId, project: 'shop', kind: 'void', path: 'docs/source.json' }] })); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
+  const library = Buffer.from(JSON.stringify({ format: 'hivem1nd-library-v1', folders: [], items: {} })); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   const current = Buffer.from('Newer source');
   await mkdir(path.dirname(catalogPath), { recursive: true });
   await writeFile(catalogPath, catalog);
@@ -259,7 +259,7 @@ test('a newer source revision prevents every logical write in an incoming librar
   await observeLocalChange(desktop, { kind: 'project', project: 'shop', path: 'docs/source.json' }, { bytes: current, at: LATER });
   const transactionId = uuidV8(['conflicting-library-move']);
   const incoming = Buffer.from('Older source');
-  const nextCatalog = Buffer.from(JSON.stringify({ format: 'hivem1nd-resources-v1', resources: [{ id: destinationId, project: 'shop', kind: 'void', path: 'docs/destination.json' }] }));
+  const nextCatalog = Buffer.from(JSON.stringify({ format: 'hivem1nd-resources-v1', resources: [{ id: destinationId, project: 'shop', kind: 'void', path: 'docs/destination.json' }] })); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   const records = [
     put({ kind: 'mind', path: 'user/gui/resources.json' }, nextCatalog, { transactionId }),
     { ...put({ kind: 'project', project: 'shop', path: 'docs/source.json' }, incoming, { transactionId }), operation: 'delete', hash: null, size: 0 },
@@ -358,7 +358,7 @@ test('immutable bytes and the wrong owner are rejected before writes', async (t)
   assert.equal(await readFile(path.join(message, 'one.md'), 'utf8'), 'id: one\n\nOriginal\n');
   const approvalId = uuidV8(['approval']);
   const result = Buffer.from(JSON.stringify({
-    format: 'hivem1nd-approval-result-v1',
+    format: 'hivem1nd-approval-result-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     approvalId,
     state: 'approved',
     answerId: null,
@@ -388,7 +388,7 @@ test('a missing dependency stays pending and a later copy does not charge twice'
     dependencies: [{ hash, machine: 'LAPTOP', sequence: 1, packHash: hashBytes(base) }],
   });
   const head = {
-    format: 'hivem1nd-head-v1',
+    format: 'hivem1nd-head-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     machine: 'LAPTOP',
     sequence: 1,
     updatedAt: AT,
@@ -428,7 +428,7 @@ test('a crashed group resumes once and a crashed head is not reused for other by
   await applyPack(desktop, grouped);
   assert.equal(await readFile(path.join(fixture.paths.mind, 'user', 'right.txt'), 'utf8'), 'right');
   assert.equal(desktop.store.events.filter((event) => event.type === 'sync.applied').length, 1);
-  const beat = { format: 'hivem1nd-service-v1', machine: 'LAPTOP', state: 'running', version: '3.0.0', heartbeatAt: AT, startedAt: AT };
+  const beat = { format: 'hivem1nd-service-v1', machine: 'LAPTOP', state: 'running', version: '3.0.0', heartbeatAt: AT, startedAt: AT }; // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   laptopOrigin.fault = 'before-head';
   const crashBody = Buffer.from('crash');
   const bytes = pack([put({ kind: 'mind', path: 'user/crash.txt' }, crashBody)], [{ hash: hashBytes(crashBody), raw: crashBody }]);
@@ -574,9 +574,9 @@ test('a registered project imports only cataloged documents, sidecars, and asset
   await mkdir(path.join(fixture.paths.mind, 'user', 'gui'), { recursive: true });
   await writeFile(path.join(shop, 'README.md'), 'local');
   await writeFile(path.join(shop, 'docs', 'release.json'), '{"title":"Release","cover":"docs/flows/assets/icon.png"}\n');
-  await writeFile(path.join(shop, 'gui', 'resources.json'), '{"format":"hivem1nd-resources-v1","resources":[{"project":"shop","path":"README.md"}]}\n');
+  await writeFile(path.join(shop, 'gui', 'resources.json'), '{"format":"hivem1nd-resources-v1","resources":[{"project":"shop","path":"README.md"}]}\n'); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   await writeFile(path.join(fixture.paths.mind, 'user', 'gui', 'resources.json'), `${JSON.stringify({
-    format: 'hivem1nd-resources-v1',
+    format: 'hivem1nd-resources-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     resources: [{ id: '10943b49-2c8a-4b30-b3aa-2d431e34a551', kind: 'void', project: 'shop', path: 'docs/release.json', legacyId: null }],
   })}\n`);
   desktop.projects = [{ name: 'shop', localPath: shop }];
@@ -612,7 +612,7 @@ test('missing owners stay pending and inconsistent owners are rejected', async (
   const requestId = uuidV8(['request']);
   const sessionId = uuidV8(['session']);
   const unbound = Buffer.from(JSON.stringify({
-    format: 'hivem1nd-session-result-v1',
+    format: 'hivem1nd-session-result-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     id: uuidV8(['result']),
     requestId,
     machine: 'LAPTOP',
@@ -625,10 +625,10 @@ test('missing owners stay pending and inconsistent owners are rejected', async (
   assert.equal(pending.code, 'owner_unavailable');
   await assert.rejects(() => readFile(path.join(fixture.paths.mind, 'user', 'relay', 'results', 'one.json')));
   const request = Buffer.from(JSON.stringify({
-    format: 'hivem1nd-session-request-v1', id: requestId, targetMachine: 'DESKTOP',
+    format: 'hivem1nd-session-request-v1', id: requestId, targetMachine: 'DESKTOP', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   }));
   const bound = Buffer.from(JSON.stringify({
-    format: 'hivem1nd-session-result-v1', id: uuidV8(['result', 'bound']), requestId, machine: 'LAPTOP', state: 'done',
+    format: 'hivem1nd-session-result-v1', id: uuidV8(['result', 'bound']), requestId, machine: 'LAPTOP', state: 'done', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   }));
   await assert.rejects(() => applyPack(desktop, pack([
     put({ kind: 'mind', path: `user/relay/requests/DESKTOP/${requestId}.json` }, request),
@@ -641,7 +641,7 @@ test('missing owners stay pending and inconsistent owners are rejected', async (
     kind: 'registration', sessionId, unitId: 'project:shop:executor-shop', machine: 'LAPTOP',
   }));
   const status = Buffer.from(JSON.stringify({
-    format: 'hivem1nd-session-status-v1', sessionId, state: 'stopped', machine: 'LAPTOP', at: AT,
+    format: 'hivem1nd-session-status-v1', sessionId, state: 'stopped', machine: 'LAPTOP', at: AT, // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   }));
   await applyPack(desktop, pack([
     put({ kind: 'mind', path: 'user/relay/registrations/one.json' }, registration),
@@ -667,7 +667,7 @@ test('missing owners stay pending and inconsistent owners are rejected', async (
     bindings: { actors: { 'project:shop:executor-shop': 'LAPTOP' } },
   }), (error) => error.code === 'invalid_record_owner');
   const receipt = Buffer.from(JSON.stringify({
-    format: 'hivem1nd-chat-read-v1', chatId: uuidV8(['chat']), unitId: 'root:master', machine: 'DESKTOP', messageIds: [], at: AT,
+    format: 'hivem1nd-chat-read-v1', chatId: uuidV8(['chat']), unitId: 'root:master', machine: 'DESKTOP', messageIds: [], at: AT, // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   }));
   await assert.rejects(() => applyPack(desktop, pack([
     put({ kind: 'mind', path: `user/relay/chats/${uuidV8(['chat'])}/read/${Buffer.from('root:master').toString('base64url')}/DESKTOP/${uuidV8(['receipt'])}.json` }, receipt),
@@ -699,7 +699,7 @@ test('a revocation tombstone blocks an older grant and keeps a new grant id', as
   const fresh = uuidV8(['grant', 'new']);
   const requestId = uuidV8(['revoke']);
   const revocation = Buffer.from(JSON.stringify({
-    format: 'hivem1nd-grant-revocation-result-v1',
+    format: 'hivem1nd-grant-revocation-result-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     requestId,
     unitId: 'project:shop:executor-shop',
     grantId: revoked,
@@ -726,7 +726,7 @@ test('a state approval header drops tombstoned grants and keeps the rest of the 
   const kept = uuidV8(['grant', 'kept']);
   const requestId = uuidV8(['revoke', 'state']);
   const revocation = Buffer.from(JSON.stringify({
-    format: 'hivem1nd-grant-revocation-result-v1',
+    format: 'hivem1nd-grant-revocation-result-v1', // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     requestId,
     unitId: 'project:shop:executor-shop',
     grantId: dropped,

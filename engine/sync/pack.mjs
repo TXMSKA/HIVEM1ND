@@ -77,7 +77,7 @@ export function normalizeTarget(target) {
 export function validateChange(change, owner = null) {
   assertPlain(change);
   exactKeys(change, CHANGE_KEYS, 'change');
-  if (change.format !== 'hivem1nd-change-v1') throw new CoreError(422, 'invalid_pack', 'The change format is not supported.');
+  if (change.format !== 'hivem1nd-change-v1') throw new CoreError(422, 'invalid_pack', 'The change format is not supported.'); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   if (!isUuid(change.id)) throw new CoreError(422, 'invalid_pack', 'The change id must be a UUID.');
   const machine = validateMachineName(change.machine);
   if (owner && machine !== owner) throw new CoreError(422, 'invalid_record_owner', 'The change owner does not match the pack.');
@@ -95,7 +95,7 @@ export function validateChange(change, owner = null) {
   }
   if (change.baseHash !== null && !HASH.test(change.baseHash)) throw new CoreError(422, 'invalid_pack', 'The base hash is not valid.');
   return {
-    format: 'hivem1nd-change-v1',
+    format: 'hivem1nd-change-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     id: change.id,
     machine,
     at: change.at,
@@ -151,7 +151,7 @@ export function encodePack({ machine, sequence, changes, objects = [], dependenc
   }
   const transactionList = validateTransactions(transactions, normalized);
   const index = {
-    format: 'hivem1nd-pack-index-v1',
+    format: 'hivem1nd-pack-index-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     compression: 'br',
     objects: objectEntries,
     changes: normalized,
@@ -162,7 +162,7 @@ export function encodePack({ machine, sequence, changes, objects = [], dependenc
   const payload = sealed.payload;
   if (payload.length > MAX_PACK_BYTES) throw new CoreError(413, 'pack_too_large', 'The pack exceeds 50 MB.');
   const header = {
-    format: 'hivem1nd-pack-v1',
+    format: 'hivem1nd-pack-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     machine: owner,
     sequence,
     payloadBytes: payload.length,
@@ -184,7 +184,7 @@ export function decodePack(bytes, { expectedHash = null, machine = null, keyProv
   assertPlain(header);
   if (header.quantum) throw new CoreError(422, 'unsupported_origin', 'Quantum origins are not available.');
   exactKeys(header, HEADER_KEYS, 'header');
-  if (header.format !== 'hivem1nd-pack-v1') throw new CoreError(422, 'invalid_pack', 'The pack format is not supported.');
+  if (header.format !== 'hivem1nd-pack-v1') throw new CoreError(422, 'invalid_pack', 'The pack format is not supported.'); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   const owner = validateMachineName(header.machine);
   if (machine && owner !== machine) throw new CoreError(422, 'invalid_record_owner', 'The pack owner does not match its directory.');
   assertSequence(header.sequence);
@@ -200,7 +200,7 @@ export function decodePack(bytes, { expectedHash = null, machine = null, keyProv
   const index = parseJson(indexFrame.bytes);
   assertPlain(index);
   exactKeys(index, INDEX_KEYS, 'index');
-  if (index.format !== 'hivem1nd-pack-index-v1' || index.compression !== 'br') throw new CoreError(422, 'invalid_pack', 'The pack index is not supported.');
+  if (index.format !== 'hivem1nd-pack-index-v1' || index.compression !== 'br') throw new CoreError(422, 'invalid_pack', 'The pack index is not supported.'); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   assertArray(index.objects, 'objects');
   assertArray(index.changes, 'changes');
   assertArray(index.dependencies, 'dependencies');
@@ -239,7 +239,7 @@ export function validateHead(head, { machine = null, previous = null, packBytes 
   const value = Buffer.isBuffer(head) || typeof head === 'string' ? parseJson(asBuffer(head)) : head;
   assertPlain(value);
   exactKeys(value, ['format', 'machine', 'packs', 'sequence', 'updatedAt'], 'head');
-  if (value.format !== 'hivem1nd-head-v1') throw new CoreError(422, 'invalid_pack', 'The head format is not supported.');
+  if (value.format !== 'hivem1nd-head-v1') throw new CoreError(422, 'invalid_pack', 'The head format is not supported.'); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   const owner = validateMachineName(value.machine);
   if (machine && owner !== machine) throw new CoreError(422, 'invalid_record_owner', 'The head owner does not match its directory.');
   if (typeof value.updatedAt !== 'string' || !TIME.test(value.updatedAt)) throw new CoreError(422, 'invalid_pack', 'The head time must be UTC.');
@@ -262,7 +262,7 @@ export function validateHead(head, { machine = null, previous = null, packBytes 
   } else if (value.sequence !== packs[packs.length - 1].sequence) {
     throw new CoreError(422, 'invalid_pack', 'The head sequence must match its last pack.');
   }
-  const normalized = { format: 'hivem1nd-head-v1', machine: owner, sequence: value.sequence, updatedAt: value.updatedAt, packs };
+  const normalized = { format: 'hivem1nd-head-v1', machine: owner, sequence: value.sequence, updatedAt: value.updatedAt, packs }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   if (previous) {
     const prior = validateHead(previous, { machine: owner });
     if (normalized.sequence < prior.sequence) throw new CoreError(422, 'invalid_pack', 'The head sequence regressed.');
@@ -685,7 +685,7 @@ function encryptionKey(keyProvider, keyId) {
 }
 
 function packAdditionalData(machine, sequence, keyId) {
-  return Buffer.from(`hivem1nd-pack-v1:${machine}:${sequence}:${keyId}`, 'utf8');
+  return Buffer.from(`hivem1nd-pack-v1:${machine}:${sequence}:${keyId}`, 'utf8'); // Compatibility: encryption AAD keeps existing packs decryptable.
 }
 
 function encryptPayload(payload, encryption, machine, sequence, keyProvider) {

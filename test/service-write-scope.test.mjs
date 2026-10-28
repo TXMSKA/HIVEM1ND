@@ -32,13 +32,13 @@ async function world(t) {
   const context = { store: fixture.store, paths: fixture.paths, now: () => fixture.clock.now, projects: [{ name: 'shop', localPath: repository }],
     adapters: { codex: adapter }, ownedPids: new Set(), beat: { state: 'running', heartbeatAt: new Date(fixture.clock.now).toISOString() }, principal: { audience: 'desktop', unitId: 'root:master' } };
   const identity = await readRepositoryIdentity(repository);
-  await writeFile(path.join(fixture.paths.localDirectory, 'cluster-links.json'), JSON.stringify({ format: 'hivem1nd-cluster-links-v1', machine: 'DESKTOP', links: {
+  await writeFile(path.join(fixture.paths.localDirectory, 'cluster-links.json'), JSON.stringify({ format: 'hivem1nd-cluster-links-v1', machine: 'DESKTOP', links: { // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     'repository:shop': { localPath: repository, machine: 'DESKTOP', identity: await directoryIdentity(repository), repositoryId: identity.id },
   } }));
   await createCluster(context, { title: 'Shop', members: [unitId], parentId: null, link: { kind: 'repository', projectId: 'shop' }, machine: 'DESKTOP', confirmed: true });
   const permissionFile = path.join(fixture.paths.localDirectory, 'client-permissions.json');
   await writeFile(permissionFile, JSON.stringify({ permissions: [{ id: randomUUID(), machine: 'DESKTOP', client: 'codex', actions: ['git.commit', 'git.push'],
-    scope: 'hivem1nd-started-sessions', grantedAt: new Date(fixture.clock.now).toISOString(), grantedBy: 'root:master' }] }));
+    scope: 'hivem1nd-started-sessions', grantedAt: new Date(fixture.clock.now).toISOString(), grantedBy: 'root:master' }] })); // Compatibility: existing permission grants retain their scope identity.
   const started = await enqueueStart(context, { unitId, runMode: 'chat', stateRevision: hashBytes(Buffer.from(state)) });
   const sessionId = started.result.sessionId, actor = { ...context, principal: { audience: 'agent', unitId, sessionId } };
   const instruction = { confirmed: true, sessionId, repository, branch: 'main', paths: ['task.txt'], action: 'git.commit', message: 'Apply reviewed task' };

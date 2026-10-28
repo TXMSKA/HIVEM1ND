@@ -5,7 +5,7 @@ import { CoreError, validateMachineName } from './identity.mjs';
 
 const ONE_DRIVE_ENV = ['OneDrive', 'OneDriveConsumer', 'OneDriveCommercial'];
 export const COSMIC_ROOT_NAME = 'Cosmic';
-export const MIND_DIRECTORY_NAME = '.m1nd';
+export const MIND_DIRECTORY_NAME = 'onem1nd';
 
 function library(platform) {
   return platform === 'win32' ? path.win32 : path.posix;
@@ -55,13 +55,14 @@ export function mindKeyFor(mindPath, platform) {
   return createHash('sha256').update(hashed).digest('hex').slice(0, 16);
 }
 
-export function servicePaths({ platform, env = {}, home, mindPath, machine, originPath = null, cosmicPath = null } = {}) {
+export function servicePaths({ platform, env = {}, home, mindPath, machine, originPath = null, cosmicPath = null, serviceDirectoryName = 'onem1nd-service' } = {}) {
   const lib = library(platform);
   const machineName = validateMachineName(machine);
   const cosmic = cosmicPath ? lib.resolve(cosmicPath) : localCosmic({ platform, env, home });
   const mind = lib.resolve(mindPath ?? defaultMind({ platform, env, home }));
   const mindKey = mindKeyFor(mind, platform);
-  const serviceRoot = lib.join(cosmic, 'hivem1nd-service');
+  if (!['onem1nd-service', 'hivem1nd-service'].includes(serviceDirectoryName)) throw new CoreError(422, 'invalid_path', 'The service directory is not supported.'); // Compatibility: the legacy service directory is accepted only to stop its authenticated runtime during migration.
+  const serviceRoot = lib.join(cosmic, serviceDirectoryName);
   const localDirectory = lib.join(serviceRoot, mindKey, machineName);
   const staging = lib.join(localDirectory, 'staging');
   const origin = originPath ? lib.resolve(originPath) : null;

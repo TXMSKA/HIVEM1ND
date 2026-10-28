@@ -131,7 +131,7 @@ test('ReLAN mutations forward their own action and release after a rejected join
 });
 
 test('init --join-code configures the local mirror and joins without loading setup screens', async t => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-relan-cli-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-relan-cli-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const mind = path.join(root, 'mind');
   let configured;

@@ -12,7 +12,7 @@ import { text } from '../engine/texts.mjs';
 const KIT_PATH = path.resolve(import.meta.dirname, '..');
 
 async function temporary(context) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hivem1nd-progress-'));
+  const root = await mkdtemp(path.join(os.tmpdir(), 'onem1nd-progress-'));
   context.after(() => rm(root, { recursive: true, force: true }));
   return root;
 }
@@ -50,7 +50,7 @@ test('the starting row reports files done out of the total in the session langua
   const root = await temporary(context);
   const kitPath = path.join(root, 'kit');
   await mkdir(path.join(kitPath, 'migrations'), { recursive: true });
-  await writeFile(path.join(kitPath, 'package.json'), '{"name":"hivem1nd-fixture","version":"3.0.0","files":["rules.md","migrations/"]}\n');
+  await writeFile(path.join(kitPath, 'package.json'), '{"name":"onem1nd-fixture","version":"3.0.0","files":["rules.md","migrations/"]}\n');
   await writeFile(path.join(kitPath, 'rules.md'), 'Current rules.\n');
   for (const name of ['2.0.0-experimental.4', '3.0.0']) {
     await writeFile(path.join(kitPath, 'migrations', `${name}.mjs`),

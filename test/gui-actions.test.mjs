@@ -282,9 +282,9 @@ function apiWith(handler) {
       const outcome = await handler({ method: options.method, path: decodeURIComponent(new URL(url).pathname), body, headers: options.headers });
       const status = outcome.status ?? 200;
       const payload = status >= 400
-        ? { contract: "hivem1nd-gui-v3", error: outcome.error }
+        ? { contract: "hivem1nd-gui-v3", error: outcome.error } // Compatibility: stored schemas and wire contracts retain their existing identifiers.
         : {
-          contract: "hivem1nd-gui-v3",
+          contract: "hivem1nd-gui-v3", // Compatibility: stored schemas and wire contracts retain their existing identifiers.
           data: outcome.data ?? null,
           meta: { requestId: "req", readAt: "2026-10-10T12:00:00.000Z", eventCursor: "0", sync: "local" },
         };

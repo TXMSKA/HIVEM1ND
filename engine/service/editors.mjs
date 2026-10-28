@@ -115,7 +115,7 @@ function commentsFile(project, legacyId) {
 
 async function readCatalog(context) {
   const loaded = await loadBytes(catalogFile(context), context.store);
-  const value = loaded.bytes ? parseJson(loaded.bytes) : { format: 'hivem1nd-resources-v1', resources: [] };
+  const value = loaded.bytes ? parseJson(loaded.bytes) : { format: 'hivem1nd-resources-v1', resources: [] }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   if (!value || typeof value !== 'object' || !Array.isArray(value.resources)) fail(409, 'corrupt_resource', 'The resource could not be read.');
   return { ...loaded, value };
 }
@@ -839,7 +839,7 @@ export async function writeAttachments(context, id, input) {
   if (input.expectedRevision !== loaded.revision) fail(409, 'revision_conflict', 'The board changed since it was read.');
   const attached = await canonicalAttachments(context, input.attached);
   const bytes = jsonBytes({
-    format: 'hivem1nd-editor-binding-v1',
+    format: 'hivem1nd-editor-binding-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     resourceId: id,
     kind: found.entry.kind,
     attached,
@@ -963,7 +963,7 @@ function assetRegistryFile(context, id) {
 async function rememberAsset(context, id, name) {
   const file = assetRegistryFile(context, id);
   const loaded = await loadBytes(file);
-  const value = loaded.bytes ? parseJson(loaded.bytes) : { format: 'hivem1nd-asset-registry-v1', resourceId: id, assets: [] };
+  const value = loaded.bytes ? parseJson(loaded.bytes) : { format: 'hivem1nd-asset-registry-v1', resourceId: id, assets: [] }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   if (!Array.isArray(value.assets)) value.assets = [];
   if (!value.assets.includes(name)) value.assets.push(name);
   return record(file, loaded.revision, jsonBytes(value));
@@ -986,7 +986,7 @@ function quotaFile(context, project) {
 }
 
 function freshQuota(project) {
-  return { format: 'hivem1nd-asset-quota-v1', project, count: 0, bytes: 0, reservations: [] };
+  return { format: 'hivem1nd-asset-quota-v1', project, count: 0, bytes: 0, reservations: [] }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
 }
 
 function readQuota(loaded, project) {
@@ -1788,7 +1788,7 @@ async function noticePlan(context, messageId, resourceId, recipients) {
   if (!context.paths?.mind || recipients.length === 0) return { entries: [], events: [] };
   const file = path.join(context.paths.mind, 'user', 'relay', 'fanout', `${messageId}.json`);
   const loaded = await loadBytes(file);
-  const parsed = loaded.bytes ? parseJson(loaded.bytes) : { format: 'hivem1nd-fanout-v1', messageId, notices: [] };
+  const parsed = loaded.bytes ? parseJson(loaded.bytes) : { format: 'hivem1nd-fanout-v1', messageId, notices: [] }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   const events = [];
   for (const unitId of recipients) {
     const key = `${messageId}:${unitId}`;
@@ -2034,8 +2034,8 @@ async function loadLibrary(context, name) {
   if (!stats?.isDirectory()) fail(409, 'project_unavailable', 'The project repository is not available on this machine.');
   const file = inside(project.localPath, 'docs/flows/library.json');
   const loaded = await loadBytes(file, context.store);
-  const value = loaded.bytes ? parseJson(loaded.bytes) : { format: 'hivem1nd-library-v1', folders: [], items: {} };
-  if (value.format !== 'hivem1nd-library-v1' || !Array.isArray(value.folders) || !value.items || typeof value.items !== 'object' || Array.isArray(value.items)) fail(409, 'corrupt_resource', 'The library metadata is not valid.');
+  const value = loaded.bytes ? parseJson(loaded.bytes) : { format: 'hivem1nd-library-v1', folders: [], items: {} }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
+  if (value.format !== 'hivem1nd-library-v1' || !Array.isArray(value.folders) || !value.items || typeof value.items !== 'object' || Array.isArray(value.items)) fail(409, 'corrupt_resource', 'The library metadata is not valid.'); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   const ids = new Set();
   for (const folder of value.folders) {
     if (!isUuid(folder.id) || ids.has(folder.id) || !['blueprint', 'void'].includes(folder.kind) || libraryTitle(folder.title) !== folder.title) fail(409, 'corrupt_resource', 'The library folder is not valid.');
@@ -2105,7 +2105,7 @@ async function initialHistory(context, entry, document, comments, operation = 'c
   const project = projectOf(context, entry.project);
   const id = randomUUID();
   const relative = `docs/flows/history/${entry.id}/${id}`;
-  const metadata = { format: 'hivem1nd-editor-history-v1', id, resourceId: entry.id, at: clock(context),
+  const metadata = { format: 'hivem1nd-editor-history-v1', id, resourceId: entry.id, at: clock(context), // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     by: actor(context).authorId, operation, documentPath: entry.path,
     commentsPath: comments ? path.relative(project.localPath, commentsPath({ project, entry })).replaceAll('\\', '/') : null,
     revision: hashBytes(document), commentsRevision: revisionOf(comments), title: parseJson(document).title,
@@ -2125,7 +2125,7 @@ async function historyRecords(context, found) {
     if (!loaded.bytes) continue;
     if (loaded.bytes.length > TEXT_LIMIT) fail(413, 'resource_too_large', 'A history object exceeds 16 MB.');
     const item = parseJson(loaded.bytes);
-    if (item.format !== 'hivem1nd-editor-history-v1' || !isUuid(item.id) || name !== `${item.id}.json`
+    if (item.format !== 'hivem1nd-editor-history-v1' || !isUuid(item.id) || name !== `${item.id}.json` // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
       || item.resourceId !== found.entry.id || !Number.isFinite(Date.parse(item.at))
       || !/^[0-9a-f]{64}$/.test(item.revision) || item.commentsRevision !== null && !/^[0-9a-f]{64}$/.test(item.commentsRevision)
       || !['create', 'rename', 'board-edit', 'sketch', 'text-edit', 'comment', 'proposal', 'conflict', 'restore'].includes(item.operation)) {
@@ -2471,7 +2471,7 @@ function invalidateEditor(context, id) {
 
 async function finishRemoval(context, bundles, library, entries, resourceIds, kinds) {
   const id = randomUUID();
-  const undoEvents = [...kinds].map((kind) => libraryEvent(library, kind, library.bytes ?? jsonBytes({ format: 'hivem1nd-library-v1', folders: [], items: {} })));
+  const undoEvents = [...kinds].map((kind) => libraryEvent(library, kind, library.bytes ?? jsonBytes({ format: 'hivem1nd-library-v1', folders: [], items: {} }))); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   const unique = uniqueEntries(entries);
   const undo = await prepareChangeUndo(context, { id, permission: 'editor.write', resourceIds, entries: unique, events: [...undoEvents,
     { name: 'view.changed', data: { collections: ['editors'], revision: id } }] });
@@ -2639,7 +2639,7 @@ export async function moveEditor(context, id, input) {
         || source.includes(`${path.sep}history${path.sep}`) && !source.endsWith('.document.json') && !source.endsWith('.comments.json')) {
         const value = remapResource(parseJson(bytes), id, newId);
         if (source === bundle.comments.file && entry.kind === 'void') value.path = path.basename(input.path);
-        if (value.format === 'hivem1nd-editor-history-v1') {
+        if (value.format === 'hivem1nd-editor-history-v1') { // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
           value.documentPath = input.path;
           value.commentsPath = path.relative(destination.project.localPath, commentsPath(targetFound)).replaceAll('\\', '/');
         }

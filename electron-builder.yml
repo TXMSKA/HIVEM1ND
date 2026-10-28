@@ -1,7 +1,9 @@
-appId: com.txmska.hivem1nd
-productName: HIVEM1ND
+appId: com.txmska.hivem1nd # Compatibility: preserve the installed Electron application identity.
+productName: ONEM1ND
 copyright: Copyright (c) 2026 TXMSKA
-asar: true
+asar: false # The registered Node service needs real CLI files and a real working directory.
+extraMetadata:
+  main: gui/electron.mjs
 directories:
   output: dist
 files:
@@ -30,4 +32,4 @@ win:
     - target: dir
       arch:
         - x64
-  artifactName: HIVEM1ND-${version}-${arch}.${ext}
+  artifactName: ONEM1ND-${version}-${arch}.${ext}

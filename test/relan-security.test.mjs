@@ -14,7 +14,7 @@ import { openFolderTransport } from '../engine/sync/replicate.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
 const AT = '2026-10-10T12:00:00.000Z';
-const PAIR_VERSION = 'hivem1nd-relan-pair-v2';
+const PAIR_VERSION = 'hivem1nd-relan-pair-v2'; // Compatibility: stored schemas and wire contracts retain their existing identifiers.
 
 async function rogueHost(start) {
   const messages = [];
@@ -51,7 +51,7 @@ async function member(options = {}) {
 function packed(material, plaintext, algorithm = 'aes-256-gcm') {
   const raw = Buffer.from(plaintext), hash = hashBytes(raw);
   return encodePack({ machine: 'MACHINE-B', sequence: 1,
-    changes: [{ format: 'hivem1nd-change-v1', id: uuidV8(['relan-security', hash]), machine: 'MACHINE-B', at: AT,
+    changes: [{ format: 'hivem1nd-change-v1', id: uuidV8(['relan-security', hash]), machine: 'MACHINE-B', at: AT, // Compatibility: stored schemas and wire contracts retain their existing identifiers.
       target: { kind: 'mind', path: 'user/secret.md' }, operation: 'put', hash, size: raw.length, baseHash: null, messageId: null, transactionId: null }],
     objects: [{ hash, raw }], encryption: algorithm === 'none' ? { algorithm } : { algorithm, keyId: material.keyId },
     keyProvider: () => material.key });
@@ -59,8 +59,8 @@ function packed(material, plaintext, algorithm = 'aes-256-gcm') {
 
 function signed(key, method, route, timestamp, nonce, body = Buffer.alloc(0)) {
   const digest = createHash('sha256').update(body).digest('hex');
-  return { 'x-hivem1nd-time': String(timestamp), 'x-hivem1nd-nonce': nonce,
-    'x-hivem1nd-signature': createHmac('sha256', key).update([method, route, digest, timestamp, nonce].join('\n')).digest('hex') };
+  return { 'x-hivem1nd-time': String(timestamp), 'x-hivem1nd-nonce': nonce, // Compatibility: paired machines retain their signed wire headers.
+    'x-hivem1nd-signature': createHmac('sha256', key).update([method, route, digest, timestamp, nonce].join('\n')).digest('hex') }; // Compatibility: paired machines retain their signed wire headers.
 }
 
 function raw(port, route, headers = {}, method = 'GET', body = Buffer.alloc(0)) {
@@ -96,7 +96,7 @@ test('ReLAN key rejects malformed saved secrets', async () => {
   const options = { localDirectory: fixture.paths.localDirectory, store: fixture.store };
   try {
     await createRelanKey(options);
-    await writeFile(path.join(fixture.paths.localDirectory, 'relan-key.json'), JSON.stringify({ format: 'hivem1nd-relan-key-v1', key: 'short' }));
+    await writeFile(path.join(fixture.paths.localDirectory, 'relan-key.json'), JSON.stringify({ format: 'hivem1nd-relan-key-v1', key: 'short' })); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     await assert.rejects(loadRelanKey(options), { code: 'invalid_relan_key' });
     await assert.rejects(saveRelanKey(options, { relanId: 'x', keyId: 'x', key: randomBytes(31) }), { code: 'invalid_relan_key' });
   } finally { await dispose(fixture); }
@@ -233,10 +233,10 @@ test('ReLAN refuses v1 on both sides before the joiner sends a proof', async () 
   const pairing = createPairing(); pairing.showCode();
   const nonce = randomBytes(16).toString('base64url');
   assert.throws(() => pairing.handleStart({ nonce, publicKey: randomBytes(44).toString('base64url') }), { code: 'pairing_refused' });
-  assert.throws(() => pairing.handleStart({ nonce, version: 'hivem1nd-relan-pair-v1' }), { code: 'pairing_refused' });
+  assert.throws(() => pairing.handleStart({ nonce, version: 'hivem1nd-relan-pair-v1' }), { code: 'pairing_refused' }); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   const server = pairing.handleStart({ version: PAIR_VERSION, nonce });
   await assert.rejects(pairing.handleFinish({ session: server.session, proof: randomBytes(32).toString('base64url') }), { code: 'pairing_refused' });
-  const rogue = await rogueHost(() => ({ version: 'hivem1nd-relan-pair-v1', session: randomBytes(24).toString('base64url'), publicKey: randomBytes(32).toString('base64url') }));
+  const rogue = await rogueHost(() => ({ version: 'hivem1nd-relan-pair-v1', session: randomBytes(24).toString('base64url'), publicKey: randomBytes(32).toString('base64url') })); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   try {
     await assert.rejects(pairRelan({ address: '127.0.0.1', port: rogue.port, code: '234567' }), { code: 'pairing_refused' });
     assert.equal(rogue.messages.length, 1);
@@ -331,7 +331,7 @@ test('ReLAN transport preserves encrypted pack bytes and never puts file plainte
   try {
     const bytes = packed(host.material, plaintext);
     await transport.writePack('MACHINE-B', 1, bytes);
-    const head = { format: 'hivem1nd-head-v1', machine: 'MACHINE-B', sequence: 1, updatedAt: AT,
+    const head = { format: 'hivem1nd-head-v1', machine: 'MACHINE-B', sequence: 1, updatedAt: AT, // Compatibility: stored schemas and wire contracts retain their existing identifiers.
       packs: [{ sequence: 1, file: packFileName(1), hash: hashBytes(bytes), bytes: bytes.length }] };
     await transport.writeHead(head);
     assert.deepEqual(await transport.listHeads(), [head]);

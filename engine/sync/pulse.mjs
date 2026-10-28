@@ -397,7 +397,7 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
     pending = pending.filter((id) => !skipped.has(id));
     const existing = await readBytes(sync.store, issuesPath());
     const prior = existing ? JSON.parse(existing.toString('utf8')).ids ?? [] : [];
-    const record = { format: 'hivem1nd-sync-issues-v1', ids: [...new Set([...prior, ...ids])] };
+    const record = { format: 'hivem1nd-sync-issues-v1', ids: [...new Set([...prior, ...ids])] }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     await writeDurable(sync.store, issuesPath(), Buffer.from(`${canonicalJson(record)}\n`, 'utf8'), [sync.paths.localDirectory, sync.store.confineRoot]);
   }
 
@@ -433,7 +433,7 @@ function preparePack(groups, sequence, head, objects, committed, compressed = nu
     transactions: transactionsOf(changes),
   });
   const nextHead = {
-    format: 'hivem1nd-head-v1',
+    format: 'hivem1nd-head-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     machine: changes[0].machine,
     sequence,
     updatedAt: head?.updatedAt ?? '2026-10-10T12:00:00.000Z',

@@ -11,8 +11,8 @@ import { CoreError } from '../service/identity.mjs';
 import { parse as parseToml } from 'smol-toml';
 import { applyEdits, modify as modifyJsonc, parse as parseJsonc } from 'jsonc-parser';
 
-const OWNED_SERVER = 'hivem1nd-relay';
-const MARKER = '# HIVEM1ND Relay managed server';
+const OWNED_SERVER = 'onem1nd-relay';
+const MARKER = '# ONEM1ND Relay managed server';
 // A Cursor stop hook reads the mind through OneDrive and measured 5 to 11 s on Windows.
 const CURSOR_HOOK_TIMEOUT = 30;
 const SUPPORTED = new Set(['claude', 'codex', 'cursor', 'opencode', 'copilot', 'antigravity']);
@@ -394,7 +394,7 @@ function isOwnedHookHandler(handler, client, event) {
 }
 
 function findOwnedTableHeader(text) {
-  const matches = [...text.matchAll(/^\s*\[mcp_servers\.(?:"hivem1nd-relay"|hivem1nd-relay)\]\s*$/gm)];
+  const matches = [...text.matchAll(/^\s*\[mcp_servers\.(?:"onem1nd-relay"|onem1nd-relay)\]\s*$/gm)];
   return matches.at(-1)?.index ?? -1;
 }
 
@@ -836,7 +836,7 @@ function removeJsonHooks(text, client, mindPath) {
   return changed ? `${JSON.stringify(doc, null, 2)}\n` : text;
 }
 
-// The hivem1nd-relay MCP server of a client, or undefined when its config has none. Antigravity has no
+// The onem1nd-relay MCP server of a client, or undefined when its config has none. Antigravity has no
 // MCP slot, so its entry is the allow rules and it is read apart.
 async function relayMcpEntry({ client, homeDir, env }) {
   const configText = await readRegular(clientConfigPaths({ client, homeDir, env }).mcp);
@@ -862,7 +862,7 @@ async function antigravityOwnedRules({ homeDir, env }) {
 }
 
 // A client counts as configured when its own config already holds the Relay entry: the
-// hivem1nd-relay MCP server or, for Antigravity, which has no MCP slot, the allow rules of the mind.
+// onem1nd-relay MCP server or, for Antigravity, which has no MCP slot, the allow rules of the mind.
 // Nothing else in that config is compared, so a hand-edited hook never makes it unconfigured.
 export async function relayEntryPresent({ client, homeDir, env = process.env, mindPath } = {}) {
   if (!SUPPORTED.has(client)) throw new Error(`Unsupported Relay client: ${client}`);

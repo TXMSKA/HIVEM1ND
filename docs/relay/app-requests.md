@@ -2,7 +2,7 @@
 
 Status: draft for review, 2026-10-11. Format names: `cosmic-request-v1` for messages and `cosmic-actions-v1` for action lists.
 
-Any agent or app can ask a Cosmic app (Nebula, Nova, Blueprint, Vault, HIVEM1ND) to do something within that app's scope, and get an answer, through Relay. The rule is one for every app and lives in the kit's Relay. Each app keeps its own handler, its own actions and its own history.
+Any agent or app can ask a Cosmic app (Nebula, Nova, Blueprint, Vault, ONEM1ND) to do something within that app's scope, and get an answer, through Relay. The rule is one for every app and lives in the kit's Relay. Each app keeps its own handler, its own actions and its own history.
 
 Nothing here needs a new Relay feature: an app is a Relay unit, and a request, its answer and its approval are ordinary messages in one thread. A later kit version validates these messages in the service and gives them native kinds (see Versions).
 
@@ -142,7 +142,7 @@ Each app keeps who asked what, when, the answer, whether it was approved and by 
 ## Versions
 
 - `format` is versioned. An app that reads only `cosmic-request-v1` answers any other format with `invalid` and `error.code` `unsupported_format`.
-- HIVEM1ND 3.0 carries these messages as ordinary messages (`kind: message`).
+- ONEM1ND 3.0 carries these messages as ordinary messages (`kind: message`).
 - A later kit version adds native kinds for request and answer, validates bodies in the Relay service, and maps approvals onto the approval records of 3.0 (approve, approve always for one unit and one kind of action, revoke). Messages written to this draft keep working.
 
 ## Example

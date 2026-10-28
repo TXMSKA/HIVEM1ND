@@ -135,14 +135,14 @@ async function world(t, { client = 'claude', ownProcess = true } = {}) {
       return native;
     },
     ...ownProcess ? { ownProcess: fakeOwner(handles) } : {},
-    createNativeLaunch: () => ({ env: {}, mcp: { name: 'hivem1nd-relay', command: 'node', args: [] }, ready() {}, close() {} }) });
+    createNativeLaunch: () => ({ env: {}, mcp: { name: 'onem1nd-relay', command: 'node', args: [] }, ready() {}, close() {} }) });
   t.after(() => adapter.close());
   const owner = createSettingsOwner({ store: fixture.store, paths: fixture.paths, now: () => fixture.clock.now, projects: [{ name: 'shop', localPath: repository }],
     bus: createEventBus({ machine: fixture.machine, now: () => fixture.clock.now }), probeAgents: async () => ({}), homeDir: fixture.home, env: process.env,
     adapters: { [client]: adapter }, ownedPids: new Set(), beat: { state: 'running', heartbeatAt: new Date(fixture.clock.now).toISOString() } });
   const context = owner;
   const identity = await readRepositoryIdentity(repository);
-  await writeFile(path.join(fixture.paths.localDirectory, 'cluster-links.json'), JSON.stringify({ format: 'hivem1nd-cluster-links-v1', machine: 'DESKTOP', links: {
+  await writeFile(path.join(fixture.paths.localDirectory, 'cluster-links.json'), JSON.stringify({ format: 'hivem1nd-cluster-links-v1', machine: 'DESKTOP', links: { // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     'repository:shop': { localPath: repository, machine: 'DESKTOP', identity: await directoryIdentity(repository), repositoryId: identity.id },
   } }));
   const cluster = await createCluster(context, { title: 'Shop', members: [unitId], parentId: null, link: { kind: 'repository', projectId: 'shop' }, machine: 'DESKTOP', confirmed: true });
@@ -218,14 +218,14 @@ test('the boundary authorizes one exact approval once, and automatic work only f
   for (const input of [{ once: true }, { automatic: true }]) assert.deepEqual(await automatic.authorize(input), { authorized: false });
 });
 
-test('only the launch\'s own HIVEM1ND tools skip the question; every other tool and a Read outside the folder stay denied', async t => {
+test('only the launch\'s own ONEM1ND tools skip the question; every other tool and a Read outside the folder stay denied', async t => {
   const w = await world(t);
   const { native } = await w.launch();
   const before = w.asked.length;
-  assert.equal(await w.ask(native, 'mcp__hivem1nd-relay__session_complete', { outcome: 'delivered' }), 'allow');
-  assert.equal(await w.ask(native, 'mcp__hivem1nd-relay__reminder', {}), 'allow');
+  assert.equal(await w.ask(native, 'mcp__onem1nd-relay__session_complete', { outcome: 'delivered' }), 'allow');
+  assert.equal(await w.ask(native, 'mcp__onem1nd-relay__reminder', {}), 'allow');
   assert.equal(w.asked.length, before, 'the own server never asks');
-  for (const [tool, input] of [['mcp__other-server__run', {}], ['mcp__hivem1nd-relay', {}], ['mcp__hivem1nd-relayx__run', {}], ['WebFetch', { url: 'https://example.invalid' }],
+  for (const [tool, input] of [['mcp__other-server__run', {}], ['mcp__onem1nd-relay', {}], ['mcp__onem1nd-relayx__run', {}], ['WebFetch', { url: 'https://example.invalid' }],
     ['Read', { file_path: path.join(w.fixture.root, 'outside.txt') }], ['Task', {}]]) {
     assert.equal(await w.ask(native, tool, input), 'deny', tool);
   }
@@ -324,7 +324,7 @@ test('automatic work is granted per agent and client only, once, and only for an
   assert.equal((await readAgentPermissions(w.context)).length, 1);
   // A Git permission list and an automatic grant coexist, and the grant never counts as Git authority.
   await writeFile(w.permissionFile, JSON.stringify({ permissions: [...(await readAgentPermissions(w.context)), { id: randomUUID(), machine: 'DESKTOP', client: 'claude',
-    actions: ['git.commit', 'git.push'], scope: 'hivem1nd-started-sessions', grantedAt: new Date(w.fixture.clock.now).toISOString(), grantedBy: 'root:master' }] }));
+    actions: ['git.commit', 'git.push'], scope: 'hivem1nd-started-sessions', grantedAt: new Date(w.fixture.clock.now).toISOString(), grantedBy: 'root:master' }] })); // Compatibility: existing permission grants retain their scope identity.
   const { started, native } = await w.launch();
   assert.equal(started.result.state, 'started');
   assert.equal(await w.ask(native, 'Bash', { command: 'git commit -m "Applied"' }), 'deny', 'automatic work is not Git authority');

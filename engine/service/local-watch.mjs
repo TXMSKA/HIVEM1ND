@@ -13,7 +13,7 @@ const SLICE_TARGETS = 400;
 // start reads only the files that differ from it, instead of reading and hashing the whole M1ND again (minutes on a large
 // one, during which every other change waited between slices).
 const SIGNATURES_FILE = 'local-watch-signatures.json';
-const SIGNATURES_FORMAT = 'hivem1nd-local-signatures-v1';
+const SIGNATURES_FORMAT = 'hivem1nd-local-signatures-v1'; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
 
 // The first pass reads every eligible file of the M1ND against what was staged before, which takes tens of seconds on a large
 // one. A caller that wants the service to answer first passes deferBaseline and starts that pass with close.baseline().
@@ -121,7 +121,7 @@ export async function watchLocalChanges(runtime, onChanges, { deferBaseline = fa
     if (revision !== catalogHash) { validatedHashes.clear(); catalogHash = revision; }
     if (!bytes) return [];
     const catalog = JSON.parse(bytes.toString('utf8'));
-    return catalog.format === 'hivem1nd-resources-v1' && Array.isArray(catalog.resources) ? catalog.resources : [];
+    return catalog.format === 'hivem1nd-resources-v1' && Array.isArray(catalog.resources) ? catalog.resources : []; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   }
 
   async function importedTargets() {

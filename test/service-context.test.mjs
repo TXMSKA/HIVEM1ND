@@ -205,7 +205,7 @@ test('Lyra Compact uses normal chat with bounded exact inputs and Clear keeps me
     discover: async () => ({ home: `fixture-${randomUUID()}`, port: 8123, pid: 7777, startedAt: '2026-10-14T00:00:00Z' }),
     tokens: { get: async () => 'a'.repeat(43) }, fetch: async (url, init) => {
       const route = new URL(url).pathname, body = init.body ? JSON.parse(init.body) : null; calls.push({ route, body });
-      if (route === '/v1/apps/current') return Response.json({ id: 'hivem1nd', kind: 'app', status: 'granted', scopes: ['chat', 'models', 'tools'] });
+      if (route === '/v1/apps/current') return Response.json({ id: 'hivem1nd', kind: 'app', status: 'granted', scopes: ['chat', 'models', 'tools'] }); // Compatibility: Lyra app grants retain their registered identity.
       if (route === '/v1/models') return Response.json({ ollama: { running: true }, installed: [{ name: 'lyra-base' }], modes: { fast: { model: 'lyra-base' }, normal: { model: 'lyra-base' }, thinking: { model: 'lyra-thinking' } } });
       if (route === '/v1/tools') return Response.json(body.tools);
       if (route !== '/v1/chat') throw new Error('An unsupported Lyra endpoint was used.');
@@ -239,7 +239,7 @@ test('new Overseer sessions default fresh, explicit keep reuses native context, 
   const { context, fixture, registration, file } = await world(t);
   await stopSession(context, registration.sessionId, { confirmed: true });
   const captured = [], transcript = [
-    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"hivem1nd"}}}',
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"onem1nd"}}}',
     '{"jsonrpc":"2.0","id":2,"method":"thread/start","params":{"cwd":"C:/fixture"}}',
     '{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"fixture-thread-1"}}}',
   ];

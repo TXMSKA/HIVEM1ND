@@ -40,7 +40,7 @@ async function attachRecoveryHost(handle, service) {
       if (JSON.stringify(JSON.parse(body)) !== '{}') fail(422, 'invalid_body', 'The request must be empty.');
       reply(200, await handle.recover());
     } catch (error) {
-      reply(error.status ?? 503, { error: { code: error.code ?? 'service_unavailable', message: 'The owned service could not be recovered. Reopen HIVEM1ND using its local launcher.' } });
+      reply(error.status ?? 503, { error: { code: error.code ?? 'service_unavailable', message: 'The owned service could not be recovered. Reopen ONEM1ND using its local launcher.' } });
     }
   });
   server.on('connection', socket => { sockets.add(socket); socket.unref(); socket.once('close', () => sockets.delete(socket)); });
@@ -106,7 +106,7 @@ function attachFolderReopen(http, token, mindPath, reopen) {
         if (!http.credentials.verify(key)) fail(401, 'invalid_session', 'The viewer session has ended.');
         if (!host) fail(403, 'forbidden', 'This viewer has no folder selection host.');
         if (req.method === 'GET') {
-          reply(200, { contract: 'hivem1nd-gui-v3', data: { mindPath: host.mindPath }, meta });
+          reply(200, { contract: 'hivem1nd-gui-v3', data: { mindPath: host.mindPath }, meta }); // Compatibility: retain the service wire contract for existing viewers.
           return;
         }
         if (String(req.headers['content-type']).split(';')[0] !== 'application/json') fail(415, 'invalid_body', 'JSON is required.');
@@ -117,7 +117,7 @@ function attachFolderReopen(http, token, mindPath, reopen) {
         }
         if (JSON.stringify(JSON.parse(body)) !== '{}') fail(422, 'invalid_body', 'The request must be empty.');
         const wizard = await host.reopen();
-        reply(200, { contract: 'hivem1nd-gui-v3', data: { url: wizard.url }, meta });
+        reply(200, { contract: 'hivem1nd-gui-v3', data: { url: wizard.url }, meta }); // Compatibility: retain the service wire contract for existing viewers.
       } catch (error) {
         reply(error.status ?? 503, { error: { code: error.code ?? 'folder_unavailable', message: 'The folder selection could not be opened.' } });
       }

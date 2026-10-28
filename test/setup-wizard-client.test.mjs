@@ -14,7 +14,7 @@ const failedStep = {
   failure: { headline: "The service did not start", body: "The port is in use." },
   progress: [{ id: "service", state: "fail", label: "Service", elapsedSeconds: 1 }],
   ui: {
-    documentTitle: "HIVEM1ND setup",
+    documentTitle: "ONEM1ND setup",
     stepOfFour: "Step {step} of 4",
     step1Title: "Install",
     step2Title: "Location",
@@ -30,7 +30,7 @@ const failedStep = {
 
 test("a failed setup install clears the Retry spinner", async () => {
   const document = createWizardDocument();
-  const session = new Map([["hivem1nd.session", "test-token"]]);
+  const session = new Map([["hivem1nd.session", "test-token"]]); // Compatibility: browser storage and desktop bridge names remain stable.
   const source = await readFile(new URL("../gui/app.js", import.meta.url), "utf8");
   const start = new AsyncFunction("document", "location", "sessionStorage", "history", "fetch", "window", "CSS", "setTimeout", source);
   await start(
@@ -60,11 +60,11 @@ test("a failed setup install clears the Retry spinner", async () => {
 
 test("the 2.x sessions to close start folded under their count", async () => {
   const document = createWizardDocument();
-  const session = new Map([["hivem1nd.session", "test-token"]]);
+  const session = new Map([["hivem1nd.session", "test-token"]]); // Compatibility: browser storage and desktop bridge names remain stable.
   const sessions = Array.from({ length: 30 }, (_, index) => ({ unit: `executor-${index}`, client: "codex", machine: "MOTHERSHIP", local: true }));
   const step = { ...failedStep, id: "location", number: 2, failure: null, progress: [], fields: [{ id: "mindPath", type: "text", label: "Folder", required: true }],
     values: { mindPath: "C:/M1ND" }, languages: [{ value: "en", label: "English" }], relayPlus: { title: "Relay+", badge: "Soon", body: "", disabled: true },
-    legacy: { confirmation: true, closeTitle: "Close HIVEM1ND 2.x first", closeCopy: "Close them.", action: "Sessions closed, migrate", offline: "", sessions },
+    legacy: { confirmation: true, closeTitle: "Close ONEM1ND 2.x first", closeCopy: "Close them.", action: "Sessions closed, migrate", offline: "", sessions },
     ui: { ...failedStep.ui, onMachine: "{client} on {machine}", legacySessionsOne: "1 open 2.x session", legacySessionsOther: "{count} open 2.x sessions", cancel: "Cancel" } };
   const source = await readFile(new URL("../gui/app.js", import.meta.url), "utf8");
   const start = new AsyncFunction("document", "location", "sessionStorage", "history", "fetch", "window", "CSS", "setTimeout", source);
@@ -90,9 +90,9 @@ const locationStep = {
 };
 
 // Starts the wizard client on a step; each API path answers from `routes`, and a route may return a promise to hold the request.
-async function openWizard(step, routes, hivem1nd) {
+async function openWizard(step, routes, hivem1nd) { // Compatibility: browser storage and desktop bridge names remain stable.
   const document = createWizardDocument();
-  const session = new Map([["hivem1nd.session", "test-token"]]);
+  const session = new Map([["hivem1nd.session", "test-token"]]); // Compatibility: browser storage and desktop bridge names remain stable.
   const calls = [];
   const source = await readFile(new URL("../gui/app.js", import.meta.url), "utf8");
   const start = new AsyncFunction("document", "location", "sessionStorage", "history", "fetch", "window", "CSS", "setTimeout", source);
@@ -104,7 +104,7 @@ async function openWizard(step, routes, hivem1nd) {
       const handler = routes[route];
       const reply = handler ? await handler(options) : { data: step };
       return { ok: reply.error === undefined, status: reply.error ? 501 : 200, json: async () => reply };
-    }, { hivem1nd }, { escape: (value) => String(value) }, (fn) => setTimeout(fn, 0));
+    }, { hivem1nd }, { escape: (value) => String(value) }, (fn) => setTimeout(fn, 0)); // Compatibility: browser storage and desktop bridge names remain stable.
   return { document, calls };
 }
 const spinnerIn = (node) => node.querySelector(".button-spinner");

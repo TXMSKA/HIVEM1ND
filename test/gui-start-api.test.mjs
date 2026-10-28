@@ -2,7 +2,7 @@ import assert from'node:assert/strict';import test from'node:test';import{create
 const id='00000000-0000-8000-8000-000000000001',choice={client:'codex',model:'fixture-model',effort:'high',mode:null};
 function fixture(statuses=[]){const calls=[];const api=createApi({location:{origin:'http://127.0.0.1:4310',hash:''},history:{replaceState(){}},fetch:async(url,options)=>{
   calls.push({path:new URL(url).pathname,query:Object.fromEntries(new URL(url).searchParams),method:options.method,body:options.body?JSON.parse(options.body):null,key:options.headers['Idempotency-Key']});
-  const status=statuses.shift()??200;return new Response(JSON.stringify({contract:'hivem1nd-gui-v3',data:{id},meta:{requestId:'fixture',readAt:'2026-10-14T00:00:00.000Z',eventCursor:'1',sync:'local'},
+  const status=statuses.shift()??200;return new Response(JSON.stringify({contract:'hivem1nd-gui-v3',data:{id},meta:{requestId:'fixture',readAt:'2026-10-14T00:00:00.000Z',eventCursor:'1',sync:'local'}, // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     ...(status>=400?{error:{code:'service_unavailable',message:'Service unavailable'}}:{})}),{status,headers:{'Content-Type':'application/json'}});}});
   api.token='public-fixture-token';return{api,calls};}
 test('browser operations expose the exact cluster plan and context routes',async()=>{

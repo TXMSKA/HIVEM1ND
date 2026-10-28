@@ -223,7 +223,7 @@ async function readLedger(ledger) {
   } catch {
     throw new CoreError(422, 'corrupt_resource', 'The sync ledger is not valid.');
   }
-  if (parsed?.format !== 'hivem1nd-sync-ledger-v1' || !Array.isArray(parsed.admitted) || !Array.isArray(parsed.outgoing)) {
+  if (parsed?.format !== 'hivem1nd-sync-ledger-v1' || !Array.isArray(parsed.admitted) || !Array.isArray(parsed.outgoing)) { // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     throw new CoreError(422, 'corrupt_resource', 'The sync ledger is not valid.');
   }
   parsed.incoming ??= {};
@@ -234,7 +234,7 @@ async function readLedger(ledger) {
 
 async function saveLedger(ledger, data) {
   const record = {
-    format: 'hivem1nd-sync-ledger-v1',
+    format: 'hivem1nd-sync-ledger-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     admitted: data.admitted,
     outgoing: data.outgoing,
     incoming: data.incoming,
@@ -245,7 +245,7 @@ async function saveLedger(ledger, data) {
 }
 
 function emptyLedger() {
-  return { format: 'hivem1nd-sync-ledger-v1', admitted: [], outgoing: [], incoming: {}, applied: {}, notices: [] };
+  return { format: 'hivem1nd-sync-ledger-v1', admitted: [], outgoing: [], incoming: {}, applied: {}, notices: [] }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
 }
 
 function blocked(ledger, phase, status, code, message, retryAt, limits) {

@@ -93,7 +93,7 @@ test('removing a linked cluster sole agent preserves its empty cluster, chat and
   const directory = path.join(fixture.root, 'linked-folder'), folderId = randomUUID();
   await mkdir(directory);
   const linksFile = path.join(context.paths.localDirectory, 'cluster-links.json');
-  await writeFile(linksFile, JSON.stringify({ format: 'hivem1nd-cluster-links-v1', machine: fixture.machine,
+  await writeFile(linksFile, JSON.stringify({ format: 'hivem1nd-cluster-links-v1', machine: fixture.machine, // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     links: { [`folder:${folderId}`]: { localPath: directory, machine: fixture.machine, identity: await directoryIdentity(directory) } } }));
   const cluster = await createCluster(context, { title: 'Linked', parentId: null, link: { kind: 'folder', folderId },
     members: [UNIT], machine: fixture.machine, confirmed: true });
@@ -228,7 +228,7 @@ test('confirmation, revision, master, reports, groups and desktop authority are 
   await writeFile(report, 'unit: report\nunit-id: root:report\nrole: executor\nstate: out\n\n');
   const group = await createGroup(context, { title: 'Single', members: [UNIT] });
   const groupFile = path.join(context.paths.mind, 'user', 'gui', 'groups', `${group.id}.json`);
-  const legacy = { ...JSON.parse(await readFile(groupFile)), format: 'hivem1nd-group-v1' };
+  const legacy = { ...JSON.parse(await readFile(groupFile)), format: 'hivem1nd-group-v1' }; // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   await writeFile(groupFile, JSON.stringify(legacy));
   await assert.rejects(removeUnit(context, UNIT, input), { code: 'invalid_members' });
   await patchGroup(context, group.id, { members: [UNIT, 'root:two'], expectedRevision: hashBytes(await readFile(groupFile)) });

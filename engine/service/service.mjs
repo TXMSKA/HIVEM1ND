@@ -207,7 +207,7 @@ export async function startService(options, retained = null) {
       settingsOwner: handle.runtime.settingsOwner, sync: handle.runtime.sync, pulse: handle.runtime.pulse });
     handle.bootstrap = await publishBootstrap(options, handle.http.port, handle.bootstrapState);
     handle.shutdown = {
-      format: 'hivem1nd-shutdown-v1', endpoint: handle.bridge.endpoint, secret: handle.bridge.secret,
+      format: 'hivem1nd-shutdown-v1', endpoint: handle.bridge.endpoint, secret: handle.bridge.secret, // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
       mindPath: paths.mind, machine: paths.machine, startedAt: handle.bootstrap.startedAt, nonce,
     };
     handle.shutdownBytes = Buffer.from(`${canonicalJson(handle.shutdown)}\n`);
@@ -316,7 +316,7 @@ async function configuredProjects(paths) {
       await assertNoLinks(recoveryPath, { root: paths.localDirectory });
       const recovery = JSON.parse(await readFile(recoveryPath));
       const expectedOwner = hashBytes(Buffer.from(canonicalJson([paths.mindKey, paths.machine, path.resolve(paths.localDirectory)])));
-      if (recovery.format !== 'hivem1nd-addition-checkout-v1' || recovery.id !== provenance.additionId || recovery.ownerHash !== expectedOwner || canonicalJson(recovery.pin) !== canonicalJson(provenance.pin)) throw new CoreError(409, 'destination_changed', 'The checkout recovery ownership changed.');
+      if (recovery.format !== 'hivem1nd-addition-checkout-v1' || recovery.id !== provenance.additionId || recovery.ownerHash !== expectedOwner || canonicalJson(recovery.pin) !== canonicalJson(provenance.pin)) throw new CoreError(409, 'destination_changed', 'The checkout recovery ownership changed.'); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     }
     projects.push({ name: project.name, localPath: await realpath(localPath), eligible: true,
       ...(provenance?.additionId ? { additionId: provenance.additionId, origin: provenance.origin, pin: provenance.pin, title: provenance.title } : {}) });
@@ -367,7 +367,7 @@ export async function refreshAdditionProjects(context) {
 }
 
 export function restartService(handle) {
-  if (!handle || handle.attached) throw new CoreError(503, 'service_unavailable', 'Restart using the local HIVEM1ND launcher.');
+  if (!handle || handle.attached) throw new CoreError(503, 'service_unavailable', 'Restart using the local ONEM1ND launcher.');
   if (handle.restarting) return handle.restarting;
   handle.restarting = (async () => {
     const lock = parseLock(await readFile(lockPath(handle.options)).catch(() => null));
@@ -647,7 +647,7 @@ async function nativeSessionLive(options, runtime, binding) {
 
 export async function writeBeat(options, state) {
   const record = {
-    format: 'hivem1nd-service-v1',
+    format: 'hivem1nd-service-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     machine: options.paths.machine,
     state,
     version: '3.0.0',
@@ -741,6 +741,7 @@ export async function readOwnedServiceBridge(options = {}) {
   const paths = servicePaths({
     platform, env: options.env ?? process.env, home: options.homeDir ?? options.home ?? os.homedir(),
     mindPath: options.mindPath, cosmicPath: options.cosmicPath,
+    serviceDirectoryName: options.serviceDirectoryName,
     machine: options.hostname ?? options.machine ?? os.hostname(),
   });
   const selected = { ...options, paths };
@@ -751,7 +752,7 @@ export async function readOwnedServiceBridge(options = {}) {
   const active = await readOptionalJson(activePath(selected));
   if (active && active.mindPath !== paths.mind) {
     const otherPaths = servicePaths({ platform, env: options.env ?? process.env, home: options.homeDir ?? options.home ?? os.homedir(),
-      mindPath: active.mindPath, cosmicPath: paths.cosmic, machine: active.machine });
+      mindPath: active.mindPath, cosmicPath: paths.cosmic, machine: active.machine, serviceDirectoryName: options.serviceDirectoryName });
     await assertNoLinks(bootstrapPath({ paths: otherPaths }));
     await verifyBootstrapFiles(otherPaths.localDirectory, bootstrapPath({ paths: otherPaths }), { aclRunner: options.aclRunner, store: options.store });
     await attachOrStart({ ...selected, paths: otherPaths, userKey, attachTimeoutMs: options.shutdownTimeoutMs ?? 3000 }, port);
@@ -765,10 +766,10 @@ export async function readOwnedServiceBridge(options = {}) {
   try { descriptor = JSON.parse(raw.toString('utf8')); } catch { throw new CoreError(503, 'service_unavailable', 'The shutdown descriptor is not valid.'); }
   const lock = parseLock(await readFile(lockPath(selected)).catch(() => null));
   if (!descriptor || Object.keys(descriptor).sort().join(',') !== 'endpoint,format,machine,mindPath,nonce,secret,startedAt'
-      || descriptor.format !== 'hivem1nd-shutdown-v1' || descriptor.mindPath !== paths.mind || descriptor.machine !== paths.machine
+      || descriptor.format !== 'hivem1nd-shutdown-v1' || descriptor.mindPath !== paths.mind || descriptor.machine !== paths.machine // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
       || descriptor.startedAt !== attached.active.startedAt || descriptor.startedAt !== attached.bootstrap.startedAt
       || descriptor.nonce !== lock?.nonce || !/^[A-Za-z0-9_-]{43}$/.test(descriptor.secret)
-      || typeof descriptor.endpoint !== 'string' || !descriptor.endpoint.startsWith(process.platform === 'win32' ? '\\\\.\\pipe\\hivem1nd-' : `${os.tmpdir()}${path.sep}hivem1nd-`)) {
+      || typeof descriptor.endpoint !== 'string' || !descriptor.endpoint.startsWith(process.platform === 'win32' ? '\\\\.\\pipe\\hivem1nd-' : `${os.tmpdir()}${path.sep}hivem1nd-`)) { // Compatibility: wire identifiers keep existing native sessions and paired machines connected.
     throw new CoreError(503, 'service_unavailable', 'The shutdown descriptor does not match the running service.');
   }
   if (!(await readFile(file)).equals(raw)) throw new CoreError(409, 'service_unavailable', 'The service ownership changed.');
@@ -1004,7 +1005,7 @@ async function publishServiceBeat(runtime, state, { settings = true } = {}) {
     }
   }
   const record = {
-    format: 'hivem1nd-service-v1',
+    format: 'hivem1nd-service-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     machine: runtime.paths.machine,
     state,
     version: '3.0.0',
@@ -1467,7 +1468,7 @@ async function mirrorBeat(runtime, machine) {
   } catch {
     return;
   }
-  if (parsed?.format !== 'hivem1nd-service-v1') return;
+  if (parsed?.format !== 'hivem1nd-service-v1') return; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   const destination = path.join(runtime.paths.mind, 'machines', machine, 'service.json');
   await atomicWrite(runtime.sync.store, destination, Buffer.from(`${canonicalJson(parsed)}\n`));
 }
@@ -1475,14 +1476,14 @@ async function mirrorBeat(runtime, machine) {
 async function ownerBindings(sync) {
   const bindings = { requests: {}, approvals: {}, revocations: {} };
   await readJsonTree(path.join(sync.paths.mind, 'user', 'relay', 'requests'), (record) => {
-    if (record?.format === 'hivem1nd-session-request-v1' && record.id) bindings.requests[record.id] = { targetMachine: record.targetMachine };
+    if (record?.format === 'hivem1nd-session-request-v1' && record.id) bindings.requests[record.id] = { targetMachine: record.targetMachine }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   });
   await readJsonTree(path.join(sync.paths.mind, 'user', 'relay', 'approvals'), (record) => {
-    if (record?.format === 'hivem1nd-approval-v1' && record.id) bindings.approvals[record.id] = { machine: record.machine };
-    if (record?.format === 'hivem1nd-approval-binding-v1' && record.approvalId) {
+    if (record?.format === 'hivem1nd-approval-v1' && record.id) bindings.approvals[record.id] = { machine: record.machine }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
+    if (record?.format === 'hivem1nd-approval-binding-v1' && record.approvalId) { // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
       bindings.approvals[record.approvalId] = { machine: record.machine ?? bindings.approvals[record.approvalId]?.machine };
     }
-    if (record?.format === 'hivem1nd-grant-revocation-result-v1' && record.requestId) bindings.revocations[record.requestId] = { machine: record.machine };
+    if (record?.format === 'hivem1nd-grant-revocation-result-v1' && record.requestId) bindings.revocations[record.requestId] = { machine: record.machine }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   });
   return bindings;
 }
@@ -1522,7 +1523,7 @@ async function publishBootstrap(options, httpPort, state) {
   const origin = `http://127.0.0.1:${httpPort}`;
   const secretBytes = randomBytes(32);
   const secret = secretBytes.toString('base64url');
-  const record = { format: 'hivem1nd-bootstrap-v1', origin, secret, startedAt };
+  const record = { format: 'hivem1nd-bootstrap-v1', origin, secret, startedAt }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   const active = {
     pid: process.pid,
     mindPath: options.paths.mind,
@@ -1530,7 +1531,7 @@ async function publishBootstrap(options, httpPort, state) {
     localDirectory: options.paths.localDirectory,
     startedAt,
   };
-  const local = { format: 'hivem1nd-service-local-v1', pid: process.pid, origin, startedAt };
+  const local = { format: 'hivem1nd-service-local-v1', pid: process.pid, origin, startedAt }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   const file = bootstrapPath(options);
   try {
     await writeDescriptor(options.store, activePath(options), Buffer.from(`${canonicalJson(active)}\n`));
@@ -1564,7 +1565,7 @@ function descriptorOf(handle) {
 
 function identityOf(options, userKey, port, pid) {
   return {
-    format: 'hivem1nd-service-descriptor-v1',
+    format: 'hivem1nd-service-descriptor-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     mind: path.resolve(options.paths.mind),
     machine: options.paths.machine,
     userKey,
@@ -1591,7 +1592,7 @@ async function readOptionalJson(file) {
 function validBootstrap(record) {
   if (!record || typeof record !== 'object' || Array.isArray(record)) return false;
   if (Object.keys(record).sort().join(',') !== 'format,origin,secret,startedAt') return false;
-  if (record.format !== 'hivem1nd-bootstrap-v1' || typeof record.origin !== 'string' || typeof record.startedAt !== 'string') return false;
+  if (record.format !== 'hivem1nd-bootstrap-v1' || typeof record.origin !== 'string' || typeof record.startedAt !== 'string') return false; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   return /^[A-Za-z0-9_-]{43}$/.test(record.secret) && Buffer.from(record.secret, 'base64url').length === 32;
 }
 
@@ -1655,7 +1656,7 @@ async function readConfiguredMind(options) {
   const home = options.home ?? options.homeDir ?? os.homedir();
   const cosmic = options.cosmicPath ? path.resolve(options.cosmicPath) : localCosmic({ platform, env, home });
   const mindPath = path.resolve(options.mindPath);
-  const root = path.join(cosmic, 'hivem1nd-service', mindKeyFor(mindPath, platform));
+  const root = path.join(cosmic, 'onem1nd-service', mindKeyFor(mindPath, platform));
   let entries = [];
   try {
     entries = await readdir(root, { withFileTypes: true });
@@ -1681,7 +1682,7 @@ async function readConfiguredMind(options) {
   const wanted = options.hostname ?? options.machine ?? null;
   const chosen = wanted ? found.find((item) => item.machine === wanted || item.parsed?.machine === wanted) : found.length === 1 ? found[0] : null;
   if (!chosen) throw new CoreError(409, 'service_mind_conflict', 'The configured machine does not match.');
-  if (chosen.parsed?.format !== 'hivem1nd-service-config-v1') throw new CoreError(422, 'invalid_body', 'The service configuration is not valid.');
+  if (chosen.parsed?.format !== 'hivem1nd-service-config-v1') throw new CoreError(422, 'invalid_body', 'The service configuration is not valid.'); // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   const config = bootstrapConfig(chosen.parsed);
   if (path.resolve(config.mindPath) !== mindPath || config.machine !== chosen.machine) {
     throw new CoreError(422, 'invalid_body', 'The configured M1ND does not match.');

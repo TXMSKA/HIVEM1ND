@@ -3,7 +3,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { CoreError } from './identity.mjs';
 
-// The owned process handle of a native client that HIVEM1ND itself spawned.
+// The owned process handle of a native client that ONEM1ND itself spawned.
 // identity = pid plus creation time, so a recycled pid is never mistaken for the child.
 // stop() ends the whole tree; cleanup() proves, after the exit, that no recorded descendant remains.
 export const STOP_GRACE_MS = 5000;

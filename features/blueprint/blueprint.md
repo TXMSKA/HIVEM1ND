@@ -11,11 +11,11 @@ Argument: [project] [board]
 
 Start: Locate in `rules.md` of the mind above; no unit is needed to serve the view, so its step that asks for one is skipped. The tools write as the session's own unit.
 
-A board designs an interface or a flow. Agents use the tools of the `hivem1nd-relay` server; the local server on port 3300 keeps the person's browser view. When an agent may create or edit a board is in `rules.md` (Blueprint and Void).
+A board designs an interface or a flow. Agents use the tools of the `onem1nd-relay` server; the local server on port 3300 keeps the person's browser view. When an agent may create or edit a board is in `rules.md` (Blueprint and Void).
 
 ## Tools
 
-Each tool answers `{"contract":"hivem1nd-gui-v3","data":...}`, or, with `isError`, `{"error":{"code","message","requestId"}}`. Only a unit attached to the board may use it, otherwise `forbidden`: the creator is attached, and the person attaches a unit to a board the person made.
+Each tool answers `{"contract":"hivem1nd-gui-v3","data":...}`, or, with `isError`, `{"error":{"code","message","requestId"}}`. Only a unit attached to the board may use it, otherwise `forbidden`: the creator is attached, and the person attaches a unit to a board the person made. <!-- Compatibility: stored schemas and wire contracts retain their existing identifiers. -->
 
 Read:
 

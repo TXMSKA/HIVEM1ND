@@ -48,7 +48,7 @@ test('every supported native file/process hook uses the actor-bound permission c
       cwd: 'C:/reviewed', tool_input: toolName === 'Bash' ? { command: 'node task.mjs' } : { file_path: 'C:/reviewed/task.txt', content: 'reviewed' } }));
     const calls = [], stdout = new PassThrough(); stdout.resume();
     const result = await runRelayHook({ client: 'claude', mindPath: 'unused', stdin, stdout, stderr: new PassThrough(),
-      env: { HIVEM1ND_SERVICE_GRANT: 'fixture' }, serviceConnector: async () => ({
+      env: { HIVEM1ND_SERVICE_GRANT: 'fixture' }, serviceConnector: async () => ({ // Compatibility: native bridge environment names match attached sessions.
         hook: async () => ({ verified: true }), close() {}, async callTool(name, input) {
           calls.push({ name, input }); return { isError: false, content: [{ type: 'text', text: JSON.stringify({ data: { decision: 'deny' } }) }] };
         },
@@ -84,7 +84,7 @@ test('a verified hook renews the shared window and carries the expired or daily-
   const invokeVerified = async () => {
     const stdin = new PassThrough(), stdout = new PassThrough();
     stdin.end(JSON.stringify({ session_id: nativeSessionId, hook_event_name: 'UserPromptSubmit' }));
-    return runRelayHook({ client: 'claude', mindPath, stdin, stdout, stderr: new PassThrough(), env: { HIVEM1ND_SERVICE_GRANT: 'fixture' },
+    return runRelayHook({ client: 'claude', mindPath, stdin, stdout, stderr: new PassThrough(), env: { HIVEM1ND_SERVICE_GRANT: 'fixture' }, // Compatibility: native bridge environment names match attached sessions.
       serviceConnector: async () => ({
         hook: event => handleNativeHook({ controller, binding: { ...binding, sessionId: registration.sessionId, event } }),
         callTool: async () => ({ content: [{ type: 'text', text: JSON.stringify({ data: { registered: true, text: '' } }) }] }), close() {},

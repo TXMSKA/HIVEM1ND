@@ -8,7 +8,7 @@ test('group writes carry exact bodies and deletion undo uses its own route', asy
   const api = createApi({ location: { origin: 'http://127.0.0.1:12345', hash: '#session=fixture' }, history: { replaceState() {} },
     fetch: async (url, options) => {
       calls.push({ url, method: options.method, body: JSON.parse(options.body), key: options.headers['Idempotency-Key'] });
-      return new Response(JSON.stringify({ contract: 'hivem1nd-gui-v3', data: {}, meta: { requestId: 'fixture', readAt: '2026-10-13T00:00:00.000Z', eventCursor: 'fixture:1', sync: 'local' } }), { status: 200 });
+      return new Response(JSON.stringify({ contract: 'hivem1nd-gui-v3', data: {}, meta: { requestId: 'fixture', readAt: '2026-10-13T00:00:00.000Z', eventCursor: 'fixture:1', sync: 'local' } }), { status: 200 }); // Compatibility: stored schemas and wire contracts retain their existing identifiers.
     } });
   await createGroup(api, 'Checkout launch', ['root:executor-shop']);
   await removeGroup(api, { id: '11111111-1111-4111-8111-111111111111', revision: 'a'.repeat(64) });
