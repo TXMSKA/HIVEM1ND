@@ -20,7 +20,7 @@ async function sourceFiles(directory) {
 }
 
 function runNode(args) {
-  const result = spawnSync(process.execPath, args, { cwd: root, encoding: "utf8" });
+  const result = spawnSync(process.execPath, args, { cwd: root, encoding: "utf8", windowsHide: true });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(result.stderr || result.stdout || `Command failed: ${args[0]}`);
   return result.stdout;

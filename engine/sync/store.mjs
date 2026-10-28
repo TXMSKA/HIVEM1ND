@@ -3,7 +3,7 @@ import path from 'node:path';
 import { CoreError, canonicalJson, hashBytes, hashText, isUuid, uuidV8 } from '../service/identity.mjs';
 import { resolveTarget } from '../service/paths.mjs';
 import { atomicWrite, exclusiveRecord, readBytes, withLocalChanges, withLocks } from '../service/store.mjs';
-import { compressObjectAsync, decompressObject, isTemporaryName, normalizeTarget, resolveDependencies, sanitizeSessionRecord, sessionVerdict, validateChange } from './pack.mjs';
+import { MAX_AGGREGATE_BYTES, MAX_INDEX_ITEMS, compressObjectAsync, countLogicalMessages, decompressObject, isTemporaryName, normalizeTarget, resolveDependencies, sanitizeSessionRecord, sessionVerdict, validateChange } from './pack.mjs';
 
 const LOCK = 'sync-stage';
 const STAGED_READS = 32;
@@ -38,6 +38,107 @@ export async function observeLocalChange(sync, target, options = {}) {
 
 export async function stageTransaction(sync, entries, options = {}) {
   return withLocalChanges(sync.store, () => withLocks(sync.store, [LOCK], () => stageUnlocked(sync, entries, options)));
+}
+
+export async function stageCommittedGroup(sync, group) {
+  return withLocalChanges(sync.store, () => withLocks(sync.store, [LOCK], async () => {
+    if (!sync.domain || !isUuid(group?.transactionId) || !Array.isArray(group.entries) || group.entries.length === 0) {
+      throw new CoreError(422, 'invalid_body', 'A committed transaction is not valid.');
+    }
+    if (group.entries.length > MAX_INDEX_ITEMS) throw new CoreError(413, 'pack_too_large', 'The transaction lists too many changes.');
+    const at = requireTime(group.at);
+    if (!Number.isFinite(Date.parse(at)) || new Date(at).toISOString() !== at) throw new CoreError(422, 'invalid_body', 'The change time must be UTC.');
+    const source = [];
+    const ids = new Set();
+    for (const entry of group.entries) {
+      if (!isUuid(entry?.id) || ids.has(entry.id) || !['put', 'delete'].includes(entry.operation)
+        || entry.operation === 'delete' && entry.bytes != null
+        || entry.operation === 'put' && !(entry.bytes instanceof Uint8Array) && typeof entry.bytes !== 'string') {
+        throw new CoreError(422, 'invalid_body', 'A committed change is not valid.');
+      }
+      ids.add(entry.id);
+      source.push({ id: entry.id, target: entry.target, operation: entry.operation,
+        hash: entry.operation === 'delete' ? null : hashBytes(Buffer.from(entry.bytes)),
+        baseHash: entry.baseHash ?? null, messageId: entry.messageId ?? null });
+    }
+    const sourceHash = hashText(canonicalJson({ transactionId: group.transactionId, at, entries: source.sort((left, right) => left.id.localeCompare(right.id)) }));
+    const known = await listCommittedGroups(sync);
+    const existing = known.find(item => item.id === group.transactionId);
+    if (existing) {
+      if (existing.sourceHash !== sourceHash) throw new CoreError(409, 'revision_conflict', 'The committed transaction changed.');
+      return existing.changes;
+    }
+    if (known.some(item => item.changeIds.some(id => ids.has(id)))) {
+      throw new CoreError(409, 'revision_conflict', 'A committed change id is already in use.');
+    }
+    const prepared = [];
+    for (const entry of group.entries) {
+      if (await sync.domain.validate(entry) === false) throw new CoreError(422, 'invalid_schema', 'The domain rejected a committed change.');
+      const approved = await sync.domain.serialize(entry);
+      if (!approved || typeof approved !== 'object') throw new CoreError(422, 'invalid_schema', 'The domain serialization is not valid.');
+      const target = normalizeTarget({ kind: 'opaque', namespace: sync.namespace, identity: approved.target });
+      const deleted = entry.operation === 'delete';
+      if (deleted && approved.bytes != null || !deleted && approved.bytes == null) {
+        throw new CoreError(422, 'invalid_schema', 'The domain serialization has an invalid body.');
+      }
+      if (!deleted && !(approved.bytes instanceof Uint8Array) && typeof approved.bytes !== 'string') {
+        throw new CoreError(422, 'invalid_schema', 'The domain serialization has an invalid body.');
+      }
+      const raw = deleted ? null : Buffer.from(approved.bytes);
+      const change = validateChange({
+        format: 'hivem1nd-change-v1', id: entry.id, machine: sync.machine, at, target,
+        operation: entry.operation, hash: raw === null ? null : hashBytes(raw), size: raw?.length ?? 0,
+        baseHash: approved.baseHash ?? null, messageId: approved.messageId ?? null, transactionId: group.transactionId,
+      }, sync.machine);
+      if (await sync.domain.validate({ id: change.id, target: target.identity, operation: change.operation,
+        bytes: raw, baseHash: change.baseHash, messageId: change.messageId }) === false) {
+        throw new CoreError(422, 'invalid_schema', 'The domain rejected a serialized change.');
+      }
+      prepared.push({ change, raw });
+    }
+    const objects = new Map(prepared.filter(item => item.raw !== null).map(item => [item.change.hash, item.raw]));
+    if ([...objects.values()].reduce((bytes, raw) => bytes + raw.length, 0) > MAX_AGGREGATE_BYTES) {
+      throw new CoreError(413, 'pack_too_large', 'The transaction expands past 64 MB.');
+    }
+    if (countLogicalMessages({ changes: prepared.map(item => item.change), objects }) > 60) {
+      throw new CoreError(413, 'pack_too_large', 'The transaction exceeds the logical message limit.');
+    }
+    // Only this manifest makes the group visible; interruption during object writes exposes no partial transaction.
+    for (const item of prepared) if (item.raw !== null) await publishObject(sync, item.change.hash, item.raw);
+    const changes = prepared.map(item => item.change);
+    const record = { id: group.transactionId, at, changeIds: changes.map(item => item.id), changes, sourceHash, phase: 'staged', ackScope: null };
+    await atomicWrite(sync.store, transactionPath(sync, group.transactionId), Buffer.from(`${canonicalJson(record)}\n`, 'utf8'));
+    return changes;
+  }));
+}
+
+export async function listCommittedGroups(sync) {
+  const directory = path.join(sync.paths.localDirectory, 'staging', 'transactions');
+  const names = await readdir(directory).catch(error => { if (error.code === 'ENOENT') return []; throw error; });
+  const groups = [];
+  const ids = new Set();
+  for (const name of names.sort()) {
+    if (!name.endsWith('.json') || !isUuid(name.slice(0, -5))) continue;
+    const group = await readJson(sync, path.join(directory, name));
+    if (!group || group.id !== name.slice(0, -5) || !['staged', 'published'].includes(group.phase)
+      || !Array.isArray(group.changes) || group.changes.length === 0 || !Array.isArray(group.changeIds)
+      || group.changeIds.length !== group.changes.length || typeof group.sourceHash !== 'string'
+      || !/^[a-f0-9]{64}$/.test(group.sourceHash)) {
+      throw new CoreError(422, 'corrupt_resource', 'The committed transaction manifest is not valid.');
+    }
+    requireTime(group.at);
+    group.changes = group.changes.map(change => validateChange(change, sync.machine));
+    for (let index = 0; index < group.changes.length; index += 1) {
+      const change = group.changes[index];
+      if (change.id !== group.changeIds[index] || change.transactionId !== group.id || change.at !== group.at
+        || change.target.kind !== 'opaque' || change.target.namespace !== sync.namespace || ids.has(change.id)) {
+        throw new CoreError(422, 'corrupt_resource', 'The committed transaction membership is not valid.');
+      }
+      ids.add(change.id);
+    }
+    groups.push(group);
+  }
+  return groups;
 }
 
 export async function settleAppliedMarker(sync, target) {
@@ -248,6 +349,19 @@ export async function readStagedObject(sync, hash) {
 export async function ackPublished(sync, ids) {
   if (!Array.isArray(ids) || ids.some((id) => typeof id !== 'string')) throw new CoreError(422, 'invalid_body', 'Published ids must be a list.');
   return withLocks(sync.store, [LOCK], async () => {
+    if (sync.domain) {
+      const selected = new Set(ids);
+      const groups = (await listCommittedGroups(sync)).filter(group => group.changeIds.some(id => selected.has(id)));
+      if (groups.some(group => group.changeIds.some(id => !selected.has(id)))
+        || groups.reduce((count, group) => count + group.changeIds.length, 0) !== selected.size) {
+        throw new CoreError(422, 'invalid_body', 'A committed transaction must be acknowledged in full.');
+      }
+      for (const group of groups) {
+        if (group.phase === 'published') continue;
+        await atomicWrite(sync.store, transactionPath(sync, group.id), Buffer.from(`${canonicalJson({ ...group, phase: 'published', ackScope: sync.ackScope ?? 'filesystem' })}\n`, 'utf8'));
+      }
+      return { acked: [...selected] };
+    }
     const acked = [];
     for (const id of ids) {
       const source = changePath(sync, id);
@@ -272,12 +386,13 @@ export async function ackPublished(sync, ids) {
 }
 
 export async function listStaged(sync) {
+  if (sync.domain) return (await listCommittedGroups(sync)).filter(group => group.phase === 'staged').flatMap(group => group.changes);
   return stagedChanges(sync);
 }
 
 export async function resolveIncoming(sync, packBytes, provider) {
   const result = await resolveDependencies(packBytes, provider);
-  if (result.status !== 'pending') {
+  if (result.status !== 'pending' && !sync.domain) {
     const { validatePlanRunBundle } = await import('../service/runs.mjs');
     await validatePlanRunBundle(sync, result.decoded.changes.map(change => ({ target: change.target, bytes: result.objects.get(change.hash), deleted: change.operation === 'delete' })), result.decoded.header.machine);
     const { validateClusterBundle } = await import('../service/clusters.mjs');
@@ -496,6 +611,11 @@ async function stageUnlocked(sync, entries, options = {}, retainedVersion = null
 
 async function publishObject(sync, hash, raw) {
   const compressed = await compressObjectAsync(raw);
+  if (sync.domain) {
+    // A crash cannot leave a truncated final object that prevents retrying its committed outbox group.
+    await atomicWrite(sync.store, objectPath(sync, hash), compressed);
+    return;
+  }
   try {
     await exclusiveRecord(sync.store, objectPath(sync, hash), compressed);
   } catch (error) {
@@ -865,6 +985,10 @@ function pendingPath(sync, machine, sequence) {
 
 function objectPath(sync, hash) {
   return path.join(sync.paths.localDirectory, 'staging', 'objects', `${hash}.br`);
+}
+
+function transactionPath(sync, id) {
+  return path.join(sync.paths.localDirectory, 'staging', 'transactions', `${id}.json`);
 }
 
 function changePath(sync, id) {
