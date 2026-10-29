@@ -7,6 +7,7 @@ import { migrate } from '../migrations/3.0.0-onem1nd.mjs';
 import { hashContent } from '../engine/records.mjs';
 import { ownershipRecord, planRegistration } from '../engine/service/install.mjs';
 import { mindKeyFor } from '../engine/service/paths.mjs';
+import { stubAclRunner } from '../engine/service/security.mjs';
 
 const LEGACY = 'hivem1nd'; // Compatibility: representative 3.0.0 installation identity.
 
@@ -19,7 +20,8 @@ async function fixture(t) {
   await mkdir(path.join(mindPath, 'user', 'machines'), { recursive: true });
   await mkdir(homeDir);
   await writeFile(path.join(mindPath, 'user', 'VERSION'), '3.0.0\n');
-  const options = { cosmicPath, mindPath, homeDir, hostname: 'QA', platform: process.platform, env: { LOCALAPPDATA: path.join(root, 'local'), APPDATA: path.join(root, 'roaming'), HOME: homeDir, USERPROFILE: homeDir }, shimDirectories: [], protectFile: async () => {} };
+  const options = { cosmicPath, mindPath, homeDir, hostname: 'QA', platform: process.platform, nodePath: path.join(root, 'runtime', 'node.exe'),
+    env: { LOCALAPPDATA: path.join(root, 'local'), APPDATA: path.join(root, 'roaming'), HOME: homeDir, USERPROFILE: homeDir }, shimDirectories: [], protectFile: async () => {}, aclRunner: stubAclRunner() };
   return { root, cosmicPath, mindPath, homeDir, options, destination: path.join(cosmicPath, 'onem1nd') };
 }
 
@@ -80,7 +82,7 @@ for (const [platform, interrupted, selectedDestination, embeddedKit] of [['darwi
     const local = path.join(fx.cosmicPath, `${LEGACY}-service`, mindKeyFor(fx.mindPath, platform), 'QA');
     await mkdir(local, { recursive: true });
     const plan = planRegistration({ platform, home: fx.homeDir, configHome: path.join(fx.homeDir, '.config'), uid: 501,
-      label: `com.${LEGACY}.service`, unitName: `${LEGACY}.service`, nodePath: process.execPath, cliPath: path.join(fx.root, 'kit', 'cli', 'index.mjs'),
+      label: `com.${LEGACY}.service`, unitName: `${LEGACY}.service`, nodePath: fx.options.nodePath, cliPath: path.join(fx.root, 'kit', 'cli', 'index.mjs'),
       mindPath: fx.mindPath, workingDirectory: fx.root, localDirectory: local });
     await mkdir(path.dirname(plan.file), { recursive: true });
     await writeFile(plan.file, plan.body);
@@ -266,15 +268,24 @@ test('rebrand resumes a crash after a verified copied file is linked but its tem
   const fx = await fixture(t);
   const source = path.join(fx.mindPath, 'user', 'machines', 'QA.md');
   const destination = path.join(fx.destination, 'user', 'machines', 'QA.md');
+  const relative = 'user/machines/QA.md';
   let temporary;
+  let journaledBeforePublication = false;
   await writeFile(source, `machine: QA\nmind: ${fx.mindPath}\nsetup: done\n\n## Agents\n\n## Paths\n\n## Excluded\n`);
   let interrupted = true;
-  const options = { ...fx.options, afterCopy: async file => {
+  const options = { ...fx.options, protectFile: async file => {
+    if (!path.basename(file).endsWith(`-${hashContent(relative)}.tmp`)) return;
+    const checkpoint = JSON.parse(await readFile(path.join(fx.cosmicPath, '.onem1nd-upgrade.json'), 'utf8'));
+    const move = checkpoint.moves.find(move => move.source === fx.mindPath);
+    assert.equal(typeof move.copyId, 'string', 'the copy nonce is durable before publishing the destination');
+    temporary = path.join(path.dirname(destination), `.onem1nd-copy-${move.copyId}-${hashContent(relative)}.tmp`);
+    assert.equal(file, temporary);
+    await assert.rejects(lstat(destination), { code: 'ENOENT' });
+    journaledBeforePublication = true;
+  }, afterCopy: async file => {
     if (interrupted && file === destination) {
       interrupted = false;
-      const checkpoint = JSON.parse(await readFile(path.join(fx.cosmicPath, '.onem1nd-upgrade.json'), 'utf8'));
-      temporary = checkpoint.moves.find(move => move.source === fx.mindPath).copyTemps['user/machines/QA.md'];
-      assert.equal(typeof temporary, 'string', 'the copy journal owns its temporary alias before publication');
+      assert.equal(journaledBeforePublication, true);
       await link(destination, temporary);
       throw new Error('interrupted before copied temporary alias cleanup');
     }

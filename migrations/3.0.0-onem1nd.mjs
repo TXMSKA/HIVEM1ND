@@ -13,7 +13,7 @@ import { ownershipRecord, planRegistration, queryRegistration } from '../engine/
 import { clientConfigPaths, RELAY_CLIENTS } from '../engine/relay/config.mjs';
 import { applyShortcuts, shortcutPlan } from '../engine/shortcuts.mjs';
 import { loadAdapters, resolveAdapterPaths } from '../engine/discovery.mjs';
-import { protectLocalFile } from '../engine/service/security.mjs';
+import { protectLocalFile, verifyLocalPermissions } from '../engine/service/security.mjs';
 import { planClientOwnership } from '../engine/rebrand-clients.mjs';
 
 export const version = '3.0.0-onem1nd';
@@ -44,7 +44,7 @@ function samePath(left, right, platform) {
   return normalize(left) === normalize(right);
 }
 
-async function publish(file, content, protect) {
+async function publish(file, content, protect, renameFile = rename) {
   await assertNoLinks(file);
   const current = await lstat(file).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
   if (current && (!current.isFile() || current.nlink !== 1)) conflict(file);
@@ -57,7 +57,15 @@ async function publish(file, content, protect) {
     await handle.sync();
     if (process.platform !== 'win32') await chmod(temporary, 0o600 | (current?.mode & 0o100));
   } finally { await handle.close(); }
-  try { await rename(temporary, file); }
+  try {
+    for (let attempt = 0; ; attempt += 1) {
+      try { await renameFile(temporary, file); break; }
+      catch (error) {
+        if (!['EPERM', 'EBUSY', 'EACCES'].includes(error?.code) || attempt === 5) throw error;
+        await new Promise(resolve => setTimeout(resolve, 5 * (attempt + 1)));
+      }
+    }
+  }
   finally { await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
 }
 
@@ -405,7 +413,6 @@ export async function migrate(input = {}) {
   if (active.has(cosmic)) return active.get(cosmic);
   const work = (async () => {
     const checkpoint = await json(path.join(cosmic, '.onem1nd-upgrade.json'));
-    if (checkpoint?.complete) return { migrated: false, mindPath: checkpoint.mindPath, relocatedPaths: checkpoint.moves, version };
     const roots = [LEGACY, '.m1nd'].map(name => path.join(cosmic, name)).filter(root => !input.mindPath || samePath(input.mindPath, root, platform) || samePath(input.mindPath, path.join(cosmic, 'onem1nd'), platform));
     let relevant = (await Promise.all(roots.map(exists))).some(Boolean);
     const serviceRoot = path.join(cosmic, LEGACY_SERVICE);
@@ -450,16 +457,48 @@ async function runMigration(input) {
   options.homeDir ??= os.homedir();
   options.env ??= process.env;
   options.platform ??= process.platform;
-  options.protectFile ??= protectLocalFile;
+  options.protectFile ??= file => protectLocalFile(file, options);
   const cosmic = cosmicFor(options);
   const checkpoint = path.join(cosmic, '.onem1nd-upgrade.json');
   let state = await json(checkpoint);
-  if (state?.complete) return { migrated: false, mindPath: state.mindPath, relocatedPaths: state.moves, version };
+  const privateRoots = ['onem1nd-service', 'onem1nd-origin'].map(name => path.join(cosmic, name));
+  const protectedDirectories = new Set();
+  const directory = async (file, create = true) => {
+    await assertNoLinks(file);
+    const privateRoot = privateRoots.find(root => inside(root, file));
+    if (privateRoot && file !== privateRoot) await directory(path.dirname(file), create);
+    if (create) await mkdir(file, { recursive: true, mode: 0o700 });
+    else {
+      const stat = await lstat(file).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+      if (!stat) {
+        if (!state.complete) conflict(file);
+        return;
+      }
+      if (!stat.isDirectory()) conflict(file);
+    }
+    if (!privateRoot || protectedDirectories.has(file)) return;
+    try { await verifyLocalPermissions(file, options); }
+    catch {
+      await protectLocalFile(file, options);
+      await verifyLocalPermissions(file, options);
+    }
+    protectedDirectories.add(file);
+  };
+  const repairDirectories = async () => {
+    for (const move of state.moves.filter(item => privateRoots.some(root => inside(root, item.destination)))) {
+      if (!move.copied && !state.complete) continue;
+      for (const file of [move.destination, ...move.inventory.filter(entry => entry.directory).map(entry => path.join(move.destination, entry.path))]) await directory(file, false);
+    }
+  };
+  if (state?.complete) {
+    await repairDirectories();
+    return { migrated: false, mindPath: state.mindPath, relocatedPaths: state.moves, version };
+  }
   const legacyRoots = [path.join(cosmic, LEGACY), path.join(cosmic, '.m1nd')];
   const legacyServiceRoot = path.join(cosmic, LEGACY_SERVICE);
   if (!state && !(await Promise.all([...legacyRoots, legacyServiceRoot].map(exists))).some(Boolean)) return { migrated: false, version };
   const run = options.run ?? (async ([file, ...args]) => { await exec(file, args, { windowsHide: true, shell: false, timeout: 20000 }); });
-  const save = async () => { await publish(checkpoint, `${JSON.stringify(state, null, 2)}\n`, options.protectFile); };
+  const save = async () => { await publish(checkpoint, `${JSON.stringify(state, null, 2)}\n`, options.protectFile, options.renameFile); };
   if (!state) {
     const roots = [];
     for (const root of legacyRoots) if (await exists(root)) roots.push(root);
@@ -529,17 +568,18 @@ async function runMigration(input) {
         else await publish(item.file, target, options.protectFile);
       }
       item.done = true;
-      await save();
       await options.afterWrite?.(item.file);
     }
     for (const item of (state.symlinks ?? []).filter(item => !item.done)) {
       const current = await lstat(item.file).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
       if (current) {
+        await assertNoLinks(path.dirname(item.file));
         if (!current.isSymbolicLink() || await readlink(item.file) !== item.target) conflict(item.file);
         await unlink(item.file);
       }
-      item.done = true; await save();
+      item.done = true;
     }
+    await save();
   };
   if (state.staleLeases && !state.phases.includes('leases')) {
     for (const name of ['active.json', 'service.lock']) if (await exists(path.join(legacyServiceRoot, name))) await stage(path.join(legacyServiceRoot, name), null);
@@ -549,29 +589,37 @@ async function runMigration(input) {
     if (!inside(move.destination, temporary) || !path.basename(temporary).startsWith('.onem1nd-copy-')) conflict(temporary);
     const stat = await lstat(temporary).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
     if (stat) {
+      await assertNoLinks(temporary);
       if (!stat.isFile() || stat.isSymbolicLink()) conflict(temporary);
       await unlink(temporary);
     }
   }
+  for (const move of state.moves) delete move.copyTemps;
+  await repairDirectories();
   await flush();
   for (const move of state.moves) {
     if (move.copied) continue;
     if (!isDeepStrictEqual(await inventory(move.source), move.inventory)) conflict(move.source);
     await assertNoLinks(move.destination);
-    await mkdir(move.destination, { recursive: true });
+    await directory(move.destination);
+    // The immutable inventory and verified destination files are the copy progress journal.
+    // One saved nonce also identifies partial copies that were never published before a crash.
+    move.copyId ??= randomUUID();
+    await save();
     for (const entry of move.inventory ?? []) {
       const source = path.join(move.source, entry.path), destination = path.join(move.destination, entry.path);
       await assertNoLinks(destination);
-      if (entry.directory) await mkdir(destination, { recursive: true, mode: 0o700 });
+      if (entry.directory) await directory(destination);
       else {
-        await mkdir(path.dirname(destination), { recursive: true });
+        const temporary = path.join(path.dirname(destination), `.onem1nd-copy-${move.copyId}-${hashContent(entry.path)}.tmp`);
+        await assertNoLinks(temporary);
+        const partial = await lstat(temporary).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+        if (partial) {
+          if (!partial.isFile()) conflict(temporary);
+          await unlink(temporary);
+        }
         if (!await exists(destination)) {
-          move.copyTemps ??= {};
-          if (!move.copyTemps[entry.path]) {
-            move.copyTemps[entry.path] = path.join(path.dirname(destination), `.onem1nd-copy-${randomUUID()}.tmp`);
-            await save();
-          }
-          await copyVerified(source, destination, entry, options.protectFile, move.copyTemps[entry.path]);
+          await copyVerified(source, destination, entry, options.protectFile, temporary);
         }
         if (digest(await bytes(destination)) !== entry.sha256) conflict(destination);
       }
@@ -644,12 +692,14 @@ async function runMigration(input) {
     for (const prefix of prefixes) for (const extension of ['', '.cmd', '.ps1']) {
       const file = path.join(prefix, `${LEGACY}${extension}`);
       const stat = await lstat(file).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+      if (!stat) continue;
       if (stat?.isSymbolicLink()) {
         await assertNoLinks(path.dirname(file));
         const target = await readlink(file), resolved = path.resolve(path.dirname(file), target);
         if (new RegExp(`node_modules[\\\\/]${LEGACY}[\\\\/]cli[\\\\/]index\\.mjs$`).test(resolved)) state.symlinks.push({ file, target });
         continue;
       }
+      if (!stat.isFile() || stat.nlink !== 1) continue;
       const content = await bytes(file);
       if (content && new RegExp(`node_modules[\\\\/]${LEGACY}[\\\\/]cli[\\\\/]index\\.mjs`).test(content.toString())) await stage(file, null);
     }
@@ -661,7 +711,8 @@ async function runMigration(input) {
     if (!inside(cosmic, move.source) || !inside(cosmic, move.destination) || move.source === cosmic) conflict(move.source);
     if (await exists(move.source)) {
       const remaining = await inventory(move.source);
-      for (const entry of remaining) if (!move.inventory.some(original => isDeepStrictEqual(original, entry))) conflict(move.source);
+      const originals = new Map(move.inventory.map(entry => [entry.path, entry]));
+      for (const entry of remaining) if (!isDeepStrictEqual(originals.get(entry.path), entry)) conflict(move.source);
       // Verify every destination again, accepting only journaled transformations.
       for (const directory of [move.destination, ...move.inventory.filter(item => item.directory).map(item => path.join(move.destination, item.path))]) {
         await assertNoLinks(directory);
@@ -675,7 +726,11 @@ async function runMigration(input) {
         if (digest(await bytes(destination)) !== expected) conflict(destination);
       }
       move.retiring = true; await save();
-      for (const entry of remaining.filter(item => !item.directory)) await unlink(path.join(move.source, entry.path));
+      for (const entry of remaining.filter(item => !item.directory)) {
+        const file = path.join(move.source, entry.path);
+        await unlink(file);
+        await options.afterRetire?.(file);
+      }
       for (const entry of remaining.filter(item => item.directory).sort((a, b) => b.path.length - a.path.length)) await rmdir(path.join(move.source, entry.path));
       await rmdir(move.source);
     }

@@ -7,20 +7,29 @@ import { buildClientConfig, unconfigureRelayClient } from '../engine/relay/confi
 import { hashContent, readMachineRecord, writeMachineRecord } from '../engine/records.mjs';
 import { mindKeyFor } from '../engine/service/paths.mjs';
 import { ownershipRecord, planRegistration } from '../engine/service/install.mjs';
+import { stubAclRunner } from '../engine/service/security.mjs';
 import { parse as parseToml } from 'smol-toml';
 import { evolve } from '../engine/lifecycle.mjs';
 
 const OLD = 'hivem1nd'; // Compatibility: representative 3.0.0 input, never fresh installation output.
-const legacy = value => value.replaceAll('ONEM1ND', OLD.toUpperCase()).replaceAll('onem1nd', OLD);
+function legacyMcp(client, value) {
+  if (client === 'codex') return value.replace('# ONEM1ND Relay managed server', `# ${OLD.toUpperCase()} Relay managed server`)
+    .replace('[mcp_servers.onem1nd-relay]', `[mcp_servers.${OLD}-relay]`);
+  const document = JSON.parse(value);
+  document.mcpServers[`${OLD}-relay`] = document.mcpServers['onem1nd-relay'];
+  delete document.mcpServers['onem1nd-relay'];
+  return `${JSON.stringify(document, null, 2)}\n`;
+}
 const base64 = value => Buffer.from(value).toString('base64');
 async function put(file, content) { await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, content); return file; }
 
 async function fixture(t, { service = false, folder = OLD } = {}) {
   await mkdir('.work/test-migration', { recursive: true });
-  const root = await mkdtemp(path.resolve('.work/test-migration/case-'));
+  const root = await mkdtemp(path.resolve('.work/test-migration/onem1nd-case-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const cosmic = path.join(root, 'Cosmic'), homeDir = path.join(root, 'home'), source = path.join(cosmic, folder), destination = path.join(cosmic, 'onem1nd');
-  const options = { cosmicPath: cosmic, homeDir, hostname: 'TEST', platform: 'win32', env: {}, kitPath: process.cwd(), protectFile: async () => {} };
+  const options = { cosmicPath: cosmic, homeDir, hostname: 'TEST', platform: 'win32', env: {}, kitPath: process.cwd(),
+    nodePath: path.join(root, 'runtime', 'node.exe'), protectFile: async () => {}, aclRunner: stubAclRunner() };
   await put(path.join(source, 'user', 'VERSION'), '3.0.0\n');
   const hierarchy = 'project-id: stable-project\nunit-id: stable-unit\n';
   await put(path.join(source, 'user', 'projects', 'project.md'), hierarchy);
@@ -39,8 +48,8 @@ async function fixture(t, { service = false, folder = OLD } = {}) {
     ['codex', path.join(homeDir, '.codex', 'config.toml'), path.join(homeDir, '.codex', 'hooks.json')],
   ]) {
     const personal = client === 'codex' ? `# ${OLD} personal comment\nmodel = "personal"\n` : JSON.stringify({ note: `${OLD} personal text`, mcpServers: { personal: { command: 'personal-server' } } });
-    const config = buildClientConfig({ client, kitPath: process.cwd(), mindPath: source, nodePath: process.execPath, platform: 'win32', existing: { mcp: personal } });
-    const oldMcp = legacy(config.mcp), oldHooks = legacy(config.hooks);
+    const config = buildClientConfig({ client, kitPath: process.cwd(), mindPath: source, nodePath: options.nodePath, platform: 'win32', existing: { mcp: personal } });
+    const oldMcp = legacyMcp(client, config.mcp), oldHooks = config.hooks;
     // Only the brand in generated output changes; personal input is kept byte for byte.
     await put(mcp, oldMcp);
     await put(hooks, oldHooks);
@@ -57,9 +66,9 @@ async function fixture(t, { service = false, folder = OLD } = {}) {
   const calls = [], registered = new Map();
   if (service) {
     const oldKey = mindKeyFor(source, options.platform), oldLocal = path.join(cosmic, `${OLD}-service`, oldKey, 'TEST');
-    const current = planRegistration({ platform: 'win32', nodePath: process.execPath, cliPath: path.join(process.cwd(), 'cli', 'index.mjs'),
+    const current = planRegistration({ platform: 'win32', nodePath: options.nodePath, cliPath: path.join(process.cwd(), 'cli', 'index.mjs'),
       mindPath: source, workingDirectory: process.cwd(), localDirectory: oldLocal, sid: 'S-1-5-21-123' });
-    current.name = legacy(current.name);
+    current.name = current.name.replace(/^ONEM1ND-/, `${OLD.toUpperCase()}-`);
     current.installationId = 'existing-installation-id';
     await put(path.join(oldLocal, 'registration.json'), JSON.stringify(ownershipRecord(current)));
     await put(path.join(oldLocal, 'service-task.xml'), Buffer.from(`\uFEFF${current.body}`, 'utf16le'));
