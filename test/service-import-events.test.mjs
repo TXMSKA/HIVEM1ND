@@ -80,13 +80,14 @@ test('two cores project imported tasks, encoded notices and editor sidecars once
   await b.runtime.reconciling;
   assert.ok(frames.some(frame => frame.name === 'editor.attachments.changed' && frame.data.data.revision === attachment.revision));
   assert.equal(b.runtime.lastError, null);
-  const count = frames.length;
+  const importedCount = () => frames.filter(frame => frame.data.source.kind === 'sync').length;
+  const count = importedCount();
   const head = await readHead(a.runtime.origin, 'ALPHA');
   const pack = await readOriginPack(a.runtime.origin, 'ALPHA', head.sequence);
   const replay = await applyPack(b.runtime.sync, pack, { projects: b.runtime.sync.projects });
   assert.equal(replay.replayed, true);
   await b.runtime.reconciling;
-  assert.equal(frames.length, count);
+  assert.equal(importedCount(), count);
   b.bus.release(subscriber);
   await stopService(b);
   const restartedEvents = [];

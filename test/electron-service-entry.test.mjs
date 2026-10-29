@@ -16,7 +16,7 @@ test('a packaged Electron login task dispatches the exact local service command 
 
 test('a development Electron entry dispatches its local service command after the main script', () => {
   const kitPath = '/work/onem1nd';
-  const argv = ['/usr/bin/electron', `${kitPath}/gui/electron.mjs`, `${kitPath}/cli/index.mjs`,
+  const argv = ['/usr/bin/electron', `${kitPath}/gui/electron-entry.cjs`, `${kitPath}/cli/index.mjs`,
     'service', 'run', '--mind-path', '/data/onem1nd'];
   assert.deepEqual(electronCliArgs(argv, { kitPath, platform: 'linux' }), argv.slice(3));
 });

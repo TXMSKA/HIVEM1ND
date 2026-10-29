@@ -23,6 +23,8 @@ const COPY = {
   blueprint: ["Blueprint", "Blueprint"],
   document: ["Document", "Documento"],
   voidMode: ["Void", "Void"],
+  embeddedAppLoading: ["Opening {app}.", "Abriendo {app}."],
+  embeddedAppUnavailable: ["{app} could not be opened. Connect to the internet to open it for the first time, then try again.", "No se pudo abrir {app}. Conectarse a internet para abrir la aplicación por primera vez y volver a intentarlo."],
   boards: ["Boards", "Tableros"],
   boardSelect: ["Select", "Seleccionar"],
   boardFrame: ["Frame", "Marco"],

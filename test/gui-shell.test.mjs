@@ -7,7 +7,6 @@ import { dirname, join, relative, resolve } from "node:path";
 import test from "node:test";
 import { createApi, createOperation, dispose as disposeApi, request, retryOperation } from "../gui/app/api.mjs";
 import { answerApproval, changeTaskStatus, createGroup, createUnit, removeUnit, setUnitAlias, startSession, undoTask } from "../gui/app/actions.mjs";
-import { documentSaver, findTextMatches, textDraft } from "../gui/app/void.mjs";
 import { createThread, markMailboxRead, openDirectChat, postMessage } from "../gui/app/chats.mjs";
 import { dispose as disposeEmbed, handleParentMessage, publishDirty, publishReady, startEmbedChannel } from "../gui/app/embed.mjs";
 import { DICTIONARIES, cardinal, dictionaryKeys, formatClock, formatRecent, formatShortDate, formatShortTime, formatWhen, limitsUsage, text } from "../gui/app/i18n.mjs";
@@ -18,7 +17,6 @@ import { activateUnit, buildHierarchy, flattenVisibleHierarchy, revealGroup, tog
 import { collectPages, createPagedList, loadAll, moveFocus, reloadList, renderWindow, setQuery } from "../gui/app/lists.mjs";
 import { flushLayout, graphBounds, queueLayoutPatch, wheelZoom } from "../gui/app/map.mjs";
 import { clusterCamera } from "../gui/app/cluster-geometry.mjs";
-import { setAttachments, startWatch, libraryState, createResource, registerResource } from "../gui/app/editors.mjs";
 import { composeCore } from "../engine/service/service.mjs";
 import { stopService } from "../engine/service/service.mjs";
 import { close as closeStream } from '../gui/app/stream.mjs';
@@ -39,6 +37,7 @@ import { createText } from '../engine/service/editors.mjs';
 import { callPlanTool, drainRunLaunches, readRun } from '../engine/service/runs.mjs';
 import { checkRuns } from '../engine/service/run-supervision.mjs';
 import { createHttpServer } from '../engine/service/http.mjs';
+import { createEventBus } from '../engine/service/events.mjs';
 import { createCredentialStore } from '../engine/service/security.mjs';
 import { openLedger } from '../engine/sync/limits.mjs';
 import { createChat, postChat } from '../engine/service/chats.mjs';
@@ -83,6 +82,70 @@ import { createSettingsOwner } from '../engine/service/settings.mjs';
 
 const PHONE = ["read", "chat.post", "master.read", "approval.answer", "task.accept", "task.send-back"];
 const DESKTOP = ["read", "chat.post", "chat.manage", "mailbox.read", "approval.answer", "grant.revoke", "task.status", "task.undo", "unit.create", "unit.connect", "session.start", "session.stop", "layout.write", "settings.write", "home.manage", "editor.read", "editor.write", "comment.write", "proposal.answer", "asset.write", "watch", "viewer.write"];
+
+test("native Blueprint and Void modes show the real app stage, localized connection guidance and bridge stream events", async t => {
+  const fixture = await createGuiFixture(); t.after(() => fixture.close());
+  const updates = [], events = [], paths = [];
+  let status;
+  const host = { embeddedUpdate: value => updates.push(value), embeddedEvent: value => events.push(value),
+    onEmbeddedStatus(listener) { status = listener; return () => { status = null; }; } };
+  const desktop = await bootWithFetch(fixture.desktopUrl, 1440, (url, init) => { paths.push(new URL(url).pathname); return fetch(url, init); }, { hivem1nd: host });
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.layout === "desktop", "The native shell did not open.");
+  for (const [mode, name] of [["blueprint", "blueprint"], ["document", "void"]]) {
+    navigate(desktop.app, mode);
+    assert.equal(desktop.root.querySelector("[data-embedded-stage]").getAttribute("data-embedded-stage"), name);
+    assert.equal(updates.at(-1).app, name);
+    assert.equal(desktop.root.querySelector("[data-editor-column]"), null);
+    assert.equal(desktop.root.querySelector("[data-action='toggle-comments']"), null);
+    status({ app: name, state: "unavailable" });
+    assert.match(desktop.root.querySelector(".embedded-message").querySelector("p").textContent, /Connect to the internet/);
+    desktop.app.language = "es"; renderShell(desktop.app);
+    assert.match(desktop.root.querySelector(".embedded-message").querySelector("p").textContent, /Conectarse a internet/);
+    const before = updates.length; click(desktop.root.querySelector("[data-action='retry-embedded-app']"));
+    assert.equal(updates.length, before + 1);
+    status({ app: name, state: "ready" });
+    assert.equal(desktop.root.querySelector("[data-embedded-state]").getAttribute("data-embedded-state"), "ready");
+    desktop.app.language = "en";
+  }
+  const data = { app: "void", name: "void.files.changed", params: [{ path: "notes.md", kind: "changed", by: "executor" }] };
+  await fixture.control.emit("app.bridge", data);
+  await waitFor(() => events.length > 0, "The native bridge did not receive the stream event.");
+  assert.deepEqual(events.at(-1).envelope.data, data);
+  assert.equal(paths.some(path => /\/(?:blueprint\/boards|void\/texts|editors)(?:\/|$)/.test(path)), false);
+  navigate(desktop.app, "map"); assert.equal(updates.at(-1).app, null);
+});
+
+test('ephemeral app stream events reach the host at the snapshot cursor and while snapshot reads pause', async t => {
+  const fixture = await createGuiFixture(); t.after(() => fixture.close());
+  let controller, snapshotCursor;
+  const forwarded = [], encoder = new TextEncoder();
+  const ready = () => {
+    if (controller && snapshotCursor) controller.enqueue(encoder.encode(sseFrame('stream.ready', snapshotCursor, { cursor: snapshotCursor, capabilities: DESKTOP })));
+  };
+  const desktop = await bootWithFetch(fixture.desktopUrl, 1440, async (url, init) => {
+    if (new URL(url).pathname === '/api/v1/events') return new Response(new ReadableStream({ start(value) { controller = value; ready(); } }), { headers: { 'content-type': 'text/event-stream' } });
+    const response = await fetch(url, init);
+    if (new URL(url).pathname === '/api/v1/view') { snapshotCursor = (await response.clone().json()).meta.eventCursor; ready(); }
+    return response;
+  }, { hivem1nd: { embeddedUpdate() {}, embeddedEvent: event => forwarded.push(event) } });
+  t.after(() => dispose(desktop.app));
+  await waitFor(() => desktop.app.layout === 'desktop', 'The native shell did not open.');
+  const cursor = desktop.app.store.cursor, separator = cursor.lastIndexOf(':');
+  const bus = createEventBus({ startupId: cursor.slice(0, separator) });
+  for (let index = 0; index < Number(cursor.slice(separator + 1)); index++) bus.emit({ name: 'unit.changed' });
+  bus.subscribe({ stableId: 'ephemeral-native-stream', audience: 'desktop' }, {}, frame => {
+    controller.enqueue(encoder.encode(`id: ${frame.id}\nevent: ${frame.name}\ndata: ${JSON.stringify(frame.data)}\n\n`));
+  });
+  for (const name of ['void.files.changed', 'agents.changed']) bus.emit({ name: 'app.bridge', data: { app: 'void', name, params: [] } });
+  await patient(() => forwarded.length === 2, 'Same-cursor app events were dropped.', 2000);
+  desktop.app.store.paused = true;
+  bus.emit({ name: 'app.bridge', data: { app: 'void', name: 'void.project', params: null } });
+  await patient(() => forwarded.length === 3, 'App events were buffered behind a snapshot.', 2000);
+  assert.equal(desktop.app.store.cursor, cursor);
+  assert.equal(desktop.app.store.buffer.length, 0);
+  assert.deepEqual(forwarded.map(event => event.envelope.data.name), ['void.files.changed', 'agents.changed', 'void.project']);
+});
 
 test("disposing an API or shell cancels its pending reconnect timer", async t => {
   for (const close of [disposeApi, api => dispose({ api, root: createTestDocument().root })]) {
@@ -872,7 +935,7 @@ test("phone capabilities select the phone shell and desktop capabilities stay de
 });
 
 test("the shell has no remote assets, no token storage beyond the tab session, and no inline code", async () => {
-  const files = ["gui/app/index.html", "gui/app/favicon.svg", "gui/app/main.mjs", "gui/app/i18n.mjs", "gui/app/styles.css", "gui/app/components.mjs", "gui/app/lists.mjs", "gui/app/hierarchy.mjs", "gui/app/map.mjs", "gui/app/map-geometry.mjs", "gui/app/actions.mjs", "gui/app/chats.mjs", "gui/app/chat-media.mjs", "gui/app/inspector.mjs", "gui/app/editors.mjs", "gui/app/blueprint.mjs", "gui/app/markup.mjs", "gui/app/void.mjs", "gui/app/settings.mjs", "gui/app/qr.mjs", "gui/app/qr-render.mjs", "gui/app/phone.mjs", "gui/app/embed.mjs"];
+  const files = ["gui/app/index.html", "gui/app/favicon.svg", "gui/app/main.mjs", "gui/app/i18n.mjs", "gui/app/styles.css", "gui/app/components.mjs", "gui/app/lists.mjs", "gui/app/hierarchy.mjs", "gui/app/map.mjs", "gui/app/map-geometry.mjs", "gui/app/actions.mjs", "gui/app/chats.mjs", "gui/app/chat-media.mjs", "gui/app/inspector.mjs", "gui/app/markup.mjs", "gui/app/settings.mjs", "gui/app/qr.mjs", "gui/app/qr-render.mjs", "gui/app/phone.mjs", "gui/app/embed.mjs", "gui/app/embedded-apps.mjs"];
   const sources = await Promise.all(files.map(async (file) => [file, await readFile(file, "utf8")]));
   for (const [file, source] of sources) {
     if (file !== "gui/app/main.mjs") assert.equal(source.includes("localStorage"), false, file);
@@ -884,7 +947,7 @@ test("the shell has no remote assets, no token storage beyond the tab session, a
     assert.equal(source.includes("fonts.googleapis"), false, file);
     assert.equal(source.includes("\u2014"), false, file);
     const remote = source.match(/https?:\/\/[^\s"'`)]+/g) ?? [];
-    assert.deepEqual(remote.filter((url) => url !== "http://www.w3.org/2000/svg"), [], file);
+    assert.deepEqual(remote.filter((url) => !["http://www.w3.org/2000/svg", "https://blueprint.txmska.com/files", "https://void.txmska.com/"].includes(url)), [], file);
   }
   const html = sources[0][1];
   assert.match(html, /lang="en"/);
@@ -902,7 +965,7 @@ test("the shell has no remote assets, no token storage beyond the tab session, a
   assert.equal(html.includes("session="), false);
   const main = sources[2][1];
   const imports = [...new Set([...main.matchAll(/from "([^"]+)"/g)].map((match) => match[1]))].sort();
-  assert.deepEqual(imports, ["./actions.mjs", "./api.mjs", "./blueprint.mjs", "./chat-media.mjs", "./chats.mjs", "./components.mjs", "./editors.mjs", "./embed.mjs", "./hierarchy.mjs", "./i18n.mjs", "./inspector.mjs", "./lists.mjs", "./map.mjs", "./markup.mjs", "./phone.mjs", "./settings.mjs", "./state.mjs", "./stream.mjs", "./void.mjs"]);
+  assert.deepEqual(imports, ["./actions.mjs", "./api.mjs", "./chat-media.mjs", "./chats.mjs", "./components.mjs", "./embed.mjs", "./embedded-apps.mjs", "./hierarchy.mjs", "./i18n.mjs", "./inspector.mjs", "./lists.mjs", "./map.mjs", "./phone.mjs", "./settings.mjs", "./state.mjs", "./stream.mjs"]);
   const css = sources[4][1];
   assert.match(css, /--bg:\s*#07040a/);
   assert.match(css, /--bg:\s*#050505/);
@@ -1009,7 +1072,6 @@ test("later collection pages stay available and compact windows stay under 100 r
   assert.equal(list.scrollTop, 0);
   assert.match([...host.querySelectorAll("[data-row]")].map((row) => row.textContent).join("\n"), /unit-1200/);
 
-  await assert.rejects(setAttachments({}, { current: { resourceId: "board", attachmentRevision: null, attached: [] } }, Array.from({ length: 257 }, (_, index) => `unit-${index}`)), (error) => error.code === "invalid_body");
 });
 
 test("a stale collection generation cannot overwrite a newer page", () => {
@@ -1581,7 +1643,7 @@ test("phone boot never calls viewer routes and a narrow desktop token stays desk
   navigate(phone.app, "blueprint");
   navigate(phone.app, "settings");
   assert.equal(phone.app.mode, "hierarchy");
-  assert.equal(phone.root.querySelector(".mode"), null);
+  assert.equal(phone.root.querySelectorAll(".mode").length, 2);
   assert.equal(phone.root.querySelector("[data-action='new-cluster']"), null);
   assert.equal(phone.root.querySelector("[aria-label='Settings']"), null);
   assert.equal(phone.root.querySelector(".stage"), null);
@@ -1818,34 +1880,6 @@ test("session, approval and grant outcomes use the contract events", async (t) =
   await waitFor(() => desktop.root.querySelector(`[data-approval="${extraId}"]`), "The requested approval did not appear.");
 });
 
-test("Watch opens the focused board and clears a stopped watch", async (t) => {
-  const fixture = await createGuiFixture();
-  t.after(() => fixture.close());
-  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
-  t.after(() => dispose(desktop.app));
-  await waitFor(() => desktop.root.querySelector(".shell"), "The desktop shell did not appear.");
-  navigate(desktop.app, "blueprint");
-  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");
-  const board = desktop.app.editors.catalog.find((item) => item.title === "Cart");
-  const opened = await request(desktop.app.api, "GET", "/blueprint/boards/:resourceId", { params: { resourceId: board.id } });
-  const screen = opened.data.document.screens[0];
-  const nodeId = screen.root?.id;
-  assert.ok(screen?.id);
-  assert.ok(nodeId);
-  await startWatch(desktop.app.api, desktop.app.editors, { unitId: "project:shop:executor-shop", resourceId: board.id });
-  await fixture.control.noteActivity({
-    unitId: "project:shop:executor-shop",
-    resourceId: board.id,
-    focus: { screenId: screen.id, nodeId },
-  });
-  await waitFor(() => desktop.root.querySelector(".shell")?.getAttribute("data-mode") === "blueprint"
-    && desktop.root.querySelector(`[data-screen="${screen.id}"]`)?.getAttribute("data-focus") === "true"
-    && desktop.root.querySelector(`[data-node="${nodeId}"]`)?.getAttribute("data-highlight") === "true", "Watch did not open the focused board.");
-  const watchId = desktop.app.editors.watch?.watchId;
-  assert.ok(watchId);
-  await fixture.control.emit("watch.changed", { watchId, unitId: "project:shop:executor-shop", resourceId: board.id, state: "stopped" });
-  await waitFor(() => desktop.app.editors.watch == null, "The stopped watch remained.");
-});
 
 test("Enter in the composer sends the message and Shift+Enter does not", async (t) => {
   const fixture = await createGuiFixture();
@@ -2002,7 +2036,8 @@ test("waiting opens from either navigation surface and refreshes without a selec
   assert.equal(desktop.root.querySelector("[data-waiting-panel]"), null, "any mode change, the Map included, closes Waiting");
   assert.equal(desktop.root.querySelector("[data-action='waiting']").getAttribute("aria-pressed"), "false");
 
-  for (const mode of ["settings", "blueprint", "document", "focus"]) {
+  desktop.app.embeddedHost = { embeddedUpdate() {} };
+  for (const mode of ["settings", "blueprint", "document"]) {
     navigate(desktop.app, mode);
     assert.equal(desktop.root.querySelector("[data-action='waiting']").getAttribute("aria-pressed"), "false");
     click(desktop.root.querySelector("[data-action='waiting']"));
@@ -2029,307 +2064,8 @@ test("waiting opens from either navigation surface and refreshes without a selec
   assert.equal(phone.root.querySelector("[data-waiting-record]")?.querySelector("[data-action='undo']"), null);
 });
 
-test("desktop registers a path, copies a legacy module, and edits structure without rewriting read-only bytes", async (t) => {
-  const fixture = await createGuiFixture();
-  t.after(() => fixture.close());
-  const legacyFile = join(fixture.root, "repositories", "shop", "docs", "flows", "boards", "legacy-cart.mjs");
-  await writeFile(legacyFile, 'import { board } from "blueprint/board.mjs";\nimport { col, text } from "blueprint/kit.mjs";\nexport default board({ id: "legacy-cart", title: "Legacy cart", screens: [{ id: "cart", title: "Cart", root: col({ w: 300, h: 560 }, text("Actual legacy cart")) }] });\n');
-  const indexFile = join(fixture.root, "repositories", "shop", "docs", "flows", "boards", "index.json");
-  const index = JSON.parse(await readFile(indexFile, "utf8")); index.push({ id: "legacy-cart", title: "Legacy cart" });
-  await writeFile(indexFile, JSON.stringify(index));
-  await fixture.control.refresh();
-  const originalFile = join(fixture.root, "repositories", "shop", "docs", "release.orig.json");
-  const legacyBytes = await readFile(legacyFile);
-  const originalBytes = await readFile(originalFile);
-  const writes = [];
-  const desktop = await bootApp(fixture.desktopUrl, 1440, [], async (_input, init) => {
-    if (!init?.body || (init.method !== "POST" && init.method !== "PUT")) return;
-    writes.push({ method: init.method, url: String(_input), body: JSON.parse(init.body) });
-  });
-  t.after(() => dispose(desktop.app));
-  await waitFor(() => desktop.root.querySelector(".shell")?.getAttribute("data-layout") === "desktop", "The desktop shell did not appear.");
-  navigate(desktop.app, "blueprint");
-  await waitFor(() => desktop.root.querySelector("[data-action='open-register']")?.getAttribute("data-kind") === "blueprint", "The registration form was not shown.");
-  click(desktop.root.querySelector("[data-action='open-register']"));
-  typeInput(desktop.document.querySelector("[data-field='register-path']"), "docs/flows/boards/legacy-cart.mjs", 0, 0);
-  click(desktop.document.querySelector("[data-action='register-resource']"));
-  await waitFor(() => desktop.root.querySelector(".board-notice")?.getAttribute("data-legacy") === "docs/flows/boards/legacy-cart.mjs", "The module board was not drawn with its path.");
-  assert.equal(desktop.root.querySelector("[data-action='resize-screen']"), null);
-  click(desktop.root.querySelector("[data-action='copy-json']"));
-  await waitFor(() => desktop.app.editors.error || desktop.root.querySelector("[data-action='resize-screen']"), "The copy returned no result.");
-  assert.equal(desktop.app.editors.error?.code ?? null, null, desktop.app.editors.error?.message);
-  await waitFor(() => desktop.app.editors.current?.authoritative?.legacy == null && desktop.root.querySelector("[data-action='resize-screen']"), "The JSON copy did not open.");
-  assert.deepEqual(await readFile(legacyFile), legacyBytes);
-  const copied = writes.find((item) => item.method === "POST" && item.body?.document?.id === "legacy-cart");
-  assert.equal(copied.body.path, "docs/flows/boards/legacy-cart.json");
-  const copyFile = join(fixture.root, "repositories", "shop", "docs", "flows", "boards", "legacy-cart.json");
-  assert.equal(JSON.parse((await readFile(copyFile)).toString("utf8")).id, "legacy-cart");
-  assert.equal((await readFile(copyFile)).includes(Buffer.from("export const board")), false);
 
-  await waitFor(() => desktop.app.editors.catalog.some((item) => item.title === "Cart"), "The board catalog did not load.");
-  const cart = desktop.app.editors.catalog.find((item) => item.title === "Cart");
-  renderShell(desktop.app);
-  openLibraryItem(desktop, cart.id);
-  await waitFor(() => desktop.app.editors.current?.resourceId === cart.id && desktop.root.querySelector("[data-field='screen-width']"), "The Cart board did not open.");
-  assert.equal(desktop.root.querySelector("[data-action='move-page']")?.getAttribute("disabled"), "");
-  assert.equal(desktop.root.querySelector("[data-action='add-link']")?.getAttribute("disabled"), "");
-  const cartRevision = desktop.app.editors.current.revision;
-  typeInput(desktop.root.querySelector("[data-field='screen-width']"), "400", 0, 3);
-  typeInput(desktop.root.querySelector("[data-field='screen-height']"), "844", 0, 3);
-  click(desktop.root.querySelector("[data-action='resize-screen']"));
-  await waitFor(() => desktop.app.editors.current?.revision !== cartRevision, "The screen resize was not saved.");
-  const resized = writes.filter((item) => item.method === "PUT" && item.body?.document?.screens).at(-1);
-  assert.equal(resized.body.expectedRevision, cartRevision);
-  assert.equal(resized.body.document.sentinel, "document-sentinel");
-  assert.equal(resized.body.document.screens[0].sentinel, "screen-sentinel");
-  assert.equal(resized.body.document.screens[0].w, 400);
-  assert.equal(resized.body.document.screens[0].root.w, 400);
-  assert.equal(resized.body.document.screens[0].root.sentinel, "node-sentinel");
-  assert.equal(resized.body.document.links[0].to, "missing-screen");
-  assert.equal(resized.body.document.links[0].sentinel, "link-sentinel");
-  assert.equal(resized.body.document.pages[0].sentinel, "page-sentinel");
 
-  click(desktop.root.querySelector("[data-action='open-create']"));
-  typeInput(desktop.document.querySelector("[data-field='create-title']"), "Sample board", 0, 12);
-  desktop.document.querySelector("[data-field='create-project']").value = "shop";
-  click(desktop.document.querySelector("[data-action='create-resource']"));
-  await waitFor(() => desktop.app.editors.current?.authoritative?.document?.id === "sample-board" && desktop.root.querySelector("[data-editor-title]")?.getAttribute("data-editor-title") === "Sample board", "The new board did not open.");
-  assert.equal(desktop.root.querySelector("[data-structure]").children.some(child => child.textContent === "null"), false);
-  assert.equal(desktop.app.editors.current.authoritative.document.screens.length, 1);
-  assert.equal(desktop.app.editors.current.authoritative.document.pages.length, 1);
-  assert.equal(desktop.root.querySelector("[data-action='move-page']").getAttribute("disabled"), "");
-  assert.equal(desktop.root.querySelector("[data-action='move-screen']").getAttribute("disabled"), "");
-  assert.equal(desktop.root.querySelector("[data-action='add-link']").getAttribute("disabled"), "");
-  assert.deepEqual(await readFile(legacyFile), legacyBytes);
-
-  navigate(desktop.app, "document");
-  await waitFor(() => desktop.app.editors.catalog.some((item) => item.title === "Release notes"), "The text catalog did not load.");
-  const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
-  renderShell(desktop.app);
-  openLibraryItem(desktop, notes.id);
-  await waitFor(() => desktop.app.editors.current?.resourceId === notes.id && desktop.root.querySelector("[data-void-title]"), "The text did not open.");
-  const textRevision = desktop.app.editors.current.revision;
-  const textRev = desktop.app.editors.current.authoritative.document.rev;
-  const title = desktop.root.querySelector("[data-void-title]");
-  title.textContent = "Revised notes";
-  for (const handler of title.listeners.get("input") ?? []) handler();
-  await waitFor(() => desktop.app.editors.current?.authoritative?.document?.title === "Revised notes", "The document replacement was not saved.");
-  const replaced = writes.filter((item) => item.method === "PUT" && item.body?.document?.pages && !item.body.document.screens).at(-1);
-  assert.equal(replaced.body.expectedRevision, textRevision);
-  assert.equal(Object.hasOwn(replaced.body.document, "rev"), false);
-  assert.equal(replaced.body.document.sentinel, "void-sentinel");
-  assert.equal(desktop.app.editors.current.authoritative.document.rev, textRev + 1);
-  assert.equal(desktop.app.editors.current.authoritative.document.pages[0].sentinel, "void-page-sentinel");
-  assert.deepEqual(await readFile(originalFile), originalBytes);
-  assert.deepEqual(await readFile(legacyFile), legacyBytes);
-
-  const phone = await bootApp(fixture.phoneUrl, 390, []);
-  t.after(() => dispose(phone.app));
-  await waitFor(() => phone.root.querySelector(".shell")?.getAttribute("data-layout") === "phone", "The phone shell did not appear.");
-  phone.app.mode = "blueprint";
-  renderShell(phone.app);
-  assert.equal(phone.root.querySelector("[data-action='register-resource']"), null);
-  assert.equal(phone.root.querySelector("[data-action='open-register']"), null);
-  assert.equal(phone.root.querySelector("[data-action='create-resource']"), null);
-  assert.equal(phone.root.querySelector("[data-action='open-create']"), null);
-  assert.equal(phone.root.querySelector("[data-action='copy-json']"), null);
-  assert.equal(phone.root.querySelector("[data-action='resize-screen']"), null);
-  phone.app.mode = "document";
-  renderShell(phone.app);
-  assert.equal(phone.root.querySelector("[data-action='replace-document']"), null);
-});
-
-test("void drafts stay with their page and comments use the rendered selection", async (t) => {
-  const fixture = await createGuiFixture();
-  t.after(() => fixture.close());
-  const writes = [];
-  const desktop = await bootApp(fixture.desktopUrl, 1440, [], async (input, init) => {
-    if (!init?.body || (init.method !== "POST" && init.method !== "PUT")) return;
-    writes.push({ method: init.method, url: String(input), body: JSON.parse(init.body) });
-  });
-  t.after(() => dispose(desktop.app));
-  await waitFor(() => desktop.root.querySelector(".shell"), "The desktop shell did not appear.");
-  navigate(desktop.app, "document");
-  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
-  const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
-  renderShell(desktop.app);
-  openLibraryItem(desktop, notes.id);
-  await waitFor(() => desktop.root.querySelector("[data-source]")?.value?.includes("<b>Welcome</b>"), "The release text did not open.");
-  const commentsBefore = () => writes.filter((item) => item.method === "POST" && item.url.includes("/comments"));
-  click(desktop.root.querySelector("[data-action='comment-quote']"));
-  await delay(40);
-  assert.equal(commentsBefore().length, 0);
-  const quote = textNodes(desktop.root.querySelector("[data-void]")).find((node) => node.textContent.includes("first"));
-  const offset = quote.textContent.indexOf("first");
-  desktop.document.getSelection = () => ({
-    anchorNode: quote,
-    anchorOffset: offset,
-    focusNode: quote,
-    focusOffset: offset + "first".length,
-    isCollapsed: false,
-  });
-  click(desktop.root.querySelector("[data-action='comment-quote']"));
-  await waitFor(() => commentsBefore().some((item) => item.body.anchor?.quote === "first"), "The comment did not use the rendered selection.");
-  const anchor = commentsBefore().find((item) => item.body.anchor?.quote === "first").body.anchor;
-  assert.equal(anchor.k, "Intro.Welcome");
-  assert.equal(anchor.lang, "en");
-  assert.equal(anchor.start, 10);
-  assert.equal(anchor.end, 15);
-  assert.equal(anchor.prefix, "Welcome\nA ");
-  assert.equal(anchor.suffix, " paragraph.");
-
-  const source = desktop.root.querySelector("[data-source]");
-  const original = source.value;
-  const broken = original.replace("<b>", "<");
-  typeInput(source, broken, 0, 1);
-  await desktop.app.editors.current.voidSaver.flush();
-  const ranged = writes.filter((item) => item.method === "PUT" && item.url.includes("/void/texts/")).at(-1).body;
-  assert.equal(ranged.document.pages.find((page) => page.k === "Intro.Welcome").en, broken);
-  assert.equal(ranged.document.pages.find((page) => page.k === "Intro.Welcome").es, desktop.app.editors.current.authoritative.document.pages[0].es);
-  await waitFor(() => desktop.app.editors.current?.authoritative?.document?.pages?.find((page) => page.k === "Intro.Welcome")?.en === broken
-    && desktop.root.querySelector("[data-source]")?.value === broken, "The saved text was not shown.");
-
-  const kept = `${broken} kept`;
-  fixture.control.setFault({ method: "PUT", path: `/api/v1/void/texts/${notes.id}`, status: 409, code: "revision_conflict" });
-  typeInput(desktop.root.querySelector("[data-source]"), kept, 0, 4);
-  await assert.rejects(desktop.app.editors.current.voidSaver.flush());
-  await waitFor(() => desktop.app.editors.current?.conflict?.code === "revision_conflict", "The conflict draft was discarded.");
-  assert.equal(desktop.root.querySelector("[data-source]").value, kept);
-  assert.equal(textDraft(desktop.app.editors.current, notes.id, "Intro.Welcome", "en"), kept);
-
-  typeInput(desktop.root.querySelector("[data-source]"), "", 0, 0);
-  renderShell(desktop.app);
-  assert.equal(desktop.root.querySelector("[data-source]").value, "");
-  desktop.app.voidState.page = "Notes.Next";
-  renderShell(desktop.app);
-  assert.equal(desktop.root.querySelector("[data-source]").value, "Next page.");
-  desktop.app.voidState.page = "Intro.Welcome";
-  renderShell(desktop.app);
-  assert.equal(desktop.root.querySelector("[data-source]").value, "");
-  desktop.app.language = "es";
-  renderShell(desktop.app);
-  assert.equal(desktop.root.querySelector("[data-source]").value.includes("Bienvenida"), true);
-  desktop.app.language = "en";
-  renderShell(desktop.app);
-  assert.equal(desktop.root.querySelector("[data-source]").value, "");
-  typeInput(desktop.root.querySelector("[data-source]"), "LOCAL DRAFT", 0, 5);
-  desktop.app.voidState.page = "Notes.Next";
-  renderShell(desktop.app);
-  click(desktop.root.querySelector("[data-action='open-create']"));
-  typeInput(desktop.document.querySelector("[data-field='create-title']"), "Fresh note", 0, 10);
-  desktop.document.querySelector("[data-field='create-project']").value = "shop";
-  click(desktop.document.querySelector("[data-action='create-resource']"));
-  await waitFor(() => desktop.app.editors.current?.authoritative?.document?.id === "fresh-note" && desktop.app.voidState?.page === "Intro.Welcome", "The new text did not open on its first page.");
-  assert.equal(desktop.app.voidState.page, "Intro.Welcome");
-  assert.notEqual(desktop.root.querySelector("[data-source]").value, "LOCAL DRAFT");
-  assert.notEqual(desktop.root.querySelector("[data-source]").value, "Next page.");
-  renderShell(desktop.app);
-  openLibraryItem(desktop, notes.id);
-  await waitFor(() => desktop.app.editors.current?.resourceId === notes.id && desktop.app.voidState?.page === "Notes.Next", "The text did not restore its selected page.");
-  assert.equal(textDraft(desktop.app.editors.current, notes.id, "Intro.Welcome", "en"), "LOCAL DRAFT");
-  desktop.app.voidState.page = "Intro.Welcome";
-  renderShell(desktop.app);
-  await waitFor(() => desktop.root.querySelector("[data-source]")?.value === "LOCAL DRAFT", "The page draft was lost while switching texts.");
-});
-
-test("comments use a complete anchor and stay disabled until one exists", async (t) => {
-  const fixture = await createGuiFixture();
-  t.after(() => fixture.close());
-  const writes = [];
-  const desktop = await bootApp(fixture.desktopUrl, 1440, [], async (input, init) => {
-    if (!init?.body || init.method !== "POST") return;
-    writes.push({ url: String(input), body: JSON.parse(init.body) });
-  });
-  t.after(() => dispose(desktop.app));
-  await waitFor(() => desktop.root.querySelector(".shell"), "The desktop shell did not appear.");
-  navigate(desktop.app, "blueprint");
-  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");
-  const cart = desktop.app.editors.catalog.find((item) => item.title === "Cart");
-  renderShell(desktop.app);
-  openLibraryItem(desktop, cart.id);
-  await waitFor(() => desktop.root.querySelector("[data-action='comment']") && desktop.root.querySelector("[data-node='label']"), "The board comment control did not appear.");
-  const commentPosts = () => writes.filter((item) => item.url.includes("/comments") && item.body.anchor);
-  assert.equal(desktop.root.querySelector("[data-action='comment']").getAttribute("disabled"), "");
-  typeInput(desktop.root.querySelector("[data-comment]"), "Place the label", 0, 3);
-  assert.equal(desktop.root.querySelector("[data-action='comment']").getAttribute("disabled"), "");
-  click(desktop.root.querySelector("[data-action='comment']"));
-  await delay(40);
-  assert.equal(commentPosts().length, 0);
-  const host = desktop.root.querySelector(".board-host");
-  clickEvent(host, { target: host.querySelector("[data-node='label']"), offsetX: 20, offsetY: 24 });
-  assert.equal(desktop.root.querySelector("[data-action='comment']").getAttribute("disabled"), null);
-  click(desktop.root.querySelector("[data-action='comment']"));
-  await waitFor(() => commentPosts().some((item) => item.body.text === "Place the label"), "The node comment was not sent.");
-  const nodeAnchor = commentPosts().find((item) => item.body.text === "Place the label").body.anchor;
-  assert.equal(nodeAnchor.screen, "empty");
-  assert.equal(nodeAnchor.screenTitle, "Empty cart");
-  assert.equal(nodeAnchor.element, "label");
-  assert.equal(nodeAnchor.label, "Label");
-  assert.deepEqual(nodeAnchor.path, ["Empty cart", "Root", "Label"]);
-  assert.deepEqual(nodeAnchor.point, { x: 20, y: 24 });
-  await waitFor(() => desktop.root.querySelector("[data-comment]")?.value === "", "The sent node comment remained.");
-
-  clickEvent(desktop.root.querySelector(".board-host"), { target: desktop.root.querySelector("[data-screen='empty']"), offsetX: 8, offsetY: 9 });
-  typeInput(desktop.root.querySelector("[data-comment]"), "Whole screen", 0, 5);
-  assert.equal(desktop.root.querySelector("[data-action='comment']").getAttribute("disabled"), null);
-  click(desktop.root.querySelector("[data-action='comment']"));
-  await waitFor(() => commentPosts().some((item) => item.body.text === "Whole screen"), "The screen comment was not sent.");
-  const screenAnchor = commentPosts().find((item) => item.body.text === "Whole screen").body.anchor;
-  assert.equal(screenAnchor.screen, "empty");
-  assert.equal(screenAnchor.screenTitle, "Empty cart");
-  assert.equal(screenAnchor.element, null);
-  assert.equal(screenAnchor.label, "Empty cart");
-  assert.deepEqual(screenAnchor.path, ["Empty cart"]);
-  assert.deepEqual(screenAnchor.point, { x: 8, y: 9 });
-  await waitFor(() => desktop.root.querySelector("[data-comment]")?.value === "", "The sent screen comment remained.");
-
-  clickEvent(desktop.root.querySelector(".board-host"), { target: desktop.root.querySelector(".board-host"), offsetX: -40, offsetY: -15 });
-  typeInput(desktop.root.querySelector("[data-comment]"), "   ", 0, 3);
-  assert.equal(desktop.root.querySelector("[data-action='comment']").getAttribute("disabled"), "");
-  typeInput(desktop.root.querySelector("[data-comment]"), "On the canvas", 0, 3);
-  click(desktop.root.querySelector("[data-action='comment']"));
-  await waitFor(() => commentPosts().some((item) => item.body.text === "On the canvas"), "The canvas comment was not sent.");
-  const canvas = commentPosts().find((item) => item.body.text === "On the canvas").body.anchor;
-  assert.equal(canvas.screen, null);
-  assert.equal(canvas.screenTitle, null);
-  assert.equal(canvas.element, null);
-  assert.equal(canvas.label, "Board");
-  assert.deepEqual(canvas.path, ["Board"]);
-  assert.deepEqual(canvas.point, { x: -40, y: -15 });
-  await waitFor(() => desktop.root.querySelector("[data-comment]")?.value === "", "The sent canvas comment remained.");
-
-  navigate(desktop.app, "document");
-  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
-  const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
-  renderShell(desktop.app);
-  openLibraryItem(desktop, notes.id);
-  await waitFor(() => desktop.root.querySelector("[data-source]")?.value?.includes("<b>Welcome</b>"), "The release text did not open.");
-  assert.equal(desktop.root.querySelector("[data-action='comment']").getAttribute("disabled"), "");
-  typeInput(desktop.root.querySelector("[data-comment]"), "Use the rendered words", 0, 3);
-  assert.equal(desktop.root.querySelector("[data-action='comment']").getAttribute("disabled"), "");
-  const quote = textNodes(desktop.root.querySelector("[data-void]")).find((node) => node.textContent.includes("first"));
-  const offset = quote.textContent.indexOf("first");
-  desktop.document.getSelection = () => ({
-    anchorNode: quote,
-    anchorOffset: offset,
-    focusNode: quote,
-    focusOffset: offset + "first".length,
-    isCollapsed: false,
-  });
-  desktop.app.onCommentSelection();
-  assert.equal(desktop.root.querySelector("[data-comment]").value, "Use the rendered words");
-  assert.equal(desktop.root.querySelector("[data-action='comment']").getAttribute("disabled"), null);
-  click(desktop.root.querySelector("[data-action='comment']"));
-  await waitFor(() => commentPosts().some((item) => item.body.text === "Use the rendered words"), "The text comment was not sent.");
-  const textAnchorBody = commentPosts().find((item) => item.body.text === "Use the rendered words").body.anchor;
-  assert.equal(textAnchorBody.k, "Intro.Welcome");
-  assert.equal(textAnchorBody.lang, "en");
-  assert.equal(textAnchorBody.start, 10);
-  assert.equal(textAnchorBody.end, 15);
-  assert.equal(textAnchorBody.quote, "first");
-  assert.equal(textAnchorBody.prefix, "Welcome\nA ");
-  assert.equal(textAnchorBody.suffix, " paragraph.");
-});
 
 function clickEvent(node, event) {
   const payload = { preventDefault() {}, target: event.target ?? node, offsetX: event.offsetX ?? 0, offsetY: event.offsetY ?? 0 };
@@ -2460,20 +2196,6 @@ for (const language of ["en", "es"]) test(`current mounted ${language} states us
   navigate(desktop.app, "settings");
   await waitFor(() => desktop.root.querySelector("[data-settings]"), "The copy inventory did not open Settings.");
   capture("Settings and service");
-  for (const [mode, kind] of [["blueprint", "blueprint"], ["document", "void"]]) {
-    navigate(desktop.app, mode);
-    await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.kind === kind && item.title === (kind === "blueprint" ? "Cart" : "Release notes")), "The copy inventory did not load the library.");
-    capture(`${mode} library`);
-    const item = desktop.app.editors.catalog.find((item) => item.kind === kind && item.title === (kind === "blueprint" ? "Cart" : "Release notes"));
-    renderShell(desktop.app);
-    openLibraryItem(desktop, item.id);
-    await waitFor(() => desktop.app.editors.current?.resourceId === item.id && desktop.root.querySelector(kind === "blueprint" ? ".board-host" : "[data-void]"), "The copy inventory did not open the resource.");
-    capture(`${mode} content and comments`);
-  }
-  navigate(desktop.app, "focus");
-  capture("Focus");
-  desktop.root.listeners.get("pointermove")[0]();
-  capture("Focus tools");
   const phone = await bootApp(fixture.phoneUrl, 390, []);
   t.after(() => dispose(phone.app));
   capture("Phone Hierarchy", phone);
@@ -2500,7 +2222,7 @@ for (const language of ["en", "es"]) test(`current mounted ${language} states us
   empty.app.selectedFolder = "C:/fixtures/mind/keep";
   empty.app.bootError = new ApiError(0, "timeout", text(language, "requestTimeout"));
   capture("Unreadable M1ND", empty);
-  assert.equal(inventory.size, 20);
+  assert.equal(inventory.size, 14);
 });
 
 test("unit forms use machines, session forms use the stored runtime, and the inspector shows the contract facts", async (t) => {
@@ -2619,51 +2341,11 @@ test("unsaved forms share one dirty flag and only a saved draft clears it", asyn
   desktop.app.activeHandlers.onActivate({ id: executor.id, kind: "unit", unit: executor }, "single");
   await waitFor(() => desktop.root.querySelector("[data-note='project:shop:030']"), "The return note did not appear.");
   typeInput(desktop.root.querySelector("[data-note='project:shop:030']"), "Fix", 0, 3);
-  navigate(desktop.app, "blueprint");
-  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");
-  const cart = desktop.app.editors.catalog.find((item) => item.title === "Cart");
-  renderShell(desktop.app);
-  openLibraryItem(desktop, cart.id);
-  await waitFor(() => desktop.root.querySelector("[data-node-name]"), "The node name field did not open.");
-  typeInput(desktop.root.querySelector("[data-node-name]"), "Label 2", 0, 7);
-  navigate(desktop.app, "document");
-  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
-  const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
-  renderShell(desktop.app);
-  openLibraryItem(desktop, notes.id);
-  await waitFor(() => desktop.root.querySelector("[data-source]")?.value?.includes("<b>Welcome</b>"), "The release text did not open.");
-  const source = desktop.root.querySelector("[data-source]");
-  typeInput(source, `${source.value}!`, 0, 1);
   assert.equal(dirtyPatches().filter((item) => item.body.dirty === true).length, 1);
   assert.equal(dirtyMessages().filter((item) => item.value === true).length, 1);
-  assert.equal(dirtyPatches().some((item) => item.body.dirty === false), false);
-  assert.equal(desktop.app.inputDrafts.chats.get(chat.id).value, "Hold!");
-  assert.equal(desktop.app.inputDrafts.notes.get("project:shop:030").value, "Fix");
-
-  navigate(desktop.app, "map");
-  await waitFor(() => desktop.root.querySelector("[data-composer]")?.value === "Hold!", "The chat draft was not restored.");
   typeInput(desktop.root.querySelector("[data-composer]"), "", 0, 0);
   typeInput(desktop.root.querySelector("[data-note='project:shop:030']"), "", 0, 0);
-  navigate(desktop.app, "blueprint");
-  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.id === cart.id), "The board catalog did not return.");
-  renderShell(desktop.app);
-  openLibraryItem(desktop, cart.id);
-  await waitFor(() => desktop.root.querySelector("[data-node-name]")?.value === "Label 2", `The node draft was not restored. value=${desktop.root.querySelector("[data-node-name]")?.value ?? "missing"} stored=${desktop.app.inputDrafts.nodes?.get(cart.id) ?? "missing"}`);
-  typeInput(desktop.root.querySelector("[data-node-name]"), "", 0, 0);
-  assert.equal(dirtyPatches().some((item) => item.body.dirty === false), false);
-  navigate(desktop.app, "document");
-  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.id === notes.id), "The text catalog did not return.");
-  renderShell(desktop.app);
-  openLibraryItem(desktop, notes.id);
-  await waitFor(() => desktop.root.querySelector("[data-source]")?.value?.endsWith("!"), "The source draft was discarded with the other forms.");
-  await desktop.app.editors.current.voidSaver?.flush();
-  await waitFor(() => !(desktop.app.editors.current?.textDrafts?.size), "The source draft was not saved.");
-  await waitFor(() => dirtyPatches().some((item) => item.body.dirty === false) && dirtyMessages().some((item) => item.value === false), "Saving the last draft did not clear the dirty flag.");
-  assert.equal(dirtyPatches().filter((item) => item.body.dirty === true).length, 1);
-  assert.equal(desktop.app.inputDrafts.chats.get(chat.id).value, "");
-  assert.equal(desktop.app.inputDrafts.notes.get("project:shop:030").value, "");
-  assert.equal(desktop.app.viewerDirty, false);
-
+  await waitFor(() => dirtyPatches().some((item) => item.body.dirty === false), "Clearing the last draft did not clear the dirty flag.");
   const phoneUrls = [];
   const phone = await bootApp(fixture.phoneUrl, 390, phoneUrls);
   t.after(() => dispose(phone.app));
@@ -2678,437 +2360,12 @@ test("unsaved forms share one dirty flag and only a saved draft clears it", asyn
   assert.equal(phone.app.inputDrafts.chats.get(phoneChat.id).value, "Local only");
 });
 
-test("Blueprint and Document place the catalog beside the comments", async (t) => {
-  const fixture = await createGuiFixture();
-  t.after(() => fixture.close());
-  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
-  t.after(() => dispose(desktop.app));
-  await waitFor(() => desktop.root.querySelector(".shell"), "The desktop shell did not appear.");
-  navigate(desktop.app, "blueprint");
-  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");
-  const layout = desktop.root.querySelector("[data-editor-layout]");
-  assert.equal(layout?.getAttribute("data-editor-layout"), "blueprint");
-  assert.equal(layout.className.includes("workspace-editor"), true);
-  assert.deepEqual([...layout.children].map((node) => node.getAttribute("data-editor-column")), ["catalog", "resource", "comments"]);
-  assert.equal(layout.querySelector("[data-editor-column='catalog']").querySelector("h2").textContent, "Boards");
-  assert.equal(layout.querySelector("[data-editor-column='comments']").querySelector("h2").textContent, "Comments");
-  assert.equal(desktop.root.querySelector("[role='tab']"), null);
-  assert.equal(desktop.root.querySelector(".side"), null);
-  assert.equal(desktop.root.querySelector(".inspector"), null);
-  assert.equal(layout.querySelector("[data-editor-column='catalog']").querySelector("[data-action='open-register']")?.getAttribute("data-kind"), "blueprint");
-  desktop.app.language = "es";
-  renderShell(desktop.app);
-  assert.equal(desktop.root.querySelector("[data-editor-column='catalog']").querySelector("h2").textContent, "Tableros");
-  assert.equal(desktop.root.querySelector("[data-editor-column='comments']").querySelector("h2").textContent, "Comentarios");
-  desktop.app.language = "en";
-  renderShell(desktop.app);
-  const cart = desktop.app.editors.catalog.find((item) => item.title === "Cart");
-  renderShell(desktop.app);
-  openLibraryItem(desktop, cart.id);
-  await waitFor(() => desktop.root.querySelector(".board-host"), "The board did not open.");
-  const resource = desktop.root.querySelector("[data-editor-column='resource']");
-  const comments = desktop.root.querySelector("[data-editor-column='comments']");
-  const tools = resource.querySelector("[data-editor-tools]");
-  assert.equal(tools.querySelector("[data-watch]")?.getAttribute("data-watch"), "off");
-  assert.equal(resource.querySelector("[data-toolbar='board']").querySelector("[data-action='attach']") != null, true);
-  assert.equal(resource.querySelector("[data-toolbar='board']").querySelector("[data-action='watch']") != null, true);
-  assert.equal(columnIndex(resource, tools) < columnIndex(resource, resource.querySelector(".board-host")), true);
-  assert.equal(resource.querySelector("[data-node-name]") != null, true);
-  assert.equal(resource.querySelector("[data-comment]"), null);
-  assert.equal(comments.querySelector("[data-comment]") != null, true);
-  assert.equal(comments.querySelector(".board-host"), null);
 
-  navigate(desktop.app, "document");
-  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
-  const documentLayout = desktop.root.querySelector("[data-editor-layout]");
-  assert.equal(documentLayout.getAttribute("data-editor-layout"), "document");
-  assert.equal(documentLayout.querySelector("[data-editor-column='catalog']").querySelector("h2").textContent, "Texts");
-  const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
-  renderShell(desktop.app);
-  openLibraryItem(desktop, notes.id);
-  await waitFor(() => desktop.root.querySelector("[data-source]")?.value?.includes("<b>Welcome</b>"), "The release text did not open.");
-  const textResource = desktop.root.querySelector("[data-editor-column='resource']");
-  const textComments = desktop.root.querySelector("[data-editor-column='comments']");
-  const textTools = textResource.querySelector("[data-editor-tools]");
-  assert.equal(columnIndex(textResource, textTools) < columnIndex(textResource, textResource.querySelector("[data-source]")), true);
-  assert.equal(textTools.querySelector("[data-action='watch']") != null, true);
-  assert.equal(textResource.querySelector("[data-source]") != null, true);
-  assert.equal(textResource.querySelector("[data-draft]"), null);
-  assert.equal(textResource.querySelector("[data-action='save-range']"), null);
-  assert.equal(textResource.querySelector("[data-action='replace-document']"), null);
-  assert.equal(textResource.querySelector("[data-void-body]").getAttribute("contenteditable"), "true");
-  assert.equal(textComments.querySelector("[data-comment]") != null, true);
-  assert.equal(textComments.querySelector("[data-source]"), null);
 
-  const css = await readFile("gui/app/styles.css", "utf8");
-  const modern = css.split('[data-look="high-contrast"]')[0];
-  const contrast = css.split('[data-look="high-contrast"]')[1];
-  assert.match(modern, /--editor-side:\s*228px/);
-  assert.match(modern, /--editor-comments:\s*368px/);
-  assert.match(contrast, /--editor-side:\s*240px/);
-  assert.match(contrast, /--editor-comments:\s*380px/);
-  assert.match(css, /\.workspace-editor\s*\{[^}]*grid-template-columns:\s*var\(--editor-side\)\s+minmax\(0,\s*1fr\)\s+var\(--editor-comments\)/);
-});
 
-test("a narrow desktop keeps the main column and dismisses the side panels", async (t) => {
-  const fixture = await createGuiFixture();
-  t.after(() => fixture.close());
-  const desktop = await bootApp(fixture.desktopUrl, 320, []);
-  t.after(() => dispose(desktop.app));
-  await waitFor(() => desktop.root.querySelector(".shell"), "The desktop shell did not appear.");
-  assert.equal(desktop.root.querySelector(".shell").getAttribute("data-layout"), "desktop");
-  assert.equal(desktop.root.querySelector(".side").className.includes("is-open"), false);
-  assert.equal(desktop.root.querySelector("[data-editor-column='resource']"), null);
-  click(desktop.root.querySelector("[data-action='toggle-catalog']"));
-  assert.equal(desktop.root.querySelector(".side").className.includes("is-open"), true);
-  click(desktop.root.querySelector("[data-action='toggle-catalog']"));
-  assert.equal(desktop.root.querySelector(".side").className.includes("is-open"), false);
-  navigate(desktop.app, "blueprint");
-  await waitFor(() => desktop.root.querySelector("[data-editor-column='resource']"), "The board column did not stay available.");
-  assert.equal(desktop.root.querySelector("[data-editor-column='catalog']").className.includes("is-open"), false);
-  assert.equal(desktop.root.querySelector("[data-editor-column='comments']").className.includes("is-open"), false);
-  click(desktop.root.querySelector("[data-action='toggle-comments']"));
-  assert.equal(desktop.root.querySelector("[data-editor-column='comments']").className.includes("is-open"), true);
-  click(desktop.root.querySelector("[data-action='toggle-catalog']"));
-  assert.equal(desktop.root.querySelector("[data-editor-column='catalog']").className.includes("is-open"), true);
-  desktop.app.language = "es";
-  desktop.app.look = "high-contrast";
-  renderShell(desktop.app);
-  assert.equal(desktop.root.querySelector(".shell").getAttribute("data-layout"), "desktop");
-  assert.equal(desktop.root.querySelector("[data-action='toggle-catalog']").children.at(-1).textContent, text("es", "boards"));
-  assert.equal(desktop.root.querySelector("[data-action='toggle-catalog']").getAttribute("aria-pressed"), "true");
-  assert.equal(desktop.root.querySelector("[data-action='toggle-comments']").textContent, text("es", "hideComments"));
-  const css = await readFile("gui/app/styles.css", "utf8");
-  const start = css.indexOf("@media (max-width: 987px)");
-  const narrow = css.slice(start, css.indexOf("@media", start + 10));
-  assert.match(narrow, /\.workspace\.workspace-editor\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
-  assert.equal(narrow.includes("var(--editor-side)"), false);
-  assert.equal(narrow.includes("var(--editor-comments)"), false);
-  assert.equal(narrow.includes("minmax(180px"), false);
-  assert.match(css, /overflow-x:\s*clip/);
-  assert.match(css, /\.shell \* \{\s*min-width:\s*0;\s*\}/);
-  assert.match(css, /\.modes\s*\{[^}]*flex-wrap:\s*wrap/);
-});
 
-test("board nodes and named controls are available from the keyboard", async (t) => {
-  const fixture = await createGuiFixture();
-  t.after(() => fixture.close());
-  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
-  t.after(() => dispose(desktop.app));
-  await waitFor(() => desktop.app.unitList?.catalog?.some((unit) => unit.id === "project:shop:executor-shop"), "The unit list did not load.");
-  navigate(desktop.app, "blueprint");
-  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");
-  const cart = desktop.app.editors.catalog.find((item) => item.title === "Cart");
-  renderShell(desktop.app);
-  openLibraryItem(desktop, cart.id);
-  await waitFor(() => desktop.root.querySelector("[data-node][tabindex='0']"), "The board node was not keyboard focusable.");
-  const node = desktop.root.querySelector("[data-node][tabindex='0']");
-  assert.equal(node.getAttribute("role"), "treeitem");
-  assert.equal(node.getAttribute("aria-label").length > 0, true);
-  const host = node.closest(".board-host");
-  for (const handler of host.listeners.get("keydown") ?? []) handler({ key: "Enter", target: node, preventDefault() {} });
-  assert.equal(desktop.app.editors.commentTarget.kind, "node");
-  assert.equal(desktop.app.editors.commentTarget.nodeId, node.getAttribute("data-node"));
-  const outline = desktop.root.querySelector(".board-outline");
-  assert.equal(outline.getAttribute("aria-label"), "Screens and nodes");
-  const item = outline.querySelector("[data-outline]");
-  click(item);
-  assert.equal(desktop.app.editors.selectedNodeId ?? desktop.app.editors.commentTarget.screenId, item.getAttribute("data-outline"));
-  const asset = desktop.root.querySelector("[data-asset]");
-  assert.equal(asset.closest("label").querySelector(".field-label").textContent, "Upload");
-  assert.equal(asset.getAttribute("aria-describedby"), asset.closest("label").querySelector(".field-hint").getAttribute("id"));
-  assert.equal(desktop.root.querySelector("[data-node-name]").closest("label").querySelector(".field-label").textContent, "Node name");
-  assert.equal(desktop.root.querySelector("[data-draft]"), null);
-  const comment = desktop.root.querySelector("[data-comment]");
-  assert.equal(comment.closest("label").querySelector(".field-label").textContent, "Reply on the board");
-  assert.equal(comment.closest("label").querySelector(".field-hint").textContent, "Choose a screen or node, then write the comment.");
 
-  navigate(desktop.app, "document");
-  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
-  const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
-  renderShell(desktop.app);
-  openLibraryItem(desktop, notes.id);
-  await waitFor(() => desktop.root.querySelector("[data-source]"), "The source field did not open.");
-  assert.equal(desktop.root.querySelector("[data-source]").closest("label").querySelector(".field-label").textContent, "Source");
-  assert.equal(desktop.root.querySelector("[data-source]").closest("[data-source-edit]") != null, true);
-  click(desktop.root.querySelector("[data-action='open-create']"));
-  assert.equal(desktop.document.querySelector("[data-field='create-project']").closest("label").querySelector(".field-hint").textContent, "The text's file lives in this repository");
 
-  navigate(desktop.app, "map");
-  await waitFor(() => desktop.root.querySelector("[data-action='new-cluster']"), "The unit control did not return.");
-  click(desktop.root.querySelector("[data-action='new-cluster']"));
-  await waitFor(() => desktop.document.querySelector("[data-start-dialog='cluster']"), "The unit dialog did not open.");
-  const dialog = desktop.document.querySelector("[data-start-dialog='cluster']");
-  const heading = dialog.querySelector("h2");
-  assert.equal(dialog.getAttribute("aria-labelledby"), heading.getAttribute("id"));
-  assert.match(heading.getAttribute("id"), /^dialog-title-\d+$/);
-  const firstId = heading.getAttribute("id");
-  click(dialog.querySelector("[data-action='cancel-cluster']"));
-  click(desktop.root.querySelector("[data-action='new-cluster']"));
-  await waitFor(() => desktop.document.querySelector("[data-start-dialog='cluster']")?.querySelector("h2")?.getAttribute("id") !== firstId, "The second dialog reused the heading id.");
-
-  navigate(desktop.app, "settings");
-  await waitFor(() => desktop.root.querySelector("[data-addresses]"), "The address field did not open.");
-  assert.equal(desktop.root.querySelector("[data-addresses]").closest("label").querySelector(".field-label").textContent, "Addresses");
-
-  navigate(desktop.app, "chats");
-  const chat = desktop.app.chatList.catalog[0];
-  desktop.app.activeHandlers.onActivate({ id: chat.id, kind: "chat" }, "double");
-  await waitFor(() => desktop.root.querySelector("[data-composer]"), "The composer did not open.");
-  assert.equal(desktop.root.querySelector("[data-composer]").closest("label").querySelector(".field-label").textContent, "Message");
-
-  const executor = desktop.app.unitList.catalog.find((unit) => unit.id === "project:shop:executor-shop");
-  desktop.app.activeHandlers.onActivate({ id: executor.id, kind: "unit", unit: executor }, "single");
-  await waitFor(() => desktop.root.querySelector("[data-note='project:shop:030']"), "The return note did not appear.");
-  const note = desktop.root.querySelector("[data-note='project:shop:030']");
-  assert.equal(note.closest("label").querySelector(".field-label").textContent, "Send back");
-  assert.equal(note.getAttribute("aria-describedby"), note.closest("label").querySelector(".field-hint").getAttribute("id"));
-
-  desktop.app.language = "es";
-  renderShell(desktop.app);
-  assert.equal(desktop.root.querySelector("[data-note='project:shop:030']").closest("label").querySelector(".field-label").textContent, "Devolver");
-});
-
-test("Focus keeps only the readable document until the pointer reveals its tools", async (t) => {
-  const fixture = await createGuiFixture();
-  t.after(() => fixture.close());
-  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
-  t.after(() => dispose(desktop.app));
-  await waitFor(() => desktop.app.layout === 'desktop' && !desktop.app.bootReading && desktop.app.store.capabilities.includes('editor.read'), "The desktop shell did not become ready.");
-  navigate(desktop.app, "document");
-  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
-  const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
-  renderShell(desktop.app);
-  openLibraryItem(desktop, notes.id);
-  await waitFor(() => desktop.root.querySelector("[data-action='enter-focus']"), "The Focus control did not appear.");
-  click(desktop.root.querySelector("[data-action='enter-focus']"));
-  assert.equal(desktop.root.querySelector(".shell")?.getAttribute("data-mode"), "focus");
-  const reading = desktop.root.querySelector("[data-focus-layout]");
-  assert.equal(reading?.getAttribute("data-focus-layout"), "document");
-  assert.equal(desktop.root.querySelector(".workspace-focus")?.children.length, 1);
-  assert.equal(textNodes(reading.querySelector(".void-page")).some((node) => node.textContent.includes("Welcome")), true);
-  assert.equal(reading.querySelector("[data-tools]")?.getAttribute("data-tools"), "hidden");
-  assert.equal(desktop.root.querySelector("[data-editor-column]"), null);
-  assert.equal(desktop.root.querySelector("[data-editor-tools]"), null);
-  assert.equal(desktop.root.querySelector("[data-comment]"), null);
-  assert.equal(desktop.root.querySelector(".side"), null);
-  assert.equal(desktop.root.querySelector(".inspector"), null);
-  assert.equal(desktop.root.querySelector(".foot") != null, true);
-  for (const look of ["high-contrast", "modern"]) {
-    desktop.app.look = look;
-    renderShell(desktop.app);
-    assert.equal(desktop.app.look, look);
-    assert.equal(desktop.root.querySelector(".shell")?.getAttribute("data-mode"), "focus");
-    assert.equal(desktop.root.querySelector("[data-editor-column]"), null);
-    assert.equal(desktop.root.querySelector(".void-page") != null, true);
-  }
-  const stale = desktop.root.querySelector("[data-action='enter-focus']");
-  for (const handler of desktop.root.listeners?.get("pointermove") ?? []) handler();
-  assert.equal(desktop.root.querySelector("[data-tools]")?.getAttribute("data-tools"), "visible");
-  assert.equal(desktop.root.querySelector(".void-tools")?.className.includes("is-visible"), true);
-  for (const handler of desktop.view.listeners?.get("keydown") ?? []) {
-    handler({ key: "Escape", target: { tagName: "BODY" }, preventDefault() {} });
-  }
-  const fresh = desktop.root.querySelector("[data-action='enter-focus']");
-  assert.equal(desktop.root.querySelector(".shell")?.getAttribute("data-mode"), "document");
-  assert.equal(fresh != null && fresh !== stale, true);
-  assert.equal(desktop.document.activeElement === fresh, true);
-  assert.equal(fresh.closest("[data-editor-layout]")?.getAttribute("data-editor-layout"), "document");
-  navigate(desktop.app, "focus");
-  assert.equal(desktop.root.querySelector(".shell")?.getAttribute("data-mode"), "focus");
-  assert.equal(desktop.root.querySelector("[data-tools]")?.getAttribute("data-tools"), "hidden");
-  const css = await readFile("gui/app/styles.css", "utf8");
-  const focusCss = css.slice(css.indexOf('[data-mode="focus"]'));
-  assert.match(focusCss, /background:\s*#000000/);
-  assert.match(focusCss, /grid-template-columns:\s*minmax\(0,\s*1fr\)/);
-  assert.match(focusCss, /grid-template-rows:\s*minmax\(0,\s*1fr\)/);
-  assert.match(focusCss, /\[data-mode="focus"\] \.foot[\s\S]*display:\s*none/);
-  assert.match(focusCss, /box-shadow:\s*none/);
-});
-
-test("Find controls navigate source matches replace one or all texts and Undo the complete last batch", async (t) => {
-  const desktop = await openedBoardDesktop(t), { app, root } = desktop;
-  await openCommentEditor(desktop, 'void');
-  const workers = [];
-  app.createFindWorker = () => {
-    const worker = { terminated: false, terminate() { this.terminated = true; }, postMessage(data) { queueMicrotask(() => {
-      if (this.terminated || data.query === '(a+)+$') return;
-      try { this.onmessage({ data: { id: data.id, matches: findTextMatches(data.text, data.query, data.options) } }); }
-      catch (error) { this.onmessage({ data: { id: data.id, error: { code: error instanceof RangeError ? 'too_many_matches' : 'invalid_pattern', message: error.message } } }); }
-    }); } };
-    workers.push(worker); return worker;
-  };
-  const editor = app.editors.current;
-  typeInput(root.querySelector('[data-source]'), '**cat** cat 😀', 0, 0);
-  await editor.voidSaver.flush(); renderShell(app);
-  await createResource(app.api, 'void', { project: 'shop', path: 'docs/find-second.json', document: { formatVersion: 1, id: 'find-second', title: 'Other text', pages: [{ k: 'One', en: 'cat cat' }, { k: 'Two', en: 'cat' }] } });
-  click(root.querySelector('[data-action="toggle-find"]'));
-  typeInput(root.querySelector('[data-find-field="query"]'), 'cat', 3, 3);
-  await waitFor(() => !app.voidFind.pending && app.voidFind.matches.length === 2, 'Find did not return both matches.');
-  assert.equal(root.querySelector('[data-find-count]').textContent, '1 of 2');
-  assert.equal(root.querySelector('[data-find-hits]').getAttribute('data-find-hits'), '2');
-  const toggles = root.querySelectorAll('.void-find-option');
-  assert.deepEqual(toggles.map((node) => node.textContent), ['Aa', 'W', '.*']);
-  assert.ok(toggles.every((node) => node.getAttribute('aria-label') && node.getAttribute('title')));
-  const selection = { get isCollapsed() { return this.anchorNode === this.focusNode && this.anchorOffset === this.focusOffset; }, setBaseAndExtent(anchorNode, anchorOffset, focusNode, focusOffset) { Object.assign(this, { anchorNode, anchorOffset, focusNode, focusOffset }); } };
-  desktop.document.getSelection = () => selection;
-  const firstRun = textNodes(root.querySelector('[data-void-body]')).find((node) => node.textContent === 'cat');
-  selection.setBaseAndExtent(firstRun, 0, firstRun, 0); root.querySelector('[data-void-body]').focus(); editor.captureSelection();
-  click(root.querySelector('[data-action="find-next"]'));
-  assert.equal(root.querySelector('[data-find-count]').textContent, '2 of 2');
-  assert.deepEqual(editor.textSelections.get(`${editor.resourceId}\0${editor.page}\0en`), { start: 8, end: 11 });
-  click(root.querySelector('[data-action="find-previous"]'));
-  typeInput(root.querySelector('[data-find-field="replacement"]'), 'dog', 3, 3);
-  click(root.querySelector('[data-action="replace-match"]'));
-  await waitFor(() => !app.voidFind.pending && !app.voidFind.busy && app.voidFind.matches.length === 1, 'Replace did not update the current hit.');
-  assert.equal(editor.authoritative.document.pages[0].en, '**dog** cat 😀');
-  click(root.querySelector('[data-action="find-all"]'));
-  await waitFor(() => !app.voidFind.pending && app.voidFind.matches.length === 4, 'All texts did not include every page.');
-  assert.equal(root.querySelector('[data-action="replace-all"]').textContent, 'Replace all 4');
-  click(root.querySelector('[data-action="find-next"]'));
-  await waitFor(() => app.editors.current.authoritative.title === 'Other text', 'Next did not open the matching text.');
-  await waitFor(() => !app.voidFind.pending && app.voidFind.matches.length === 4, 'Find did not finish after opening the matching text.');
-  assert.equal(app.voidFind.matches.length, 4);
-  click(root.querySelector('[data-action="find-next"]')); click(root.querySelector('[data-action="find-next"]'));
-  assert.equal(app.editors.current.page, 'Two');
-  click(root.querySelector('[data-action="replace-all"]'));
-  await waitFor(() => !app.voidFind.pending && !app.voidFind.busy && app.voidFind.matches.length === 0, 'Replace all did not commit.');
-  // The first text was left clean, so switching dropped its copy; the saved text is read back.
-  const firstText = async () => (await request(app.api, 'GET', '/void/texts/:resourceId', { params: { resourceId: editor.resourceId } })).data.document.pages[0].en;
-  assert.equal(await firstText(), '**dog** dog 😀');
-  click(root.querySelector('[data-action="undo-replace"]'));
-  await waitFor(() => !app.voidFind.pending && !app.voidFind.busy && app.voidFind.matches.length === 4, 'Undo did not restore the whole replacement batch.');
-  assert.equal(await firstText(), '**dog** cat 😀');
-  click(root.querySelector('[data-action="find-regularExpression"]'));
-  typeInput(root.querySelector('[data-find-field="query"]'), '[', 1, 1);
-  await waitFor(() => root.querySelector('[data-find-error="invalid_pattern"]'), 'Invalid regex did not show an error.');
-  assert.equal(root.querySelector('[data-action="replace-all"]').getAttribute('disabled'), '');
-  typeInput(root.querySelector('[data-find-field="query"]'), '(a+)+$', 6, 6);
-  await waitFor(() => root.querySelector('[data-find-error="pattern_too_slow"]'), 'A slow regex did not terminate.');
-  assert.equal(root.querySelector('[data-find-error]').textContent, text('en', 'findSlow'));
-  assert.equal(root.querySelector('[data-action="replace-match"]').getAttribute('disabled'), '');
-  click(root.querySelector('[data-action="toggle-find"]'));
-  assert.equal(root.querySelector('[data-find-bar]'), null); assert.ok(workers.every((worker) => worker.terminated));
-});
-
-test("Void keeps the source selection and draft through formatting, Source, Focus and page arrows", async (t) => {
-  const fixture = await createGuiFixture();
-  t.after(() => fixture.close());
-  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
-  t.after(() => dispose(desktop.app));
-  navigate(desktop.app, "document");
-  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
-  const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
-  openLibraryItem(desktop, notes.id);
-  await waitFor(() => desktop.root.querySelector("[data-void-body]"), "The document did not open.");
-  const editor = desktop.app.editors.current;
-  editor.voidSaver = documentSaver(desktop.app.api, editor, () => {}, 10000);
-  const source = "# Title\r\n\r\n<b>A😀</b> **bold**\r\nSecond";
-  typeInput(desktop.root.querySelector("[data-source]"), source, 0, 0);
-  renderShell(desktop.app);
-  const selection = {
-    get isCollapsed() { return this.anchorNode === this.focusNode && this.anchorOffset === this.focusOffset; },
-    setBaseAndExtent(anchorNode, anchorOffset, focusNode, focusOffset) { Object.assign(this, { anchorNode, anchorOffset, focusNode, focusOffset }); },
-  };
-  desktop.document.getSelection = () => selection;
-  const body = desktop.root.querySelector("[data-void-body]");
-  const emoji = textNodes(body).find((node) => node.textContent === "A😀");
-  selection.setBaseAndExtent(emoji, 3, emoji, 1);
-  body.focus();
-  editor.captureSelection(); editor.updateFormats();
-  const bar = desktop.root.querySelector("[data-format-bar]");
-  assert.equal(bar.getAttribute("hidden"), null);
-  assert.deepEqual(bar.querySelectorAll("[data-format]").map((node) => node.getAttribute("data-format")),
-    ["bold", "italic", "strikethrough", "h1", "h2", "h3", "list", "quote", "code", "link", "table", "image", "comment"]);
-  click(desktop.root.querySelector("[data-action='toggle-source']"));
-  let input = desktop.root.querySelector("[data-source]");
-  assert.equal(input.value, source);
-  assert.equal(input.selectionStart, source.indexOf("😀"));
-  assert.equal(input.selectionEnd, source.indexOf("😀") + 2);
-  assert.equal(editor.textSelections.get(`${notes.id}\0Intro.Welcome\0en`).backward, true);
-  click(desktop.root.querySelector("[data-action='toggle-source']"));
-  assert.equal(selection.anchorOffset, 3); assert.equal(selection.focusOffset, 1);
-  click(desktop.root.querySelector("[data-format='bold']"));
-  const formatted = source.replace("😀", "**😀**");
-  assert.equal(textDraft(editor, notes.id, "Intro.Welcome", "en"), formatted);
-  const formattedEmoji = textNodes(desktop.root.querySelector("[data-void-body]")).find((node) => node.textContent === "😀");
-  selection.setBaseAndExtent(formattedEmoji, 2, formattedEmoji, 2);
-  editor.captureSelection(); editor.updateFormats();
-  assert.equal(desktop.root.querySelector("[data-format-bar]").getAttribute("hidden"), "");
-  const caret = { ...editor.textSelections.get(`${notes.id}\0Intro.Welcome\0en`) };
-  click(desktop.root.querySelector("[data-action='enter-focus']"));
-  assert.equal(desktop.app.editors.current === editor, true);
-  assert.equal(editor.page, "Intro.Welcome");
-  for (const handler of desktop.view.listeners.get("keydown") ?? []) handler({ key: "ArrowRight", target: desktop.root.querySelector("[data-void-body]"), preventDefault() {} });
-  assert.equal(editor.page, "Notes.Next");
-  for (const handler of desktop.view.listeners.get("keydown") ?? []) handler({ key: "ArrowLeft", target: desktop.root.querySelector("[data-void-body]"), preventDefault() {} });
-  assert.equal(editor.page, "Intro.Welcome");
-  assert.deepEqual(editor.textSelections.get(`${notes.id}\0Intro.Welcome\0en`), caret);
-  for (const handler of desktop.root.listeners.get("pointermove") ?? []) handler();
-  assert.equal(desktop.root.querySelector("[data-tools]").getAttribute("data-tools"), "visible");
-  for (const handler of desktop.view.listeners.get("keydown") ?? []) handler({ key: "Escape", target: desktop.root.querySelector("[data-void-body]"), preventDefault() {} });
-  assert.equal(desktop.app.mode, "document");
-  assert.equal(desktop.app.editors.current.resourceId, notes.id);
-  assert.equal(textDraft(editor, notes.id, "Intro.Welcome", "en"), formatted);
-  assert.deepEqual(editor.textSelections.get(`${notes.id}\0Intro.Welcome\0en`), caret);
-  assert.equal(desktop.root.querySelector("[data-action='save-range']"), null);
-  assert.equal(desktop.root.querySelector("[data-action='replace-document']"), null);
-  desktop.app.language = "es"; renderShell(desktop.app);
-  assert.equal(editor.language, "es");
-  desktop.app.language = "en"; renderShell(desktop.app);
-  click(desktop.root.querySelector("[data-action='toggle-source']"));
-  input = desktop.root.querySelector("[data-source]");
-  assert.equal(input.value, formatted);
-  assert.equal(input.selectionStart, caret.start); assert.equal(input.selectionEnd, caret.end);
-  const mappedSource = "## Chats and mailboxes\r\n\r\nEdited here.";
-  typeInput(input, mappedSource, mappedSource.length, mappedSource.length);
-  click(desktop.root.querySelector("[data-action='toggle-source']"));
-  const editedText = textNodes(desktop.root.querySelector("[data-void-body]")).find(node => node.textContent === "Edited here.");
-  assert.ok(editedText, "The edited paragraph did not render in Document view.");
-  selection.setBaseAndExtent(editedText, 6, editedText, 6);
-  desktop.root.querySelector("[data-void-body]").focus();
-  const sourceToggle = desktop.root.querySelector("[data-action='toggle-source']");
-  for (const handler of sourceToggle.listeners.get("pointerdown") ?? []) handler();
-  click(sourceToggle);
-  input = desktop.root.querySelector("[data-source]");
-  assert.equal(input.selectionStart, mappedSource.indexOf("Edited here.") + 6);
-  assert.equal(input.selectionEnd, mappedSource.indexOf("Edited here.") + 6);
-});
-
-test("Void shows Not saved and retries the captured operation before saving later typing", async (t) => {
-  const fixture = await createGuiFixture();
-  t.after(() => fixture.close());
-  const attempts = [];
-  const desktop = await bootApp(fixture.desktopUrl, 1440, [], (url, init) => {
-    if (init.method === "PUT" && String(url).includes("/void/texts/")) attempts.push({ key: init.headers["Idempotency-Key"], body: JSON.parse(init.body) });
-  });
-  t.after(() => dispose(desktop.app));
-  navigate(desktop.app, "document");
-  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
-  const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
-  openLibraryItem(desktop, notes.id);
-  await waitFor(() => desktop.root.querySelector("[data-source]"), "The document did not open.");
-  const editor = desktop.app.editors.current;
-  fixture.control.setFault({ method: "PUT", path: `/api/v1/void/texts/${notes.id}`, dropAfterCommit: true });
-  typeInput(desktop.root.querySelector("[data-source]"), "**First 😀**", 2, 2);
-  await assert.rejects(editor.voidSaver.flush());
-  assert.equal(desktop.root.querySelector("[data-void-save]").textContent, "Not saved");
-  assert.equal(desktop.root.querySelector("[data-void-error]").querySelector("span").textContent, text("en", "voidSaveError"));
-  assert.equal(textDraft(editor, notes.id, "Intro.Welcome", "en"), "**First 😀**");
-  typeInput(desktop.root.querySelector("[data-source]"), "**Later 😀**", 2, 2);
-  click(desktop.root.querySelector("[data-action='retry-void-save']"));
-  await waitFor(() => editor.saveState === "saved", "The retained save and later typing did not finish.");
-  assert.equal(attempts.length, 3);
-  assert.deepEqual(attempts[0], attempts[1]);
-  assert.notEqual(attempts[2].key, attempts[1].key);
-  assert.equal(attempts[2].body.document.pages[0].en, "**Later 😀**");
-  assert.equal(editor.authoritative.document.pages[0].en, "**Later 😀**");
-  assert.equal(editor.textDrafts.size, 0);
-  assert.equal(editor.authoritative.document.sentinel, "void-sentinel");
-  assert.equal(editor.authoritative.document.pages[0].sentinel, "void-page-sentinel");
-  assert.equal(desktop.root.querySelector("[data-void-error]"), null);
-  assert.equal(desktop.root.querySelector("[data-void-save]").textContent, "Saved");
-});
 
 test("mounted map circles use translated status and the zoom bar has no pan button", async (t) => {
   const fixture = await createGuiFixture();
@@ -3265,450 +2522,12 @@ test("action notes use bilingual outcomes and keep wire codes for diagnostics", 
   assert.equal(desktop.root.querySelector("[data-action-note]").getAttribute("data-code"), "totally_unknown");
 });
 
-test("request expiry stays separate from reopening guidance and comments require text", async (t) => {
-  assert.equal(text("en", "sessionExpired"), "This session ended. Open ONEM1ND again.");
-  assert.equal(text("es", "sessionExpired"), "Esta sesión terminó. Abrir ONEM1ND de nuevo.");
-  assert.equal(text("en", "sessionRequestExpired"), "The session request expired.");
-  assert.equal(text("es", "sessionRequestExpired"), "La solicitud de sesión expiró.");
 
-  const fixture = await createGuiFixture();
-  t.after(() => fixture.close());
-  const writes = [];
-  const desktop = await bootApp(fixture.desktopUrl, 1440, [], async (input, init) => {
-    if (!init?.body || init.method !== "POST") return;
-    writes.push({ url: String(input), body: JSON.parse(init.body) });
-  });
-  t.after(() => dispose(desktop.app));
-  await waitFor(() => desktop.root.querySelector("[data-handle='connect']"), "The connect handle did not appear.");
-  const connectLabel = () => {
-    const handle = desktop.root.querySelector("[data-handle='connect']");
-    const unitId = handle.getAttribute("data-unit-id");
-    const named = [...desktop.root.querySelectorAll("[data-map-label]")].find((item) => item.closest("[data-unit-id]")?.getAttribute("data-unit-id") === unitId);
-    return { handle, name: named.getAttribute("data-map-label") };
-  };
-  assert.equal(connectLabel().handle.getAttribute("aria-label"), `Connect ${connectLabel().name}`);
-  desktop.app.language = "es";
-  renderShell(desktop.app);
-  assert.equal(connectLabel().handle.getAttribute("aria-label"), `Conectar ${connectLabel().name}`);
-  desktop.app.language = "en";
-  renderShell(desktop.app);
 
-  await fixture.control.emit("session.request.changed", {
-    requestId: "11111111-1111-4111-8111-111111111111",
-    unitId: "root:overseer",
-    machine: "DESKTOP",
-    state: "expired",
-    sessionId: null,
-    error: null,
-  });
-  await waitFor(() => noteText(desktop) === "The session request expired.", "Request expiry reused the reopening sentence.");
-  assert.notEqual(noteText(desktop), "This session ended. Open ONEM1ND again.");
 
-  navigate(desktop.app, "blueprint");
-  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");
-  const cart = desktop.app.editors.catalog.find((item) => item.title === "Cart");
-  renderShell(desktop.app);
-  openLibraryItem(desktop, cart.id);
-  await waitFor(() => desktop.root.querySelector("[data-action='comment-node']"), "The node comment control did not appear.");
-  const commentBodies = () => writes.filter((item) => item.url.includes("/comments")).map((item) => item.body.text);
-  click(desktop.root.querySelector("[data-action='comment-node']"));
-  await delay(40);
-  assert.equal(commentBodies().includes("On the node."), false);
-  typeInput(desktop.root.querySelector("[data-comment]"), "   ", 0, 3);
-  click(desktop.root.querySelector("[data-action='comment-node']"));
-  await delay(40);
-  assert.equal(commentBodies().includes("On the node."), false);
-  assert.equal(commentBodies().some((item) => item?.trim?.() === ""), false);
-  typeInput(desktop.root.querySelector("[data-comment]"), "Pinned here", 0, 11);
-  click(desktop.root.querySelector("[data-action='comment-node']"));
-  await waitFor(() => commentBodies().includes("Pinned here"), "The supplied node comment was not sent.");
 
-  navigate(desktop.app, "document");
-  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
-  const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
-  renderShell(desktop.app);
-  openLibraryItem(desktop, notes.id);
-  await waitFor(() => desktop.root.querySelector("[data-action='reply']"), "The reply control did not appear.");
-  const replies = () => writes.filter((item) => item.url.includes("/replies")).map((item) => item.body.text);
-  click(desktop.root.querySelector("[data-action='reply']"));
-  await delay(40);
-  assert.equal(replies().includes("Noted."), false);
-  typeInput(desktop.root.querySelector("[data-comment]"), "   ", 0, 3);
-  click(desktop.root.querySelector("[data-action='reply']"));
-  await delay(40);
-  assert.equal(replies().includes("Noted."), false);
-  typeInput(desktop.root.querySelector("[data-comment]"), "A reply", 0, 7);
-  click(desktop.root.querySelector("[data-action='reply']"));
-  await waitFor(() => replies().includes("A reply"), "The supplied reply was not sent.");
-});
 
-test("a shell refresh keeps the focused editor field and its caret", async (t) => {
-  const fixture = await createGuiFixture();
-  t.after(() => fixture.close());
-  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
-  t.after(() => dispose(desktop.app));
-  await waitFor(() => desktop.root.querySelector(".shell"), "The desktop shell did not appear.");
-  navigate(desktop.app, "document");
-  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
-  const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
-  renderShell(desktop.app);
-  openLibraryItem(desktop, notes.id);
-  await waitFor(() => desktop.root.querySelector("[data-source]"), "The source field did not appear.");
-  click(desktop.root.querySelector("[data-action='toggle-source']"));
-  let typed = "";
-  for (const letter of ["A", "B", "C"]) {
-    const source = desktop.root.querySelector("[data-source]");
-    typed += letter;
-    source.focus();
-    source.value = typed;
-    source.selectionStart = typed.length;
-    source.selectionEnd = typed.length;
-    for (const handler of source.listeners.get("input") ?? []) handler();
-    renderShell(desktop.app);
-    const again = desktop.root.querySelector("[data-source]");
-    const edit = desktop.root.querySelector("[data-source-edit]");
-    assert.equal(edit.getAttribute("hidden"), null);
-    assert.equal(again.value, typed);
-    assert.equal(desktop.document.activeElement, again);
-    assert.equal(again.selectionStart, typed.length);
-  }
-  click(desktop.root.querySelector("[data-action='open-create']"));
-  const title = desktop.document.querySelector("[data-field='create-title']");
-  title.focus();
-  title.value = "Kept";
-  title.selectionStart = 4;
-  title.selectionEnd = 4;
-  for (const handler of title.listeners.get("input") ?? []) handler();
-  renderShell(desktop.app);
-  const titleAgain = desktop.document.querySelector("[data-field='create-title']");
-  assert.equal(titleAgain.value, "Kept");
-  assert.equal(desktop.document.activeElement === titleAgain, true);
-  assert.equal(titleAgain.selectionStart, 4);
-});
 
-test("editor forms, chats, and the inspector stay compact", async (t) => {
-  const fixture = await createGuiFixture();
-  t.after(() => fixture.close());
-  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
-  t.after(() => dispose(desktop.app));
-  await waitFor(() => desktop.app.chatList?.catalog?.length > 0, "The chat list did not load.");
-  navigate(desktop.app, "chats");
-  desktop.app.chatList.height = 4000;
-  renderShell(desktop.app);
-  const rows = desktop.app.activeRows ?? [];
-  assert.equal(rows.some((row) => row.kind === "heading"), true);
-  const sample = rows.find((row) => row.kind === "chat");
-  assert.equal(String(sample?.text ?? "").includes(sample?.chat?.title || sample?.chat?.id || ""), true);
-  if (sample?.chat?.lastMessage) {
-    const snippet = sample.chat.lastMessage.body || sample.chat.lastMessage.subject || "";
-    if (snippet) assert.equal(sample.text.includes(snippet), true);
-    const stamp = sample.chat.lastMessage.timestamp || sample.chat.lastMessage.date || "";
-    if (stamp) assert.equal(sample.text.includes(stamp), false);
-  }
-  const chat = desktop.app.chatList.catalog[0];
-  desktop.app.activeHandlers.onActivate({ id: chat.id, kind: "chat" }, "double");
-  await waitFor(() => desktop.root.querySelector("[data-chat-title]")?.textContent === (displayName(chat.title) || chat.id), "The conversation title was not shown.");
-  await waitFor(() => desktop.root.querySelector(".bubble-meta"), "The message sender was not shown.");
-  assert.equal(desktop.root.querySelector(".bubble-meta").textContent.toLowerCase().includes("master"), true);
-  assert.equal(desktop.root.querySelector("[data-message]")?.closest(".bubble") != null, true);
-  const group = desktop.app.chatList.catalog.find((item) => (item.members?.length ?? 0) > 2);
-  desktop.app.activeHandlers.onActivate({ id: group.id, kind: "chat" }, "double");
-  await waitFor(() => desktop.root.querySelector("[data-chat-members]")?.textContent.includes("Executor shop"), "The group members were not shown.");
-  await waitFor(() => desktop.root.querySelector("[data-own='true']"), "An own message was not marked.");
-
-  navigate(desktop.app, "blueprint");
-  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");
-  const cart = desktop.app.editors.catalog.find((item) => item.title === "Cart");
-  renderShell(desktop.app);
-  openLibraryItem(desktop, cart.id);
-  await waitFor(() => desktop.root.querySelector("[data-action='attach']"), "The attach control did not appear.");
-  const toolbar = desktop.root.querySelector("[data-toolbar='board']");
-  assert.equal(toolbar?.getAttribute("role"), "toolbar");
-  assert.equal(desktop.root.querySelector(".attach-list"), null);
-  assert.equal(desktop.root.querySelector(".attach-chips") != null, true);
-  click(desktop.root.querySelector("[data-action='attach']"));
-  const chooser = desktop.document.querySelector("[data-form='attach']");
-  assert.equal(chooser != null, true);
-  assert.equal(chooser.querySelector("[data-attach-search]") != null, true);
-  const offered = chooser.querySelectorAll("[data-attach-unit]").length;
-  assert.equal(offered > 0 && offered <= 40, true);
-  typeInput(chooser.querySelector("[data-attach-search]"), "zzzz", 0, 4);
-  assert.equal(chooser.querySelectorAll("[data-attach-unit]").length, 0);
-  chooser.close();
-
-  navigate(desktop.app, "document");
-  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
-  const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
-  renderShell(desktop.app);
-  openLibraryItem(desktop, notes.id);
-  await waitFor(() => desktop.root.querySelector("[data-editor-column='comments']")?.querySelector(".comment-author")?.textContent === "You", "The comment author was not shown as the person.");
-  const source = desktop.root.querySelector("[data-source]");
-  assert.equal(source?.closest("[data-source-edit]") != null, true);
-  assert.equal(desktop.root.querySelector(".reading-card") != null, true);
-  await waitFor(() => desktop.root.querySelector("[data-editor-column='comments']")?.querySelector("[data-action='accept-change']"), "The proposal action was not shown.");
-  assert.equal(desktop.root.querySelector("[data-editor-column='resource']")?.querySelector("[data-action='accept-change']"), null);
-
-  await waitFor(() => desktop.app.unitList?.catalog?.some((unit) => unit.id === "project:shop:executor-shop"), "The unit list did not load.");
-  navigate(desktop.app, "hierarchy");
-  navigate(desktop.app, "map");
-  const executor = desktop.app.unitList.catalog.find((unit) => unit.id === "project:shop:executor-shop");
-  desktop.app.activeHandlers.onActivate({ id: executor.id, kind: "unit", unit: executor }, "double");
-  // Details is the agent's third tab, in separate sections.
-  await waitFor(() => desktop.root.querySelector("[data-details-section='detailsWaiting']") && desktop.root.querySelector("[data-action='session-details']")?.textContent === "Details", "The inspector details did not appear.");
-  assert.equal(desktop.root.querySelector("[data-details-section='detailsAgent']") != null, true);
-  assert.equal(desktop.root.querySelector("[data-unit-facts]") != null, true);
-  assert.equal(desktop.root.querySelector("[data-task]") != null, true);
-  desktop.app.actionNote = "The task is done.";
-  desktop.app.actionCode = "done";
-  desktop.app.actionScope = "unit";
-  navigate(desktop.app, "blueprint");
-  assert.equal(desktop.root.querySelector("[data-editor-column='resource']")?.querySelector("[data-action-note]"), null);
-  assert.equal(desktop.app.actionNote, "The task is done.");
-  assert.equal(desktop.document.querySelector("[data-live='status']").textContent.includes("The task is done."), false);
-  assert.equal(desktop.document.querySelector("[data-live='error']").textContent.includes("The task is done."), false);
-  assert.equal(desktop.document.querySelectorAll("[data-live='status']").length, 1);
-  assert.equal(desktop.document.querySelectorAll("[data-live='error']").length, 1);
-  navigate(desktop.app, "map");
-  assert.equal(desktop.root.querySelector(".inspector-body")?.querySelector("[data-action-note]")?.textContent, "The task is done.");
-  desktop.app.actionScope = "editor";
-  navigate(desktop.app, "blueprint");
-  assert.equal(desktop.root.querySelector("[data-editor-column='resource']")?.querySelector("[data-action-note]")?.textContent, "The task is done.");
-});
-
-test("editor events refresh attachments, assets, delivery and conflicts", async (t) => {
-  const fixture = await createGuiFixture();
-  t.after(() => fixture.close());
-  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
-  t.after(() => dispose(desktop.app));
-  await waitFor(() => desktop.root.querySelector(".shell"), "The desktop shell did not appear.");
-  navigate(desktop.app, "blueprint");
-  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");
-  const cart = desktop.app.editors.catalog.find((item) => item.title === "Cart");
-  renderShell(desktop.app);
-  openLibraryItem(desktop, cart.id);
-  await waitFor(() => desktop.app.editors.current?.resourceId === cart.id && desktop.root.querySelector("[data-comment]"), "The board did not open.");
-  desktop.app.editors.selectedNodeId = "kept-node";
-  desktop.app.editors.current.selectedNodeId = "kept-node";
-  typeInput(desktop.root.querySelector("[data-comment]"), "Keep this draft", 0, 4);
-
-  await fixture.control.emit("editor.attachments.changed", {
-    resourceId: cart.id,
-    attached: ["env:web:overlord-web"],
-    revision: "a".repeat(64),
-  });
-  await waitFor(() => desktop.root.querySelector("[data-chip='env:web:overlord-web']"), "The attachment chip did not refresh.");
-
-  desktop.app.editors.current.attachmentChoice = new Set(["project:shop:executor-shop"]);
-  await fixture.control.emit("editor.attachments.changed", {
-    resourceId: cart.id,
-    attached: ["root:master"],
-    revision: "b".repeat(64),
-  });
-  await waitFor(() => desktop.root.querySelector("[data-attachment-conflict]"), "The attachment draft was not kept.");
-  assert.equal(desktop.app.editors.current.attachmentChoice.has("project:shop:executor-shop"), true);
-  assert.equal(desktop.app.editors.current.attachmentChoice.has("root:master"), false);
-
-  await fixture.control.emit("editor.asset.created", {
-    resourceId: cart.id,
-    asset: {
-      id: "mark",
-      src: "assets/mark.png",
-      contentType: "image/png",
-      bytes: 8,
-      revision: "c".repeat(64),
-      url: "/api/v1/missing-asset",
-    },
-  });
-  await waitFor(() => desktop.app.editors.current.assetRecords?.some((item) => item.id === "mark"), "The asset was not recorded.");
-  assert.equal(desktop.app.editors.selectedNodeId, "kept-node");
-
-  await fixture.control.emit("notification.changed", {
-    noticeKey: "watch",
-    unitId: "env:web:overlord-web",
-    resourceId: cart.id,
-    state: "failed",
-    error: { code: "not_attached", message: "The unit is not attached." },
-  });
-  await waitFor(() => desktop.root.querySelector("[data-notice='failed']"), "The delivery failure was not shown.");
-  assert.equal(desktop.document.querySelector("[data-live='error']")?.textContent, "The notice failed. Nothing was delivered.");
-
-  await fixture.control.emit("sync.conflict", {
-    target: { kind: "mind", path: "units/shop.md" },
-    winnerMachine: "OTHER",
-    copyPath: "conflicts/shop.md",
-    at: "2026-10-10T12:00:00.000Z",
-  });
-  await waitFor(() => desktop.root.querySelector("[data-sync-conflict]")?.textContent.includes("conflicts/shop.md"), "The sync conflict was not shown.");
-  assert.equal(desktop.document.querySelector("[data-live='error']")?.textContent.includes("conflicts/shop.md"), true);
-  assert.equal(desktop.root.querySelector("[data-comment]").value, "Keep this draft");
-  assert.equal(desktop.app.editors.selectedNodeId, "kept-node");
-});
-
-test("phone navigation stays compact and focus can leave the source", async (t) => {
-  const fixture = await createGuiFixture();
-  t.after(() => fixture.close());
-  const phone = await bootApp(fixture.phoneUrl, 390, []);
-  t.after(() => dispose(phone.app));
-  await waitFor(() => phone.root.querySelector(".shell")?.getAttribute("data-layout") === "phone", "The phone shell did not appear.");
-  assert.equal([...phone.root.querySelectorAll("h2")].some((node) => node.textContent === "Snapshot"), false);
-  assert.equal(phone.root.querySelector("[data-phone-issues]")?.querySelector("summary")?.textContent.includes("issues"), true);
-  assert.equal(phone.root.querySelector("[data-phone-title]")?.textContent, "Hierarchy");
-  assert.equal(phone.root.querySelector("[data-phone-hint]")?.textContent, "Use the bottom buttons to switch views.");
-  assert.equal(phone.root.querySelector("[data-phone-mode='hierarchy']")?.getAttribute("aria-pressed"), "true");
-  await waitFor(() => phone.app.chatList?.catalog?.length, "The phone chat list did not load.");
-  click(phone.root.querySelector("[data-phone-mode='chats']"));
-  const chat = phone.app.chatList.catalog.find(chat => chat.kind === 'direct');
-  phone.app.activeHandlers.onActivate({ id: chat.id, kind: "chat" }, "double");
-  await waitFor(() => phone.root.querySelector("[data-stage-title]")?.textContent === (chat.title || chat.id), "The phone conversation title was not shown.");
-  assert.equal(phone.root.querySelector("[data-stage-title]").textContent === "Hierarchy", false);
-  await waitFor(() => phone.root.querySelector(".bubble-meta"), "The phone message sender was not shown.");
-  await waitFor(() => {
-    const wanted = (phone.app.waitingList?.items ?? []).some((item) => item.kind === "approval" || item.kind === "review");
-    return !wanted || phone.root.querySelector("[data-phone-card]");
-  }, "The phone approval card did not appear.");
-  const group = phone.app.chatList.catalog.find((item) => (item.members?.length ?? 0) > 2);
-  phone.app.activeHandlers.onActivate({ id: group.id, kind: "chat" }, "double");
-  await waitFor(() => phone.root.querySelector("h1")?.textContent === (group.title || group.id), "The phone heading did not follow the group.");
-  click(phone.root.querySelector("[data-phone-mode='waiting']"));
-  await waitFor(() => phone.root.querySelector("h1")?.textContent === "Waiting", "Waiting kept the conversation title.");
-  assert.equal(phone.document.title, "Waiting · ONEM1ND");
-  assert.equal(phone.root.querySelector("[data-stage-title]")?.textContent, "Waiting");
-  assert.equal(phone.root.querySelector(".side"), null);
-  assert.equal(phone.root.querySelector("[data-phone-mode='waiting']")?.getAttribute("aria-pressed"), "true");
-  assert.equal(phone.root.querySelector("[data-phone-mode='chats']")?.getAttribute("aria-pressed"), "false");
-  click(phone.root.querySelector("[data-phone-mode='chats']"));
-  await waitFor(() => phone.root.querySelector("h1")?.textContent === (group.title || group.id), "The chat title did not return.");
-  assert.equal(phone.root.querySelector("[data-phone-mode='chats']")?.getAttribute("aria-pressed"), "true");
-  click(phone.root.querySelector("[data-phone-mode='hierarchy']"));
-  await waitFor(() => phone.root.querySelector("h1")?.textContent === "Hierarchy", "Hierarchy did not restore its title.");
-  assert.equal(phone.root.querySelector("[data-phone-mode='hierarchy']")?.getAttribute("aria-pressed"), "true");
-  assert.equal(phone.document.title, "Hierarchy · ONEM1ND");
-  const css = await readFile("gui/app/styles.css", "utf8");
-  assert.match(css, /\.shell\[data-layout="phone"\] \.phone-nav button\[aria-pressed="true"\]/);
-  assert.match(css, /env\(safe-area-inset-bottom\)/);
-  assert.match(css, /border-radius:\s*var\(--radius-pill\)/);
-
-  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
-  t.after(() => dispose(desktop.app));
-  await waitFor(() => desktop.root.querySelector(".shell"), "The desktop shell did not appear.");
-  navigate(desktop.app, "document");
-  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
-  const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
-  renderShell(desktop.app);
-  openLibraryItem(desktop, notes.id);
-  await waitFor(() => desktop.root.querySelector("[data-action='enter-focus']"), "The Focus control did not appear.");
-  click(desktop.root.querySelector("[data-action='enter-focus']"));
-  const source = desktop.root.querySelector("[data-source]");
-  source.focus();
-  for (const handler of desktop.view.listeners?.get("keydown") ?? []) {
-    handler({ key: "Escape", target: source, preventDefault() {} });
-  }
-  assert.equal(desktop.root.querySelector(".shell")?.getAttribute("data-mode"), "document");
-  click(desktop.root.querySelector("[data-action='enter-focus']"));
-  for (const handler of desktop.root.listeners?.get("focusin") ?? []) handler();
-  assert.equal(desktop.root.querySelector("[data-tools]")?.getAttribute("data-tools"), "visible");
-  assert.equal(desktop.root.querySelector("[data-action='leave-focus']")?.textContent, "Document");
-  assert.equal(desktop.root.querySelector("[data-focus-hint]") != null, true);
-  click(desktop.root.querySelector("[data-action='leave-focus']"));
-  assert.equal(desktop.root.querySelector(".shell")?.getAttribute("data-mode"), "document");
-});
-
-test("disabled controls explain how to continue", async (t) => {
-  const fixture = await createGuiFixture();
-  t.after(() => fixture.close());
-  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
-  t.after(() => dispose(desktop.app));
-  await waitFor(() => desktop.app.unitList?.catalog?.some((unit) => unit.id === "project:shop:executor-shop"), "The unit list did not load.");
-  const executor = desktop.app.unitList.catalog.find((unit) => unit.id === "project:shop:executor-shop");
-  desktop.app.activeHandlers.onActivate({ id: executor.id, kind: "unit", unit: executor }, "double");
-  await waitFor(() => desktop.root.querySelector("[data-task='project:shop:030']")?.querySelector("[data-disabled-reason='accept']")?.textContent === "Accept is available when the task is in review.", "The accept reason was not shown.");
-  navigate(desktop.app, "settings");
-  await waitFor(() => desktop.root.querySelector("[data-look='modern']")?.closest("button").getAttribute("aria-pressed") === "true", "The current look was not marked.");
-  assert.equal(desktop.root.querySelector("[data-look='high-contrast']")?.closest("button").getAttribute("aria-pressed"), "false");
-  assert.equal(desktop.root.querySelector("[data-language='en']")?.getAttribute("aria-pressed"), "true");
-  navigate(desktop.app, "blueprint");
-  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");
-  const cart = desktop.app.editors.catalog.find((item) => item.title === "Cart");
-  renderShell(desktop.app);
-  openLibraryItem(desktop, cart.id);
-  await waitFor(() => desktop.root.querySelector("[data-action='resize-screen']"), "The resize control did not appear.");
-  assert.equal(desktop.root.querySelector("[data-action='patch-node']")?.getAttribute("disabled"), "");
-  assert.equal(desktop.root.querySelector("[data-action='remove-node']")?.getAttribute("disabled"), "");
-  assert.equal(desktop.root.querySelector("[data-disabled-reason='node']")?.textContent, "Select a shape on the board first.");
-  assert.equal(desktop.root.querySelector("[data-disabled-reason='add-link']")?.textContent, "A link needs two screens.");
-  typeInput(desktop.root.querySelector("[data-field='screen-width']"), "no", 0, 2);
-  click(desktop.root.querySelector("[data-action='resize-screen']"));
-  await waitFor(() => noteText(desktop) === "Enter a whole width and height before resizing.", "The resize reason was not shown.");
-});
-
-test("an editor action names its failure and waits inside its dialog", async (t) => {
-  const fixture = await createGuiFixture();
-  t.after(() => fixture.close());
-  let nodePosts = 0;
-  let releaseNodes = () => {};
-  const nodeHold = new Promise((resolve) => { releaseNodes = resolve; });
-  let attachPosts = 0;
-  let releaseAttach = () => {};
-  const attachHold = new Promise((resolve) => { releaseAttach = resolve; });
-  const desktop = await bootApp(fixture.desktopUrl, 1440, [], async (input, init) => {
-    const target = String(input);
-    if (init?.method === "POST" && target.includes("/nodes")) {
-      nodePosts += 1;
-      if (nodePosts === 1) await nodeHold;
-    }
-    if (init?.method === "PUT" && target.includes("/attachments")) {
-      attachPosts += 1;
-      if (attachPosts === 1) await attachHold;
-    }
-  });
-  t.after(() => dispose(desktop.app));
-  await waitFor(() => desktop.root.querySelector(".shell"), "The desktop shell did not appear.");
-  navigate(desktop.app, "blueprint");
-  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");
-  const cart = desktop.app.editors.catalog.find((item) => item.title === "Cart");
-  renderShell(desktop.app);
-  openLibraryItem(desktop, cart.id);
-  await waitFor(() => desktop.root.querySelector("[data-action='add-node']"), "The shape control did not appear.");
-  click(desktop.root.querySelector("[data-action='add-node']"));
-  await waitFor(() => nodePosts === 1, "The shape write did not start.");
-  click(desktop.root.querySelector("[data-action='add-node']"));
-  assert.equal(nodePosts, 1);
-  releaseNodes();
-  await waitFor(() => desktop.app.editors.current?.authoritative?.document?.screens?.some((screen) => screen.root.kids.some((node) => node.name === "Added")), "The shape was not saved.");
-
-  desktop.app.mode = "map";
-  desktop.app.chatList.status = "empty";
-  desktop.app.chatList.query = "";
-  desktop.app.tab = "chats";
-  renderShell(desktop.app);
-  const listed = desktop.root.querySelector(".list-total");
-  assert.equal(listed?.getAttribute("data-list-status"), "empty");
-  assert.equal(listed?.textContent, "No conversations yet.");
-  assert.equal(desktop.root.querySelector("[data-action='show-map']")?.textContent, "Show the map");
-
-  navigate(desktop.app, "blueprint");
-  await waitFor(() => desktop.root.querySelector("[data-action='attach']"), "The attach control did not return.");
-  click(desktop.root.querySelector("[data-action='attach']"));
-  const chooser = desktop.document.querySelector("[data-form='attach']");
-  click(chooser.querySelector("[data-attach-unit]"));
-  click(chooser.querySelector("[data-action='save-attachments']"));
-  await waitFor(() => chooser.querySelector("[data-attach-progress]") && chooser.getAttribute("open") != null, "The attach dialog closed before the save finished.");
-  releaseAttach();
-  await waitFor(() => desktop.document.querySelector("[data-form='attach']") == null, "The saved attach dialog stayed open.");
-  assert.equal(attachPosts, 1);
-
-  const resourceId = desktop.app.editors.current.resourceId;
-  fixture.control.setFault({ method: "PUT", path: `/api/v1/editors/${resourceId}/attachments`, status: 422, code: "invalid_body" });
-  click(desktop.root.querySelector("[data-action='attach']"));
-  const failedChooser = desktop.document.querySelector("[data-form='attach']");
-  click(failedChooser.querySelector("[data-action='save-attachments']"));
-  await waitFor(() => failedChooser.querySelector("[data-dialog-error]")?.textContent.includes("Attach failed."), "The failed attach did not stay in the dialog.");
-  assert.equal(failedChooser.getAttribute("open") != null, true);
-  const retry = failedChooser.querySelector("[data-action='save-attachments']");
-  assert.equal(retry.children.some((child) => child.textContent === "Retry"), true);
-  click(retry);
-  await waitFor(() => desktop.document.querySelector("[data-form='attach']") == null, "Retry did not finish the attach save.");
-});
 
 test("counts, clocks, and session facts follow the active language", () => {
   assert.equal(cardinal("en", "unitCount", 1), "1 agent");
@@ -4474,7 +3293,8 @@ test("a resolved action clears only its own error and navigation drops stale ann
   click(desktop.root.querySelector("[data-look='high-contrast']"));
   await waitFor(() => desktop.app.activity.get("settings")?.phase === "error", "The settings failure was not shown.");
   assert.equal(taskFailure.phase, "error");
-  navigate(desktop.app, "focus");
+  desktop.app.embeddedHost = { embeddedUpdate() {} };
+  navigate(desktop.app, "document");
   assert.equal(desktop.root.querySelector("[data-activity='task:project:shop:029']"), null);
   assert.equal(desktop.document.querySelector("[data-live='error']").textContent.includes("The action failed."), false);
   assert.equal(desktop.document.querySelectorAll("[data-live='status']").length, 1);
@@ -4921,36 +3741,6 @@ test('the change Runs in picker shows an existing grant checked and unchecking i
   assert.equal(permissionWrites(desktop.calls).length, 1, 'no second grant');
 });
 
-test("a reopened board gives each added shape a distinct persisted identity", async (t) => {
-  const fixture = await createGuiFixture();
-  t.after(() => fixture.close());
-  const created = [];
-  const mounts = [];
-  t.after(() => { for (const desktop of mounts) dispose(desktop.app); });
-  let expectedCount = null;
-  for (let index = 0; index < 2; index += 1) {
-    const desktop = await bootApp(fixture.desktopUrl, 1440, [], async (input, init) => {
-      if (init?.method === "POST" && String(input).includes("/nodes")) created.push(JSON.parse(init.body).node.id);
-    });
-    mounts.push(desktop);
-    navigate(desktop.app, "blueprint");
-    await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");
-    const cart = desktop.app.editors.catalog.find((item) => item.title === "Cart");
-    renderShell(desktop.app);
-    openLibraryItem(desktop, cart.id);
-    await waitFor(() => desktop.root.querySelector("[data-action='add-node']"), "The board did not open.");
-    const kids = () => desktop.app.editors.current.authoritative.document.screens[0].root.kids;
-    if (expectedCount === null) expectedCount = kids().length;
-    assert.equal(kids().length, expectedCount);
-    click(desktop.root.querySelector("[data-action='add-node']"));
-    expectedCount += 1;
-    await waitFor(() => kids().length === expectedCount, "The new shape was not persisted after reopening.");
-    assert.equal(kids().some((node) => node.id === created[index]), true);
-    dispose(desktop.app);
-  }
-  assert.equal(created.length, 2);
-  assert.notEqual(created[0], created[1]);
-});
 
 test("failure causes and empty lists name the resource and its next step", async (t) => {
   assert.equal(text("en", "requestTimeout"), "The request timed out.");
@@ -4988,33 +3778,6 @@ test("failure causes and empty lists name the resource and its next step", async
   assert.equal(limitedText.includes("The request limit was reached."), true);
   assert.equal(limitedText.includes("Try again."), true);
   assert.equal(limitedText.includes("Wait and try again."), false);
-
-  navigate(desktop.app, "document");
-  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Release notes"), "The text catalog did not load.");
-  const notes = desktop.app.editors.catalog.find((item) => item.title === "Release notes");
-  renderShell(desktop.app);
-  openLibraryItem(desktop, notes.id);
-  await waitFor(() => desktop.root.querySelector("[data-comment]"), "The comment field did not open.");
-  assert.equal(desktop.root.querySelector("[data-comment]").closest("label").querySelector(".field-hint").textContent, "Select text, then write the comment.");
-  assert.equal(desktop.root.querySelector("[data-disabled-reason='comment']")?.textContent, "Select text before commenting on it.");
-  assert.equal([...desktop.root.querySelectorAll("p")].some((node) => node.textContent.includes("Choose a screen or node")), false);
-  desktop.app.editors.current.threads = [];
-  desktop.app.editors.current.commentsTotal = 0;
-  renderShell(desktop.app);
-  assert.equal(desktop.root.querySelector("[data-empty='comments']")?.textContent, "No comments yet. Select text, then write one.");
-
-  desktop.app.editors.catalog = [];
-  desktop.app.editors.catalogTotal = 0;
-  desktop.app.editors.loadedKind = "void";
-  desktop.app.editors.catalogLoading = false;
-  renderShell(desktop.app);
-  const empty = desktop.root.querySelector("[data-empty='void']");
-  assert.equal(empty.children[0].textContent, "No texts yet");
-  assert.match(empty.children[1].textContent, /^A text is a Markdown file in /);
-  assert.deepEqual(empty.querySelectorAll("button").map((button) => button.getAttribute("data-action")), ["library-empty-create", "library-empty-register"]);
-  assert.equal(desktop.root.querySelector("[data-action='open-create']")?.getAttribute("aria-label"), "New text");
-  assert.equal(desktop.root.querySelector("[data-action='refresh-catalog']")?.getAttribute("aria-label"), "Refresh");
-  assert.equal([...desktop.root.querySelectorAll("p")].some((node) => node.textContent.includes("Nothing to show yet.")), false);
 
   navigate(desktop.app, "map");
   await waitFor(() => desktop.app.unitList && desktop.app.unitList.status !== "loading", "The unit list did not settle.");
@@ -5055,63 +3818,6 @@ test("failure causes and empty lists name the resource and its next step", async
   assert.equal(desktop.root.querySelector('[data-mailbox-view]'), null);
 });
 
-test("the board toolbar is one row on the canvas", async (t) => {
-  const fixture = await createGuiFixture();
-  t.after(() => fixture.close());
-  const desktop = await bootApp(fixture.desktopUrl, 1440, []);
-  t.after(() => dispose(desktop.app));
-  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart") || desktop.root.querySelector(".shell"), "The desktop shell did not appear.");
-  navigate(desktop.app, "blueprint");
-  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board catalog did not load.");
-  const cart = desktop.app.editors.catalog.find((item) => item.title === "Cart");
-  renderShell(desktop.app);
-  openLibraryItem(desktop, cart.id);
-  await waitFor(() => desktop.root.querySelector("[data-toolbar='board']"), "The board toolbar did not appear.");
-  const resource = desktop.root.querySelector("[data-editor-column='resource']");
-  const comments = desktop.root.querySelector("[data-editor-column='comments']");
-  const host = resource.querySelector(".board-host");
-  const toolbar = host.querySelector("[data-toolbar='board']");
-  const editorTools = resource.querySelector("[data-editor-tools]");
-  assert.equal(toolbar?.getAttribute("role"), "toolbar");
-  assert.equal(toolbar.className.includes("board-toolbar"), true);
-  assert.equal(host.querySelectorAll("[role='toolbar']").length, 1);
-  assert.equal(columnIndex(resource, editorTools) < columnIndex(resource, host), true);
-  assert.equal(toolbar.querySelector("[data-action='attach']") != null, true);
-  assert.equal(toolbar.querySelector("[data-action='watch']") != null, true);
-  assert.equal(comments.querySelector("[data-toolbar='board']"), null);
-  assert.equal(comments.querySelector("[data-comment]") != null, true);
-  const tools = [...toolbar.querySelectorAll("[data-board-tool]")];
-  assert.deepEqual(tools.map((node) => node.getAttribute("data-board-tool")), ["select", "frame", "text", "draw", "comment"]);
-  assert.deepEqual(tools.map((node) => node.getAttribute("aria-label")), ["Select", "Frame", "Text", "Draw", "Comment"]);
-  assert.equal(tools[0].getAttribute("aria-pressed"), "true");
-  assert.equal(host.querySelector(".board-properties").querySelector("[data-node-name]") != null, true);
-  assert.equal(host.querySelector(".board-properties").querySelector("[data-asset]") != null, true);
-  assert.equal(host.querySelector(".board-outline") != null, true);
-  const css = await readFile("gui/app/styles.css", "utf8");
-  const rule = css.match(/\.board-host > \.board-toolbar \{[\s\S]*?\}/)?.[0] ?? "";
-  assert.match(rule, /position:\s*absolute/);
-  assert.match(rule, /flex-wrap:\s*nowrap/);
-  assert.match(rule, /overflow-x:\s*auto/);
-  assert.match(rule, /white-space:\s*nowrap/);
-  assert.equal(rule.includes("flex-wrap: wrap"), false);
-  assert.match(css, /\[data-mode="focus"\] \.board-toolbar,/);
-  const narrowStart = css.indexOf("@media (max-width: 987px)");
-  const narrowOpen = css.indexOf("{", narrowStart);
-  let depth = 0;
-  let narrowEnd = narrowOpen;
-  for (let index = narrowOpen; index < css.length; index += 1) {
-    if (css[index] === "{") depth += 1;
-    else if (css[index] === "}") {
-      depth -= 1;
-      if (depth === 0) {
-        narrowEnd = index;
-        break;
-      }
-    }
-  }
-  assert.equal(css.slice(narrowStart, narrowEnd).includes("board-toolbar"), false);
-  assert.match(css, /\.toolbar\s*\{[^}]*flex-wrap:\s*nowrap/);
-});
 
 test("the GUI import graph stays inside its ownership table", async () => {
   const plan = await readFile("docs/3.0/plan-gui.md", "utf8");
@@ -5119,7 +3825,7 @@ test("the GUI import graph stays inside its ownership table", async () => {
   const owned = new Set([...section.matchAll(/`((?:gui\/app|test)\/[^`]+)`/g)].map((match) => match[1]));
   const integration = await readFile('docs/3.0/integration.md', 'utf8');
   assert.match(integration.split('#### T046.')[1].split('#### T047.')[0], /`gui\/app\/find-worker\.mjs`, new isolated regex worker/);
-  owned.add('gui/app/find-worker.mjs');
+  owned.add('gui/app/embedded-apps.mjs');
   assert.equal(owned.has("gui/app/phone.mjs"), true);
   assert.equal(owned.has("gui/app/embed.mjs"), true);
   assert.equal(owned.has("test/gui-fixture.mjs"), true);
@@ -5130,12 +3836,8 @@ test("the GUI import graph stays inside its ownership table", async () => {
     seen.add(rel);
     assert.equal(owned.has(rel), true, rel);
     const source = await readFile(file, "utf8");
-    const audited = rel === "gui/app/main.mjs" ? source.slice(0, source.indexOf("async function exportLegacyDocument")) + source.slice(source.indexOf("export async function importLegacyBoard")) : source;
+    const audited = source;
     assert.equal(audited.includes("import("), false, rel);
-    if (rel === "gui/app/main.mjs") {
-      assert.match(source, /iframe\.setAttribute\("sandbox", "allow-scripts"\)/);
-      assert.match(source, /connect-src 'none'/);
-    }
     const specifiers = [...source.matchAll(/from "([^"]+)"/g)].map((match) => match[1]);
     for (const specifier of specifiers) {
       assert.equal(specifier.startsWith(".") || specifier.startsWith("node:"), true, specifier);
@@ -5148,7 +3850,6 @@ test("the GUI import graph stays inside its ownership table", async () => {
     }
   }
   await walk(resolve("gui/app/main.mjs"));
-  await walk(resolve('gui/app/find-worker.mjs'));
   await walk(resolve("test/gui-fixture.mjs"));
   await walk(resolve("test/gui-data.mjs"));
 });
@@ -5232,14 +3933,6 @@ function click(node) {
 }
 
 // A library row waits in a folded folder until the folders above it are opened, so a test opens them as a person would before it presses the row.
-function openLibraryItem(desktop, id) {
-  const editors = desktop.app.editors, item = editors.catalog.find((entry) => entry.id === id), state = libraryState(editors, item.kind);
-  state.opened.add(`project:${item.project}`);
-  for (let folder = state.folders.find((entry) => entry.id === item.folderId); folder; folder = state.folders.find((entry) => entry.id === folder.parentId)) state.opened.add(`${item.project}:${folder.id}`);
-  renderShell(desktop.app);
-  click(desktop.root.querySelector(`[data-id="${id}"]`));
-}
-
 function clickAndWait(node) {
   return Promise.all([...(node?.listeners?.get("click") ?? [])].map(handler => handler({ preventDefault() {}, target: node })));
 }
@@ -5957,330 +4650,21 @@ async function assertAbsent(root, secret) {
   }
 }
 
-async function libraryDesktop(t, kind = "blueprint", options = {}) {
-  const fixture = await createGuiFixture(options); t.after(() => fixture.close());
-  const desktop = await bootApp(fixture.desktopUrl, 1440, []); t.after(() => dispose(desktop.app));
-  navigate(desktop.app, kind === "blueprint" ? "blueprint" : "document");
-  await waitFor(() => desktop.app.editors?.loadedKind === kind && !desktop.app.editors.catalogLoading, "The shared library did not load.");
-  // The library starts folded; these tests work on its rows, so they begin with every project and folder open.
-  const state = libraryState(desktop.app.editors, kind);
-  for (const project of state.projects) state.opened.add(`project:${project.id ?? project.name}`);
-  for (const folder of state.folders) state.opened.add(`${folder.project}:${folder.id}`);
-  renderShell(desktop.app);
-  return { ...desktop, fixture, state };
-}
-
 function changeSelect(node, value) {
   node.value = value;
   for (const handler of node.listeners.get("change") ?? []) handler({ target: node, currentTarget: node });
 }
 
-function toggleCommentPreference(root, value) {
-  const input = root.querySelector("[data-send-to-agent]");
-  assert.ok(input); assert.equal(input.disabled, false);
-  input.checked = value;
-  for (const handler of input.listeners.get("change") ?? []) handler({ target: input });
-}
-
-async function openCommentEditor(desktop, kind) {
-  navigate(desktop.app, kind === "blueprint" ? "blueprint" : "document");
-  await waitFor(() => desktop.app.editors?.loadedKind === kind && !desktop.app.editors.catalogLoading, "The editor library did not load.");
-  const item = desktop.app.editors.catalog.find((entry) => entry.title === (kind === "blueprint" ? "Cart" : "Release notes"));
-  renderShell(desktop.app); openLibraryItem(desktop, item.id);
-  await waitFor(() => desktop.app.editors.current?.resourceId === item.id && desktop.root.querySelector("[data-send-to-agent]"), "The comment composer did not open.");
-  return desktop.app.editors.current;
-}
-
-test("Blueprint and Void share the default checkbox, persisted false, machine changes and reopen without overwriting an unattached preference", async (t) => {
-  const desktop = await openedBoardDesktop(t), { app, root, fixture } = desktop;
-  assert.equal(root.querySelector("[data-send-to-agent]").checked, true);
-  click(root.querySelector("button[data-board-tool='comment']"));
-  const host = root.querySelector(".board-host");
-  clickEvent(host, { target: host.querySelector("[data-node='label']"), offsetX: 20, offsetY: 24 });
-  assert.equal(root.querySelectorAll("[data-send-to-agent]").length, 2);
-  toggleCommentPreference(root, false);
-  await waitFor(() => app.activity.get("settings")?.phase === "success", "The preference did not save.");
-  assert.ok(root.querySelectorAll("[data-send-to-agent]").every((input) => input.checked === false));
-  assert.ok(root.querySelectorAll(".comment-preference-hint").every((hint) => hint.textContent === "Kept as a note, not sent"));
-  const current = await openCommentEditor(desktop, "void");
-  assert.equal(root.querySelector("[data-send-to-agent]").checked, false);
-  assert.equal(root.querySelector("[data-comment]").getAttribute("aria-label"), "Reply on the text");
-  await setAttachments(app.api, app.editors, []); renderShell(app);
-  assert.equal(root.querySelector("[data-send-to-agent]").checked, false);
-  assert.equal(root.querySelector("[data-send-to-agent]").disabled, true);
-  assert.equal(root.querySelector(".comment-preference-hint").textContent, "No agents attached");
-  assert.equal((await request(app.api, "GET", "/settings")).data.settings.sendToAgent, false);
-  const reopened = await bootApp(fixture.desktopUrl, 1440, []); t.after(() => dispose(reopened.app));
-  await openCommentEditor(reopened, "blueprint");
-  assert.equal(reopened.root.querySelector("[data-send-to-agent]").checked, false);
-  const settings = (await request(app.api, "GET", "/settings")).data;
-  await saveSettings(app.api, settings.revision, { sendToAgent: true });
-  await waitFor(() => app.editors.sendToAgent && reopened.root.querySelector("[data-send-to-agent]")?.checked, "The shared setting did not synchronize to both viewers.");
-  assert.equal(root.querySelector("[data-send-to-agent]").checked, false);
-  assert.equal((await request(app.api, "GET", "/settings")).data.settings.sendToAgent, true);
-  await setAttachments(app.api, app.editors, ["project:shop:executor-shop"]); renderShell(app);
-  assert.equal(root.querySelector("[data-send-to-agent]").checked, true);
-  assert.equal(current.kind, "void");
-  app.language = "es"; renderShell(app);
-  assert.equal(root.querySelector("[data-send-to-agent]").getAttribute("aria-label"), "Enviar al agente");
-  const phone = await bootApp(fixture.phoneUrl, 390, []); t.after(() => dispose(phone.app));
-  assert.equal(phone.root.querySelector("[data-send-to-agent]"), null);
-  const css = await readFile("gui/app/styles.css", "utf8");
-  assert.match(css, /\.comment-composer[^}]*padding: 12px 14px 16px;[^}]*gap: 7px/);
-  assert.match(css, /\.comment-checkbox-hit[^}]*width: 32px; height: 32px/);
-  assert.match(css, /\.comment-checkbox \{[^}]*width: 16px; height: 16px;[^}]*border-radius: 4px/);
-});
-
-test("false remains shared after the fixture service restarts and both composers reopen", async (t) => {
-  const desktop = await openedBoardDesktop(t), { app, root, fixture } = desktop;
-  toggleCommentPreference(root, false);
-  await waitFor(() => app.activity.get("settings")?.phase === "success", "The preference did not save before restart.");
-  dispose(app); await fixture.control.restart();
-  const restarted = await bootApp(fixture.desktopUrl, 1440, []); t.after(() => dispose(restarted.app));
-  for (const kind of ["blueprint", "void"]) {
-    await openCommentEditor(restarted, kind);
-    assert.equal(restarted.root.querySelector("[data-send-to-agent]").checked, false);
-    assert.equal(restarted.app.editors.sendToAgent, false);
-  }
-  assert.equal((await request(restarted.app.api, "GET", "/settings")).data.settings.sendToAgent, false);
-});
-
-test("a settings conflict retains the visible checkbox and Retry saves that choice while a lost response reuses its receipt", async (t) => {
-  const fixture = await createGuiFixture(); t.after(() => fixture.close());
-  const api = apiFrom(fixture.desktopUrl), writes = []; let conflict = true;
-  const desktop = await bootApp(fixture.desktopUrl, 1440, [], async (url, init) => {
-    if (init?.method !== "PATCH" || !String(url).endsWith("/settings")) return;
-    writes.push({ key: headerValue(init.headers, "Idempotency-Key"), body: JSON.parse(init.body) });
-    if (conflict) {
-      conflict = false;
-      const current = (await request(api, "GET", "/settings")).data;
-      await saveSettings(api, current.revision, { look: "high-contrast" });
-    }
-  });
-  t.after(() => dispose(desktop.app)); await openCommentEditor(desktop, "blueprint");
-  toggleCommentPreference(desktop.root, false);
-  await waitFor(() => desktop.app.activity.get("settings")?.error?.code === "revision_conflict", "The setting conflict was not shown.");
-  assert.equal(desktop.root.querySelector("[data-send-to-agent]").checked, false);
-  assert.equal((await request(api, "GET", "/settings")).data.settings.sendToAgent, true);
-  await openCommentEditor(desktop, "void");
-  assert.equal(desktop.root.querySelector("[data-send-to-agent]").checked, false);
-  await desktop.app.activity.get("settings").retry();
-  assert.equal((await request(api, "GET", "/settings")).data.settings.sendToAgent, false);
-  assert.equal(writes[0].body.sendToAgent, false); assert.equal(writes[1].body.sendToAgent, false);
-  assert.notEqual(writes[0].key, writes[1].key);
-  fixture.control.setFault({ method: "PATCH", path: "/api/v1/settings", dropAfterCommit: true });
-  toggleCommentPreference(desktop.root, true);
-  await waitFor(() => desktop.app.activity.get("settings")?.phase === "error", "The lost setting response did not offer Retry.");
-  assert.equal(desktop.root.querySelector("[data-send-to-agent]").checked, true);
-  await desktop.app.activity.get("settings").retry();
-  assert.deepEqual(writes[3], writes[2]);
-  assert.equal((await request(api, "GET", "/settings")).data.settings.sendToAgent, true);
-});
-
-test("a pending note retries its captured choice and original board after navigation and a later toggle", async (t) => {
-  const writes = [], desktop = await openedBoardDesktop(t, (url, init) => {
-    if (init?.method === "POST" && String(url).includes("/comments")) writes.push({ url: String(url), key: headerValue(init.headers, "Idempotency-Key"), body: JSON.parse(init.body) });
-  });
-  const { app, root, fixture } = desktop, current = app.editors.current;
-  toggleCommentPreference(root, false);
-  await waitFor(() => app.activity.get("settings")?.phase === "success", "The note preference did not save.");
-  const host = root.querySelector(".board-host");
-  clickEvent(host, { target: host.querySelector("[data-node='label']"), offsetX: 20, offsetY: 24 });
-  typeInput(root.querySelector("[data-comment]"), "Keep the original note", 0, 0);
-  fixture.control.setFault({ method: "POST", path: `/api/v1/editors/${current.resourceId}/comments`, dropAfterCommit: true });
-  click(root.querySelector("[data-action='comment']"));
-  const key = `comment:${current.resourceId}`;
-  await waitFor(() => app.activity.get(key)?.phase === "error", "The lost comment did not offer Retry.");
-  const captured = app.activity.get(key).commentChoice;
-  assert.equal(captured.sendToAgent, false);
-  assert.deepEqual(captured.attached, current.attached);
-  await openCommentEditor(desktop, "void");
-  toggleCommentPreference(root, true);
-  await waitFor(() => app.activity.get("settings")?.phase === "success", "The later preference did not save.");
-  await app.activity.get(key).retry();
-  assert.deepEqual(writes[1], writes[0]);
-  assert.equal(writes[1].body.sendToAgent, false);
-  assert.equal(app.editors.current.kind, "void");
-  await openCommentEditor(desktop, "blueprint");
-  const note = app.editors.current.threads.filter((thread) => thread.messages?.some((message) => message.text === "Keep the original note"));
-  assert.equal(note.length, 1); assert.equal(note[0].anchor.element, "label");
-  assert.equal(note[0].messages[0].sendToAgent, false);
-  assert.equal(root.querySelector("[data-comment-note]").textContent, "Kept as a note, not sent");
-  assert.equal(root.querySelector("[data-send-to-agent]").checked, true);
-});
-
-async function openedBoardDesktop(t, onFetch) {
+async function openedDesktop(t, onFetch) {
   const fixture = await createGuiFixture(); t.after(() => fixture.close());
   const desktop = await bootApp(fixture.desktopUrl, 1440, [], onFetch); t.after(() => dispose(desktop.app));
-  await waitFor(() => desktop.root.querySelector(".shell") && desktop.app.layout === "desktop", "The desktop shell did not open.");
-  navigate(desktop.app, "blueprint");
-  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.title === "Cart"), "The board library did not load.");
-  const board = desktop.app.editors.catalog.find((item) => item.title === "Cart");
-  renderShell(desktop.app); openLibraryItem(desktop, board.id);
-  await waitFor(() => desktop.root.querySelector(".board-svg"), "The board did not open.");
-  return { ...desktop, fixture, board };
+  await waitFor(() => desktop.app.layout === "desktop", "The desktop shell did not open.");
+  return { ...desktop, fixture };
 }
 
-test('R6 comment metadata separates the short time and reports submitted recipients once', async t => {
-  const desktop = await openedBoardDesktop(t), current = desktop.app.editors.current;
-  current.threads = [{ id: 'thread-r6', messages: [{ id: 'message-r6', authorId: 'root:master', at: '2026-10-10T12:00:00.000Z', text: 'A comment.' }] }];
-  current.notices = [
-    { unitId: 'project:shop:executor-shop', state: 'submitted' },
-    { unitId: 'env:web:overlord-web', state: 'submitted' },
-  ];
-  renderShell(desktop.app);
-  const line = desktop.root.querySelector('[data-comment-message="message-r6"]');
-  assert.equal(line.querySelector('.comment-author').textContent, 'You');
-  assert.equal(line.querySelector('time').textContent, localTime('2026-10-10T12:00:00.000Z'));
-  const statuses = desktop.root.querySelectorAll('[data-notice]');
-  assert.equal(statuses.length, 1);
-  assert.equal(statuses[0].textContent, 'Sent to Executor shop and Overlord web.');
-  assert.equal(desktop.root.querySelector('[data-notice="queued"]'), null);
-  const css = await readFile('gui/app/styles.css', 'utf8');
-  assert.match(css, /\.comment-line \{ display: flex; flex-wrap: wrap; align-items: baseline;/);
-  assert.match(css, /\.comment-line time \{ color: var\(--mute\);/);
-});
 
-test('comments scroll inside their panel: chips split open from resolved threads, Reply and Resolve are links, and the reply count sits in the header', async t => {
-  const desktop = await openedBoardDesktop(t), current = desktop.app.editors.current;
-  const thread = (index, status) => ({ id: `thread-${index}`, status, messages: [
-    { id: `message-${index}`, authorId: 'root:master', at: '2026-10-10T12:00:00.000Z', text: `Comment ${index}` },
-    ...(index % 2 ? [{ id: `reply-${index}`, authorId: 'root:master', at: '2026-10-10T12:05:00.000Z', text: `Reply ${index}` }] : []),
-  ] });
-  current.threads = [...Array.from({ length: 45 }, (_, index) => thread(index, 'open')), ...Array.from({ length: 15 }, (_, index) => thread(100 + index, 'resolved'))];
-  current.commentsTotal = 60;
-  renderShell(desktop.app);
-  const column = () => desktop.root.querySelector("[data-editor-column='comments']");
-  const chips = () => column().querySelectorAll('[data-comment-filter]');
-  const boxes = () => column().querySelectorAll('.comment-box');
-  assert.deepEqual(chips().map(chip => [chip.getAttribute('data-comment-filter'), chip.getAttribute('aria-pressed'), chip.children[0].textContent]), [['open', 'true', 'Open 45'], ['resolved', 'false', 'Resolved 15']]);
-  assert.equal(boxes().length, 40, 'the cap of 40 counts within the group');
-  assert.ok(column().querySelector("[data-action='more-comments']"));
-  assert.ok(boxes().every(box => box.getAttribute('data-status') === 'open'));
-  const replied = boxes()[1], plain = boxes()[0];
-  assert.equal(replied.querySelector('.comment-replies').textContent, '1 reply');
-  assert.deepEqual(replied.querySelector("[data-comment-message='message-1']").children.map(child => child.tag === 'time' ? 'time' : child.className), ['comment-author', 'time', 'comment-replies', 'comment-text']);
-  assert.equal(plain.querySelector('.comment-replies'), null);
-  assert.deepEqual(plain.querySelector('.comment-actions').querySelectorAll('button').map(button => [button.getAttribute('data-action'), button.className]), [['reply', 'comment-action'], ['resolve', 'comment-action']]);
-  // The composer stays under the list, in the same column, which does the scrolling inside it.
-  assert.deepEqual(column().children.slice(0, 3).map(child => child.className.split(' ')[0]), ['editor-comments-head', 'editor-comments', 'comment-composer']);
-  click(chips()[1]);
-  assert.equal(chips()[1].getAttribute('aria-pressed'), 'true');
-  assert.equal(boxes().length, 15);
-  assert.ok(boxes().every(box => box.getAttribute('data-status') === 'resolved' && !box.querySelector("[data-action='resolve']") && box.querySelector("[data-action='reply']")), 'a resolved thread offers Reply only');
-  desktop.app.language = 'es';
-  renderShell(desktop.app);
-  assert.deepEqual(chips().map(chip => chip.children[0].textContent), ['Abiertos 45', 'Resueltos 15']);
-  click(chips()[0]);
-  assert.equal(boxes()[1].querySelector('.comment-replies').textContent, '1 respuesta');
-  current.threads = [thread(1, 'open')];
-  current.commentFilter = 'resolved';
-  desktop.app.language = 'en';
-  renderShell(desktop.app);
-  assert.equal(column().querySelector('.editor-comments-none').textContent, 'No resolved comments.');
-  const css = await readFile('gui/app/styles.css', 'utf8');
-  assert.match(css, /\.workspace \{[^}]*grid-template-rows: minmax\(0, 1fr\);/);
-  assert.match(css, /\.editor-comments-column \{ overflow: hidden; \}/);
-  assert.match(css, /\.editor-comments \{[^}]*flex: 1 1 auto; min-height: 0; overflow: auto;/);
-  assert.match(css, /\.comment-composer \{[^}]*flex: none;/);
-  assert.match(css, /\.comment-action \{[^}]*color: var\(--accent\); font-size: 12px; font-weight: 700;/);
-  assert.match(css, /\.comment-action:hover \{ text-decoration: underline;/);
-  assert.match(css, /\.comment-chip\[aria-pressed="true"\] \{[^}]*background: var\(--accent-soft\)/);
-});
 
-test('with nothing open, the middle and the comments column say what to do, and the library search waits for a pause', async t => {
-  const fixture = await createGuiFixture(); t.after(() => fixture.close());
-  const urls = [], desktop = await bootApp(fixture.desktopUrl, 1440, urls); t.after(() => dispose(desktop.app));
-  await waitFor(() => desktop.root.querySelector('.shell') && desktop.app.layout === 'desktop', 'The desktop shell did not open.');
-  navigate(desktop.app, 'document');
-  await waitFor(() => desktop.app.editors?.loadedKind === 'void' && !desktop.app.editors.catalogLoading, 'The texts did not load.');
-  const idle = () => desktop.root.querySelector('[data-editor-idle]');
-  assert.equal(idle().getAttribute('data-editor-idle'), 'void');
-  assert.deepEqual(idle().children.slice(1).map(child => child.textContent), ['Pick a text or start a new one', 'Texts open here with their comments beside them.']);
-  assert.equal(desktop.root.querySelector('.editor-comments-idle').textContent, 'Comments on the open text show here.');
-  assert.equal(desktop.root.querySelector("[data-action='toggle-catalog']").children.at(-1).textContent, 'Texts');
-  desktop.app.language = 'es';
-  renderShell(desktop.app);
-  assert.deepEqual(idle().children.slice(1).map(child => child.textContent), ['Elegir un texto o empezar uno nuevo', 'Los textos se abren aquí con sus comentarios al lado.']);
-  assert.equal(desktop.root.querySelector('.editor-comments-idle').textContent, 'Aquí se muestran los comentarios del texto abierto.');
-  desktop.app.language = 'en';
-  navigate(desktop.app, 'blueprint');
-  await waitFor(() => desktop.app.editors?.loadedKind === 'blueprint' && !desktop.app.editors.catalogLoading, 'The boards did not load.');
-  assert.equal(idle().getAttribute('data-editor-idle'), 'blueprint');
-  assert.deepEqual(idle().children.slice(1).map(child => child.textContent), ['Pick a board or start a new one', 'Boards open here with their comments beside them.']);
-  assert.equal(desktop.root.querySelector('.editor-comments-idle').textContent, 'Comments on the open board show here.');
-  assert.equal(desktop.root.querySelector("[data-action='toggle-catalog']").children.at(-1).textContent, 'Boards');
-  const board = desktop.app.editors.catalog.find(item => item.title === 'Cart');
-  openLibraryItem(desktop, board.id);
-  await waitFor(() => desktop.root.querySelector('.board-svg'), 'The board did not open.');
-  assert.equal(idle(), null);
-  assert.equal(desktop.root.querySelector('.editor-comments-idle'), null);
-  // One request follows a pause in typing; the letters in between ask for nothing, and an emptied box asks at once.
-  const search = () => desktop.root.querySelector('[data-library-search]'), asked = () => urls.slice(before).filter(url => url.includes('/blueprint/boards?'));
-  const before = urls.length;
-  for (const value of ['c', 'ca', 'car']) { typeInput(search(), value, value.length, value.length); await delay(40); }
-  assert.equal(asked().length, 0, 'nothing is asked while the typing goes on');
-  await waitFor(() => asked().some(url => url.includes('q=car')), 'The pause did not send the search.');
-  await delay(300);
-  assert.deepEqual([...new Set(asked().map(url => new URL(url).searchParams.get('q')))], ['car']);
-  assert.equal(asked().length, 1);
-  const quiet = urls.length;
-  typeInput(search(), '', 0, 0);
-  await waitFor(() => urls.slice(quiet).some(url => url.includes('/blueprint/boards?') && !url.includes('q=')), 'An emptied search did not ask at once.');
-});
 
-test('a module board is drawn from its module in memory with a read-only notice, converts once, and falls back to the old message when it cannot be read', async t => {
-  const fixture = await createGuiFixture(); t.after(() => fixture.close());
-  const boards = join(fixture.root, 'repositories', 'shop', 'docs', 'flows', 'boards'), legacyFile = join(boards, 'legacy-cart.mjs'), brokenFile = join(boards, 'broken-cart.mjs');
-  await writeFile(legacyFile, 'import { board } from "blueprint/board.mjs";\nimport { col, text } from "blueprint/kit.mjs";\nexport default board({ id: "legacy-cart", title: "Legacy cart", screens: [{ id: "cart", title: "Cart", root: col({ w: 300, h: 560 }, text("Actual legacy cart")) }] });\n');
-  await writeFile(brokenFile, 'throw new Error("This module does not load.");\n');
-  const index = JSON.parse(await readFile(join(boards, 'index.json'), 'utf8'));
-  index.push({ id: 'legacy-cart', title: 'Legacy cart' }, { id: 'broken-cart', title: 'Broken cart' });
-  await writeFile(join(boards, 'index.json'), JSON.stringify(index));
-  await fixture.control.refresh();
-  const legacyBytes = await readFile(legacyFile);
-  const api = apiFrom(fixture.desktopUrl);
-  const legacy = (await registerResource(api, { kind: 'blueprint', project: 'shop', path: 'docs/flows/boards/legacy-cart.mjs' })).data;
-  const broken = (await registerResource(api, { kind: 'blueprint', project: 'shop', path: 'docs/flows/boards/broken-cart.mjs' })).data;
-  const urls = [], desktop = await bootApp(fixture.desktopUrl, 1440, urls); t.after(() => dispose(desktop.app));
-  await waitFor(() => desktop.root.querySelector('.shell') && desktop.app.layout === 'desktop', 'The desktop shell did not open.');
-  navigate(desktop.app, 'blueprint');
-  await waitFor(() => desktop.app.editors?.catalog?.some(item => item.id === legacy.id) && desktop.app.editors.catalog.some(item => item.id === broken.id), 'The module boards were not listed.');
-  openLibraryItem(desktop, legacy.id);
-  await waitFor(() => desktop.root.querySelector('.board-notice'), 'The module board was not drawn.');
-  const notice = desktop.root.querySelector('.board-notice');
-  assert.equal(notice.getAttribute('data-legacy'), 'docs/flows/boards/legacy-cart.mjs');
-  assert.equal(notice.children[0].textContent, 'Module board, read only. A JSON copy can be edited.');
-  assert.equal(notice.querySelector("[data-action='copy-json']").children[0].textContent, 'Create JSON copy');
-  assert.ok(desktop.root.querySelector("[data-screen='cart']"), 'the screen of the module is on the canvas');
-  assert.equal(desktop.root.querySelector("[data-action='resize-screen']"), null);
-  assert.deepEqual(desktop.root.querySelectorAll('.board-tool').map(tool => tool.getAttribute('data-board-tool')), ['select', 'comment'], 'no tool that draws');
-  // A screen can still be chosen to comment on.
-  const host = desktop.root.querySelector('.board-host');
-  clickEvent(host, { target: host.querySelector("[data-screen='cart']"), offsetX: 10, offsetY: 10 });
-  typeInput(desktop.root.querySelector('[data-comment]'), 'On the cart', 0, 3);
-  assert.equal(desktop.root.querySelector("[data-action='comment']").getAttribute('disabled'), null);
-  // Opening it again reads the kept document; nothing is imported or written.
-  const exports = () => urls.filter(url => url.includes('/export')).length;
-  assert.equal(exports(), 1);
-  const cart = desktop.app.editors.catalog.find(item => item.title === 'Cart');
-  openLibraryItem(desktop, cart.id);
-  await waitFor(() => desktop.app.editors.current?.resourceId === cart.id && !desktop.root.querySelector('.board-notice'), 'The other board did not open.');
-  openLibraryItem(desktop, legacy.id);
-  await waitFor(() => desktop.root.querySelector('.board-notice'), 'The module board did not come back.');
-  assert.equal(exports(), 1, 'the conversion is kept by resource and revision');
-  assert.equal(urls.some(url => url.endsWith('/blueprint/boards/import')), false);
-  assert.deepEqual(await readFile(legacyFile), legacyBytes);
-  // A module that cannot be read keeps today's message and button, and says why.
-  openLibraryItem(desktop, broken.id);
-  await waitFor(() => desktop.root.querySelector('[data-legacy-reason]'), 'The failure did not show its reason.');
-  assert.equal(desktop.root.querySelector('[data-legacy]').textContent, 'docs/flows/boards/broken-cart.mjs');
-  assert.equal(desktop.root.querySelector('[data-legacy-reason]').textContent, 'The module could not be read.');
-  assert.ok(desktop.root.querySelectorAll('p').some(node => node.textContent === 'This module needs a JSON copy.'));
-  assert.ok(desktop.root.querySelector("[data-action='copy-json']"));
-  assert.equal(desktop.root.querySelector('.board-notice'), null);
-  assert.equal(desktop.root.querySelector('.board-svg'), null);
-});
 
 test('R9 plan cards use the chat scroll area and the Overseer notice wraps its actions', async () => {
   const { document } = createTestDocument(720);
@@ -6296,26 +4680,6 @@ test('R10 Runs in never renders a null model or effort as a label', () => {
   assert.equal(runsInLabel({ client: 'codex', model: null, effort: 'high', mode: null }, [{ id: 'codex', title: 'Codex', models: [] }]), 'Codex, High');
 });
 
-test('R10 History replaces Comments and places the current version first with readable metadata', async t => {
-  const desktop = await openedBoardDesktop(t), current = desktop.app.editors.current;
-  current.historyOpen = true;
-  current.history = [
-    { id: 'older', by: 'project:shop:executor-shop', at: '2026-10-10T10:00:00.000Z', operation: 'board-edit', current: false },
-    { id: 'current', by: 'root:master', at: '2026-10-10T12:00:00.000Z', operation: 'restore', current: true },
-  ];
-  renderShell(desktop.app);
-  const column = desktop.root.querySelector('[data-editor-column="comments"]');
-  const rows = column.querySelectorAll('.history-row');
-  assert.equal(column.querySelector('h2').textContent, 'History');
-  assert.equal(rows[0].getAttribute('data-history-id'), 'current');
-  assert.ok(rows[0].querySelector('.history-current'));
-  const rendered = rows.map(row => row.textContent).join(' ');
-  assert.equal(rendered.includes('root:master'), false);
-  assert.equal(rendered.includes('project:shop:'), false);
-  assert.equal(rendered.includes('2026-10-10T'), false);
-  assert.ok(desktop.root.querySelector('.shared-library'));
-  assert.equal(desktop.root.querySelector('[data-action="editor-history"]').getAttribute('aria-pressed'), 'true');
-});
 
 test('a repository plan stalls ten minutes after its last confirmed step', async () => {
   const { stallPast } = await import('./visual/cases/start-board.mjs');
@@ -6334,12 +4698,6 @@ test('the slow notice keeps Cancel inside the card', async () => {
   assert.match(css, /\.slow-notice \{[^}]*box-sizing:\s*border-box/);
   assert.match(css, /\.slow-notice > div \{[^}]*min-width:\s*0/);
   assert.match(css, /\.slow-notice \.btn \{[^}]*flex:\s*0 0 auto/);
-});
-
-test('the board conflict banner wraps its full sentence', async () => {
-  const css = await readFile('gui/app/styles.css', 'utf8');
-  assert.match(css, /\.board-conflict > span \{[^}]*white-space:\s*normal/);
-  assert.doesNotMatch(css, /\.board-conflict > span \{[^}]*text-overflow:\s*ellipsis/);
 });
 
 test('the cluster inspector keeps the composer and does not stretch Start a plan', async () => {
@@ -6370,9 +4728,8 @@ test('R10 look controls and placeholders use themed contrast tokens', async () =
 });
 
 test('R13 session progress names the failed client and offers Retry only after failure', async t => {
-  const desktop = await openedBoardDesktop(t), selected = desktop.app.unitList.catalog.find(unit => unit.id === 'project:shop:executor-shop');
+  const desktop = await openedDesktop(t), selected = desktop.app.unitList.catalog.find(unit => unit.id === 'project:shop:executor-shop');
   desktop.app.mode = 'map';
-  desktop.app.editors.current = null;
   desktop.app.store.selected.unitId = selected.id;
   desktop.app.sessionRequest = { requestId: 'start-r13', unitId: selected.id, state: 'starting', client: 'claude-code', machine: 'DESKTOP' };
   renderShell(desktop.app);
@@ -6388,10 +4745,9 @@ test('R13 session progress names the failed client and offers Retry only after f
 });
 
 test('an empty chat does not offer older messages until a cursor exists', async t => {
-  const desktop = await openedBoardDesktop(t);
+  const desktop = await openedDesktop(t);
   const selected = desktop.app.unitList.catalog.find(unit => unit.id === 'project:shop:executor-shop');
   desktop.app.mode = 'map';
-  desktop.app.editors.current = null;
   desktop.app.store.selected.unitId = selected.id;
   desktop.app.thread = { chat: { id: 'chat-empty', title: 'Shop', kind: 'direct', members: ['root:master', selected.id], pinned: true, listed: true }, messages: [], total: 0, nearBottom: true };
   renderShell(desktop.app);
@@ -6402,10 +4758,9 @@ test('an empty chat does not offer older messages until a cursor exists', async 
 });
 
 test('ask cards scroll with the conversation, after its messages and above the composer, in one scroll area', async t => {
-  const desktop = await openedBoardDesktop(t);
+  const desktop = await openedDesktop(t);
   const selected = desktop.app.unitList.catalog.find(unit => unit.id === 'project:shop:executor-shop');
   desktop.app.mode = 'map';
-  desktop.app.editors.current = null;
   desktop.app.store.selected.unitId = selected.id;
   desktop.app.inspectorData = { unitId: selected.id, approvals: [{ id: 'approval-ask', state: 'pending', action: 'git.commit', display: 'Commit the cart', alwaysAllowed: true }], tasks: [], sessions: [], grants: [], waiting: [] };
   renderShell(desktop.app);
@@ -6427,9 +4782,8 @@ test('ask cards scroll with the conversation, after its messages and above the c
 
 
 test('background loads do not announce a slow request', async t => {
-  const desktop = await openedBoardDesktop(t);
+  const desktop = await openedDesktop(t);
   desktop.app.mode = 'map';
-  desktop.app.editors.current = null;
   if (!desktop.app.activity) desktop.app.activity = new Map();
   desktop.app.activity.set('chat-load:shop', { key: 'chat-load:shop', phase: 'pending', scope: 'unit', label: 'Loading the conversation', elapsed: 0 });
   desktop.app.activity.set('inspector:shop', { key: 'inspector:shop', phase: 'pending', scope: 'unit', label: 'Loading details', elapsed: 0 });
@@ -6442,9 +4796,8 @@ test('background loads do not announce a slow request', async t => {
 });
 
 test('a session that never names its step says nothing was started', async t => {
-  const desktop = await openedBoardDesktop(t), selected = desktop.app.unitList.catalog.find(unit => unit.id === 'project:shop:executor-shop');
+  const desktop = await openedDesktop(t), selected = desktop.app.unitList.catalog.find(unit => unit.id === 'project:shop:executor-shop');
   desktop.app.mode = 'map';
-  desktop.app.editors.current = null;
   desktop.app.store.selected.unitId = selected.id;
   desktop.app.sessionRequest = { requestId: 'start-unnamed', unitId: selected.id, state: 'failed', client: 'codex', machine: 'DESKTOP', error: { code: 'launch_failed', step: 'The session is starting.' } };
   renderShell(desktop.app);
@@ -6458,454 +4811,6 @@ test('a session that never names its step says nothing was started', async t => 
   assert.equal(spanish.includes('La sesión está iniciando'), false);
   assert.match(spanish, /Codex no respondió en 30 segundos\./);
   assert.match(spanish, /No se inició nada\./);
-});
-
-function boardEvent(host, type, target, x, y, more = {}) {
-  for (const handler of host.listeners.get(type) ?? []) handler({ target, pointerId: 1, button: 0, offsetX: x, offsetY: y, clientX: x, clientY: y, preventDefault() {}, ...more });
-}
-
-test("board drag and resize use parent coordinates at zoom, cancel without writes, and move by keyboard", async (t) => {
-  const writes = [];
-  const desktop = await openedBoardDesktop(t, (url, init) => { if (init?.method === "PUT" && String(url).includes("/blueprint/boards/")) writes.push(JSON.parse(init.body)); });
-  const { app, root } = desktop, editor = app.editors.current;
-  const board = structuredClone(editor.authoritative.document);
-  board.screens[0].x = 100; board.screens[0].y = 200;
-  board.screens[0].root.kids.push({ id: "nested", name: "Nested", t: "box", dir: "stack", place: { x: 30, y: 40 }, w: 180, h: 120, kids: [
-    { id: "nested-text", name: "Text", t: "text", value: "Editable", size: 24, color: "#f5f1f6", place: { x: 10, y: 12, future: "kept" }, w: 80, h: 30, future: "node kept" },
-  ] });
-  const { replaceBoard, indexNodes } = await import("../gui/app/blueprint.mjs");
-  await replaceBoard(app.api, editor, board); renderShell(app); writes.length = 0;
-  const zoom = (host) => {
-    const svg = host.querySelector(".board-svg");
-    svg.createSVGPoint = () => ({ x: 0, y: 0, matrixTransform(matrix) { return matrix.convert(this); } });
-    svg.getScreenCTM = () => ({ convert: (point) => ({ x: point.x * 2, y: point.y * 2 }), inverse: () => ({ convert: (point) => ({ x: point.x / 2, y: point.y / 2 }) }) });
-  };
-  let host = root.querySelector(".board-host"); zoom(host);
-  boardEvent(host, "pointerdown", host.querySelector("[data-node='nested-text']"), 300, 510);
-  boardEvent(host, "pointermove", host, 320, 520);
-  boardEvent(host, "pointercancel", host, 320, 520);
-  assert.equal(editor.boardDraft, null); assert.equal(writes.length, 0);
-  host = root.querySelector(".board-host");
-  zoom(host); boardEvent(host, "pointerdown", host.querySelector("[data-node='nested-text']"), 300, 510);
-  boardEvent(host, "pointermove", host, 320, 520); boardEvent(host, "pointerup", host, 320, 520);
-  await waitFor(() => !editor.boardDraft && writes.length === 1, "The nested drag did not save.");
-  let node = indexNodes(editor.authoritative.document).get("nested-text").node;
-  assert.deepEqual(node.place, { x: 20, y: 17, future: "kept" }); assert.equal(node.future, "node kept");
-  host = root.querySelector(".board-host"); zoom(host);
-  const handle = host.querySelector("[data-resize='nw']"); assert.ok(handle);
-  boardEvent(host, "pointerdown", handle, 300, 514); boardEvent(host, "pointermove", host, 320, 524); boardEvent(host, "pointerup", host, 320, 524);
-  await waitFor(() => !editor.boardDraft && writes.length === 2, "The resize did not save.");
-  node = indexNodes(editor.authoritative.document).get("nested-text").node;
-  assert.deepEqual(node.place, { x: 30, y: 22, future: "kept" }); assert.equal(node.w, 70); assert.equal(node.h, 25);
-  host = root.querySelector(".board-host"); boardEvent(host, "keydown", host.querySelector("[data-node='nested-text']"), 0, 0, { key: "ArrowRight", shiftKey: true });
-  await waitFor(() => !editor.boardDraft && writes.length === 3, "Keyboard movement did not save.");
-  assert.equal(indexNodes(editor.authoritative.document).get("nested-text").node.place.x, 40);
-  assert.equal(editor.authoritative.document.sentinel, board.sentinel);
-});
-
-test("Draw stores pen and marker strokes, cancels previews and erases through node removals", async (t) => {
-  const deletes = [];
-  const desktop = await openedBoardDesktop(t, (url, init) => { if (init?.method === "DELETE" && String(url).includes("/nodes/")) deletes.push(String(url)); });
-  const { app, root } = desktop, editor = app.editors.current;
-  click(root.querySelector("button[data-board-tool='draw']"));
-  await waitFor(() => !editor.boardDraft && editor.authoritative.document.screens.some((screen) => screen.root.sketch), "The hand frame did not save.");
-  assert.equal(editor.conflict, null, "The board's own saved sketch was reported as an outside change.");
-  assert.equal(root.querySelector("[data-board-overlay='conflict']"), null);
-  const frame = editor.authoritative.document.screens.find((screen) => screen.root.sketch);
-  assert.deepEqual([frame.x, frame.y, frame.w, frame.h, frame.root.radius, frame.root.dash], [350, 120, 300, 560, 18, "6 5"]);
-  const stroke = async (tool, end) => {
-    click(root.querySelector(`[data-draw-tool='${tool}']`));
-    const host = root.querySelector(".board-host");
-    boardEvent(host, "pointerdown", host.querySelector(`[data-screen='${frame.id}']`), 370, 150);
-    boardEvent(host, "pointermove", host, ...end); boardEvent(host, "pointerup", host, ...end);
-    await waitFor(() => !editor.boardDraft && app.activity.get(`board:${editor.resourceId}`)?.phase !== "pending", "The stroke did not save.");
-  };
-  await stroke("pen", [430, 230]); await stroke("marker", [400, 190]);
-  let strokes = editor.authoritative.document.screens.find((screen) => screen.id === frame.id).root.kids;
-  assert.equal(strokes.length, 2); assert.equal(strokes[0].strokeWidth, 2.2); assert.equal(strokes[1].opacity, 0.4);
-  let host = root.querySelector(".board-host");
-  boardEvent(host, "pointerdown", host.querySelector(`[data-screen='${frame.id}']`), 380, 180); boardEvent(host, "pointermove", host, 460, 250);
-  boardEvent(host, "keydown", host, 0, 0, { key: "Escape" });
-  assert.equal(editor.boardDraft, null);
-  await stroke("eraser", [410, 205]);
-  await waitFor(() => app.activity.get(`erase:${editor.resourceId}`)?.phase === "success", "The eraser did not finish.");
-  strokes = editor.authoritative.document.screens.find((screen) => screen.id === frame.id).root.kids;
-  assert.equal(strokes.length, 0); assert.equal(deletes.length, 2);
-  const read = (await request(app.api, "GET", "/blueprint/boards/:resourceId", { params: { resourceId: editor.resourceId } })).data.document;
-  assert.equal(read.screens.find((screen) => screen.id === frame.id).root.kids.length, 0);
-  const { addNode } = await import("../gui/app/blueprint.mjs");
-  await addNode(app.api, editor, { screenId: "empty", parentId: editor.authoritative.document.screens[0].root.id,
-    node: { id: "lite-stroke", name: "Retained Lite stroke", t: "vector", kind: "pen", place: { x: 40, y: 100 }, w: 80, h: 80,
-      d: "M0 0 L100 100", fill: "none", stroke: "#f5f1f6", strokeWidth: 2.2, future: "Lite metadata" } });
-  renderShell(app); host = root.querySelector(".board-host");
-  boardEvent(host, "pointerdown", host.querySelector("[data-screen='empty']"), 80, 140);
-  boardEvent(host, "pointerup", host, 80, 140);
-  await waitFor(() => app.activity.get(`erase:${editor.resourceId}`)?.phase === "success" && deletes.length === 3, "The eraser ignored a retained Lite stroke outside the hand frame.");
-  assert.equal(editor.authoritative.document.screens[0].root.kids.some((node) => node.id === "lite-stroke"), false);
-});
-
-test("the board attach picker searches groups and aliases and commits canonical unique members", async (t) => {
-  const desktop = await openedBoardDesktop(t), { app, root, document } = desktop;
-  await waitFor(() => app.unitList?.catalog?.length, "Units did not load.");
-  const members = ["project:shop:executor-shop", "env:web:overlord-web"];
-  const group = await createGroup(app.api, "Checkout launch", members);
-  app.store.indexes.groups.set(group.data.id, group.data);
-  app.editors.current.attachmentChoice = new Set();
-  click(root.querySelector("[data-action='attach']"));
-  const chooser = document.querySelector("[data-form='attach']");
-  assert.equal(chooser.querySelector("[data-attach-search]").getAttribute("aria-label"), "Search agents and clusters");
-  typeInput(chooser.querySelector("[data-attach-search]"), "Checkout", 0, 0);
-  assert.equal(chooser.querySelectorAll("[data-attach-unit]").length, 0);
-  click(chooser.querySelector("[data-attach-group]"));
-  typeInput(chooser.querySelector("[data-attach-search]"), "executor-shop", 0, 0);
-  click(chooser.querySelector("[data-attach-unit='project:shop:executor-shop']"));
-  assert.equal(chooser.querySelector("[data-action='save-attachments']").textContent, "Attach 2");
-  click(chooser.querySelector("[data-action='save-attachments']"));
-  await waitFor(() => document.querySelector("[data-form='attach']") == null, "The picker did not save.");
-  assert.deepEqual([...app.editors.current.attached].sort(), [...members].sort());
-});
-
-test("the board attach picker lists agents that load after it opened", async (t) => {
-  const desktop = await openedBoardDesktop(t), { app, root, document } = desktop;
-  await waitFor(() => app.unitList?.catalog?.length, "Units did not load.");
-  const loaded = app.unitList.catalog;
-  app.unitList.catalog = [];
-  app.editors.current.attachmentChoice = new Set();
-  click(root.querySelector("[data-action='attach']"));
-  const chooser = document.querySelector("[data-form='attach']");
-  assert.equal(chooser.querySelectorAll("[data-attach-unit]").length, 0);
-  app.unitList.catalog = loaded;
-  app.unitList.onUpdate();
-  assert.equal(chooser.querySelectorAll("[data-attach-unit]").length > 0, true, "the open picker shows the agents once they arrive");
-  click(chooser.querySelector("[data-action='cancel-form']"));
-  assert.equal(app.attachRepaint, null);
-});
-
-test("board text saves later typing, comments pin full anchors, and conflict controls retain both versions", async (t) => {
-  let release, held = false; const hold = new Promise((resolve) => { release = resolve; }); t.after(() => release());
-  const desktop = await openedBoardDesktop(t, async (url, init) => {
-    if (init?.method === "PUT" && String(url).includes("/blueprint/boards/") && !held) { held = true; await hold; }
-  });
-  const { app, root } = desktop, editor = app.editors.current;
-  let host = root.querySelector(".board-host");
-  clickEvent(host, { target: host.querySelector("[data-node='label']"), offsetX: 20, offsetY: 24 });
-  typeInput(root.querySelector("[data-node-text='label']"), "First typing", 0, 0);
-  await waitFor(() => held, "The first save did not start.");
-  typeInput(root.querySelector("[data-node-text='label']"), "Later typing", 0, 0); release();
-  await waitFor(() => !editor.boardDraft && editor.authoritative.document.screens[0].root.kids[0].value === "Later typing", "An older acknowledgment replaced later typing.");
-  click(root.querySelector("button[data-board-tool='comment']")); host = root.querySelector(".board-host");
-  clickEvent(host, { target: host.querySelector("[data-node='label']"), offsetX: 20, offsetY: 24 });
-  assert.equal(root.querySelector(".board-breadcrumb").textContent, "Empty cart / Root / Label");
-  typeInput(root.querySelector("[data-board-comment]"), "Anchored note", 0, 0);
-  click(root.querySelector(".board-comment-actions").querySelector(".primary"));
-  await waitFor(() => editor.threads.some((thread) => !thread.pending && thread.messages?.some((message) => message.text === "Anchored note")), "The comment did not save.");
-  const thread = editor.threads.find((thread) => thread.messages?.some((message) => message.text === "Anchored note"));
-  assert.ok(root.querySelector(`[data-comment-pin='${thread.id}']`));
-  assert.equal(thread.anchor.element, "label");
-  const { setBoardDraft } = await import("../gui/app/blueprint.mjs");
-  const local = structuredClone(editor.authoritative.document); local.title = "Local draft"; setBoardDraft(editor, local);
-  const incoming = await request(app.api, "PUT", "/blueprint/boards/:resourceId", { operation: createOperation({ method: "PUT", path: "/blueprint/boards/:resourceId", params: { resourceId: editor.resourceId },
-    body: { document: { ...editor.authoritative.document, title: "Incoming board" }, expectedRevision: editor.revision } }) });
-  const remote = { ...incoming.data, by: "project:shop:executor-shop" };
-  editor.conflict = { remote, revision: remote.revision }; renderShell(app);
-  click(root.querySelector("[data-action='show-changes']"));
-  assert.equal(root.querySelector("[data-board-changes]").querySelectorAll("pre").length, 2);
-  click(root.querySelector("[data-action='discard-draft']"));
-  await waitFor(() => editor.authoritative.document.title === "Incoming board" && !editor.historyPending, "Reload did not persist its conflict answer.");
-  assert.equal(editor.authoritative.document.title, "Incoming board");
-  assert.equal(editor.conflictCopies.at(-1).local.document.title, "Local draft");
-  assert.equal(editor.conflictCopies.at(-1).remote.by, "project:shop:executor-shop");
-});
-
-test("a preceding save never commits a pointer preview that is later canceled", async (t) => {
-  let release; const hold = new Promise((resolve) => { release = resolve; }); t.after(() => release());
-  let count = 0;
-  const { app, root } = await openedBoardDesktop(t, async (url, init) => {
-    if (init?.method === "PUT" && String(url).includes("/blueprint/boards/")) { count++; if (count === 1) await hold; }
-  });
-  const editor = app.editors.current;
-  let host = root.querySelector(".board-host");
-  clickEvent(host, { target: host.querySelector("[data-node='label']"), offsetX: 20, offsetY: 24 });
-  typeInput(root.querySelector("[data-node-text='label']"), "Committed text", 0, 0);
-  await waitFor(() => count === 1, "The preceding save did not start.");
-  host = root.querySelector(".board-host");
-  boardEvent(host, "pointerdown", host.querySelector("[data-node='label']"), 20, 24);
-  boardEvent(host, "pointermove", host, 60, 64); release();
-  await waitFor(() => app.activity.get(`board:${editor.resourceId}`)?.phase === "success", "The preceding save did not finish.");
-  assert.equal(root.querySelector(".board-host"), host);
-  boardEvent(host, "pointercancel", host, 60, 64);
-  assert.equal(count, 1); assert.equal(editor.boardDraft, null);
-  assert.equal(editor.authoritative.document.screens[0].root.kids[0].place.x, 12);
-  assert.equal(editor.authoritative.document.screens[0].root.kids[0].value, "Committed text");
-});
-
-test("Frame and Text create normal nodes and Fill edits the selection in place", async (t) => {
-  const { app, root } = await openedBoardDesktop(t), editor = app.editors.current;
-  click(root.querySelector("button[data-board-tool='frame']"));
-  let host = root.querySelector(".board-host");
-  boardEvent(host, "pointerdown", host, 500, 120); boardEvent(host, "pointermove", host, 800, 680); boardEvent(host, "pointerup", host, 800, 680);
-  await waitFor(() => !editor.boardDraft && editor.authoritative.document.screens.length === 2, "The new frame did not save.");
-  const frame = editor.authoritative.document.screens.at(-1);
-  assert.deepEqual([frame.x, frame.y, frame.w, frame.h], [500, 120, 300, 560]);
-  click(root.querySelector("button[data-board-tool='text']")); host = root.querySelector(".board-host");
-  boardEvent(host, "pointerdown", host, 520, 150);
-  await waitFor(() => !editor.boardDraft && root.querySelector("[data-node-text]"), "The new text did not save.");
-  let node = editor.authoritative.document.screens.at(-1).root.kids.at(-1);
-  assert.deepEqual(node.place, { x: 20, y: 30 }); assert.equal(node.t, "text");
-  const fill = root.querySelector("[data-node-fill]"); changeSelect(fill, "#bdcd79");
-  await waitFor(() => !editor.boardDraft && editor.authoritative.document.screens.at(-1).root.kids.at(-1).color === "#bdcd79", "Fill did not save.");
-  assert.equal(editor.authoritative.document.sentinel, "document-sentinel");
-});
-
-test("Keep mine rebases a rejected board write under a new operation and retains the remote version", async (t) => {
-  let release, puts = 0; const hold = new Promise((resolve) => { release = resolve; }); t.after(() => release());
-  const { app, root } = await openedBoardDesktop(t, async (url, init) => {
-    if (init?.method === "PUT" && String(url).includes("/blueprint/boards/")) { puts++; if (puts === 1) await hold; }
-  });
-  const editor = app.editors.current, original = structuredClone(editor.authoritative.document);
-  const host = root.querySelector(".board-host");
-  clickEvent(host, { target: host.querySelector("[data-node='label']"), offsetX: 20, offsetY: 24 });
-  typeInput(root.querySelector("[data-node-text='label']"), "Keep local typing", 0, 0);
-  await waitFor(() => puts === 1, "The local write did not start.");
-  const remote = { ...original, title: "Committed remotely" };
-  const operation = createOperation({ method: "PUT", path: `/blueprint/boards/${editor.resourceId}`, body: { document: remote, expectedRevision: editor.revision } });
-  await request(app.api, operation.method, operation.path, { operation }); release();
-  await waitFor(() => app.activity.get(`board:${editor.resourceId}`)?.phase === "error" && editor.conflict?.remote, "The stale write did not retain a conflict.");
-  const failedId = app.activity.get(`board:${editor.resourceId}`).operation.id;
-  click(root.querySelector("[data-action='reapply-draft']"));
-  await waitFor(() => !editor.boardDraft && !editor.historyPending && !app.activity.has(`board:${editor.resourceId}`), "Keep mine did not commit its conflict answer.");
-  assert.equal(puts, 2); assert.notEqual(app.activity.get(`board:${editor.resourceId}`)?.operation?.id, failedId);
-  assert.equal(editor.authoritative.document.screens[0].root.kids[0].value, "Keep local typing");
-  assert.deepEqual(editor.conflictCopies.at(-1).remote.document, remote);
-});
-
-function libraryMenu(desktop, entry, action) {
-  click(desktop.root.querySelector(`[data-library-more="${entry.id}"]`));
-  click(desktop.root.querySelector(`[data-action="library-${action}"]`));
-}
-
-for (const kind of ["blueprint", "void"]) test(`the ${kind} library shares header, filters, menus and inline rename without losing a draft`, async (t) => {
-  const desktop = await libraryDesktop(t, kind);
-  const { app, root, document, fixture, state } = desktop;
-  const header = root.querySelector(".library-header");
-  assert.deepEqual(header.children.slice(1).map((node) => node.getAttribute("data-action")), ["library-filters", "new-folder", "open-create"]);
-  assert.equal(root.querySelector("[data-library]").getAttribute("data-library"), kind);
-  const entry = app.editors.catalog.find((item) => !item.readOnly);
-  click(root.querySelector(`[data-library-more="${entry.id}"]`));
-  assert.deepEqual(root.querySelector('[data-library-menu="item"]').querySelectorAll("button").map((node) => node.querySelector("span").textContent), ["Rename", "Duplicate", "Move to folder", "Delete"]);
-  click(root.querySelector('[data-action="library-filters"]'));
-  const menu = root.querySelector('[data-library-menu="filters"]');
-  for (const handler of menu.listeners.get("keydown") ?? []) handler({ key: "Escape", preventDefault() {} });
-  openLibraryItem(desktop, entry.id);
-  await waitFor(() => app.editors.current?.resourceId === entry.id && root.querySelector("[data-comment]"), "The selected editor did not open.");
-  typeInput(root.querySelector("[data-comment]"), "Kept comment draft", 3, 8);
-  const current = app.editors.current;
-  libraryMenu(desktop, entry, "rename");
-  let input = root.querySelector(`[data-library-rename="${entry.id}"]`);
-  typeInput(input, "Renamed library item", 2, 8);
-  await fixture.control.emit("service.changed", { machine: "DESKTOP" });
-  await waitFor(() => root.querySelector(`[data-library-rename="${entry.id}"]`) !== input, "The rename did not survive a live render.");
-  input = root.querySelector(`[data-library-rename="${entry.id}"]`);
-  assert.equal(document.activeElement, input); assert.equal(input.selectionStart, 2); assert.equal(input.selectionEnd, 8);
-  assert.equal(input.value, "Renamed library item"); assert.equal(app.editors.current, current);
-  for (const handler of input.listeners.get("keydown")) handler({ key: "Escape", preventDefault() {} });
-  assert.equal(state.rename, null); assert.equal(document.activeElement.getAttribute("data-id"), entry.id);
-  libraryMenu(desktop, entry, "rename");
-  input = root.querySelector(`[data-library-rename="${entry.id}"]`);
-  typeInput(input, "Renamed library item", 0, 20);
-  fixture.control.setFault({ method: "PATCH", path: `/api/v1/editors/${entry.id}/library`, status: 503, code: "service_unavailable" });
-  for (const handler of input.listeners.get("keydown")) handler({ key: "Enter", preventDefault() {} });
-  await waitFor(() => state.rename?.error, "A failed inline rename did not keep its draft.");
-  assert.equal(state.rename.title, "Renamed library item"); assert.equal(app.editors.current, current);
-  click(root.querySelector('[data-action="save-library-name"]'));
-  await waitFor(() => !state.rename && app.editors.catalog.some((item) => item.title === "Renamed library item"), "The rename retry did not commit.");
-  assert.equal(app.editors.current.commentText, "Kept comment draft");
-  assert.equal(app.editors.current, current);
-  click(root.querySelector('[data-action="library-filters"]'));
-  assert.equal(root.querySelector('[data-library-menu="filters"]').querySelectorAll("button").length, 3);
-  click(root.querySelector('[data-action="library-open-comments"]'));
-  await waitFor(() => root.querySelector('[data-filter-chip="openComments"]'), "The filter chip did not appear.");
-  assert.equal(state.filters.openComments, true);
-  click(root.querySelector('[data-action="remove-open-comments"]'));
-  await waitFor(() => !root.querySelector('[data-filter-chip="openComments"]'), "The removed filter stayed active.");
-  assert.equal(state.filters.openComments, undefined);
-});
-
-test("new board requires a project, Empty has one frame and duplication uses actual content", async (t) => {
-  const desktop = await libraryDesktop(t);
-  click(desktop.root.querySelector('[data-action="open-create"]'));
-  let form = desktop.document.querySelector('[data-form="library-create"]');
-  assert.equal(form.querySelector("h2").textContent, "New board");
-  assert.equal(form.querySelectorAll('[name="creation"]').length, 3);
-  typeInput(form.querySelector('[data-field="create-title"]'), "One frame", 0, 9);
-  click(form.querySelector('[data-action="create-resource"]'));
-  assert.equal(form.querySelector('[data-field-error="project"]').textContent, text("en", "projectRequired"));
-  assert.equal(desktop.app.editors.current, null);
-  changeSelect(form.querySelector('[name="project"]'), "shop");
-  click(form.querySelector('[data-action="create-resource"]'));
-  await waitFor(() => desktop.app.editors.current?.authoritative?.title === "One frame", "The empty board did not open.");
-  assert.equal(desktop.app.editors.current.authoritative.document.screens.length, 1);
-  assert.equal(desktop.app.editors.current.authoritative.document.pages.length, 1);
-  const entry = desktop.app.editors.catalog.find((item) => item.title === "Cart");
-  const source = (await request(desktop.app.api, "GET", "/blueprint/boards/:resourceId", { params: { resourceId: entry.id } })).data;
-  libraryMenu(desktop, entry, "duplicate");
-  form = desktop.document.querySelector('[data-form="library-create"]');
-  assert.equal(form.querySelector('[data-field="create-title"]').value, "Cart copy");
-  click(form.querySelector('[data-action="create-resource"]'));
-  await waitFor(() => desktop.app.editors.current?.authoritative?.title === "Cart copy", "The duplicate did not open.");
-  assert.deepEqual(desktop.app.editors.current.authoritative.document.screens, source.document.screens);
-  assert.deepEqual(desktop.app.editors.current.authoritative.document.pages, source.document.pages);
-  assert.equal(desktop.app.editors.current.authoritative.document.sentinel, source.document.sentinel);
-  assert.deepEqual(desktop.app.editors.current.attached, []);
-  assert.deepEqual(desktop.app.editors.current.threads, []);
-});
-
-test("new folders open inline, nested contents keep counts and folder deletion names its scope", { timeout: 15000 }, async (t) => {
-  const desktop = await libraryDesktop(t, "void");
-  const { app, root, document, state } = desktop;
-  click(root.querySelector('[data-action="new-folder"]'));
-  const form = document.querySelector('[data-form="library-folder"]');
-  changeSelect(form.querySelector('[name="project"]'), "shop");
-  click(form.querySelector('[data-action="confirm-form"]'));
-  await waitFor(() => root.querySelector("[data-library-rename]") && !document.querySelector('[data-form="library-folder"]'), "The new folder did not enter inline rename.");
-  let input = root.querySelector("[data-library-rename]");
-  assert.equal(document.activeElement === input, true);
-  typeInput(input, "Release", 0, 7);
-  click(root.querySelector('[data-action="save-library-name"]'));
-  await waitFor(() => !state.rename && state.folders.some((item) => item.title === "Release"), "The folder name did not commit.");
-  const folder = state.folders.find((item) => item.title === "Release");
-  assert.equal(root.querySelector(`[data-library-folder="${folder.id}"]`).querySelector(".library-count").textContent, "0");
-  const entry = app.editors.catalog.find((item) => item.title === "Release notes");
-  libraryMenu(desktop, entry, "move");
-  await waitFor(() => document.querySelector('[data-form="library-move"]'), "The move chooser did not open.");
-  const move = document.querySelector('[data-form="library-move"]');
-  changeSelect(move.querySelector('[name="folderId"]'), folder.id);
-  click(move.querySelector('[data-action="confirm-form"]'));
-  await waitFor(() => app.editors.catalog.find((item) => item.id === entry.id)?.folderId === folder.id, "The same-project move did not commit.");
-  assert.equal(document.querySelector('[data-library-repository-confirm]'), null);
-  assert.equal(root.querySelector(`[data-library-folder="${folder.id}"]`).querySelector(".library-count").textContent, "1");
-  libraryMenu(desktop, state.folders.find((item) => item.id === folder.id), "delete");
-  await waitFor(() => document.querySelector('[data-library-delete="folder"]'), "The folder delete confirmation did not open.");
-  const dialog = document.querySelector('[data-library-delete="folder"]');
-  assert.match(dialog.querySelector("p").textContent, /1 text go/);
-  assert.match(dialog.querySelector("p").textContent, /subfolders/);
-  assert.match(dialog.querySelector("p").textContent, /10 seconds/);
-  dialog.close();
-  assert.equal(app.editors.catalog.some((item) => item.id === entry.id), true);
-  assert.equal(document.activeElement.getAttribute("data-action"), `folder-${folder.id}`);
-});
-
-test("text deletion retries one operation and restores the selected draft with ten-second Undo", async (t) => {
-  const desktop = await libraryDesktop(t, "void");
-  const { app, root, document, fixture } = desktop;
-  const entry = app.editors.catalog.find((item) => item.title === "Release notes");
-  openLibraryItem(desktop, entry.id);
-  await waitFor(() => root.querySelector("[data-source]"), "The text did not open.");
-  app.editors.current.voidSaver = documentSaver(app.api, app.editors.current, () => {}, 10000);
-  typeInput(root.querySelector("[data-source]"), "Unsent source", 2, 5);
-  const current = app.editors.current;
-  libraryMenu(desktop, entry, "delete");
-  await waitFor(() => document.querySelector('[data-library-delete="item"]'), "The delete confirmation did not open.");
-  let dialog = document.querySelector('[data-library-delete="item"]');
-  assert.match(dialog.querySelector("p").textContent, /text and its comments/);
-  dialog.close(); assert.equal(app.editors.current, current);
-  libraryMenu(desktop, entry, "delete");
-  await waitFor(() => document.querySelector('[data-library-delete="item"]'), "The delete confirmation did not reopen.");
-  dialog = document.querySelector('[data-library-delete="item"]');
-  fixture.control.setFault({ method: "DELETE", path: `/api/v1/editors/${entry.id}`, status: 503, code: "service_unavailable" });
-  click(dialog.querySelector("button.primary"));
-  await waitFor(() => dialog.querySelector("[data-dialog-error]"), "The failed delete did not stay open.");
-  assert.equal(app.editors.catalog.some((item) => item.id === entry.id), true);
-  click(dialog.querySelector("button.primary"));
-  await waitFor(() => root.querySelector('[data-action="library-undo"]'), "The committed delete did not offer Undo.");
-  assert.equal(root.querySelector('[data-library-countdown]').textContent, "10 s");
-  assert.equal(app.editors.current, null);
-  click(root.querySelector('[data-action="library-undo"]'));
-  await waitFor(() => app.editors.current === current && app.editors.catalog.some((item) => item.id === entry.id), "Undo did not restore the text and selected draft.");
-  assert.equal(root.querySelector("[data-source]").value, "Unsent source");
-  libraryMenu(desktop, app.editors.catalog.find((item) => item.id === entry.id), "delete");
-  await waitFor(() => document.querySelector('[data-library-delete="item"]'), "The second confirmation did not open.");
-  click(document.querySelector('[data-library-delete="item"]').querySelector("button.primary"));
-  await waitFor(() => root.querySelector('[data-action="library-undo"]'), "The second Undo did not appear.");
-  const end = app.libraryToast.until; app.api.now = () => end;
-  renderShell(app);
-  assert.equal(root.querySelector('[data-action="library-undo"]'), null);
-});
-
-test("cross-project GUI movement confirms both repositories and moves real-core bytes with Undo", async (t) => {
-  const fixture = await makeCoreFixture(); t.after(() => disposeCoreFixture(fixture));
-  const projects = [];
-  for (const name of ["shop", "api"]) {
-    const localPath = join(fixture.root, name); await mkdir(localPath);
-    await mkdir(join(fixture.paths.mind, "user", "projects", name), { recursive: true });
-    projects.push({ name, localPath });
-  }
-  const core = await composeCore({ store: fixture.store, paths: fixture.paths, projects, now: () => fixture.clock.now });
-  t.after(() => core.http.close());
-  const origin = `http://127.0.0.1:${core.http.port}`;
-  const login = await fetch(`${origin}/api/v1/auth/local`, { method: "POST", headers: { Origin: origin, Authorization: `Bearer ${core.bootstrap.secret}`, "Content-Type": "application/json" }, body: JSON.stringify({ embedded: false, hostOrigin: null, look: null, language: null }) });
-  assert.equal(login.status, 201);
-  const token = (await login.json()).data.token;
-  const api = apiFrom(`${origin}/#session=${token}`);
-  await request(api, "POST", "/units", { operation: createOperation({ method: "POST", path: "/units", body: { unit: "overseer", role: "overseer", scope: "root", machine: fixture.machine } }) });
-  const source = await createResource(api, "blueprint", { project: "shop", document: { formatVersion: 1, id: "physical", title: "Physical board", note: "", pages: [{ id: "main", title: "Main", objects: [], order: ["frame"], start: "frame" }], screens: [{ id: "frame", title: "Frame", pageId: "main", x: 0, y: 0, w: 100, h: 100, root: { id: "root", name: "Frame", t: "box", place: { x: 0, y: 0 }, dir: "stack", w: 100, h: 100, kids: [] } }], links: [], components: [], fonts: [], threads: [], sentinel: "actual-core" } });
-  const before = await readFile(join(projects[0].localPath, source.data.path));
-  const desktop = await bootApp(`${origin}/#session=${token}`, 1440, []); t.after(() => dispose(desktop.app));
-  navigate(desktop.app, "blueprint");
-  await waitFor(() => desktop.app.editors?.catalog?.some((item) => item.id === source.data.id), "The actual core library did not load.");
-  assert.deepEqual(libraryState(desktop.app.editors, "blueprint").projects.map((project) => project.id), ["api", "shop"]);
-  const entry = desktop.app.editors.catalog.find((item) => item.id === source.data.id);
-  openLibraryItem(desktop, entry.id);
-  await waitFor(() => desktop.app.editors.current?.resourceId === entry.id, "The real board did not open.");
-  libraryMenu(desktop, entry, "move");
-  await waitFor(() => desktop.document.querySelector('[data-form="library-move"]'), "The destination chooser did not open.");
-  let form = desktop.document.querySelector('[data-form="library-move"]');
-  changeSelect(form.querySelector('[name="project"]'), "api");
-  click(form.querySelector('[data-action="confirm-form"]'));
-  await waitFor(() => desktop.document.querySelector('[data-library-repository-confirm]'), "The distinct repository confirmation did not open.");
-  let dialog = desktop.document.querySelector('[data-library-repository-confirm]');
-  assert.match(dialog.querySelector("p").textContent, /shop repository to the api repository/);
-  assert.deepEqual(await readFile(join(projects[0].localPath, source.data.path)), before);
-  dialog.close();
-  assert.equal(desktop.app.editors.current.resourceId, source.data.id);
-  libraryMenu(desktop, entry, "move");
-  await waitFor(() => desktop.document.querySelector('[data-form="library-move"]'), "The move chooser did not reopen.");
-  form = desktop.document.querySelector('[data-form="library-move"]');
-  changeSelect(form.querySelector('[name="project"]'), "api"); click(form.querySelector('[data-action="confirm-form"]'));
-  await waitFor(() => desktop.document.querySelector('[data-library-repository-confirm]'), "The repository confirmation did not reopen.");
-  dialog = desktop.document.querySelector('[data-library-repository-confirm]'); await clickAndWait(dialog.querySelector("button.primary"));
-  await waitFor(() => desktop.app.editors.current?.authoritative?.project === "api" && desktop.root.querySelector('[data-action="library-undo"]'), "The physical move did not commit.");
-  await assert.rejects(readFile(join(projects[0].localPath, source.data.path)), (error) => error.code === "ENOENT");
-  assert.deepEqual(await readFile(join(projects[1].localPath, source.data.path)), before);
-  assert.notEqual(desktop.app.editors.current.resourceId, source.data.id);
-  await clickAndWait(desktop.root.querySelector('[data-action="library-undo"]'));
-  await waitFor(() => desktop.app.editors.current?.resourceId === source.data.id, "Undo did not restore the original resource identity.");
-  assert.deepEqual(await readFile(join(projects[0].localPath, source.data.path)), before);
-  await assert.rejects(readFile(join(projects[1].localPath, source.data.path)), (error) => error.code === "ENOENT");
-  const sourceText = await createResource(api, "void", { project: "shop", path: "docs/physical-text.json", document: { formatVersion: 1, id: "physical-text", title: "Physical text", pages: [{ k: "Intro.Welcome", en: "Original text", es: "Texto original" }] } });
-  navigate(desktop.app, "document");
-  await waitFor(() => desktop.app.editors.catalog.some((item) => item.id === sourceText.data.id), "The real text did not appear in the library.");
-  const textEntry = desktop.app.editors.catalog.find((item) => item.id === sourceText.data.id);
-  openLibraryItem(desktop, textEntry.id);
-  await waitFor(() => desktop.root.querySelector("[data-source]"), "The real text did not open.");
-  desktop.app.editors.current.voidSaver = documentSaver(desktop.app.api, desktop.app.editors.current, () => {}, 10000);
-  typeInput(desktop.root.querySelector("[data-source]"), "Unsaved text", 2, 6);
-  libraryMenu(desktop, textEntry, "move");
-  await waitFor(() => desktop.document.querySelector('[data-form="library-move"]'), "The text destination chooser did not open.");
-  form = desktop.document.querySelector('[data-form="library-move"]');
-  changeSelect(form.querySelector('[name="project"]'), "api"); click(form.querySelector('[data-action="confirm-form"]'));
-  await waitFor(() => desktop.document.querySelector('[data-library-repository-confirm]'), "The text repository confirmation did not open.");
-  await clickAndWait(desktop.document.querySelector('[data-library-repository-confirm]').querySelector("button.primary"));
-  await waitFor(() => desktop.app.editors.current?.authoritative?.project === "api" && desktop.root.querySelector('[data-action="library-undo"]'), "The physical text move did not commit.");
-  const movedTextId = desktop.app.editors.current.resourceId;
-  assert.equal(desktop.root.querySelector("[data-source]").value, "Unsaved text");
-  assert.equal(textDraft(desktop.app.editors.current, movedTextId, "Intro.Welcome", "en"), "Unsaved text");
-  assert.equal(desktop.app.store.open.editors.has(textEntry.id), false);
-  assert.equal(desktop.app.store.open.editors.has(movedTextId), true);
-  await clickAndWait(desktop.root.querySelector('[data-action="library-undo"]'));
-  await waitFor(() => desktop.app.editors.current?.resourceId === textEntry.id, "Undo did not restore the text's original identity.");
-  assert.equal(textDraft(desktop.app.editors.current, textEntry.id, "Intro.Welcome", "en"), "Unsaved text");
-  assert.equal(desktop.root.querySelector("[data-source]").value, "Unsaved text");
 });
 
 function accessibilityRules(css) {
@@ -7001,7 +4906,7 @@ test("T062 measures exact six-look text and alpha surfaces and retains its evide
     assert.ok(row.ratio >= 3, `${row.look} ${row.indicator}/${row.surface}: ${row.ratio}`);
     assert.ok(controlEvidence.includes(accessibilityControlEvidenceRow(row)), `Missing non-text pair: ${row.look} ${row.indicator}/${row.surface}`);
   }
-  for (const selector of [".comment-send:disabled", ".comment-preference.no-agents", ".settings-panel .btn:disabled"]) {
+  for (const selector of [".settings-panel .btn:disabled"]) {
     assert.equal(rules.find(rule => rule.selectors.includes(selector)).values.opacity, "1", selector);
   }
   for (const look of ["modern", "high-contrast", "nebula", "txmska", "coffee-cat", "ntk"]) {
@@ -7015,13 +4920,13 @@ test("T062 measures exact six-look text and alpha surfaces and retains its evide
   }
 });
 
-test("provenance links and the Remove action keep 4.5:1 on their surfaces in every look", async () => {
+test("provenance links keep 4.5:1 on their surfaces in every look", async () => {
   const rules = accessibilityRules(await readFile(new URL("../gui/app/styles.css", import.meta.url), "utf8"));
   const value = (selector, property) => rules.filter(rule => rule.selectors.includes(selector)).map(rule => rule.values[property]).filter(Boolean).at(-1);
   for (const look of ["modern", "high-contrast", "nebula", "txmska", "coffee-cat", "ntk"]) {
     const palette = accessibilityPalette(rules, look);
     const resolve = raw => accessibilityColor(raw.replace(/^var\((--[\w-]+)\)$/, (_, name) => palette[name]));
-    for (const [selector, surface] of [[".add-content-row .add-origin", ".add-content-row"], [".library-menu-row.is-danger", ".library-menu"]]) {
+    for (const [selector, surface] of [[".add-content-row .add-origin", ".add-content-row"]]) {
       const background = resolve(value(surface, "background"));
       const foreground = accessibilityComposite(resolve(value(`[data-look="${look}"] ${selector}`, "color") ?? value(selector, "color")), background);
       const ratio = accessibilityRatio(foreground, background);
@@ -7048,23 +4953,19 @@ test("T062 retains local faces, minimum hit geometry, zoom reflow and status sha
     assert.equal(declaration(selector)["min-inline-size"], "32px");
     assert.equal(declaration(selector)["min-block-size"], "32px");
   }
-  for (const [selector, width, height] of [[".icon-button", 36, 36], [".board-tool", 32, 32], [".board-resize", 32, 32],
-    [".board-swatch", 32, 32], [".comment-send", 34, 34], [".map-handle", 44, 44], [".phone-code-cell", 40, 50]]) {
+  for (const [selector, width, height] of [[".icon-button", 36, 36], [".map-handle", 44, 44], [".phone-code-cell", 40, 50]]) {
     assert.equal(parseFloat(declaration(selector).width), width, selector);
     assert.equal(parseFloat(declaration(selector).height), height, selector);
     assert.ok(width >= 32 && height >= 32, selector);
   }
-  for (const selector of [".segmented .segment", ".comment-preference-label", ".settings-content-item", ".settings-change label"]) {
+  for (const selector of [".segmented .segment", ".settings-content-item", ".settings-change label"]) {
     assert.equal(declaration(selector)["min-height"], "32px", selector);
   }
-  assert.equal(declaration(".board-resize::before").width, "9px");
-  assert.equal(declaration(".board-resize::before").height, "9px");
   assert.equal(declaration(".phone-code-input").height, "100%");
   assert.equal(declaration(".phone-gate")["overflow-y"], "auto");
   assert.match(css, /\.settings-looks\s*\{\s*grid-template-columns:\s*repeat\(auto-fit, minmax\(166px, 1fr\)\)/);
   assert.match(css, /@media \(max-width: 360px\)[\s\S]*grid-template-columns: repeat\(3, 40px\)/);
   assert.match(css, /prefers-reduced-motion: reduce[\s\S]*animation: none !important/);
-  assert.equal(declaration('[data-mode="focus"]')["--bg"], "#000000");
   assert.equal(declaration(":root")["--qr-dark"], "#000000");
   assert.equal(declaration(":root")["--qr-light"], "#ffffff");
   assert.match(declaration('.status-dot[data-status="waiting"]')["box-shadow"], /2px/);
@@ -8488,6 +6389,7 @@ test('a service that is not set up opens the new agent form with its role chosen
   assert.ok(dialog.querySelector("[data-action='open-runs-picker']"));
   click(dialog.querySelector("[data-action='create-agent']"));
   await waitFor(() => app.unitList.catalog.some(unit => unit.id === 'root:incubator'), 'The Incubator was not created.');
+  await waitFor(() => !document.querySelector("[data-start-dialog='agent']"), 'The runtime choice did not finish saving.');
   const unit = (await request(app.api, 'GET', '/units/:unitId', { params: { unitId: 'root:incubator' } })).data;
   assert.equal(unit.role, 'incubator');
   assert.equal(unit.runsIn.client, 'codex', 'where it runs is set right after it is created');
@@ -8688,9 +6590,8 @@ test('a button that starts an action shows a loader while it runs, again after a
 });
 
 test('the same failure is one notice with one Retry, the sentence reads whole and slow requests are one notice', async t => {
-  const desktop = await openedBoardDesktop(t);
+  const desktop = await openedDesktop(t);
   desktop.app.mode = 'map';
-  desktop.app.editors.current = null;
   desktop.app.language = 'es';
   const timeout = new ApiError(0, 'timeout', 'The request timed out.');
   desktop.app.activity = new Map([
@@ -8722,9 +6623,8 @@ test('an Overseer that holds state does not say it starts fresh', () => {
 });
 
 test('an unread conversation says it could not be read instead of saying it has no messages', async t => {
-  const desktop = await openedBoardDesktop(t);
+  const desktop = await openedDesktop(t);
   desktop.app.mode = 'map';
-  desktop.app.editors.current = null;
   const chat = desktop.app.chatList.catalog[0];
   desktop.app.thread = createThread(chat);
   desktop.app.store.selected.chatId = chat.id;
@@ -8739,9 +6639,8 @@ test('an unread conversation says it could not be read instead of saying it has 
 });
 
 test('the inspector keeps its scroll position when the shell draws again', async t => {
-  const desktop = await openedBoardDesktop(t);
+  const desktop = await openedDesktop(t);
   desktop.app.mode = 'map';
-  desktop.app.editors.current = null;
   renderShell(desktop.app);
   desktop.root.querySelector('.panel.inspector').scrollTop = 180;
   renderShell(desktop.app);
@@ -8798,40 +6697,10 @@ test('a tab whose service stopped says so and how to open it again instead of a 
   assert.equal(cause.includes('30 s'), false);
 });
 
-test('the library folds the unavailable projects into one row and keeps Refresh and Register on one small line', async t => {
-  const desktop = await openedBoardDesktop(t);
-  navigate(desktop.app, 'blueprint');
-  desktop.app.editors.catalogIssues = [{ project: 'ntk.solutions', code: 'project_unavailable' }, { project: 'Cosmic', code: 'project_unavailable' }];
-  desktop.app.editors.catalogLoading = true;
-  renderShell(desktop.app);
-  const row = desktop.root.querySelector('[data-action="library-issues"]');
-  assert.equal(row.getAttribute('aria-expanded'), 'false');
-  assert.equal(row.children.find(child => child.tag === 'span').textContent, '2 repositories are not on this machine');
-  assert.equal(desktop.root.querySelectorAll('[data-library-issue]').length, 0);
-  click(row);
-  assert.deepEqual(desktop.root.querySelectorAll('[data-library-issue]').map(item => item.getAttribute('data-library-issue')), ['ntk.solutions', 'Cosmic']);
-  desktop.app.language = 'es';
-  renderShell(desktop.app);
-  assert.equal(desktop.root.querySelector('[data-action="library-issues"]').children.find(child => child.tag === 'span').textContent, '2 repositorios no están en esta máquina');
-  desktop.app.language = 'en';
-  desktop.app.editors.catalogIssues = [{ project: 'Cosmic', code: 'project_unavailable' }];
-  renderShell(desktop.app);
-  assert.equal(desktop.root.querySelector('[data-action="library-issues"]').children.find(child => child.tag === 'span').textContent, '1 repository is not on this machine');
-  click(desktop.root.querySelector('[data-action="library-issues"]'));
-  assert.equal(desktop.root.querySelectorAll('[data-library-issue]').length, 0, 'the row folds again');
-  const footer = desktop.root.querySelector('[data-library-footer="blueprint"]');
-  assert.ok(footer.querySelector('[data-action="refresh-catalog"]'));
-  assert.ok(footer.querySelector('[data-action="open-register"]'));
-  for (const button of [footer.querySelector('[data-action="refresh-catalog"]'), footer.querySelector('[data-action="open-register"]')]) assert.ok(button.className.split(/\s+/).includes('ghost'), 'both are secondary buttons');
-  assert.ok(desktop.root.querySelector('[data-catalog-progress]'));
-  // With no board open, the title is one word, never "Blueprint Blueprint".
-  assert.notEqual(desktop.root.querySelector('[data-editor-title]').textContent, 'Blueprint Blueprint');
-});
 
 test('the agent menu offers to remove the agent and asks before removing it', async t => {
-  const desktop = await openedBoardDesktop(t);
+  const desktop = await openedDesktop(t);
   desktop.app.mode = 'map';
-  desktop.app.editors.current = null;
   const executor = desktop.app.unitList.catalog.find(unit => unit.id === 'project:shop:executor-shop');
   desktop.app.mapState.selection = new Set([executor.id]);
   desktop.app.mapState.onSelection([executor.id]);
@@ -8847,10 +6716,9 @@ test('the agent menu offers to remove the agent and asks before removing it', as
 });
 
 test('a request is called slow only after five seconds; before that the button loader is enough', async t => {
-  const desktop = await openedBoardDesktop(t);
+  const desktop = await openedDesktop(t);
   desktop.app.slowNoticeAfterS = undefined;
   desktop.app.mode = 'map';
-  desktop.app.editors.current = null;
   if (!desktop.app.activity) desktop.app.activity = new Map();
   desktop.app.activity.set('older:shop', { key: 'older:shop', phase: 'pending', scope: 'unit', label: 'Loading earlier messages', elapsed: 4 });
   renderShell(desktop.app);
@@ -8861,9 +6729,8 @@ test('a request is called slow only after five seconds; before that the button l
 });
 
 test('a failure notice can be closed without retrying', async t => {
-  const desktop = await openedBoardDesktop(t);
+  const desktop = await openedDesktop(t);
   desktop.app.mode = 'map';
-  desktop.app.editors.current = null;
   if (!desktop.app.activity) desktop.app.activity = new Map();
   desktop.app.activity.set('older:shop', { key: 'older:shop', phase: 'error', scope: 'unit', label: 'Loading earlier messages', error: { code: 'timeout' } });
   renderShell(desktop.app);
@@ -9140,57 +7007,6 @@ test("at 1024 px the bar keeps Add, what waits and Details, and the rest sits in
   assert.deepEqual(desktop.app.mapState.view, view);
 });
 
-test("at 800 px the Map carries a Hierarchy button, More holds Details too, and at 1440 px the bar and the panels are as they were", async (t) => {
-  const fixture = await createGuiFixture();
-  t.after(() => fixture.close());
-  const small = await bootApp(fixture.desktopUrl, 800, []);
-  t.after(() => dispose(small.app));
-  await waitFor(() => small.app.unitList?.catalog?.length, "The lists did not load.");
-  const toggle = () => small.root.querySelector("[data-action='toggle-catalog']");
-  assert.equal(toggle().className.includes("stage-toggle"), true);
-  assert.equal(toggle().children.at(-1).textContent, "Hierarchy");
-  assert.equal(small.root.querySelector(".bar").querySelector("[data-action='toggle-catalog']"), null, "the toggle left the bar");
-  assert.equal(small.root.querySelector(".side").className.includes("is-open"), false);
-  click(toggle());
-  assert.equal(small.root.querySelector(".side").className.includes("is-open"), true);
-  assert.equal(toggle().getAttribute("aria-pressed"), "true");
-  pressKey(small, "Escape");
-  assert.equal(small.root.querySelector(".side").className.includes("is-open"), false, "Escape closes the side drawer");
-  click(small.root.querySelector("[data-action='bar-more']"));
-  assert.deepEqual(small.document.querySelector("[data-context-menu]").querySelectorAll("button").map((button) => button.children.at(-1).textContent), ["Details", "Activity", "Open on the phone", "Settings"]);
-  click(small.document.querySelector("[data-action='context-details']"));
-  assert.equal(small.root.querySelector(".inspector").className.includes("is-open"), true);
-  small.app.language = "es";
-  navigate(small.app, "blueprint");
-  await waitFor(() => small.root.querySelector("[data-editor-column='resource']"), "The board column did not open.");
-  assert.equal(toggle().children.at(-1).textContent, "Tableros");
-  navigate(small.app, "document");
-  await waitFor(() => small.root.querySelector("[data-editor-idle='void']"), "The text column did not open.");
-  assert.equal(toggle().children.at(-1).textContent, "Textos");
-  const wide = await bootApp(fixture.desktopUrl, 1440, []);
-  t.after(() => dispose(wide.app));
-  await waitFor(() => wide.app.unitList?.catalog?.length, "The lists did not load.");
-  click(wide.root.querySelector("[data-action='bar-more']"));
-  assert.deepEqual(wide.document.querySelector("[data-context-menu]").querySelectorAll("button").map((button) => button.children.at(-1).textContent), ["Activity", "Open on the phone", "Settings"]);
-  for (const action of ["open-phone", "open-notifications", "toggle-inspector", "open-settings"]) assert.ok(wide.root.querySelector(`[data-action='${action}']`), action);
-  assert.deepEqual(wide.root.querySelector(".workspace").children.map((child) => child.className.split(" ").find((name) => ["side", "stage", "inspector"].includes(name))), ["side", "stage", "inspector"]);
-  const css = await readFile("gui/app/styles.css", "utf8");
-  const block = (query, from = 0) => { const start = css.indexOf(query, from); return css.slice(start, css.indexOf("\n}", start)); };
-  const drawer = block("@media (max-width: 1180px)");
-  assert.match(drawer, /\.bar \{ flex-wrap: nowrap; \}/);
-  for (const action of ["open-phone", "open-notifications", "open-settings"]) assert.ok(drawer.includes(`.bar [data-action="${action}"]`), action);
-  assert.match(drawer, /\.bar-more \{ display: inline-flex; \}/);
-  assert.match(drawer, /\.pill-label \{ display: none; \}/);
-  assert.match(drawer, /\.foot-read,\s+\.shell\[data-layout="desktop"\] \.foot-machine\[data-answers="true"\] \{ display: none; \}/);
-  assert.match(drawer, /\.inspector\.is-open \{[^}]*width: min\(100%, 340px\);[^}]*border: 1px solid var\(--line2\); border-radius: 18px; box-shadow: var\(--panel-shadow\);/);
-  const range = block("@media (min-width: 988px) and (max-width: 1180px)");
-  assert.match(range, /--side: 260px/);
-  assert.match(range, /grid-template-columns: var\(--side\) minmax\(0, 1fr\)/);
-  assert.match(range, /\.inspector\.is-open \{ grid-column: 2; grid-row: 1; justify-self: end; \}/);
-  const narrow = block("@media (max-width: 987px)", css.indexOf("@media (max-width: 987px)") + 30);
-  assert.match(narrow, /\.brand-name,\s+\.shell\[data-layout="desktop"\] \.bar \[data-action="toggle-inspector"\] \{ display: none; \}/);
-  assert.match(css, /\.stage-toggle \{[^}]*position: absolute; top: 12px; left: 12px;/);
-});
 
 test("opening a Waiting row from a selected cluster clears the cluster, and Open task selects the agent of the task", async (t) => {
   const fixture = await createGuiFixture();

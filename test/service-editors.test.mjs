@@ -12,7 +12,7 @@ import { addNode, answerProposal, createAsset, createBoard, commentRecipients, c
 import { createFolder, duplicateEditor, importBoard, listFolders, moveEditor, patchEditorLibrary, patchFolder, readLegacyExport, removeEditor, removeFolder } from '../engine/service/editors.mjs';
 import { listHistory, restoreHistory, resolveConflict, setCommentStatus } from '../engine/service/editors.mjs';
 import { replaceTextMatches, undoTextReplace } from '../engine/service/editors.mjs';
-import { legacyModuleUrls } from '../gui/app/main.mjs';
+import { legacyModuleUrls } from './legacy-module-urls.mjs';
 import { undoChange } from '../engine/service/store.mjs';
 import { atomicWrite, commitTransaction, recoverTransactions, withReceipt } from '../engine/service/store.mjs';
 import { createEventBus } from '../engine/service/events.mjs';
@@ -126,7 +126,7 @@ test('replace and Undo recover the entire multi-text journal and replay one rece
   });
 });
 
-test('HTTP whole replace and Undo bind desktop permission exact bodies bounded matches receipts and the same-origin worker', async (t) => {
+test('HTTP whole replace and Undo bind desktop permission exact bodies bounded matches receipts and the app module', async (t) => {
   const { context, fixture, cleanups } = await shop(t);
   const first = await createText(context, { project: 'shop', path: 'docs/http.json', document: release() });
   const core = await composeCore({ store: fixture.store, paths: fixture.paths, now: context.now, projects: context.projects }); cleanups.push(() => core.http.close());
@@ -149,8 +149,8 @@ test('HTTP whole replace and Undo bind desktop permission exact bodies bounded m
   assert.deepEqual(replay.json.data, saved.json.data);
   const undo = await call(core.http.port, 'POST', `/api/v1/void/replace/${saved.json.data.changeId}/undo`, { token, body: {}, headers: { 'idempotency-key': randomUUID() } });
   assert.equal(undo.status, 200); assert.equal(undo.json.data.editors[0].document.pages[0].en, first.document.pages[0].en);
-  const worker = await call(core.http.port, 'GET', '/app/find-worker.mjs');
-  assert.equal(worker.status, 200); assert.match(worker.headers['content-security-policy'], /worker-src 'self'/);
+  const module = await call(core.http.port, 'GET', '/app/embedded-apps.mjs');
+  assert.equal(module.status, 200); assert.match(module.headers['content-security-policy'], /script-src 'self'/);
 });
 
 function legacyModule(id = 'legacy') {

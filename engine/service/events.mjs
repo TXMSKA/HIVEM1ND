@@ -5,6 +5,7 @@ import { CoreError, isUuid } from './identity.mjs';
 import { DESKTOP } from './security.mjs';
 
 export const EVENT_NAMES = [
+  'app.bridge',
   'plan.changed', 'run.changed', 'run.log', 'run.alert', 'run.closed', 'session.work',
   'stream.ready', 'stream.reset', 'service.changed', 'unit.changed', 'view.changed',
   'session.changed', 'session.request.changed', 'session.context', 'chat.changed', 'cluster.changed', 'group.changed', 'message.created', 'message.read',
@@ -41,7 +42,8 @@ export function createEventBus({ now = () => Date.now(), machine = 'DESKTOP', st
 
   function emit(event) {
     if (!event || !EVENT_NAMES.includes(event.name)) throw new CoreError(422, 'invalid_body', 'The event name is not part of the contract.');
-    const marker = event.operationId ? `${event.operationId}\n${event.name}` : null;
+    const ephemeral = event.name === 'app.bridge';
+    const marker = !ephemeral && event.operationId ? `${event.operationId}\n${event.name}` : null;
     if (marker) {
       if (operations.has(marker)) return { emitted: false, duplicate: true, id: null };
       operations.add(marker);
@@ -51,7 +53,7 @@ export function createEventBus({ now = () => Date.now(), machine = 'DESKTOP', st
     if (event.name !== 'editor.history.changed' && resourceId && revision && revisionRelation(latestRevision(event.name, resourceId), revision) === 'equal') {
       return { emitted: false, duplicate: true, id: null };
     }
-    sequence += 1;
+    if (!ephemeral) sequence += 1;
     const record = {
       id: `${startupId}:${sequence}`,
       name: event.name,
@@ -67,8 +69,10 @@ export function createEventBus({ now = () => Date.now(), machine = 'DESKTOP', st
       revision,
       operationId: event.operationId ?? null,
     };
-    ring.push(record);
-    prune();
+    if (!ephemeral) {
+      ring.push(record);
+      prune();
+    }
     for (const subscriber of subscribers) deliver(subscriber, record);
     return { emitted: true, duplicate: false, id: record.id };
   }
@@ -206,6 +210,7 @@ function present(principal, record) {
 }
 
 function visible(principal, record, mind) {
+  if (record.name === 'app.bridge') return principal.audience === 'desktop';
   if (principal.audience !== 'agent') return true;
   if (record.name === 'settings.changed' || record.name === 'sync.changed' || record.name === 'sync.conflict' || record.name === 'service.changed') return false;
   if (record.name === 'library.changed' || record.name === 'editor.removed') return false;

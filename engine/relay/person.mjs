@@ -33,31 +33,36 @@ export async function createPersonRelay({ mindPath, tool, hostname = os.hostname
   const sessionId = `${tool}-${hostname}`;
   const relay = operations ?? await openRelayOperations({ ...serviceOptions, mindPath, hostname, sessionId, client: 'master' });
   let registered = false;
-  const destinations = new Map();
-
-  async function agentFor(project) {
+  async function listFor(project) {
     const { units } = await relay.status();
     const candidates = units.filter((item) => item.scope === `project:${project}` && item.state === 'in')
-      .sort((a, b) => Number(b.unit.startsWith('executor-')) - Number(a.unit.startsWith('executor-'))
+      .sort((a, b) => Number(b.role === 'executor' || b.unit.startsWith('executor-')) - Number(a.role === 'executor' || a.unit.startsWith('executor-'))
         || String(b.date ?? '').localeCompare(String(a.date ?? '')));
-    if (!candidates.length) return null;
-    const selected = candidates[0];
-    const id = selected.id ?? selected.unitId ?? selected.unit;
-    destinations.set(project, id);
-    const awake = relay.awake ? await relay.awake(id) : (await enabledWakeUnits(path.resolve(mindPath), clock())).has(selected.unit.toLowerCase());
-    return { unit: selected.unit, awake };
+    if (!candidates.length) return [];
+    const enabled = relay.awake ? null : await enabledWakeUnits(path.resolve(mindPath), clock());
+    return Promise.all(candidates.map(async (selected) => {
+      const id = selected.id ?? selected.unitId ?? `project:${project}:${selected.unit}`;
+      const awake = relay.awake ? await relay.awake(id) : enabled.has(selected.unit.toLowerCase());
+      return { id, unit: selected.unit, name: selected.alias || selected.name || selected.unit, awake };
+    }));
   }
 
-  async function send({ project, subject, body, attachments = [] }) {
-    const agent = await agentFor(project);
+  async function agentFor(project) {
+    const selected = (await listFor(project))[0];
+    return selected ? { unit: selected.unit, awake: selected.awake } : null;
+  }
+
+  async function send({ project, subject, body, attachments = [], to, requestId }) {
+    const candidates = await listFor(project);
+    const agent = to === undefined ? candidates[0] : candidates.find((item) => item.id === to || item.unit === to);
     if (!agent) return { sent: false, reason: 'no-agent' };
     if (!registered) {
       await relay.register({ unit: 'master', nativeSessionId: sessionId, client: 'master' });
       registered = true;
     }
-    const result = await relay.send({ to: relay.awake ? destinations.get(project) : agent.unit, subject: oneLine(subject) || 'Message from the person', body: String(body ?? ''), attachments, priority: 'normal' });
+    const result = await relay.send({ to: relay.awake ? agent.id : agent.unit, subject: oneLine(subject) || 'Message from the person', body: String(body ?? ''), attachments, priority: 'normal', ...(requestId && relay.awake ? { requestId } : {}) });
     return { sent: true, to: agent.unit, id: result.id };
   }
 
-  return { agentFor, send };
+  return { agentFor, listFor, send };
 }
