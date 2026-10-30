@@ -32,6 +32,17 @@ export async function replicate({ origin, transport = null, getTransport = null,
   const localHeads = headsByMachine(await call(local, 'listHeads'));
   const remoteHeads = headsByMachine(await call(selected, 'listHeads'));
   const result = { pushed: 0, pulled: 0, headsPushed: 0, headsPulled: 0 };
+  let writesAllowed = true;
+  const canWrite = owner => writesAllowed && (typeof selected.canWriteMachine !== 'function' || selected.canWriteMachine(owner));
+  const publish = async (method, ...args) => {
+    try { await call(selected, method, ...args); return true; }
+    catch (error) {
+      // Losing Relay+ leaves reads and local application available in this same pass.
+      if (error?.code !== 'relayplus_required') throw error;
+      writesAllowed = false;
+      return false;
+    }
+  };
   // Publish local work before a slow foreign history can delay its availability to other members.
   const machines = [...new Set([...localHeads.keys(), ...remoteHeads.keys()])].sort((left, right) => Number(right === machine) - Number(left === machine) || left.localeCompare(right, 'en'));
   for (const owner of machines) {
@@ -48,18 +59,16 @@ export async function replicate({ origin, transport = null, getTransport = null,
       const remotePack = inspectPack(remoteBytes, head, entry, Boolean(remoteHead?.packs.some((item) => item.sequence === entry.sequence)), keyProvider);
       const bytes = localPack ?? remotePack;
       if (!bytes) throw missingPack(owner, entry.sequence);
-      if (!remotePack) {
-        await call(selected, 'writePack', owner, entry.sequence, bytes);
-        result.pushed += 1;
+      if (!remotePack && canWrite(owner)) {
+        if (await publish('writePack', owner, entry.sequence, bytes)) result.pushed += 1;
       }
       if (!localPack && owner !== machine) {
         await call(local, 'writePack', owner, entry.sequence, bytes);
         result.pulled += 1;
       }
     }
-    if (!remoteHead || remoteHead.sequence < head.sequence) {
-      await call(selected, 'writeHead', head);
-      result.headsPushed += 1;
+    if ((!remoteHead || remoteHead.sequence < head.sequence) && canWrite(owner)) {
+      if (await publish('writeHead', head)) result.headsPushed += 1;
     }
     if (owner !== machine && (!localHead || localHead.sequence < head.sequence)) {
       await call(local, 'writeHead', head);

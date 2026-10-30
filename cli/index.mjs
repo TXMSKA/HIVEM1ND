@@ -40,6 +40,7 @@ Usage:
   onem1nd relay <in|register|send|link|inbox|read|history|threads|status|events|reminder|delivery|mcp|hook|wake|configure|unconfigure|diagnose> [options]
   onem1nd relan <status|join <code>|host|leave> [options]
   onem1nd relan peer <add|remove> <address>[:port] [options]
+  onem1nd relay-plus <sign-in|status|sign-out|create-key|recover|inbox|outbox|request-approval|inspect|approve|accept> [options]
   onem1nd uninstall [--dry-run] [--remove-mind] [options]
   onem1nd service <install|uninstall|status|run|launch> [--dry-run] [options]
   onem1nd task status <project> <id> <status> [--note <text>]
@@ -182,6 +183,7 @@ export function parseArgs(argv) {
   if (!Array.isArray(argv)) throw new CliUsageError("Arguments must be an array.");
   if (argv[0] === "relay") return parseRelayArgs(argv.slice(1));
   if (argv[0] === "relan") return parseRelanArgs(argv.slice(1));
+  if (argv[0] === "relay-plus") return parseRelayPlusArgs(argv.slice(1));
   if (argv[0] === "service") return parseServiceArgs(argv.slice(1));
   if (argv[0] === "task") return parseTaskArgs(argv.slice(1));
   if (argv.length === 0) return { help: true };
@@ -344,6 +346,26 @@ function parseRelanArgs(tokens) {
     options.address = positional[1];
   } else if (positional.length) throw new CliUsageError(`relan ${action} does not accept positional arguments.`);
   return { command: "relan", options };
+}
+
+function parseRelayPlusArgs(tokens) {
+  const action = tokens[0];
+  if (!action || ['--help', '-h'].includes(action)) return { command: 'relay-plus', help: true };
+  if (!['sign-in', 'status', 'sign-out', 'create-key', 'recover', 'inbox', 'outbox', 'request-approval', 'inspect', 'approve', 'accept'].includes(action)) throw new CliUsageError('Unknown relay-plus action.');
+  const options = { action };
+  const flags = new Map([['--mind-path', 'mindPath'], ['--cosmic-path', 'cosmicPath'], ['--home-dir', 'homeDir'],
+    ['--hostname', 'hostname'], ['--device-id', 'deviceId'], ['--message-id', 'messageId'], ['--fingerprint', 'fingerprint']]);
+  for (let index = 1; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token === '--json') { options.json = true; continue; }
+    const key = flags.get(token);
+    if (!key || !tokens[index + 1] || tokens[index + 1].startsWith('-') || Object.hasOwn(options, key)) throw new CliUsageError(`Invalid relay-plus option: ${token}`);
+    options[key] = tokens[++index];
+  }
+  if (['request-approval', 'inspect', 'approve', 'accept'].includes(action) && !options.deviceId) throw new CliUsageError('--device-id is required.');
+  if (['inspect', 'approve', 'accept'].includes(action) && !options.messageId) throw new CliUsageError('--message-id is required.');
+  if (action === 'approve' && !options.fingerprint) throw new CliUsageError('--fingerprint is required.');
+  return { command: 'relay-plus', options };
 }
 
 function parseTaskArgs(tokens) {
@@ -1760,6 +1782,9 @@ export async function runCli(argv, dependencies = {}) {
     } else if (parsed.command === "relan") {
       const { runRelanCommand } = await import("../engine/relan/cli.mjs");
       return await runRelanCommand(parsed.options, dependencies, output);
+    } else if (parsed.command === 'relay-plus') {
+      const { runRelayPlusCommand } = await import('../engine/relay-plus/cli.mjs');
+      return await runRelayPlusCommand(parsed.options, dependencies, output);
     } else {
       return await runLifecycle(parsed.command, parsed.options, dependencies, output);
     }

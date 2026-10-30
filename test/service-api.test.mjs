@@ -1010,6 +1010,15 @@ test('every contract route has a success result and an authority or boundary fai
   expectStatus(await call(relanCore.http.port, 'POST', '/api/v1/relan', relanRequest(relanToken, { action: 'invalid' })), 422, 'ReLAN invalid action');
   expectStatus(await call(port, 'POST', '/api/v1/relan', relanRequest(token, { action: 'status' })), 503, 'ReLAN unconfigured service');
   hit('POST', '/relan');
+  const relayPlusStatus = await call(relanCore.http.port, 'POST', '/api/v1/relay-plus', relanRequest(relanToken, { action: 'status' }));
+  expectStatus(relayPlusStatus, 200, 'Relay+ signed-out status');
+  assert.equal(relayPlusStatus.json.data.state, 'signed-out');
+  for (const audience of ['phone', 'agent']) {
+    const denied = relanCore.credentials.issue({ audience, unitId: 'root:executor', capabilities: ['read'] });
+    expectStatus(await call(relanCore.http.port, 'POST', '/api/v1/relay-plus', relanRequest(denied.token, { action: 'status' })), 403, 'Relay+ desktop authority');
+  }
+  expectStatus(await call(relanCore.http.port, 'POST', '/api/v1/relay-plus', relanRequest(relanToken, { action: 'status', unknown: true })), 400, 'Relay+ unknown field');
+  hit('POST', '/relay-plus');
   await writeBeat({ store: fixture.store, paths, now: () => fixture.clock.now }, 'running');
 
   for (const template of ['/view', '/units', '/leads', '/squads', '/projects', '/machines', '/sync', '/sessions', '/layout', '/settings', '/chats', '/mailboxes', '/approvals', '/tasks', '/waiting']) {

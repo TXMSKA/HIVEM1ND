@@ -114,6 +114,8 @@ export async function createSetupSession(options = {}) {
     cosmicPath: options.cosmicPath ? path.resolve(options.cosmicPath) : null,
     originKind: options.originKind ?? 'folder',
     originPath: options.originPath ?? '',
+    relayPlus: options.relayPlus,
+    relayPlusControl: options.relayPlusControl ?? null,
     legacySourcePath: options.legacySourcePath ? path.resolve(options.legacySourcePath) : null,
     legacyControl: options.legacyControl ?? null,
     copyCheckpoint: options.copyCheckpoint ?? null,
@@ -314,6 +316,19 @@ class SetupSession {
       base.notice = text(language, 'detectedDefaults');
     }
     return base;
+  }
+
+  // Engine entry point only; the approved GUI continues to display its existing card.
+  async selectRelayPlus() {
+    if (!this.relayPlusControl) throw new CoreError(401, 'sign_in_required', 'Sign in through the local service before selecting Relay+.');
+    const status = await this.relayPlusControl({ action: 'status' });
+    if (!status.entitled) throw new CoreError(403, 'relayplus_required', 'This account needs Relay+.');
+    if (!['ready', 'configured'].includes(status.sync?.state)) throw new CoreError(409,
+      status.sync?.code ?? 'encryption_key_missing', status.sync?.message ?? 'Unlock the Cosmic account key before selecting Relay+.');
+    this.answers.originKind = 'relay-plus';
+    this.relayPlus = { ...this.relayPlus, enabled: true };
+    await this.persistDraft();
+    return { kind: 'relay-plus' };
   }
 
   async joinSummary() {
@@ -999,6 +1014,7 @@ class SetupSession {
         kitPath: this.kitPath,
         originKind: this.answers.originKind || 'folder',
         originPath: this.answers.originPath || null,
+        relayPlus: this.relayPlus,
         requireOrigin: false,
         dryRun: this.serviceDryRun !== false,
         run: this.serviceRunner,

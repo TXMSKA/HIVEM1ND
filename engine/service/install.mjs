@@ -381,6 +381,21 @@ export function bootstrapConfig(config) {
   if (!origin?.path || !['folder', 'onedrive', 'relan', 'relay-plus'].includes(origin.kind)) {
     fail(422, 'invalid_body', 'Config needs a supported origin and a local folder path.');
   }
+  let relayPlus;
+  if (config.relayPlus !== undefined) {
+    const value = config.relayPlus;
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+      || Object.keys(value).some(key => !['baseUrl', 'siteUrl', 'enabled', 'mindId'].includes(key))
+      || value.enabled !== undefined && typeof value.enabled !== 'boolean'
+      || value.mindId !== undefined && !/^[A-Za-z0-9_-]{1,64}$/.test(value.mindId)) fail(422, 'invalid_body', 'The Relay+ configuration is not valid.');
+    for (const address of [value.baseUrl, value.siteUrl].filter(value => value !== undefined)) {
+      let base;
+      try { base = new URL(address); } catch { fail(422, 'invalid_body', 'The Quantum URL is not valid.'); }
+      if (base.username || base.password || base.pathname !== '/' || base.search || base.hash
+        || !(base.protocol === 'https:' || base.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(base.hostname))) fail(422, 'invalid_body', 'The Quantum URL must use HTTPS or local loopback HTTP.');
+    }
+    relayPlus = { ...value };
+  }
   if (isInside(config.mindPath, config.stagingPath) || isInside(config.stagingPath, config.mindPath)) {
     fail(422, 'invalid_path', 'Staging cannot sit inside the mind.');
   }
@@ -396,6 +411,7 @@ export function bootstrapConfig(config) {
     machine: config.machine,
     origin: { kind: origin.kind, path: path.resolve(origin.path) },
     ...(encryption ? { encryption } : {}),
+    ...(relayPlus ? { relayPlus } : {}),
     stagingPath: path.resolve(config.stagingPath),
     port: 0,
     startWithWindows: config.startWithWindows ?? false,
@@ -528,6 +544,7 @@ export async function configureOwnedService(options = {}) {
     path: options.originPath ?? path.join(cosmic, 'onem1nd-origin', mindKey),
   };
   const config = bootstrapConfig({ mindPath, machine, origin, stagingPath, encryption: existing?.encryption,
+    relayPlus: options.relayPlus ?? existing?.relayPlus,
     startWithWindows: Object.hasOwn(options, 'startWithWindows') ? options.startWithWindows : existing?.startWithWindows ?? false,
     syncedRoots: options.syncedRoots ?? oneDriveRoots({ platform, env }) });
   const registration = {

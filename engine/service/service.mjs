@@ -14,6 +14,7 @@ import { closeOrigin, listMachineNames, openOrigin, readHead, readOriginPack, wa
 import { createPulse } from '../sync/pulse.mjs';
 import { validateHead } from '../sync/pack.mjs';
 import { createRelan } from '../relan/runtime.mjs';
+import { createRelayPlus } from '../relay-plus/runtime.mjs';
 import { clearInboundFailure, openSync, readInboundFailure, recordInboundFailure } from '../sync/store.mjs';
 import { clientRecords, createNativeAdapter, ownsSessionExecution, probeClients } from './adapters.mjs';
 import { ownChildProcess } from './process-handle.mjs';
@@ -171,6 +172,7 @@ export async function startService(options, retained = null) {
       sync: handle.runtime.sync,
       pulse: handle.runtime.pulse,
       relanControl: input => controlRelan(handle.runtime, input),
+      relayPlusControl: input => handle.runtime.relayPlus.control(input),
       adapters: handle.adapters.adapters,
       wake: { ...options.wake,
         touch: binding => handle.adopted?.controller?.wake.touch(binding),
@@ -232,7 +234,7 @@ export async function startService(options, retained = null) {
 export async function runConfiguredService(options = {}) {
   const located = await readConfiguredMind(options);
   // Codec support alone must not let a service without encrypted publication send plaintext.
-  if (located.config.encryption?.algorithm === 'aes-256-gcm' && located.config.origin.kind !== 'relan') {
+  if (located.config.encryption?.algorithm === 'aes-256-gcm' && !['relan', 'relay-plus'].includes(located.config.origin.kind)) {
     throw new CoreError(503, 'encryption_unavailable', 'Encrypted service publication is not configured.');
   }
   const platform = options.platform ?? process.platform;
@@ -259,6 +261,7 @@ export async function runConfiguredService(options = {}) {
     paths,
     projects,
     originKind: located.config.origin.kind,
+    relayPlus: { ...located.config.relayPlus, ...options.relayPlus },
     port: options.port ?? located.config.port,
     userKey: options.userKey,
     guardPort: options.guardPort,
@@ -683,6 +686,7 @@ export async function composeCore(options) {
     sync: runtime.sync,
     pulse: runtime.pulse,
     relanControl: input => controlRelan(runtime, input),
+    relayPlusControl: input => runtime.relayPlus.control(input),
     settingsOwner: runtime.settingsOwner,
     additionOwner: runtime.settingsOwner,
   });
@@ -868,12 +872,17 @@ async function openServiceSync(options, paths, { migrate = true } = {}) {
   const now = options.now ?? (() => Date.now());
   const sync = openSync({ store: options.store, paths, now, projects: options.projects ?? [] });
   let relan = null;
-  const usingRelan = options.originKind === 'relan';
-  const keyProvider = usingRelan ? keyId => relan?.keyProvider(keyId) ?? null : null;
+  let relayPlus = null;
+  const usingRelan = options.originKind === 'relan' || options.relan?.enabled === true;
+  const usingRelayPlus = options.originKind === 'relay-plus' || options.relayPlus?.enabled === true;
+  const keyProvider = usingRelan || usingRelayPlus
+    ? keyId => relayPlus?.keyProvider(keyId) ?? relan?.keyProvider(keyId) ?? null : null;
   const origin = openOrigin({ store: options.store, paths, now, machine: paths.machine, keyProvider });
   const ledger = openLedger({ store: options.store, paths, now, machine: paths.machine });
   const pulse = createPulse({ sync, origin, ledger, now, setTimeout: quietTimer, clearTimeout,
-    ...(usingRelan ? { encryption: () => relan.encryption(), keyProvider, ready: () => relan?.status().paired === true } : {}) });
+    ...(usingRelayPlus ? { encryption: () => relayPlus?.ready() ? relayPlus.encryption() : relan.encryption(), keyProvider,
+      ready: () => relayPlus?.ready() === true || relan?.status().paired === true }
+      : usingRelan ? { encryption: () => relan.encryption(), keyProvider, ready: () => relan?.status().paired === true } : {}) });
   const runtime = {
     sync,
     origin,
@@ -897,10 +906,23 @@ async function openServiceSync(options, paths, { migrate = true } = {}) {
   if (migrate) await migrateClusters(runtime.settingsOwner);
   await refreshClusterProjects(runtime.settingsOwner);
   try {
+    relayPlus = await createRelayPlus({ ...options.relayPlus, enabled: usingRelayPlus, origin, machine: paths.machine,
+      localDirectory: paths.localDirectory, store: options.store, aclRunner: options.aclRunner,
+      keyProvider, onKey: async () => {
+        if (runtime.closed) return;
+        await runtime.startSync?.();
+        if (runtime.syncStarted) await pulse.resume();
+      },
+      onReplicated: () => {
+        if (!runtime.syncStarted) { runtime.originWaiting = true; return; }
+        return reconcileOrigin(runtime);
+      } });
+    runtime.relayPlus = relayPlus;
     if (usingRelan) {
       relan = await createRelan({
         ...options.relan,
         origin, localDirectory: paths.localDirectory, machine: paths.machine, store: options.store,
+        keyProvider: keyId => relayPlus?.keyProvider(keyId) ?? null,
         aclRunner: options.aclRunner, now, startedAt: options.startedAt ?? now(),
         onKey: () => {
           if (runtime.closed) return;
@@ -922,11 +944,11 @@ async function openServiceSync(options, paths, { migrate = true } = {}) {
     // A service that answers first (deferSync) starts its first pass over the files, the publication of what is staged and the
     // settings report when the first view has been served, instead of before it listens: on a large M1ND those took the
     // start from seconds to tens of seconds. startSync is that start, and it runs once.
-    const defer = options.deferSync === true || usingRelan;
+    const defer = options.deferSync === true || usingRelan || usingRelayPlus;
     runtime.unwatchProject = await watchLocalChanges(runtime, changes => emitObserved(runtime, changes), { deferBaseline: defer });
     runtime.syncStarted = false;
     runtime.startSync = () => {
-      if (usingRelan && !relan.status().paired) return Promise.resolve();
+      if ((usingRelan || usingRelayPlus) && !relayPlus.ready() && !relan?.status().paired) return Promise.resolve();
       runtime.syncStart ??= (async () => {
         try {
           if (runtime.closed) return;
@@ -950,6 +972,7 @@ async function openServiceSync(options, paths, { migrate = true } = {}) {
     if (options.deferSync !== true) await runtime.startSync();
     runtime.unwatch = watchOrigin(origin, () => {
       relan?.wake();
+      if (usingRelayPlus) relayPlus?.wake();
       if (!runtime.syncStarted) {
         runtime.originWaiting = true;
         return;
@@ -1060,6 +1083,7 @@ async function closeServiceSync(runtime, { beat = true } = {}) {
   }
   await runtime.pulse.close().done;
   await runtime.relan?.close();
+  await runtime.relayPlus?.close();
   await closeOrigin(runtime.origin);
 }
 
