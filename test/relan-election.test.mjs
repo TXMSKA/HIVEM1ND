@@ -92,6 +92,40 @@ function allFollow(group, name) {
   return [...group.instances.values()].every((runtime) => runtime.status().host === name && runtime.status().hosting === (runtime.status().machine === name));
 }
 
+test('ReLAN recovers an unreachable member publication without changing host or retaining its outage error', async (t) => {
+  let disconnected = false;
+  const createServer = http.createServer;
+  t.mock.method(http, 'createServer', (...args) => {
+    const server = createServer(...args);
+    server.on('request', (request, response) => { if (disconnected) response.destroy(); });
+    return server;
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const group = await cluster(t, { names: ['MACHINE-A', 'MACHINE-B'] });
+  await eventually(() => allFollow(group, 'MACHINE-A'), 'The initial host was not elected.');
+  const host = group.instances.get('MACHINE-A');
+  const member = group.instances.get('MACHINE-B');
+  const epoch = host.status().epoch;
+  disconnected = true;
+  await eventually(() => host.status().lastError !== null, 'The host did not observe the unreachable member.');
+  const origin = group.origins.get('MACHINE-B');
+  const folder = openFolderTransport({ directory: origin.paths.origin, store: origin.store, keyProvider: member.keyProvider });
+  const bytes = encodePack({ machine: 'MACHINE-B', sequence: 1, changes: [], objects: [], encryption: member.encryption(), keyProvider: member.keyProvider });
+  await folder.writePack('MACHINE-B', 1, bytes);
+  await folder.writeHead({ format: 'hivem1nd-head-v1', machine: 'MACHINE-B', sequence: 1, updatedAt: new Date().toISOString(), // Compatibility: stored schemas and wire contracts retain their existing identifiers.
+    packs: [{ sequence: 1, file: packFileName(1), hash: hashBytes(bytes), bytes: bytes.length }] });
+  member.wake();
+  await eventually(() => member.status().lastError !== null, 'The offline publication did not encounter the outage.');
+  disconnected = false;
+  const received = openFolderTransport({ directory: group.origins.get('MACHINE-A').paths.origin, keyProvider: host.keyProvider });
+  await eventually(async () => (await received.listHeads()).some(head => head.machine === 'MACHINE-B'), 'The reconnected member did not deliver its offline publication.');
+  await eventually(() => host.status().lastError === null, 'The host retained the recovered member outage error.');
+  assert.deepEqual(await received.readPack('MACHINE-B', 1), bytes);
+  assert.ok(allFollow(group, 'MACHINE-A'));
+  assert.equal(host.status().epoch, epoch);
+});
+
 async function announceTo(sender, target) {
   const state = sender.status();
   const socket = createSocket('udp4');

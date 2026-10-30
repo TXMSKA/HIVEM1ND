@@ -50,6 +50,7 @@ export async function createRelan(options = {}) {
   let host = null;
   let lastHostAt = null;
   let lastError = null;
+  let lastErrorPeer = null;
   let remote = null;
   let remoteName = null;
   let closed = false;
@@ -119,8 +120,11 @@ export async function createRelan(options = {}) {
     };
   }
 
-  function report(error) {
-    if (!closed) lastError = { code: error?.code ?? 'relan_unavailable', message: error?.message ?? 'ReLAN is unavailable.' };
+  function report(error, peer = null) {
+    if (!closed) {
+      lastError = { code: error?.code ?? 'relan_unavailable', message: error?.message ?? 'ReLAN is unavailable.' };
+      lastErrorPeer = peer;
+    }
   }
 
   function announce() {
@@ -199,11 +203,17 @@ export async function createRelan(options = {}) {
     try {
       const state = await transport.getState();
       if (closed || currentNetwork !== networkGeneration || material !== currentMaterial || !validState(state) || state.relanId !== currentMaterial.relanId || state.machine !== packet.host) return;
+      if (lastErrorPeer === key) {
+        lastError = null;
+        lastErrorPeer = null;
+      }
       const seenAt = now();
       peers.set(state.machine, { ...state, rankingStartedAt: seenAt - state.uptimeMs, rankingStartedAfter: requestedAt - state.uptimeMs, address: source.address, port: packet.port, seenAt });
       maxEpoch = Math.max(maxEpoch, state.epoch);
       elect();
       remember(source.address, source.discoveryPort ?? source.port).catch(report);
+    } catch (error) {
+      if (currentNetwork === networkGeneration && material === currentMaterial) report(error, key);
     } finally {
       transport.close?.();
       probing.delete(key);
@@ -285,6 +295,7 @@ export async function createRelan(options = {}) {
       try {
         const result = await replicate({ origin, getTransport: () => remote, keyProvider });
         lastError = null;
+        lastErrorPeer = null;
         retryAt = null;
         if (result.pulled || result.headsPulled || result.pushed || result.headsPushed) await options.onReplicated?.(result);
       } catch (error) {
@@ -402,6 +413,7 @@ export async function createRelan(options = {}) {
     networkSignature = signature;
     openedAt = now();
     lastError = null;
+    lastErrorPeer = null;
     announce();
     options.onStatus?.(status());
   }
@@ -530,6 +542,7 @@ export async function createRelan(options = {}) {
     maxEpoch = 0;
     lastHostAt = null;
     lastError = null;
+    lastErrorPeer = null;
     peers.clear();
     pairing = newPairing();
     await options.onKey?.(null);

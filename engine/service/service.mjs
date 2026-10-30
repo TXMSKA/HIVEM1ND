@@ -7,11 +7,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CoreError, canonicalJson, hashBytes, isUuid, uuidV8, validateName } from './identity.mjs';
 import { assertNoLinks, localCosmic, mindKeyFor, servicePaths } from './paths.mjs';
-import { atomicWrite, bindProjects, createProjectionCache, createStore, noteProjectionChange, recoverTransactions } from './store.mjs';
+import { atomicWrite, bindProjects, createProjectionCache, createStore, noteProjectionChange, readBytes, recoverTransactions } from './store.mjs';
 import { applyPack, recoverIncomingGroups } from '../sync/apply.mjs';
 import { openLedger } from '../sync/limits.mjs';
 import { closeOrigin, listMachineNames, openOrigin, readHead, readOriginPack, watchOrigin, writeDurable } from '../sync/origin.mjs';
 import { createPulse } from '../sync/pulse.mjs';
+import { validateHead } from '../sync/pack.mjs';
 import { createRelan } from '../relan/runtime.mjs';
 import { clearInboundFailure, openSync, readInboundFailure, recordInboundFailure } from '../sync/store.mjs';
 import { clientRecords, createNativeAdapter, ownsSessionExecution, probeClients } from './adapters.mjs';
@@ -1130,7 +1131,12 @@ async function receiveOrigin(runtime) {
     if (machine === runtime.origin.machine) continue;
     const head = await readHead(runtime.origin, machine);
     const sequence = head?.sequence ?? 0;
-    for (let index = 1; index <= sequence; index += 1) {
+    const receivedBytes = await readBytes(runtime.sync.store, path.join(runtime.paths.localDirectory, 'received', machine, 'head.json'));
+    const received = receivedBytes ? validateHead(receivedBytes, { machine }) : null;
+    if (head) validateHead(head, { machine, previous: received });
+    // The received head checkpoints fully applied packs. Their immutable prefix has already been decoded and imported;
+    // replaying the entire history on each heartbeat delays newly published work behind old packs.
+    for (let index = (received?.sequence ?? 0) + 1; index <= sequence; index += 1) {
       if (runtime.closed) return;
       const packed = await readOriginPack(runtime.origin, machine, index);
       if (!packed) continue;
