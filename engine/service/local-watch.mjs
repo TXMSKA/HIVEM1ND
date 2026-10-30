@@ -24,6 +24,7 @@ export async function watchLocalChanges(runtime, onChanges, { deferBaseline = fa
     bus: runtime.bus, now: runtime.now, principal: { audience: 'desktop', unitId: 'root:master' },
   };
   const known = new Map();
+  const completedImports = new Set();
   const seen = new Map();
   let remembered = new Map();
   let saveTimer = null;
@@ -132,11 +133,9 @@ export async function watchLocalChanges(runtime, onChanges, { deferBaseline = fa
       if (error.code === 'ENOENT') return [];
       throw error;
     });
-    for (const name of names.filter(item => /^[a-f0-9-]+\.json$/.test(item))) {
-      const bytes = await readBytes(context.store, path.join(directory, name));
-      if (!bytes) continue;
+    await readImported(directory, names.filter(item => /^[a-f0-9-]+\.json$/.test(item)), (file, bytes) => {
       const group = JSON.parse(bytes.toString('utf8'));
-      if (!Array.isArray(group.ops)) continue;
+      if (!Array.isArray(group.ops)) return;
       for (const op of group.ops) {
         if (op.conflict || !['write', 'remove'].includes(op.kind)) continue;
         let target = op.target;
@@ -149,23 +148,37 @@ export async function watchLocalChanges(runtime, onChanges, { deferBaseline = fa
         known.set(key, target);
         if (group.done !== group.ops.length || group.emitted !== true) held.add(key);
       }
-    }
+      if (group.done === group.ops.length && group.emitted === true) completedImports.add(file);
+    });
+    if (closed) return held;
     const machines = await readdir(received, { withFileTypes: true }).catch(error => {
       if (error.code === 'ENOENT') return [];
       throw error;
     });
     for (const machine of machines) {
+      if (closed) return held;
       if (!machine.isDirectory() || machine.isSymbolicLink() || ['groups', 'pending'].includes(machine.name)) continue;
       const directory = path.join(received, machine.name);
       const names = await readdir(directory);
-      for (const name of names.filter(item => /^\d+\.applied\.json$/.test(item))) {
-        const bytes = await readBytes(context.store, path.join(directory, name));
-        if (!bytes) continue;
+      await readImported(directory, names.filter(item => /^\d+\.applied\.json$/.test(item)), (file, bytes) => {
         const record = JSON.parse(bytes.toString('utf8'));
         for (const target of record.targets ?? []) known.set(targetKey(target), target);
-      }
+        completedImports.add(file);
+      });
     }
     return held;
+  }
+
+  async function readImported(directory, names, visit) {
+    // Terminal import journals never change; active journals are reread so their targets stay held until completion.
+    const files = names.map(name => path.join(directory, name)).filter(file => !completedImports.has(file));
+    for (let index = 0; index < files.length && !closed; index += 32) {
+      const batch = files.slice(index, index + 32);
+      const records = await Promise.all(batch.map(file => readBytes(context.store, file)));
+      for (let offset = 0; offset < batch.length && !closed; offset += 1) {
+        if (records[offset]) visit(batch[offset], records[offset]);
+      }
+    }
   }
 
   async function reconcile(baseline = false) {
@@ -179,6 +192,7 @@ export async function watchLocalChanges(runtime, onChanges, { deferBaseline = fa
     localError = null;
     await bindRoots();
     await importedTargets();
+    if (closed) return;
     const targets = await eligibleTargets(runtime.sync);
     const candidates = new Map(targets.map(target => [targetKey(target), target]));
     for (const [key, target] of known) if (!candidates.has(key)) candidates.set(key, target);

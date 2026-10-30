@@ -637,8 +637,23 @@ async function recoverTransactionsLocked(store, beforeRecover) {
       throw error;
     }
     const recovered = [];
-    for (const name of names) recovered.push(await recoverOne(store, name.slice(0, -'.json'.length)));
+    // Completed journals are immutable history. Read that history in bounded batches; only unfinished journals need
+    // resource locks and an ordered replay. Serially opening every historical journal twice delays every restart.
+    for (let index = 0; index < names.length; index += 32) {
+      const batch = names.slice(index, index + 32);
+      const journals = await Promise.all(batch.map(async name => {
+        const bytes = await readBytesRaw(path.join(directory, name));
+        return bytes ? JSON.parse(bytes.toString('utf8')) : null;
+      }));
+      for (let offset = 0; offset < batch.length; offset += 1) {
+        const journal = journals[offset];
+        if (journal?.phase === 'committed' && journal.emitted) {
+          for (const entry of journal.entries ?? []) store.hidden.delete(materialize(store, entry));
+        } else recovered.push(await recoverOne(store, batch[offset].slice(0, -'.json'.length)));
+      }
+    }
     if (names.length > 0) noteProjectionChange(store);
+    store.recovered = true;
     return recovered.filter(Boolean);
   } finally {
     store.recovering = false;
