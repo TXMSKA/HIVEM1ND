@@ -55,6 +55,7 @@ test('removing an addition while the settings publisher holds its report lock st
   };
   t.after(() => { fixture.store.locks.acquire = base; });
   fixture.clock.now += 1000;
+  core.runtime.settingsOwner.active = false;
   const publishing = publishMachineSettings(core.runtime.settingsOwner, 'service').catch(() => undefined);
   await reportAcquired;
   removing = true;

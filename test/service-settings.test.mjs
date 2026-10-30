@@ -609,12 +609,12 @@ test('a running service answers a read of its own report from the last report an
   assert.equal(await readFile(file, 'utf8'), written);
   for (let index = 0; index < 3; index += 1) await readMachineSettings(domain, fixture.machine, 'permissions');
   assert.equal(cache.builds, builds + 1);
-  // A report older than five minutes is written again so its time stays meaningful.
+  // Service heartbeats carry freshness; unchanged reports retain their content time without creating sync history.
   noteProjectionChange(fixture.store);
   fixture.clock.now += 6 * 60000;
   const later = await readMachineSettings(domain);
-  assert.equal(later.reportedAt, new Date(fixture.clock.now).toISOString());
-  assert.notEqual(await readFile(file, 'utf8'), written);
+  assert.equal(later.reportedAt, first.reportedAt);
+  assert.equal(await readFile(file, 'utf8'), written);
   // The report a previous run left answers the first read of a new one while its own is built.
   const restarted = createSettingsOwner({ ...owner, key: null, lastReport: null, refreshing: null });
   const answer = await readMachineSettings({ ...restarted, settingsOwner: restarted });

@@ -300,7 +300,6 @@ export async function publishMachineSettings(context, section = null) {
 // keeps building on every read.
 const REPORT_MAX_AGE_MS = 60000;
 const REPORT_WAIT_MS = 1500;
-const REPORT_REWRITE_MS = 5 * 60000;
 
 async function currentReport(context) {
   const owner = ownerOf(context);
@@ -355,7 +354,7 @@ async function publishOwnedSettings(context, section) {
     clusterLinks: links.map(link => ({ ...link, localPath: null })), discoveryOffer: publicOffer(offer),
     connectedClients: refreshAgents ? await connectedClients(context) : existing.connectedClients ?? [],
   };
-  if (context.store.projectionCache && existing && !refreshAgents && Date.parse(existing.reportedAt) > Date.parse(body.reportedAt) - REPORT_REWRITE_MS) {
+  if (existing && !refreshAgents) {
     const { publicKey, signature, ...kept } = existing;
     if (canonicalJson({ ...kept, reportedAt: null }) === canonicalJson({ ...body, agents: existing.agents, reportedAt: null })) return existing;
   }
