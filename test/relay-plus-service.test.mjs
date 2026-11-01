@@ -84,6 +84,7 @@ test('signed-out runtime makes no Quantum requests; PKCE sign-in requests the ex
   const pending = await runtime.control({ action: 'sign-in' });
   const callback = new URL(new URL(pending.url).searchParams.get('redirectUri'));
   callback.searchParams.set('code', 'c'.repeat(43));
+  callback.searchParams.set('state', new URL(pending.url).searchParams.get('state'));
   assert.equal((await fetch(callback)).status, 200);
   // The callback persists credentials before the runtime loads the machine's key state.
   await new Promise(resolve => setTimeout(resolve, 50));

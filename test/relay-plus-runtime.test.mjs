@@ -74,6 +74,7 @@ test('runtime unlocks an existing protected account key, publishes encrypted his
   t.after(pending.cancel);
   const callback = new URL(new URL(pending.url).searchParams.get('redirectUri'));
   callback.searchParams.set('code', 'c'.repeat(43));
+  callback.searchParams.set('state', new URL(pending.url).searchParams.get('state'));
   assert.equal((await fetch(callback)).status, 200);
   await pending.complete;
   const binding = createHash('sha256').update(`${accountId}:${deviceId}`).digest('hex');

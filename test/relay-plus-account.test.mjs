@@ -47,6 +47,9 @@ test('loopback PKCE persists protected credentials, rotates once and revokes tok
   const callback = new URL(flow.searchParams.get('redirectUri'));
   assert.equal((await fetch(callback)).status, 400);
   callback.searchParams.set('code', 'c'.repeat(43));
+  callback.searchParams.set('state', 'forged');
+  assert.equal((await fetch(callback)).status, 400);
+  callback.searchParams.set('state', flow.searchParams.get('state'));
   assert.equal((await fetch(callback)).status, 200);
   assert.deepEqual(await pending.complete, { accountId: 'account-one', deviceId: 'device-one' });
   const saved = JSON.parse(await readFile(path.join(root, 'relay-plus/credentials.json'), 'utf8'));
@@ -60,7 +63,7 @@ test('loopback PKCE persists protected credentials, rotates once and revokes tok
   assert.equal(revokedDevice, '/v1/oauth/revoke');
   assert.equal((await account.status()).state, 'signed-out');
   const again = await account.beginSignIn(); flow = new URL(again.url);
-  const againCallback = new URL(flow.searchParams.get('redirectUri')); againCallback.searchParams.set('code', 'c'.repeat(43));
+  const againCallback = new URL(flow.searchParams.get('redirectUri')); againCallback.searchParams.set('code', 'c'.repeat(43)); againCallback.searchParams.set('state', flow.searchParams.get('state'));
   await fetch(againCallback); await again.complete;
   revoked = true;
   assert.equal((await account.status()).state, 'device_revoked_or_session_expired');

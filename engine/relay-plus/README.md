@@ -1,6 +1,6 @@
 # Relay+ Beta client
 
-The client targets Quantum contract `1.0.0-beta.1`, commit `1513657`.
+The client targets Quantum contract `1.0.0-beta.2`, commit `79289e0`. Sign-in sends a desktop `state` and refuses a callback that does not echo it.
 `onem1nd/relay-plus` exports the account, keys, messages, transport and feed clients.
 The desktop screens retain the approved Coming soon card.
 
@@ -41,7 +41,7 @@ through bootstrap and full listings before the captured cursor is saved.
 
 ## Cosmic account and M1ND keys
 
-The account content key K follows Quantum `docs/keys.md` at `1513657`.
+The account content key K follows Quantum `docs/keys.md` at `79289e0`.
 ONEM1ND reads the signed-in account's entry in
 `<Cosmic>/shared/keys/account.json` first. A missing entry requires the account's
 24-word Cosmic recovery phrase and `GET /v1/keys`; the existing `phrase` envelope

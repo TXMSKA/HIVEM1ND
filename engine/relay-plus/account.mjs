@@ -68,6 +68,8 @@ export function createRelayPlusAccount(options) {
     }
     const verifier = randomBytes(32).toString('base64url');
     const challenge = createHash('sha256').update(verifier).digest('base64url');
+    // Contract beta.2 echoes an optional desktop state; requiring it refuses callbacks this sign-in did not start.
+    const state = randomBytes(32).toString('base64url');
     let resolve, reject, claimed = false;
     const complete = new Promise((yes, no) => { resolve = yes; reject = no; });
     // Consumers can return the authorization URL before awaiting completion.
@@ -75,7 +77,8 @@ export function createRelayPlusAccount(options) {
     let timer;
     const server = http.createServer(async (req, res) => {
       const callback = new URL(req.url, 'http://127.0.0.1');
-      if (req.method !== 'GET' || callback.pathname !== '/callback' || claimed || !/^[A-Za-z0-9_-]{43}$/.test(callback.searchParams.get('code') ?? '')) {
+      if (req.method !== 'GET' || callback.pathname !== '/callback' || claimed || !/^[A-Za-z0-9_-]{43}$/.test(callback.searchParams.get('code') ?? '')
+        || callback.searchParams.get('state') !== state) {
         res.writeHead(400); res.end('Invalid authorization callback.'); return;
       }
       claimed = true;
@@ -97,7 +100,7 @@ export function createRelayPlusAccount(options) {
     timer = setTimeout(cancel, timeoutMs);
     timer.unref();
     const url = new URL('/authorize/', site);
-    for (const [key, value] of Object.entries({ appId: 'hivem1nd', redirectUri, codeChallenge: challenge, computerId, deviceName })) url.searchParams.set(key, value);
+    for (const [key, value] of Object.entries({ appId: 'hivem1nd', redirectUri, codeChallenge: challenge, computerId, deviceName, state })) url.searchParams.set(key, value);
     return { url: url.href, complete, cancel };
   }
   return {
