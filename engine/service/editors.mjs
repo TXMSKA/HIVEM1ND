@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { lstat, readFile, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { crc32, inflateSync } from 'node:zlib';
-import { validateSketch, SketchError } from '../../features/blueprint/review/sketch-format.mjs';
+import { validateBoard as validateFormatBoard } from './blueprint-format.mjs';
 import { prepareLegacyExport } from './blueprint-legacy.mjs';
 import { CoreError, canonicalJson, hashBytes, hashText, isUuid, parseUnitId, uuidV8 } from './identity.mjs';
 import { paginate } from './projection.mjs';
@@ -45,7 +45,9 @@ function inside(root, relative) {
 }
 
 function jsonBytes(value) {
-  return Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+  const bytes = Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+  if (value?.formatVersion === 4 && Array.isArray(value.screens) && bytes.length > 5_000_000) fail(422, 'invalid_document', 'The board exceeds 5 MB.');
+  return bytes;
 }
 
 async function loadBytes(file, store = null) {
@@ -200,7 +202,9 @@ function summaryOf(editor) {
 
 async function projectEditor(context, entry, document, revision) {
   const binding = await readAttachments(context, entry.id);
-  const comments = await loadComments(await resourceOf(context, entry.id));
+  const comments = entry.kind === 'blueprint' && !entry.readOnly && document
+    ? { bytes: jsonBytes(document), revision, value: document, file: inside(projectOf(context, entry.project).localPath, entry.path) }
+    : await loadComments(await resourceOf(context, entry.id));
   const threads = comments.bytes ? (projectComments(comments.value, entry.id).threads ?? []) : [];
   const library = await loadLibrary(context, entry.project);
   const item = library.value.items[entry.id];
@@ -215,7 +219,7 @@ async function projectEditor(context, entry, document, revision) {
     readOnly: entry.readOnly === true,
     revision,
     attached: [...binding.attached],
-    openThreads: threads.filter((thread) => thread.status !== 'resolved').length,
+    openThreads: threads.filter((thread) => thread.replies ? !thread.resolved : thread.status !== 'resolved').length,
     activity: currentActivity(context, entry.id),
     document: document ?? null,
     legacy: entry.readOnly ? { id: entry.legacyId, path: entry.path, reason: 'conversion_required' } : null,
@@ -263,10 +267,10 @@ function walk(left, right, known = NONE) {
 
 export function validateBoard(document) {
   try {
-    return validateSketch(document);
+    if (Buffer.byteLength(JSON.stringify(document)) > 5_000_000) throw new Error('The board exceeds 5 MB.');
+    return validateFormatBoard(document);
   } catch (error) {
-    if (error instanceof SketchError) fail(422, 'invalid_document', error.message);
-    throw error;
+    fail(422, 'invalid_document', error.message);
   }
 }
 
@@ -326,7 +330,12 @@ async function commitEditor(context, entries, events, response, replaceUndo = nu
   }
   const id = replaceUndo?.id ?? (response?.body?.undoOf ? response.body.changeId : randomUUID());
   if (replaceUndo) prepared.push(prepareReplaceUndo(context, id, replaceUndo.resourceIds, replaceUndo.entries.map((entry) => rewriteEntry(context, entry))));
-  const result = await commitChange(context, { id, entries: prepared, events, response });
+  let result;
+  try { result = await commitChange(context, { id, entries: prepared, events, response }); }
+  catch (error) {
+    if (error.code === 'revision_conflict' && events.some((event) => event.name === 'blueprint.changed')) fail(409, 'conflict', 'The board changed since it was read.');
+    throw error;
+  }
   const { listStaged } = await import('../sync/store.mjs');
   const sync = context.sync ?? openSync({ store: context.store, paths: context.paths, now: context.now, projects: context.projects ?? [] });
   context.lastEditorChanges = (await listStaged(sync)).filter((change) => change.transactionId === id);
@@ -609,13 +618,11 @@ async function stageBoard(context, found, document, operation, nodeId, screenId)
   const bytes = jsonBytes(document);
   const revision = hashBytes(bytes);
   const index = await loadBytes(indexFile(found.project));
-  const comments = await loadComments(found);
   const nextIndex = mergeIndex(index.bytes ? parseJson(index.bytes) : null, document);
   await commit(context, [
     record(found.file, found.loaded.revision, bytes),
     record(catalogFile(context), found.catalog.revision, jsonBytes(found.catalog.value)),
     record(indexFile(found.project), index.revision, jsonBytes(nextIndex)),
-    record(comments.file, comments.revision, jsonBytes(comments.value)),
   ], boardEvents(context, found.entry.id, revision, operation, nodeId, screenId));
   return shown(context, found.entry, document, revision);
 }
@@ -625,6 +632,7 @@ function deepMerge(target, changes, root = true) {
     fail(422, 'invalid_node', 'The node id, type and children cannot change.');
   }
   for (const [key, value] of Object.entries(changes)) {
+    if (['__proto__', 'constructor', 'prototype'].includes(key)) fail(422, 'invalid_node', 'The node property is not supported.');
     const current = target[key];
     if (value && typeof value === 'object' && !Array.isArray(value) && current && typeof current === 'object' && !Array.isArray(current)) {
       deepMerge(current, value, false);
@@ -641,14 +649,13 @@ export async function createBoard(context, input) {
   validateFolder(library, input.folderId ?? null, 'blueprint');
   const relative = input.path ?? `docs/flows/boards/${document.id}.json`;
   if (relative.endsWith('.mjs')) fail(409, 'read_only_resource', 'A module board cannot be overwritten.');
+  if (document.id === 'index' || relative !== `docs/flows/boards/${document.id}.json`) fail(422, 'invalid_path', 'A board must be saved as docs/flows/boards/<id>.json.');
   const full = inside(project.localPath, relative);
   const existing = await loadBytes(full);
   if (existing.bytes) fail(409, 'resource_exists', 'That path is already registered.');
   const catalog = await readCatalog(context);
   if (catalog.value.resources.some((item) => item.project === project.name && item.legacyId === document.id)) fail(409, 'board_id_exists', 'That board id is already registered.');
   const index = await loadBytes(indexFile(project));
-  const comments = await loadBytes(commentsFile(project, document.id));
-  if (comments.bytes) fail(409, 'resource_exists', 'That path is already registered.');
   const entry = {
     id: editorId('blueprint', project.name, relative),
     kind: 'blueprint',
@@ -660,19 +667,17 @@ export async function createBoard(context, input) {
   };
   const nextCatalog = { ...catalog.value, resources: [...catalog.value.resources, entry] };
   const nextIndex = mergeIndex(index.bytes ? parseJson(index.bytes) : null, document);
-  const sidecar = { board: document.id, threads: [] };
   const bytes = jsonBytes(document);
   library.value.items[entry.id] = { folderId: input.folderId ?? null, title: document.title, updatedAt: clock(context) };
-  const editor = createdEditor(context, entry, document, bytes, jsonBytes(sidecar), library);
+  const editor = createdEditor(context, entry, document, bytes, bytes, library);
   await commit(context, [
     ...(context.createGuards ?? []),
     ...(context.initialAssets ?? []),
     record(full, null, bytes),
     record(catalogFile(context), catalog.revision, jsonBytes(nextCatalog)),
     record(indexFile(project), index.revision, jsonBytes(nextIndex)),
-    record(commentsFile(project, document.id), null, jsonBytes(sidecar)),
     record(library.file, library.revision, jsonBytes(library.value)),
-    ...await initialHistory(context, entry, bytes, jsonBytes(sidecar)),
+    ...await initialHistory(context, entry, bytes, bytes),
   ], boardEvents(context, entry.id, hashBytes(bytes), 'create', null, null), { status: 201, body: editor });
   return editor;
 }
@@ -696,9 +701,12 @@ export async function importBoard(context, input) {
     if (input.project !== found.entry.project || input.path !== exported.path) fail(422, 'invalid_path', 'The JSON copy must be beside its registered module.');
     if (input.expectedRevision !== exported.expectedRevision) fail(409, 'revision_conflict', 'The module changed since it was exported.');
     if (canonicalJson(input.document?.legacySource ?? null) !== canonicalJson(exported.sourceRevisions)) fail(409, 'revision_conflict', 'The source or kit changed since it was exported.');
-    const document = validateBoard(input.document);
+    const candidate = structuredClone(input.document);
+    delete candidate.legacySource;
+    delete candidate.legacySketch;
+    const document = validateBoard(candidate);
     if (document.id !== found.entry.legacyId || !document.screens.length) fail(422, 'import_unavailable', 'The export must contain the selected board.');
-    if (exported.sketch && canonicalJson(document.legacySketch ?? null) !== canonicalJson(exported.sketch)) fail(422, 'import_unavailable', 'The export must retain the existing sketch.');
+    if (exported.sketch && canonicalJson(input.document.legacySketch ?? null) !== canonicalJson(exported.sketch)) fail(422, 'import_unavailable', 'The export must retain the existing sketch.');
     if (exported.sketch) {
       for (const key of ['pages', 'screens', 'links']) for (const item of exported.sketch[key]) {
         if (canonicalJson(document[key].find((candidate) => candidate.id === item.id) ?? null) !== canonicalJson(item)) fail(422, 'import_unavailable', 'The export must retain every sketch item.');
@@ -717,14 +725,28 @@ export async function importBoard(context, input) {
     const nextIndex = mergeIndex(parseJson(index.bytes), document);
     for (const item of Array.isArray(nextIndex) ? nextIndex : nextIndex.boards) if (item.id === document.id) Object.assign(item, { path: input.path, resourceId: id, legacyPath: found.entry.path });
     const comments = await loadComments(found);
-    const sidecar = comments.bytes ?? jsonBytes(comments.value);
+    for (const thread of comments.value.threads) {
+      if (document.threads.some((item) => item.id === thread.id)) continue;
+      const screen = document.screens.find((item) => item.id === thread.anchor?.screen);
+      const pathTo = (node, target, trail = []) => {
+        const path = [...trail, node.id];
+        if (node.id === target || node.name === target) return path;
+        for (const child of node.kids ?? []) { const found = pathTo(child, target, path); if (found) return found; }
+        return null;
+      };
+      const replies = (thread.messages ?? []).map((message) => ({ id: randomUUID(), author: message.author, text: message.text, createdAt: new Date(message.at).toISOString() }));
+      if (!replies.length) continue;
+      document.threads.push({ id: thread.id, ...(screen ? { screen: screen.id, path: [screen.id, ...(pathTo(screen.root, thread.anchor?.element) ?? [screen.root.id])] }
+        : { page: document.pages[0].id, path: [], marker: thread.anchor?.point ?? { x: 0, y: 0 } }), resolved: thread.status === 'resolved', replies });
+    }
+    validateBoard(document);
     const bytes = jsonBytes(document);
     library.value.items[id] = { folderId: input.folderId, title: document.title, updatedAt: clock(context) };
-    const editor = createdEditor(context, entry, document, bytes, sidecar, library);
+    const editor = createdEditor(context, entry, document, bytes, bytes, library);
     checkRevision((await loadBytes(inside(found.project.localPath, found.entry.path))).bytes, input.expectedRevision);
     await commit(context, [record(file, null, bytes), record(catalogFile(context), found.catalog.revision, jsonBytes(catalog)),
       record(indexFile(found.project), index.revision, jsonBytes(nextIndex)), record(library.file, library.revision, jsonBytes(library.value)),
-      ...(!comments.bytes ? [record(comments.file, null, sidecar)] : []), ...await initialHistory(context, entry, bytes, sidecar)],
+      ...await initialHistory(context, entry, bytes, bytes)],
     boardEvents(context, id, hashBytes(bytes), 'import', null, null), { status: 201, body: editor });
     return editor;
   });
@@ -736,19 +758,26 @@ async function boardFile(context, id) {
   const file = inside(found.project.localPath, found.entry.path);
   const loaded = await loadBytes(file);
   if (!loaded.bytes) fail(409, 'corrupt_resource', 'The resource could not be read.');
-  return { ...found, file, loaded, document: parseJson(loaded.bytes) };
+  return { ...found, file, loaded, document: validateBoard(parseJson(loaded.bytes)) };
 }
 
 export async function replaceBoard(context, id, input) {
   await requireAttachment(context, id);
   const found = await boardFile(context, id);
-  if (input.expectedRevision !== found.loaded.revision) fail(409, 'revision_conflict', 'The board changed since it was read.');
+  if (input.expectedRevision !== found.loaded.revision) fail(409, 'conflict', 'The board changed since it was read.');
   const document = validateBoard(input.document);
-  preserveUnknown(found.document, document);
+  if (document.id !== found.document.id) fail(422, 'invalid_document', 'The board identity cannot change.');
   return stageBoard(context, found, document, 'replace', null, null);
 }
 
 function eachNode(document, visit) {
+  const walkObjects = (nodes, parent = null, page) => {
+    for (const node of nodes ?? []) {
+      visit(node, parent, null, page);
+      walkObjects(node.kids, node, page);
+    }
+  };
+  for (const page of document.pages ?? []) walkObjects(page.objects, null, page);
   for (const screen of document.screens ?? []) {
     visit(screen.root, null, screen);
     const walk = (node, parent) => {
@@ -763,8 +792,8 @@ function eachNode(document, visit) {
 
 function findNode(document, nodeId) {
   let found = null;
-  eachNode(document, (node, parent, screen) => {
-    if (node?.id === nodeId) found = { node, parent, screen };
+  eachNode(document, (node, parent, screen, page) => {
+    if (node?.id === nodeId) found = { node, parent, screen, page };
   });
   return found;
 }
@@ -772,7 +801,7 @@ function findNode(document, nodeId) {
 export async function addNode(context, id, input) {
   await requireAttachment(context, id);
   const found = await boardFile(context, id);
-  if (input.expectedRevision !== found.loaded.revision) fail(409, 'revision_conflict', 'The board changed since it was read.');
+  if (input.expectedRevision !== found.loaded.revision) fail(409, 'conflict', 'The board changed since it was read.');
   const located = findNode(found.document, input.parentId);
   if (!located || located.node.t !== 'box' || !Array.isArray(located.node.kids)) fail(422, 'invalid_parent', 'The parent must be a box.');
   if (typeof input.screenId !== 'string' || located.screen?.id !== input.screenId) fail(422, 'invalid_parent', 'The parent must belong to the requested screen.');
@@ -788,7 +817,7 @@ export async function addNode(context, id, input) {
 export async function updateNode(context, id, nodeId, input) {
   await requireAttachment(context, id);
   const found = await boardFile(context, id);
-  if (input.expectedRevision !== found.loaded.revision) fail(409, 'revision_conflict', 'The board changed since it was read.');
+  if (input.expectedRevision !== found.loaded.revision) fail(409, 'conflict', 'The board changed since it was read.');
   const located = findNode(found.document, nodeId);
   if (!located) fail(404, 'node_not_found', 'The node does not exist.');
   const changes = input.changes ?? {};
@@ -800,10 +829,10 @@ export async function updateNode(context, id, nodeId, input) {
 export async function removeNode(context, id, nodeId, input) {
   await requireAttachment(context, id);
   const found = await boardFile(context, id);
-  if (input.expectedRevision !== found.loaded.revision) fail(409, 'revision_conflict', 'The board changed since it was read.');
+  if (input.expectedRevision !== found.loaded.revision) fail(409, 'conflict', 'The board changed since it was read.');
   const located = findNode(found.document, nodeId);
   if (!located) fail(404, 'node_not_found', 'The node does not exist.');
-  if (!located.parent) fail(422, 'root_node', 'The root node cannot be removed.');
+  if (!located.parent && !located.page) fail(422, 'root_node', 'The root node cannot be removed.');
   const screenId = located.screen?.id ?? null;
   const dropped = new Set();
   const collect = (node) => {
@@ -811,8 +840,17 @@ export async function removeNode(context, id, nodeId, input) {
     for (const kid of node.kids ?? []) collect(kid);
   };
   collect(located.node);
-  located.parent.kids = located.parent.kids.filter((kid) => kid.id !== nodeId);
+  if (located.parent) located.parent.kids = located.parent.kids.filter((kid) => kid.id !== nodeId);
+  else located.page.objects = located.page.objects.filter((node) => node.id !== nodeId);
   found.document.links = (found.document.links ?? []).filter((link) => !dropped.has(link.element) && !dropped.has(link.fromNode) && !dropped.has(link.toNode));
+  found.document.components = found.document.components.filter((component) => !dropped.has(component.nodeId));
+  eachNode(found.document, (node) => {
+    if (node.componentId && !found.document.components.some((component) => component.id === node.componentId)) {
+      delete node.componentId;
+      delete node.overrides;
+    }
+    if (dropped.has(node.sourceId)) delete node.sourceId;
+  });
   const document = validateBoard(found.document);
   return stageBoard(context, found, document, 'remove-node', nodeId, screenId);
 }
@@ -1300,6 +1338,7 @@ function stemOf(file) {
 
 function commentsPath(found) {
   if (found.entry.kind === 'void') return `${stemOf(inside(found.project.localPath, found.entry.path))}.comments.json`;
+  if (!found.entry.readOnly) return inside(found.project.localPath, found.entry.path);
   return commentsFile(found.project, found.entry.legacyId);
 }
 
@@ -1325,6 +1364,7 @@ async function loadComments(found) {
 function projectComments(value, resourceId) {
   const copy = structuredClone(value);
   for (const thread of copy.threads ?? []) {
+    if (thread.replies) continue;
     thread.messages = (thread.messages ?? []).map((message, index) => ({
       ...message,
       id: message.id ?? uuidV8(['comment-message', resourceId, thread.id, index, message.author, message.at, message.text]),
@@ -1861,6 +1901,36 @@ export async function createComment(context, id, input) {
   const found = await resourceOf(context, id);
   await requireAttachment(context, found.entry.id);
   const text = commentText(input.text);
+  // A module board keeps its sidecar comments until it is converted.
+  if (found.entry.kind === 'blueprint' && !found.entry.readOnly) {
+    const comments = await loadComments(found);
+    if (input.expectedRevision !== comments.revision || input.expectedCommentsRevision !== comments.revision) fail(409, 'conflict', 'The board changed since it was read.');
+    const document = validateBoard(comments.value);
+    const { author, authorId } = actor(context);
+    const reply = { id: randomUUID(), author, text, createdAt: clock(context) };
+    const anchor = input.anchor ?? {};
+    const screen = document.screens.find((item) => item.id === anchor.screen);
+    const pathTo = (node, target, trail = []) => {
+      const path = [...trail, node.id];
+      if (node.id === target) return path;
+      for (const child of node.kids ?? []) { const found = pathTo(child, target, path); if (found) return found; }
+      return null;
+    };
+    if (anchor.screen && (!screen || anchor.element && !pathTo(screen.root, anchor.element))) fail(409, 'anchor_changed', 'The anchor no longer matches the board.');
+    const thread = { id: randomUUID(),
+      ...(anchor.screen ? { screen: anchor.screen } : { page: anchor.page ?? document.pages[0].id }),
+      path: anchor.path ?? (screen ? [screen.id, ...(pathTo(screen.root, anchor.element ?? screen.root.id))] : []),
+      ...(!anchor.screen && !(anchor.path?.length) ? { marker: anchor.marker ?? anchor.point ?? { x: 0, y: 0 } } : anchor.marker ? { marker: anchor.marker } : {}), resolved: false, replies: [reply] };
+    document.threads.push(thread);
+    const bytes = jsonBytes(validateBoard(document)), revision = hashBytes(bytes);
+    const notices = await noticePlan(context, reply.id, id, commentRecipients(context, input, (await readAttachments(context, id)).attached, authorId));
+    if (notices.entries.length) await admitComment(context, reply.id);
+    await commit(context, [record(comments.file, comments.revision, bytes), ...notices.entries], [
+      ...boardEvents(context, id, revision, 'comment', null, thread.screen),
+      { name: 'comment.changed', resourceId: id, data: { resourceId: id, thread, commentsRevision: revision, operation: 'create' } }, ...notices.events,
+    ]);
+    return { thread, revision, commentsRevision: revision };
+  }
   const moduleBoard = found.entry.kind === 'blueprint' && found.entry.path.endsWith('.mjs');
   const document = found.entry.kind === 'void' ? (await textBundle(context, id)).document : moduleBoard ? null : (await boardFile(context, id)).document;
   const fileRevision = found.entry.kind === 'void'
@@ -1896,6 +1966,24 @@ export async function replyComment(context, id, threadId, input) {
   await requireAttachment(context, found.entry.id);
   const text = commentText(input.text);
   const comments = await loadComments(found);
+  // A module board keeps its sidecar comments until it is converted.
+  if (found.entry.kind === 'blueprint' && !found.entry.readOnly) {
+    if (input.expectedCommentsRevision !== comments.revision) fail(409, 'conflict', 'The board changed since it was read.');
+    const document = validateBoard(comments.value);
+    const thread = document.threads.find((item) => item.id === threadId);
+    if (!thread) fail(404, 'thread_not_found', 'The thread does not exist.');
+    const { author, authorId } = actor(context);
+    const reply = { id: randomUUID(), author, text, createdAt: clock(context) };
+    thread.replies.push(reply);
+    const bytes = jsonBytes(validateBoard(document)), revision = hashBytes(bytes);
+    const notices = await noticePlan(context, reply.id, id, commentRecipients(context, input, (await readAttachments(context, id)).attached, authorId));
+    if (notices.entries.length) await admitComment(context, reply.id);
+    await commit(context, [record(comments.file, comments.revision, bytes), ...notices.entries], [
+      ...boardEvents(context, id, revision, 'reply', null, thread.screen),
+      { name: 'comment.changed', resourceId: id, data: { resourceId: id, thread, commentsRevision: revision, operation: 'reply' } }, ...notices.events,
+    ]);
+    return { thread, revision, commentsRevision: revision };
+  }
   if (input.expectedCommentsRevision !== comments.revision) fail(409, 'revision_conflict', 'The comments changed since they were read.');
   const thread = comments.value.threads.find((item) => item.id === threadId);
   if (!thread) fail(404, 'thread_not_found', 'The thread does not exist.');
@@ -1961,6 +2049,22 @@ export async function setCommentStatus(context, id, threadId, input) {
   await requireAttachment(context, found.entry.id);
   if (input.status !== 'open' && input.status !== 'resolved') fail(422, 'invalid_body', 'The status must be open or resolved.');
   const comments = await loadComments(found);
+  // A module board keeps its sidecar comments until it is converted.
+  if (found.entry.kind === 'blueprint' && !found.entry.readOnly) {
+    if (input.expectedCommentsRevision !== comments.revision) fail(409, 'conflict', 'The board changed since it was read.');
+    const document = validateBoard(comments.value);
+    const thread = document.threads.find((item) => item.id === threadId);
+    if (!thread) fail(404, 'thread_not_found', 'The thread does not exist.');
+    thread.resolved = input.status === 'resolved';
+    if (thread.resolved) { thread.resolvedBy = actor(context).author; thread.resolvedAt = clock(context); }
+    else { delete thread.resolvedBy; delete thread.resolvedAt; }
+    const bytes = jsonBytes(validateBoard(document)), revision = hashBytes(bytes);
+    await commit(context, [record(comments.file, comments.revision, bytes)], [
+      ...boardEvents(context, id, revision, input.status, null, thread.screen),
+      { name: 'comment.changed', resourceId: id, data: { resourceId: id, thread, commentsRevision: revision, operation: input.status === 'resolved' ? 'resolve' : 'reopen' } },
+    ]);
+    return { thread, revision, commentsRevision: revision };
+  }
   if (input.expectedCommentsRevision !== comments.revision) fail(409, 'revision_conflict', 'The comments changed since they were read.');
   const thread = comments.value.threads.find((item) => item.id === threadId);
   if (!thread) fail(404, 'thread_not_found', 'The thread does not exist.');
@@ -2222,7 +2326,7 @@ async function historySnapshot(context, found, historyId) {
 
 async function restoreDocument(context, found, document, commentBytes, operation, extraEntries = []) {
   const current = parseJson(found.loaded.bytes);
-  preserveUnknown(current, document, KNOWN_OPTIONAL);
+  if (found.entry.kind === 'void') preserveUnknown(current, document, KNOWN_OPTIONAL);
   if (document.id !== current.id) fail(422, 'invalid_document', 'The document identity cannot change.');
   const entries = [...extraEntries];
   if (found.entry.kind === 'void') {
@@ -2239,15 +2343,17 @@ async function restoreDocument(context, found, document, commentBytes, operation
     entries.push(record(indexFile(found.project), index.revision, jsonBytes(mergeIndex(index.bytes ? parseJson(index.bytes) : null, document))));
   }
   const comments = await loadComments(found), bytes = jsonBytes(document);
-  if (comments.bytes && commentBytes) preserveUnknown(parseJson(comments.bytes), parseJson(commentBytes));
+  if (found.entry.kind === 'void' && comments.bytes && commentBytes) preserveUnknown(parseJson(comments.bytes), parseJson(commentBytes));
   entries.push(record(found.file, found.loaded.revision, bytes));
-  if (commentBytes === null) entries.push(byteEntry(comments.file, comments.bytes, null));
-  else if (commentBytes) entries.push(record(comments.file, comments.revision, commentBytes));
+  if (found.entry.kind === 'void') {
+    if (commentBytes === null) entries.push(byteEntry(comments.file, comments.bytes, null));
+    else if (commentBytes) entries.push(record(comments.file, comments.revision, commentBytes));
+  } else commentBytes = bytes;
   const events = found.entry.kind === 'void' ? [voidEvent(found.entry.id, hashBytes(bytes), document.rev, operation)] : boardEvents(context, found.entry.id, hashBytes(bytes), operation);
   const editor = await shown(context, found.entry, document, hashBytes(bytes));
   editor.commentsRevision = revisionOf(commentBytes);
   editor.threads = projectComments(commentBytes ? parseJson(commentBytes) : { threads: [] }, found.entry.id).threads;
-  editor.openThreads = editor.threads.filter((thread) => thread.status !== 'resolved').length;
+  editor.openThreads = editor.threads.filter((thread) => thread.replies ? !thread.resolved : thread.status !== 'resolved').length;
   await commit(context, entries, events, { status: 200, body: editor });
   if (found.entry.kind === 'void') rememberExternal(context, found.entry.id, hashBytes(bytes), document);
   return editor;
@@ -2280,7 +2386,7 @@ export async function resolveConflict(context, id, input) {
     const draft = (found.entry.kind === 'void' ? validateText : validateBoard)(input.document);
     if (draft.id !== found.document.id) fail(422, 'invalid_document', 'The document identity cannot change.');
     const records = await historyRecords(context, found), sequence = records.reduce((maximum, item) => Math.max(maximum, item.sequence ?? 0), 0);
-    const entries = await initialHistory(context, found.entry, jsonBytes(draft), comments.bytes, 'conflict', { sequence: sequence + 1,
+    const entries = await initialHistory(context, found.entry, jsonBytes(draft), found.entry.kind === 'blueprint' ? jsonBytes(draft) : comments.bytes, 'conflict', { sequence: sequence + 1,
       source: { kind: 'draft', id: context.paths.machine, unitId: actor(context).authorId } });
     if (!records.some((item) => item.revision === found.loaded.revision && item.commentsRevision === comments.revision)) {
       const previous = records.find((item) => item.revision === found.loaded.revision);
@@ -2288,7 +2394,8 @@ export async function resolveConflict(context, id, input) {
         by: previous?.by ?? 'root:master', source: previous?.source ?? { kind: 'external', id: context.paths.machine, unitId: null } }));
     }
     const document = input.decision === 'keep-mine' ? draft : found.document;
-    const next = await initialHistory(context, found.entry, found.entry.kind === 'void' ? jsonBytes({ ...document, rev: (found.document.rev || 0) + 1 }) : jsonBytes(document), comments.bytes, 'conflict', { sequence: sequence + 3 });
+    const nextBytes = found.entry.kind === 'void' ? jsonBytes({ ...document, rev: (found.document.rev || 0) + 1 }) : jsonBytes(document);
+    const next = await initialHistory(context, found.entry, nextBytes, found.entry.kind === 'blueprint' ? nextBytes : comments.bytes, 'conflict', { sequence: sequence + 3 });
     entries.push(...next);
     return restoreDocument(context, found, document, comments.bytes, 'conflict', entries);
   });
@@ -2296,8 +2403,8 @@ export async function resolveConflict(context, id, input) {
 
 function createdEditor(context, entry, document, bytes, comments, library) {
   return { id: entry.id, kind: entry.kind, project: entry.project, title: document.title, path: entry.path, legacyId: entry.legacyId,
-    readOnly: false, revision: hashBytes(bytes), attached: entry.attached, openThreads: 0, activity: currentActivity(context, entry.id),
-    document, legacy: null, attachmentRevision: null, commentsRevision: revisionOf(comments), threads: [],
+    readOnly: false, revision: hashBytes(bytes), attached: entry.attached, openThreads: (document.threads ?? []).filter((thread) => !thread.resolved).length, activity: currentActivity(context, entry.id),
+    document, legacy: null, attachmentRevision: null, commentsRevision: entry.kind === 'blueprint' ? hashBytes(bytes) : revisionOf(comments), threads: structuredClone(document.threads ?? []),
     folderId: library.value.items[entry.id].folderId, updatedAt: library.value.items[entry.id].updatedAt, libraryRevision: hashBytes(jsonBytes(library.value)) };
 }
 
@@ -2617,6 +2724,7 @@ export async function moveEditor(context, id, input) {
     if (input.confirmedRepositoryChange !== true) fail(422, 'confirmation_required', 'Moving the file to another repository requires confirmation.');
     const destination = await loadLibrary(context, input.project);
     validateFolder(destination, input.folderId, bundle.entry.kind);
+    if (bundle.entry.kind === 'blueprint' && (bundle.entry.readOnly || input.path !== `docs/flows/boards/${bundle.entry.legacyId}.json`)) fail(422, 'invalid_path', 'A board must keep its format 4 board path.');
     const file = inside(destination.project.localPath, input.path);
     const newId = editorId(bundle.entry.kind, input.project, input.path);
     if (bundle.catalog.value.resources.some((entry) => entry.id === newId || entry.project === input.project && (entry.path === input.path || bundle.entry.kind === 'blueprint' && entry.legacyId === bundle.entry.legacyId))) fail(409, 'resource_exists', 'The destination resource already exists.');

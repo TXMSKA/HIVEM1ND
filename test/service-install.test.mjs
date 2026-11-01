@@ -1087,8 +1087,9 @@ test('installer archives are reproducible and reject malicious containers', asyn
   const packageRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
   const lock = JSON.parse(await readFile(path.join(packageRoot, 'package-lock.json'), 'utf8'));
   const packages = productionPackages(lock);
-  assert.equal(packages.length, 8);
+  assert.equal(packages.length, 9);
   assert.equal(packages.some((item) => item.name === '@clack/prompts'), true);
+  assert.equal(packages.some((item) => item.name === 'zod' && item.version === '4.6.5'), true);
   assert.equal(packages.some((item) => item.name === 'electron'), false);
   await verifyInstalled(packageRoot, packages);
   const cached = [process.env.ONEM1ND_NODE_ZIP, path.join(os.homedir(), 'Downloads', 'node-v22.23.3-win-x64.zip')].filter(Boolean);
