@@ -3,7 +3,7 @@ import { lstat, readFile, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { crc32, inflateSync } from 'node:zlib';
 import { validateSketch, SketchError } from '../../features/blueprint/review/sketch-format.mjs';
-import { prepareLegacyExport } from '../../features/blueprint/server.mjs';
+import { prepareLegacyExport } from './blueprint-legacy.mjs';
 import { CoreError, canonicalJson, hashBytes, hashText, isUuid, parseUnitId, uuidV8 } from './identity.mjs';
 import { paginate } from './projection.mjs';
 import { admitMessage } from '../sync/limits.mjs';
