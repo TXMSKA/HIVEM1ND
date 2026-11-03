@@ -145,8 +145,8 @@ A feature is a workflow that runs on a repo, with a start and an end, one markdo
 | `/report` | Planning | Investigates a defect or request and writes an evidence-backed task for the project executor without changing code. |
 | `/plan` | Planning | Splits a request into ordered task files for the owning units and sends each unit a message without implementing it. |
 | `/brainstorm` | Planning | Develops a topic one approved decision at a time and records agreed text separately from open questions. |
-| `/blueprint` | Planning | Reads and changes Blueprint boards through the editor tools, answers their comments, and serves the boards of every project on the machine in one local browser view. The local view is Blueprint Lite; the full editor is [Blueprint](https://blueprint.txmska.com/). |
-| `/void` | Planning | Reads and changes Void texts through the editor tools, answers their comments, and opens a text in a quiet local reader where the person corrects and comments in place. |
+| `/blueprint` | Planning | Reads and changes Blueprint format 4 boards through the editor tools and answers comments in the same board the embedded Blueprint app uses. |
+| `/void` | Planning | Reads and changes Void texts through the editor tools and answers comments in the same text the embedded Void app uses. |
 | `/qa` | Quality | Runs every open project task in non-overlapping groups, verifies the results and records what passed or failed. |
 | `/tribunal` | Quality | Convenes three judges, cross-examines their findings and records an evidence-backed verdict without editing code. |
 | `/corpo` | Quality | Stress-tests delivered work with three deliberately difficult reviewers and records every finding for the user. |

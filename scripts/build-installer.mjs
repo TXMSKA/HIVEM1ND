@@ -721,7 +721,7 @@ export async function smokeImports(stage, options = {}) {
     cwd: stage,
     env: { PATH: '', SystemRoot: process.env.SystemRoot ?? '' },
   };
-  const script = "import '@clack/prompts'; import 'jsonc-parser'; import 'smol-toml';";
+  const script = "import '@clack/prompts'; import 'jsonc-parser'; import 'smol-toml'; import 'zod';";
   if (options.spawn) {
     await options.spawn(node, ['--input-type=module', '-e', script], spawnOptions);
     return;
@@ -777,7 +777,7 @@ export async function collectPayload(options) {
     }
   }
   const packages = await verifyInstalled(packageRoot, productionPackages(options.lock));
-  if (packages.length !== 8) throw new Error(`Expected 8 production packages, found ${packages.length}.`);
+  if (packages.length !== 9) throw new Error(`Expected 9 production packages, found ${packages.length}.`);
   for (const item of packages) files.push(...await walkPayload(path.join(packageRoot, item.key), `${item.key}/`, true));
   if (options.includeBrowser === true) {
     const assetDir = options.assetDir ?? path.join(packageRoot, 'gui', 'app');

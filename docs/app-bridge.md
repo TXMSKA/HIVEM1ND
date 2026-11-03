@@ -94,8 +94,12 @@ separated by project and key. Binary data travels through the authenticated
 HTTP service as base64 and through native IPC as an `ArrayBuffer` in `bytes`.
 
 Blueprint boards are ordinary `boards/<id>.json` files; reads preserve their
-stored text and unknown fields. This task does not migrate legacy board
-formats or change the agent editor API. Assets are `assets/<uuid>.<ext>`.
+stored text. Saves validate format 4 with Blueprint's schema at `026b172`;
+the document ID must match the filename. The agent editor tools write these
+same files, including comments in `threads`, with SHA-256 byte revisions and
+`conflict` on a stale revision. `expectedCommentsRevision` is the board's
+revision too. Module boards remain read-only imports and are never converted
+automatically. Assets are `assets/<uuid>.<ext>`.
 
 The contract's section 5 contains no numeric upload limits. The bridge adopts
 the existing editor limits: 10,000,000 bytes per image, 200 assets and

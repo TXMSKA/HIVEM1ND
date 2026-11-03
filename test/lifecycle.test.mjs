@@ -499,7 +499,7 @@ test("the actual setup installer parses and installs all twelve feature commands
     assert.doesNotMatch(content, /\{\{mind\}\}/);
   }
   // A feature folder installs its scripts next to the command.
-  for (const support of ["server.mjs", path.join("review", "review.js"), path.join("kit", "kit.mjs")]) {
+  for (const support of [path.join("review", "sketch-format.mjs"), path.join("kit", "kit.mjs")]) {
     await fs.access(path.join(homeDir, ".agents", "skills", "blueprint", support));
   }
 });

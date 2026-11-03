@@ -156,14 +156,14 @@ test('desktop HTTP covers chat, task, editor, watch, phone denial, receipts and 
 
   const document = newSketch('cart', 'Cart');
   addScreen(document, { title: 'Bag', x: 0, y: 0 });
-  document.script = 'kept';
+  document.formatVersion = 4;
   const board = await call(port, 'POST', '/api/v1/blueprint/boards', {
     token,
     body: { project: 'shop', document },
     headers: key(),
   });
   assert.equal(board.status, 201);
-  assert.equal(board.json.data.document.script, 'kept');
+  assert.deepEqual(board.json.data.document, document);
   const text = await call(port, 'POST', '/api/v1/void/texts', {
     token,
     body: {
@@ -960,7 +960,7 @@ test('T064 cross-project Blueprint and bilingual Void bundles survive restart an
   const offer = (await finalCall(fx, 'GET', '/settings/projects?machine=DESKTOP')).discoveryOffer;
   const repositories = offer.groups.flatMap(group => group.repositories).filter(item => ['shop', 'blog'].includes(item.name));
   await finalCall(fx, 'POST', `/discovery/offers/${offer.id}/answer`, { machine: 'DESKTOP', repositoryIds: repositories.map(item => item.id), confirmed: true, expectedRevision: offer.revision });
-  const sketch = newSketch('cart', 'Cart'); addScreen(sketch, { title: 'Empty cart', x: 0, y: 0 }); sketch.retained = { unknown: ['board'] };
+  const sketch = newSketch('cart', 'Cart'); addScreen(sketch, { title: 'Empty cart', x: 0, y: 0 }); sketch.formatVersion = 4;
   const text = { title: 'Release', rev: 0, retained: { unknown: ['text'] }, pages: [{ k: 'intro', en: '# Cart\n**Empty** 😀', es: '# Carrito\n**Vacío** 😀' }] };
   const editors = [], moves = [];
   for (const [kind, document] of [['blueprint', sketch], ['void', text]]) {
@@ -970,7 +970,7 @@ test('T064 cross-project Blueprint and bilingual Void bundles survive restart an
   for (const { kind, editor } of editors) {
     const source = await readFile(path.join(fx.repositories.shop, editor.path));
     const current = await finalCall(fx, 'GET', `/${kind === 'blueprint' ? 'blueprint/boards' : 'void/texts'}/${editor.id}`);
-    const input = { project: 'blog', path: `docs/${kind}-moved.json`, folderId: null, confirmedRepositoryChange: true,
+    const input = { project: 'blog', path: kind === 'blueprint' ? 'docs/flows/boards/cart.json' : 'docs/void-moved.json', folderId: null, confirmedRepositoryChange: true,
       expectedRevision: current.revision, expectedCommentsRevision: current.commentsRevision,
       expectedAttachmentRevision: current.attachmentRevision, expectedLibraryRevision: current.libraryRevision };
     await finalCall(fx, 'POST', `/editors/${editor.id}/move`, { ...input, confirmedRepositoryChange: false }, {}, 422);
@@ -983,7 +983,8 @@ test('T064 cross-project Blueprint and bilingual Void bundles survive restart an
   await fx.control.restart();
   for (const { kind, editor, moved, source } of moves.toReversed()) {
     const restored = await finalCall(fx, 'GET', `/${kind === 'blueprint' ? 'blueprint/boards' : 'void/texts'}/${moved.editor.id}`);
-    assert.deepEqual(restored.document.retained, editor.document.retained);
+    if (kind === 'blueprint') assert.deepEqual(restored.document, editor.document);
+    else assert.deepEqual(restored.document.retained, editor.document.retained);
     const history = await finalCall(fx, 'GET', `/editors/${moved.editor.id}/history`);
     assert.ok(history.items.length > 0);
     await finalCall(fx, 'POST', `/changes/${moved.changeId}/undo`, {});

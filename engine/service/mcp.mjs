@@ -6,7 +6,6 @@ import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
 import { CoreError, ROLES, canonicalJson, hashBytes, isUuid, parseTaskId, parseUnitId, uuidV8 } from './identity.mjs';
 import { safeError } from './security.mjs';
 import { readEditor, addNode, updateNode, removeNode, replaceRange, replyComment, requireAttachment, createBoard, createText } from './editors.mjs';
-import { addScreen, newSketch } from '../../features/blueprint/review/sketch-format.mjs';
 import { publishDomainEvents } from './events.mjs';
 import { readApproval, requestApproval } from './approvals.mjs';
 import { completeSessionTask, ownsSessionExecution } from './adapters.mjs';
@@ -255,12 +254,12 @@ export function toolSchemas() {
       paths: { type: 'array', maxItems: 256, items: { type: 'string', maxLength: 4096 } }, message: { type: 'string', maxLength: 10000 }, remote: label, requestId }, ['action', 'repository', 'branch', 'paths', 'requestId']),
     tool('session_open', 'Ask the person to open one connected CLI for a registered unit on this machine.', { client: { type: 'string', enum: ['claude', 'codex', 'cursor'], maxLength: 32 }, machine: label, unitId: { type: 'string', maxLength: 256 }, runMode: { type: 'string', enum: ['task', 'chat'] }, taskId: { type: ['string', 'null'], maxLength: 256 }, requestId }, ['client', 'machine', 'unitId', 'runMode', 'taskId', 'requestId']),
     tool('session_complete', 'Acknowledge terminal delivery or failure of this assigned task; wait for native completion before the CLI closes.', { outcome: { type: 'string', enum: ['delivered', 'failed'] }, taskId: { type: ['string', 'null'], maxLength: 256 }, requestId }, ['outcome', 'requestId']),
-    tool('blueprint_create', 'Create a Blueprint board in this agent\'s project, for interface or flow design; the agent is attached to it.', { title: documentTitle, requestId }, ['title', 'requestId']),
-    tool('blueprint_open', 'Read one Blueprint board.', { resourceId }, ['resourceId']),
-    tool('blueprint_add_node', 'Add a node to a board.', { resourceId, screenId: label, parentId: label, index: { type: 'integer', minimum: 0 }, node: { type: 'object' }, expectedRevision: revision, requestId }, ['resourceId', 'screenId', 'parentId', 'node', 'expectedRevision', 'requestId']),
-    tool('blueprint_update_node', 'Change a node.', { resourceId, nodeId: label, changes: { type: 'object' }, expectedRevision: revision, requestId }, ['resourceId', 'nodeId', 'changes', 'expectedRevision', 'requestId']),
-    tool('blueprint_remove_node', 'Remove a node.', { resourceId, nodeId: label, expectedRevision: revision, requestId }, ['resourceId', 'nodeId', 'expectedRevision', 'requestId']),
-    tool('blueprint_reply_comment', 'Reply on a board comment.', { resourceId, threadId: label, text, expectedCommentsRevision: revision, requestId }, ['resourceId', 'threadId', 'text', 'expectedCommentsRevision', 'requestId']),
+    tool('blueprint_create', 'Create a Blueprint format 4 JSON board with one frame in docs/flows/boards/<id>.json in this agent\'s project; the agent is attached to it.', { title: documentTitle, requestId }, ['title', 'requestId']),
+    tool('blueprint_open', 'Read one Blueprint format 4 board and its threads; revision and commentsRevision are the SHA-256 of the same JSON bytes. Legacy module boards are read-only imports.', { resourceId }, ['resourceId']),
+    tool('blueprint_add_node', 'Add a format 4 design node (box, text, vector, image or icon) to a box in an existing screen; place is relative to its parent. A stale SHA-256 expectedRevision returns conflict.', { resourceId, screenId: label, parentId: label, index: { type: 'integer', minimum: 0 }, node: { type: 'object' }, expectedRevision: revision, requestId }, ['resourceId', 'screenId', 'parentId', 'node', 'expectedRevision', 'requestId']),
+    tool('blueprint_update_node', 'Merge format 4 properties into a design node; id, t and kids cannot change. Screens and page objects follow the format 4 tree.', { resourceId, nodeId: label, changes: { type: 'object' }, expectedRevision: revision, requestId }, ['resourceId', 'nodeId', 'changes', 'expectedRevision', 'requestId']),
+    tool('blueprint_remove_node', 'Remove a format 4 design node, descendants and their links; comment threads remain as orphans. A screen root cannot be removed.', { resourceId, nodeId: label, expectedRevision: revision, requestId }, ['resourceId', 'nodeId', 'expectedRevision', 'requestId']),
+    tool('blueprint_reply_comment', 'Append a plain-text reply to a format 4 board thread as this unit, preserving resolved. expectedCommentsRevision is the board SHA-256; stale revisions return conflict.', { resourceId, threadId: label, text, expectedCommentsRevision: revision, requestId }, ['resourceId', 'threadId', 'text', 'expectedCommentsRevision', 'requestId']),
     tool('void_create', 'Create a Void text in this agent\'s project, for a document or copy; the agent is attached to it.', { title: documentTitle, requestId }, ['title', 'requestId']),
     tool('void_open', 'Read one Void text.', { resourceId }, ['resourceId']),
     tool('void_replace_range', 'Apply or propose a text range.', { resourceId, k: { type: 'string', maxLength: 240 }, lang: { type: 'string', maxLength: 16 }, start: { type: 'integer', minimum: 0 }, end: { type: 'integer', minimum: 0 }, expectedText: text, replacement: text, expectedRevision: revision, mode: { type: 'string', enum: ['apply', 'propose'] }, threadId: label, expectedCommentsRevision: revision, requestId }, ['resourceId', 'k', 'lang', 'start', 'end', 'expectedText', 'replacement', 'expectedRevision', 'requestId']),
@@ -730,8 +729,12 @@ async function createForAgent(context, kind, args) {
     return createText(context, { project: scope.name, path: `docs/${id}.json`, attached: [unitId],
       document: { formatVersion: 1, id, title, pages: [{ k: 'Intro', en: '' }] } });
   }
-  const document = newSketch(id, title);
-  addScreen(document, { title, x: 0, y: 0 });
+  const pageId = randomUUID(), screenId = randomUUID();
+  const document = { formatVersion: 4, id, title, note: '',
+    pages: [{ id: pageId, title: 'Page 1', objects: [], order: [screenId] }],
+    screens: [{ id: screenId, title, pageId, x: 0, y: 0, w: 1440, h: 900,
+      root: { id: randomUUID(), name: title, t: 'box', dir: 'stack', place: { x: 0, y: 0 }, w: 1440, h: 900, fill: '#ffffff', kids: [] } }],
+    links: [], components: [], fonts: [], threads: [] };
   return createBoard(context, { project: scope.name, document, attached: [unitId] });
 }
 
