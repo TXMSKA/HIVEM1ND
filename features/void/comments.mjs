@@ -1,12 +1,11 @@
 // Void: comments on a selection.
 //
 // A comment file is the full Void app's format, { path, threads }, with each
-// thread { id, anchor, to?, status, messages }, so either app reads what the
-// other wrote. Void Lite adds three fields to the anchor, because a document
-// here has pages: the page key `k` and the `start` and `end` offsets of the
-// quote in the page's plain text (see text.mjs). The quote with its
-// surroundings finds the words again after the page is edited; the offsets say
-// which copy was meant when the words repeat.
+// thread { id, anchor, to?, status, messages }. The anchor carries three more
+// fields, because a document here has pages: the page key `k` and the `start`
+// and `end` offsets of the quote in the page's plain text (see text.mjs). The
+// quote with its surroundings finds the words again after the page is edited;
+// the offsets say which copy was meant when the words repeat.
 
 import { randomUUID } from 'node:crypto';
 import { plain } from './text.mjs';

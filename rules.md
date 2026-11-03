@@ -69,4 +69,4 @@ Blocks, one fact each, a blank line between them, each led by its icon; no bold,
 
 - Any unit may use Blueprint (boards for interfaces and flows) and Void (texts) when the work calls for them: `blueprint_create` or `void_create` in its project attaches it; `blueprint_open` or `void_open` reads.
 - A change passes the last read revision (`expectedRevision`, or `expectedCommentsRevision` for a comment) and a new `requestId`, reused only to retry the same change. On a conflict, read again and reapply; never overwrite.
-- A unit edits what it created; what the person made, once the person attaches it. Comments are answered with the reply tools. Without the tools, [/blueprint](features/blueprint/blueprint.md) and [/void](features/void/void.md) serve the files on disk.
+- A unit edits what it created; what the person made, once the person attaches it. Comments are answered with the reply tools.

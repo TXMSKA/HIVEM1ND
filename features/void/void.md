@@ -1,6 +1,6 @@
 ---
 name: void
-description: Reads and changes Void texts through the editor tools, answers their comments, and opens a text in a quiet local reader where the person corrects and comments in place.
+description: Reads and changes Void texts through the editor tools and answers comments in the same text the embedded Void app uses.
 category: planning
 ---
 
@@ -9,9 +9,9 @@ category: planning
 Mind: {{mind}}
 Argument: [absolute path of a Void document]
 
-Start: Locate in `rules.md` of the mind above; no unit is needed to serve the reader, so its step that asks for one is skipped. The tools write as the session's own unit.
+Start: Locate in `rules.md` of the mind above. The tools write as the session's own unit.
 
-A Void text holds a document or copy, one entry per page, in English and Spanish. Agents use the tools of the `onem1nd-relay` server; Void Lite, the local reader on port 3302, keeps the person's browser view. When an agent may create or edit a text is in `rules.md` (Blueprint and Void).
+A Void text holds a document or copy, one entry per page, in English and Spanish. Agents use the tools of the `onem1nd-relay` server. The person uses the real Void app embedded in ONEM1ND. When an agent may create or edit a text is in `rules.md` (Blueprint and Void).
 
 ## Tools
 
@@ -69,21 +69,9 @@ A JSON file whose name ends in `.json`:
 
 - `quote`, `prefix` and `suffix` are the selected words and up to 48 characters on each side; `start` and `end` are offsets in the text as the reader shows it, without the `<b>` and `<i>` marks. A comment whose words are gone is kept and marked as changed.
 - `to` is the unit it was sent to; `status` is `open` or `resolved`.
-- `author` is `person` for the person in Void Lite and the unit for an agent; through the tools every message of the person reads `master`.
-
-## Void Lite
-
-- `http://localhost:3302/` answers with the Void Text Reader page while the server runs, one per machine. Otherwise start it in the background and leave it running: `node "{{mind}}/features/void/server.mjs"`, adding `--mind <path>` and `--hostname <name>` when it cannot find the mind or this machine's record. When another program holds the port, it prints `Port 3302 is in use` and exits: tell the person, start it with `--port <free number>`, and use that port in every link.
-- Open `http://localhost:3302/?file=<absolute path, URL-encoded>` and give the person that link; the path ends in `.json` and is neither the `.orig.json` nor the `.comments.json` file.
-- With `--lan` it also answers on this machine's network addresses and prints one link with a key per address; the person gets it with `&file=` and the encoded path appended. A server running without it is restarted with it only when the person asks.
-- Each save of the person raises `rev` and appends a line to the versions file. A save over a text that changed meanwhile is joined word by word; where both touched the same words, the person's text stays.
-- With Send to agent on, the agent of the document's project (the project whose repository, or whose folder in `user/projects/`, holds it; the unit in for it, an executor first) gets Relay messages from the person: `Void comment: <title> / <page key>` at once, with the comments file attached, and `Void edits: <title>` 20 seconds after the last correction, listing each text before and after, with the document attached.
-- To answer there, read `<name>.comments.json` right before writing, add `{ "author": "<unit>", "at": "<ISO time>", "text": "..." }` to the thread's `messages`, set `status` to resolve it, and write the file whole; the page shows it within a second.
-- A document written by hand is read right before, keeps the `rev` it read, and is written whole. A write from an older copy is repaired on the next read: each later save of the person whose page still holds its earlier text is applied again and logged as `restored`, and a page the agent rewrote keeps the agent's text.
-- `widget.html`, with its `const PAGES=` line replaced by the document's `pages`, is a read-only look inside a chat that shows HTML; its edits never reach the file.
-- Stop the server only when the person asks; the document, its original, its versions and its comments survive a restart.
+- `author` is `person` for the person and the unit for an agent; through the tools every message of the person reads `master`.
 
 ## End
 
-- Stops when the change asked for is made and verified with `void_open`, or after the link is given to the person.
-- Reports the text and what changed with the `rev` reached, or the link, and any refused change with its error code.
+- Stops when the change asked for is made and verified with `void_open`.
+- Reports the text and what changed with the `rev` reached and any refused change with its error code.
