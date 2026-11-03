@@ -4,14 +4,10 @@ import path from "node:path";
 import { createWizardServer } from "./server.mjs";
 import { defaultMind } from '../engine/service/paths.mjs';
 import { startConfiguredViewer } from '../engine/service/install.mjs';
+import { createEmbeddedApps } from './app-bridge.mjs';
+import { secureWebPreferences } from './electron-preferences.mjs';
 
-export const secureWebPreferences = Object.freeze({
-  contextIsolation: true,
-  devTools: false,
-  nodeIntegration: false,
-  sandbox: true,
-  webSecurity: true,
-});
+export { secureWebPreferences } from './electron-preferences.mjs';
 
 export function parseElectronOptions(argv, homeDir, env = process.env) {
   const options = {
@@ -91,7 +87,7 @@ export function externalLink(value) {
 }
 
 export async function startElectronApp(electron, argv = process.argv.slice(2), dependencies = {}) {
-  const { app, BrowserWindow, dialog, ipcMain, session, shell } = electron;
+  const { app, BrowserWindow, WebContentsView, dialog, ipcMain, session, shell } = electron;
   const launchOptions = parseElectronOptions(argv, app.getPath("home"));
   launchOptions.kitPath ??= app.getAppPath();
   if (launchOptions.userDataDir) app.setPath("userData", launchOptions.userDataDir);
@@ -127,6 +123,7 @@ export async function startElectronApp(electron, argv = process.argv.slice(2), d
   let closing = false;
   let viewerTarget;
   let viewerHost;
+  let embeddedApps;
 
   const viewerFrame = event => {
     if (!viewerTarget || !window || window.isDestroyed() || event.sender !== window.webContents
@@ -186,6 +183,11 @@ export async function startElectronApp(electron, argv = process.argv.slice(2), d
       path.join(launchOptions.kitPath, "gui", "preload.cjs"),
     ));
     window = createdWindow;
+    if (WebContentsView) embeddedApps = createEmbeddedApps({
+      window: createdWindow, WebContentsView, session, shell, dialog, secureWebPreferences,
+      preload: path.join(launchOptions.kitPath, 'gui', 'app-preload.cjs'),
+      serviceOrigin: () => viewerTarget?.origin, hostVersion: app.getVersion(),
+    });
     const allowedOrigin = wizard.origin;
     // A link the verified Map follows, such as one in a Void text, opens in the system browser; the window itself never leaves.
     const openOutside = (value) => {
@@ -204,6 +206,16 @@ export async function startElectronApp(electron, argv = process.argv.slice(2), d
       return { action: "deny" };
     });
     createdWindow.webContents.on("will-attach-webview", (event) => event.preventDefault());
+    createdWindow.webContents.on('did-start-navigation', (_event, url, sameDocument, mainFrame) => {
+      if (mainFrame === false) return;
+      if (sameDocument && viewerTarget) {
+        try {
+          const target = new URL(url);
+          if (target.origin === viewerTarget.origin && target.pathname === viewerTarget.pathname && !target.username && !target.password) return;
+        } catch { /* An unverified navigation revokes the app credential. */ }
+      }
+      embeddedApps?.update({ app: null });
+    });
     createdWindow.webContents.on("will-navigate", (event, targetUrl) => {
       try {
         const target = new URL(targetUrl);
@@ -217,7 +229,18 @@ export async function startElectronApp(electron, argv = process.argv.slice(2), d
       openOutside(targetUrl);
     });
     createdWindow.once("ready-to-show", () => createdWindow.show());
+    let closeReady = false;
+    createdWindow.on('close', event => {
+      if (!embeddedApps || closeReady) return;
+      event.preventDefault();
+      void embeddedApps.saveBeforeClose().finally(() => {
+        closeReady = true;
+        if (!createdWindow.isDestroyed()) createdWindow.close();
+      });
+    });
     createdWindow.on("closed", () => {
+      embeddedApps?.dispose();
+      embeddedApps = undefined;
       if (window === createdWindow) window = undefined;
     });
     await createdWindow.loadURL(wizard.url);
@@ -240,6 +263,15 @@ export async function startElectronApp(electron, argv = process.argv.slice(2), d
     if (!viewerHost) throw new Error('Reopen ONEM1ND using its local launcher.');
     return viewerHost.recover();
   });
+  ipcMain.handle('hivem1nd:embedded-update', (event, state) => {
+    viewerFrame(event);
+    if (!embeddedApps) throw new Error('The app host is unavailable.');
+    embeddedApps.update(state);
+  });
+  ipcMain.on?.('hivem1nd:embedded-event', (event, frame) => {
+    try { viewerFrame(event); embeddedApps?.event(frame); } catch { /* Only the verified local viewer may relay service events. */ }
+  });
+  ipcMain.handle('cosmic:bridge-call', (event, method, params) => embeddedApps?.call(event, method, params) ?? { error: { code: 'denied' } });
 
   await app.whenReady();
   session.defaultSession.setPermissionCheckHandler(() => false);
@@ -255,31 +287,6 @@ export async function startElectronApp(electron, argv = process.argv.slice(2), d
   app.on("before-quit", (event) => {
     if (!wizard || closing) return;
     event.preventDefault();
-    void closeWizard().then(() => app.quit());
+    void Promise.resolve(embeddedApps?.saveBeforeClose()).then(closeWizard).then(() => app.quit());
   });
-}
-
-if (process.versions.electron && process.type === "browser") {
-  const electron = await import("electron");
-  const argv = electron.app.isPackaged ? process.argv.slice(1) : process.argv.slice(2);
-  const failLaunch = error => {
-    console.error("ONEM1ND failed to start:", error);
-    electron.app.exit(1);
-  };
-  try {
-    const cliArgs = electronCliArgs(process.argv, { isPackaged: electron.app.isPackaged, kitPath: electron.app.getAppPath() });
-    if (cliArgs) {
-      const { runCli } = await import('../cli/index.mjs');
-      electron.app.exit(await runCli(cliArgs, { upgrade: true }));
-    } else {
-      void startElectronApp(electron, argv, {
-        async upgrade(options) {
-          const { migrate } = await import('../migrations/3.0.0-onem1nd.mjs');
-          return migrate({ platform: process.platform, env: process.env, homeDir: options.homeDir, kitPath: options.kitPath, nodePath: process.execPath });
-        }
-      }).catch(failLaunch);
-    }
-  } catch (error) {
-    failLaunch(error);
-  }
 }

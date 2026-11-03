@@ -36,52 +36,18 @@ import {
   uploadChatImage,
 } from "./chats.mjs";
 import { IMAGE_MAX_BYTES, IMAGE_TYPES, galleryState, messageParts, renderActions, renderAttachDialog, renderGallery, renderPendingParts } from "./chat-media.mjs";
-import { addNode, addBoardFrame, appendBoardNode, boardBounds, boardColors, boardCommentAnchor, boardDocument, dragNodeGeometry, editedBoard, hitBoardNode, indexNodes, loadAssets, parentPoint, patchNode, releaseAssets, removeNode, renderBoard, replaceBoard, setBoardDraft, sketchStroke, touchedStrokes, uploadAsset } from "./blueprint.mjs";
-import { ApiError, clearCredentials, createApi, createOperation, dispose as disposeApi, fetchAsset, forgetSession, operationId, perform, request } from "./api.mjs";
-import { clusterGlyph, element, icon, labelDialog, labeledField, pathIcon, progressMark, restoreRunning, runAction, setBusy, showDialog, showError, skeletonMark } from "./components.mjs";
-import {
-  applyWatch,
-  createComment,
-  commentChoice,
-  createEditors,
-  createResource,
-  libraryState,
-  renderEditorHistory,
-  renderLibrary,
-  libraryChange,
-  duplicateEditor,
-  moveEditor,
-  deleteEditor,
-  handleActivity,
-  loadCatalog,
-  loadComments,
-  loadHistory,
-  restoreEditorHistory,
-  resolveEditorConflict,
-  editorDraftDocument,
-  noteComment,
-  noteRemote,
-  openEditor,
-  refreshRemoteEditor,
-  registerResource,
-  replyComment,
-  resolveComment,
-  setAttachments,
-  expandAttachments,
-  startWatch,
-  stopWatch,
-} from "./editors.mjs";
+import { ApiError, clearCredentials, createApi, createOperation, dispose as disposeApi, fetchAsset, forgetSession, operationId, request } from "./api.mjs";
+import { clusterGlyph, element, icon, labelDialog, labeledField, pathIcon, progressMark, restoreRunning, runAction, showDialog, showError, skeletonMark } from "./components.mjs";
 import { activateUnit, buildHierarchy, collapseNewClusters, displayName, flattenVisibleHierarchy, hierarchyDisclosure, hierarchyIcon, listedWorktrees, openContextMenu, pathFolder, readableIdentity, revealGroup, toggleGroup, unitDisplayName, unitRoleName, unitsForTree, upperFirst } from "./hierarchy.mjs";
 import { checkoutFacts, openTaskDetail, renderApproval, renderGrants, renderMachine, renderSession, renderTask, renderUnit, renderWaiting, requestBrief, waitingSections } from "./inspector.mjs";
 import { cardinal, formatClock, formatNumber, formatRecent, formatShortDate, formatShortTime, text } from "./i18n.mjs";
 import { collectPages, createPagedList, loadAll, loadNext, reloadList, renderWindow, setQuery } from "./lists.mjs";
 import { adoptInitialLayout, applyRemoteLayout, centerUnit, createMap, keepLocalPosition, renderMap, retrySavedLayout, settlePositions, useIncomingPosition } from "./map.mjs";
 import { dispose as disposeEmbed, publishDirty, publishReady, startEmbedChannel } from "./embed.mjs";
+import { disposeEmbeddedApps, embeddedName, forwardEmbeddedEvent, openBrowserApp, renderEmbeddedApp, startEmbeddedApps, syncEmbeddedApp } from "./embedded-apps.mjs";
 import { PHONE_NAV, exchangeCode, exchangeHomeFragment, logout, renderCodeEntry, renderPhone } from "./phone.mjs";
 import { applyAgent, applyIssueChange, applyServiceBeat, applySettingsRead, applySyncSnapshot, armExpiry, clearGrant, closeHome, LOOK_IDS, noteHomeChange, openHome, previewAgent, renderClientReview, renderReviewAll, renderSettings, saveSettings, takeGrant } from "./settings.mjs";
 import { acceptStreamEvent, createStore, loadSnapshot } from "./state.mjs";
-import { answerProposal, captureTextSelection, createTextFinder, documentSaver, draftSnapshot, editProposal, enterFocus, formatSelection, highlightFind, leaveFocus, loadProposals, moveFocus, noteProposal, proposalComment, proposalPassage, proposalStale, rememberTextDraft, renderDocument, renderProposal, replaceMatches, undoReplace, replaceVisible, restoreTextSelection, selectedPlainRange, showTools, TEXT_FORMATS, textAnchor, textDraft, textDraftKey } from "./void.mjs";
-import { assetIdentity, plainCaretFromSource, plainOffsets, plainText, sourceBoundary, tokenizeMarkup, validUtf16Boundary } from "./markup.mjs";
 import { close as closeStream, resetCredentials, synchronize } from "./stream.mjs";
 import * as startApi from './start-api.mjs';
 import { roleLabel, startText } from './start-copy.mjs';
@@ -98,7 +64,7 @@ import { encodeHomeQr } from './qr.mjs';
 import { renderQr } from './qr-render.mjs';
 import { updateExpiry } from './settings.mjs';
 
-const DESKTOP_MODES = ["map", "blueprint", "document", "focus"];
+const DESKTOP_MODES = ["map", "blueprint", "document"];
 const BAR_MODES = ["map", "blueprint", "document"];
 const PHONE_MODES = PHONE_NAV;
 const RECOVERY_COPY = {
@@ -293,9 +259,12 @@ export async function mount(root, env = globalThis) {
     bootReading: Boolean(api.token),
     selectedFolder: env.mindPath ?? new URLSearchParams(api.location.search ?? "").get("mind") ?? "",
     chooseFolder: env.chooseFolder ?? null,
+    embeddedHost: env.hivem1nd ?? globalThis.hivem1nd ?? null,
+    openExternalApp: env.openExternalApp ?? null,
     startStorage: env.storage ?? viewStorage(document),
     recovery: env.recovery ?? ((env.hivem1nd ?? globalThis.hivem1nd)?.recoverService ? (env.hivem1nd ?? globalThis.hivem1nd) : null), // Compatibility: retain persisted viewer preferences and the preload bridge identity.
   };
+  startEmbeddedApps(app, () => renderShell(app));
   // Slow actions run here in the background, one after another; their notices and the bell's list draw from it.
   app.queue = createQueue({ now: () => api.now(), onChange: () => {
     // While deletions run, the lists are read once at the end instead of after every change they announce: each read
@@ -305,7 +274,6 @@ export async function mount(root, env = globalThis) {
     if (app.rendering) queueMicrotask(() => { if (!app.disposed) renderShell(app); }); else renderShell(app);
   } });
   const view = root.ownerDocument.defaultView;
-  view?.addEventListener?.("keydown", (event) => onFocusKey(app, event));
   view?.addEventListener?.("keydown", (event) => onEscapeKey(app, event));
   view?.addEventListener?.("keydown", (event) => onPickKey(app, event));
   root.addEventListener("click", (event) => closeBarPanels(app, event));
@@ -315,11 +283,6 @@ export async function mount(root, env = globalThis) {
     const id = row?.unit?.id ?? app.store.selected.unitId;
     if (id && !app.aliasEdit) { event.preventDefault?.(); beginAlias(app, id, row?.id); }
   });
-  const revealFocusTools = () => {
-    if (app.rendering || app.mode !== "focus" || !app.voidState || app.voidState.tools) return;
-    showTools(app.voidState);
-    renderShell(app);
-  };
   // A wheel, a touch drag or a scroll the shell did not cause itself marks the person as scrolling. A redraw sets the
   // scroll positions back, which fires scroll events of its own just after it.
   const scrolling = (event) => {
@@ -327,9 +290,6 @@ export async function mount(root, env = globalThis) {
     app.scrollingUntil = scrollClock() + SCROLL_QUIET_MS;
   };
   for (const type of ["wheel", "touchmove", "scroll"]) root.addEventListener?.(type, scrolling, { capture: true, passive: true });
-  root.addEventListener?.("pointermove", revealFocusTools);
-  root.addEventListener?.("pointerup", revealFocusTools);
-  root.addEventListener?.("focusin", revealFocusTools);
   app.language = knownLanguage(app.startStorage, browserLanguages(env, document));
   restoreOpeningView(app);
   renderStatus(app, "loading");
@@ -481,11 +441,6 @@ async function patchOwnViewer(app, body, retained = null) {
 async function logoutOwnViewer(app) {
   disposeEmbed(app.embed);
   app.embed = null;
-  if (app.editors) {
-    app.editors.drafts?.clear?.();
-    app.editors.watch = null;
-    app.editors.current = null;
-  }
   if (app.homeState?.expiryTimer != null) clearTimeout(app.homeState.expiryTimer);
   if (app.homeState) {
     app.homeState.expiryTimer = null;
@@ -493,11 +448,13 @@ async function logoutOwnViewer(app) {
   }
   await logout(app.api);
   app.disposed = true;
+  disposeEmbeddedApps(app);
   renderSignedOut(app);
 }
 
 export function navigate(app, mode) {
   if (app.bootReading || app.bootFailed) return;
+  if (openBrowserApp(app, mode)) return;
   if (app.layout === "phone") {
     if (!PHONE_MODES.includes(mode)) return;
     if (mode === "waiting") {
@@ -523,7 +480,6 @@ export function navigate(app, mode) {
     app.waitingOpen = false;
   }
   if (mode !== "settings" && app.homeState?.grant) clearGrant(app.homeState);
-  if (mode === "focus" && app.voidState) enterFocus(app.voidState);
   renderShell(app);
 }
 
@@ -534,15 +490,10 @@ const SCROLL_QUIET_MS = 250;
 const scrollClock = () => globalThis.performance?.now?.() ?? Date.now();
 
 export function renderShell(app) {
-  if (app.editors?.current?.boardGesture || app.editors?.current?.textComposing) return;
   const wait = (app.scrollingUntil ?? 0) - scrollClock();
   if (wait > 0) {
     if (!app.scrollRedraw) app.scrollRedraw = setTimeout(() => { app.scrollRedraw = null; if (!app.disposed) renderShell(app); }, wait + 10);
     return;
-  }
-  if (app.voidFind?.open && (app.mode !== 'document' || app.editors.current?.kind !== 'void' || app.editors.current.sourceMode)) {
-    clearTimeout(app.voidFind.timer); app.voidFind.finder.cancel(); app.voidFind.generation++;
-    app.voidFind.open = false; app.voidFind.pending = false;
   }
   app.rendering = true;
   try {
@@ -607,7 +558,6 @@ function paintShell(app) {
   paintPhonePanel(app, shell);
   paintServiceBanner(app, shell);
   restoreInputFocus(app);
-  app.editors?.current?.restoreSelection?.();
   finishList(app);
   finishMap(app);
   syncChatReads(app);
@@ -620,6 +570,7 @@ function paintShell(app) {
       homeState(app).phoneDialogFocused = true;
     }
   }
+  syncEmbeddedApp(app);
 }
 
 // Every drawing replaces the whole shell. The panels that scroll keep where they were, so reading a long panel is not
@@ -644,63 +595,24 @@ function restoreScrolls(root, saved) {
 
 function inputDrafts(app) {
   if (!app.inputDrafts) {
-    app.inputDrafts = { chats: new Map(), notes: new Map(), nodes: new Map(), resources: new Map(), fields: new Map(), disclosures: new Map(), focus: null };
+    app.inputDrafts = { chats: new Map(), notes: new Map(), fields: new Map(), disclosures: new Map(), focus: null };
   }
   return app.inputDrafts;
-}
-
-function draftMap(app, name) {
-  const drafts = inputDrafts(app);
-  if (!drafts[name]) drafts[name] = new Map();
-  return drafts[name];
-}
-
-function textDraftsDiffer(editor) {
-  if (!editor?.textDrafts?.size) return false;
-  const pages = editor.authoritative?.document?.pages ?? editor.document?.pages ?? [];
-  for (const [key, value] of editor.textDrafts) {
-    const parts = String(key).split("\0");
-    const page = pages.find((item) => item.k === parts[1]);
-    if (!page || page[parts[2]] !== value) return true;
-  }
-  return false;
-}
-
-function editorFormsDirty(editor) {
-  if (!editor) return false;
-  if (editor.titleDraft !== undefined && editor.titleDraft !== editor.authoritative?.document?.title) return true;
-  if (editor.boardDraft) return true;
-  if (editor.commentText) return true;
-  if (editor.nodeDraft) return true;
-  if (textDraftsDiffer(editor)) return true;
-  const mirrored = editor.draftKey ? textDraft(editor, editor.resourceId, editor.draftKey.k, editor.draftKey.lang) : undefined;
-  return Boolean(editor.draftText) && editor.draftText !== mirrored;
 }
 
 function aggregateDirty(app) {
   if ([...(app.chatThreads?.values() ?? [])].some((thread) => thread.pendingSends.size)) return true;
   const drafts = inputDrafts(app);
-  for (const name of ["chats", "notes", "nodes", "resources"]) {
+  for (const name of ["chats", "notes"]) {
     for (const value of drafts[name]?.values() ?? []) {
       const text = typeof value === "string" ? value : value?.value;
       if (text) return true;
     }
   }
-  const seen = new Set();
-  const editors = [];
-  if (app.editors?.current) editors.push(app.editors.current);
-  for (const editor of app.editors?.drafts?.values() ?? []) editors.push(editor);
-  for (const editor of editors) {
-    if (!editor || seen.has(editor)) continue;
-    seen.add(editor);
-    if (editorFormsDirty(editor)) return true;
-  }
   return false;
 }
 
 function syncViewerDirty(app) {
-  const editor = app.editors?.current;
-  if (editor) editor.dirty = editorFormsDirty(editor);
   if (!(app.store.capabilities ?? []).includes("viewer.write")) return null;
   const dirty = aggregateDirty(app);
   if (app.embed && app.embedDirty !== dirty) {
@@ -709,26 +621,11 @@ function syncViewerDirty(app) {
   }
   if (app.viewerDirty === dirty) return app.viewerPatch ?? null;
   app.viewerDirty = dirty;
-  if (app.editors) app.editors.viewerDirty = dirty;
   const operation = createOperation({ method: "PATCH", path: "/viewer", body: { dirty } });
   app.viewerPatch = request(app.api, "PATCH", "/viewer", { operation }).catch((error) => {
     if (!app.disposed) noteAction(app, error);
   });
-  if (app.editors) app.editors.viewerPatch = app.viewerPatch;
   return app.viewerPatch;
-}
-
-function rememberFormDraft(app, name, id, value) {
-  const map = draftMap(app, name);
-  if (value) map.set(id, value);
-  else map.delete(id);
-  syncViewerDirty(app);
-}
-
-function releaseFormDraft(app, name, id, saved) {
-  const map = draftMap(app, name);
-  if (saved === undefined || map.get(id) === saved || map.get(id)?.value === saved) map.delete(id);
-  syncViewerDirty(app);
 }
 
 function fieldDraft(node) {
@@ -747,7 +644,6 @@ function keepParts(key) {
 }
 
 function captureInputs(app) {
-  app.editors?.current?.captureSelection?.();
   const drafts = inputDrafts(app);
   if (!drafts.fields) drafts.fields = new Map();
   const active = app.root.ownerDocument?.activeElement;
@@ -774,7 +670,7 @@ function captureInputs(app) {
 function clearInputDraft(app, kind, id) {
   const drafts = inputDrafts(app);
   const key = keepId(kind, id);
-  const bucket = kind === "chat" ? drafts.chats : kind === "note" ? drafts.notes : draftMap(app, kind);
+  const bucket = kind === "chat" ? drafts.chats : drafts.notes;
   bucket.delete(id);
   drafts.fields?.delete(key);
   if (drafts.focus?.id === key) drafts.focus = null;
@@ -829,6 +725,7 @@ export function dispose(app) {
   app.startDialog?.dialog?.close();
   if (!app || app.disposed) return;
   app.disposed = true;
+  disposeEmbeddedApps(app);
   clearTimeout(app.workClock);
   clearTimeout(app.checkoutTimer);
   clearTimeout(app.readyTimer);
@@ -836,13 +733,7 @@ export function dispose(app) {
   clearTimeout(app.phoneLockTimer);
   clearTimeout(app.mapToastTimer);
   clearTimeout(app.scrollRedraw);
-  clearTimeout(app.libraryToastTimer);
-  clearTimeout(app.voidFind?.timer);
-  app.voidFind?.finder.cancel();
   for (const record of app.activity?.values() ?? []) record.cancel?.();
-  app.root?.ownerDocument?.removeEventListener?.("selectionchange", app.onCommentSelection);
-  app.root?.ownerDocument?.removeEventListener?.("selectionchange", app.onVoidSelection);
-  for (const editor of app.editors?.drafts?.values() ?? []) editor.voidSaver?.dispose();
   closeStream(app.api.live);
   for (const list of [app.unitList, app.chatList, app.waitingList]) {
     if (!list) continue;
@@ -858,7 +749,6 @@ export function dispose(app) {
   clearPhoneDialog(app);
   app.settingsState?.dialog?.close();
   disposeEmbed(app.embed);
-  releaseAssets(app.editors?.current);
   app.liveStatus?.remove?.();
   app.liveError?.remove?.();
   app.liveStatus = null;
@@ -868,6 +758,7 @@ export function dispose(app) {
 
 async function onStream(app, event) {
   if (app.disposed || app.bootFailed) return;
+  if (event?.name === 'app.bridge') { forwardEmbeddedEvent(app, event); return; }
   const result = await acceptStreamEvent(app.store, app.api, event);
   if (app.disposed || result?.dropped) return;
   if (app.layout !== 'phone' && ['plan.changed', 'run.changed', 'run.log', 'session.work', 'session.context', 'stream.reset'].includes(event?.name)) {
@@ -976,126 +867,14 @@ async function onStream(app, event) {
     }
     if (data.message?.operationId) app.api.uncertain.delete(data.message.operationId);
   }
-  const editors = app.editors;
-  const data = event?.envelope?.data ?? {};
-  if (editors && event?.name === "comment.changed") noteComment(editors, data);
-  if (editors && event?.name === "void.proposal.changed") {
-    noteProposal(editors, data);
-    if (editors.current?.resourceId === data.resourceId) {
-      try {
-        await loadProposals(app.api, editors);
-        noteProposal(editors, data);
-      } catch (error) {
-        editors.error = error;
-      }
-    }
+  if (event?.name === "notification.changed") {
+    const data = dataOf(event);
+    const thread = app.chatThreads?.get(data.chatId) ?? (app.thread?.chat?.id === data.chatId ? app.thread : null);
+    if (thread && data.message) incomingMessage(thread, data.message, true);
   }
-  if (editors && event?.name === "editor.attachments.changed") noteAttachmentEvent(editors, data);
-  if (editors && event?.name === "editor.asset.created") await noteAssetEvent(app, data);
-  if (editors && ["library.changed", "editor.removed", "editor.changed"].includes(event?.name)) {
-    if (event.name === "editor.removed" && editors.current?.resourceId === data.resourceId) {
-      editors.current = null;
-      app.store.selected.resourceId = null;
-    }
-    const kind = app.mode === "blueprint" ? "blueprint" : "void";
-    if (["blueprint", "document"].includes(app.mode)) {
-      try { await loadCatalog(app.api, editors, kind); } catch (error) { editors.error = error; }
-    } else editors.loadedKind = null;
-  }
-  if (event?.name === "notification.changed") noteDelivery(app, editors, data);
-  if (event?.name === "sync.conflict") noteSyncConflict(app, data);
-  if (editors && (event?.name === "blueprint.changed" || event?.name === "void.changed")) {
-    noteRemote(editors, data);
-    if (data.resourceId) {
-      try {
-        await refreshRemoteEditor(app.api, editors, data.resourceId);
-      } catch (error) {
-        editors.error = error;
-      }
-    }
-  }
-  if (editors && event?.name === "editor.activity") {
-    const followed = handleActivity(editors, data);
-    if (followed.follow) await revealWatched(app, editors, data);
-  }
-  if (editors && event?.name === "editor.history.changed" && editors.current?.resourceId === data.resourceId) {
-    editors.current.historyStale = true;
-    if (editors.current.historyOpen) await loadHistory(app.api, editors).catch((error) => { editors.error = error; });
-  }
-  if (editors && event?.name === "watch.changed") {
-    const nextId = applyWatch(editors, data);
-    if (data.state === "watching") await revealWatched(app, editors, { ...data, resourceId: nextId ?? data.resourceId });
-  }
-  if (editors?.current?.commentsStale) {
-    try {
-      await loadComments(app.api, editors);
-    } catch (error) {
-      editors.error = error;
-    }
-  }
+  if (event?.name === "sync.conflict") noteSyncConflict(app, dataOf(event));
   if (app.layout !== "unknown") renderShell(app);
   result?.consume?.();
-}
-
-function sameIds(choice, ids) {
-  if (!(choice instanceof Set) || choice.size !== ids.length) return false;
-  return ids.every((id) => choice.has(id));
-}
-
-function noteAttachmentEvent(editors, data) {
-  const current = editors.current;
-  if (!current || data?.resourceId !== current.resourceId || !Array.isArray(data.attached)) return;
-  const previous = current.attached ?? [];
-  const dirty = current.attachmentChoice instanceof Set && !sameIds(current.attachmentChoice, previous);
-  current.attached = data.attached;
-  if (data.revision) current.attachmentRevision = data.revision;
-  if (!dirty) {
-    current.attachmentChoice = new Set(data.attached);
-    current.attachmentConflict = null;
-  } else {
-    current.attachmentConflict = { revision: data.revision ?? null, attached: data.attached };
-  }
-}
-
-async function noteAssetEvent(app, data) {
-  const editors = app.editors;
-  const current = editors?.current;
-  if (!current || data?.resourceId !== current.resourceId || !data.asset?.id) return;
-  const selected = editors.selectedNodeId ?? null;
-  const records = current.assetRecords ?? [];
-  const index = records.findIndex((item) => item.id === data.asset.id);
-  current.assetRecords = index >= 0 ? records.map((item) => item.id === data.asset.id ? data.asset : item) : [...records, data.asset];
-  if (data.asset.src && current.assets instanceof Map) {
-    try {
-      const image = await fetchAsset(app.api, {
-        url: data.asset.url || `/api/v1/editors/${encodeURIComponent(current.resourceId)}/assets/${encodeURIComponent(data.asset.id)}`,
-      });
-      const previous = current.assets.get(data.asset.src);
-      if (previous && previous !== image) previous.revoke?.();
-      current.assets.set(data.asset.src, image);
-    } catch (error) {
-      current.assetIssues = [...(current.assetIssues ?? []).filter((item) => item.src !== data.asset.src), { src: data.asset.src, code: error.code || "invalid_asset" }];
-    }
-  }
-  editors.selectedNodeId = selected;
-}
-
-function noteDelivery(app, editors, data) {
-  const thread = app.chatThreads?.get(data?.chatId) ?? (app.thread?.chat?.id === data?.chatId ? app.thread : null);
-  if (thread && data.message) incomingMessage(thread, data.message, true);
-  const current = editors?.current;
-  if (!current || data?.resourceId !== current.resourceId || !data.state) return;
-  const notices = [...(current.notices ?? [])];
-  const index = notices.findIndex((item) => item.noticeKey === data.noticeKey && item.unitId === data.unitId);
-  const next = { noticeKey: data.noticeKey ?? null, unitId: data.unitId ?? null, state: data.state, error: data.error ?? null };
-  if (index >= 0) notices[index] = { ...notices[index], ...next };
-  else notices.push(next);
-  current.notices = notices;
-  const copy = { pending: "queued", queued: "queued", submitted: "submitted", ambiguous: "ambiguous", failed: "failed" };
-  const key = copy[data.state];
-  if (!key) return;
-  const failed = data.state === "failed" || data.state === "ambiguous";
-  showOutcome(app, text(app.language, key), data.state, failed ? "error" : "status");
 }
 
 function noteSyncConflict(app, data) {
@@ -1134,7 +913,6 @@ async function loadPresentation(app, options = {}) {
   app.store.audience ??= app.layout;
   const home = homeState(app);
   applySettingsRead(home, app.store.settings);
-  editorsOf(app).sendToAgent = home.sendToAgentChoice ?? home.settings.sendToAgent;
   app.store.settings.home = home.home;
   if (app.layout !== "unknown" && app.store.snapshotReady) {
     app.bootReading = false;
@@ -1165,15 +943,16 @@ function publish(app) {
 export function renderBar(app, t, counts) {
   const document = app.root.ownerDocument;
   const modes = element(document, "div", { class: "modes", role: "toolbar" });
-  if (app.layout !== "phone") {
-    for (const mode of BAR_MODES) {
+  {
+    for (const mode of BAR_MODES.filter(mode => app.layout !== "phone" || mode !== "map")) {
       modes.append(element(document, "button", {
         type: "button",
         class: "mode",
         "data-action": `mode-${mode}`,
         "aria-pressed": String(app.mode === mode),
         onclick: () => navigate(app, mode),
-      }, icon(document, mode), t(mode === "document" ? "voidMode" : mode)));
+        "aria-label": t(mode === "document" ? "voidMode" : mode),
+      }, icon(document, mode), element(document, "span", { class: app.layout === "phone" ? "sr" : "", text: t(mode === "document" ? "voidMode" : mode) })));
     }
   }
   const waiting = element(document, "button", {
@@ -1217,17 +996,6 @@ export function renderBar(app, t, counts) {
     onclick: () => { app.queuePanelOpen = app.queuePanelOpen !== true; renderShell(app); },
   }, icon(document, "bell"));
   if (openJobs) notifications.append(element(document, "span", { class: "queue-badge", "aria-hidden": "true", text: String(openJobs) }));
-  const commentsToggle = element(document, "button", {
-    type: "button",
-    class: "btn panel-toggle",
-    "data-action": "toggle-comments",
-    "aria-pressed": String(app.commentsOpen === true),
-    text: t(app.commentsOpen ? "hideComments" : "showComments"),
-    onclick: () => {
-      app.commentsOpen = app.commentsOpen !== true;
-      renderShell(app);
-    },
-  });
   const bar = element(document, "header", { class: "bar" }, app.layout === 'phone' ? brand(document).querySelector('.mark') : brand(document), modes);
   if (app.layout === 'phone') bar.append(element(document, 'h2', { 'data-phone-title': 'true', text: viewTitle(app, t) }));
   if (app.layout !== 'phone' && !app.bootReading && !app.bootFailed && app.store.capabilities.includes('settings.write')) {
@@ -1235,7 +1003,6 @@ export function renderBar(app, t, counts) {
   }
   if (counts.waiting) bar.append(waiting);
   if (app.layout !== "phone") {
-    if (app.mode === "blueprint" || app.mode === "document") bar.append(commentsToggle);
     bar.append(phone, notifications, inspector, settings, more);
   }
   return bar;
@@ -1286,9 +1053,8 @@ function refitBesideDrawer(app) {
 
 function renderWorkspace(app, t, view, counts) {
   if (app.layout !== "phone" && (app.bootReading || app.bootFailed)) return openingWorkspace(app, t);
-  if (app.mode === "focus") return renderFocusWorkspace(app, t);
-  if (app.layout !== "phone" && (app.mode === "blueprint" || app.mode === "document")) return renderEditorWorkspace(app, t);
   const document = app.root.ownerDocument;
+  const embedded = embeddedName(app.mode);
   if (app.layout !== "phone" && app.mode === "settings") return element(document, "div", { class: "workspace workspace-settings" }, settingsSurface(app, document, t));
   const tabs = element(document, "div", { class: "tabs" });
   for (const tab of ["hierarchy", "chats"]) {
@@ -1332,13 +1098,17 @@ function renderWorkspace(app, t, view, counts) {
   const stage = element(document, "section", { class: "panel stage" },
     element(document, "h2", { "data-stage-title": "true", text: stageTitle }),
   );
+  if (embedded) {
+    stage.setAttribute("data-embedded-stage", embedded);
+    stage.querySelector("[data-stage-title]")?.setAttribute("class", "sr");
+  }
   if (app.mode === "settings") {
     stage.append(settingsSurface(app, document, t));
   } else if (app.mode === "map") {
     ensureMap(app);
     stage.append(element(document, "div", { class: "map" }), catalogToggle(app, t, "hierarchy"));
-  } else if (app.mode === "blueprint" || app.mode === "document" || app.mode === "focus") {
-    stage.append(renderEditor(app, t));
+  } else if (embeddedName(app.mode)) {
+    stage.append(renderEmbeddedApp(app, t));
   } else if (app.layout === "phone" && app.mode === "waiting") {
     stage.append(renderWaitingSurface(app, t));
   } else if (app.layout === "phone" && app.tab === "chats") {
@@ -1441,7 +1211,8 @@ function renderWorkspace(app, t, view, counts) {
     element(document, "button", { type: "button", class: "icon-button", "data-action": "close-inspector", "aria-label": t("closeInspector"), title: t("closeInspector"), onclick: () => toggleInspector(app, false) }, icon(document, "close"))), inspectorBody);
   const phoneHierarchy = app.layout === "phone" && app.mode !== "waiting" && app.tab !== "chats";
   const showSide = app.layout !== "phone" || app.mode !== "waiting";
-  return element(document, "div", { class: "workspace" }, showSide ? side : null, phoneHierarchy ? null : stage, inspector);
+  return element(document, "div", { class: embedded ? `workspace workspace-embedded${app.inspectorOpen ? " has-inspector" : ""}` : "workspace" },
+    !embedded && showSide ? side : null, phoneHierarchy ? null : stage, !embedded || app.inspectorOpen ? inspector : null);
 }
 
 // The failed requests this panel shows as notices, by cause.
@@ -2143,1019 +1914,15 @@ function emptyCollectionAction(app, document, t, list) {
   return showMapButton(app, document, t);
 }
 
-function editorsOf(app) {
-  if (!app.editors) app.editors = createEditors();
-  return app.editors;
-}
-
-async function revealWatched(app, editors, activity) {
-  if (app.layout === "phone") return;
-  const resourceId = activity?.resourceId ?? editors.watch?.resourceId ?? null;
-  const summary = resourceId ? editors.catalog.find((item) => item.id === resourceId) : null;
-  const kind = activity?.kind === "void" || summary?.kind === "void" ? "void" : "blueprint";
-  app.mode = kind === "void" ? "document" : "blueprint";
-  if (summary && editors.current?.resourceId !== resourceId) await openEditor(app.api, editors, summary);
-  if (editors.focus?.k) {
-    if (editors.current) editors.current.page = editors.focus.k;
-    if (app.voidState) app.voidState.page = editors.focus.k;
-  }
-}
-
-function queueCatalog(app, kind) {
-  const editors = editorsOf(app);
-  if (editors.loadedKind === kind || editors.catalogLoading) return;
-  editors.catalogLoading = true;
-  settle(app, `catalog:${kind}`, text(app.language, "loadingList"), async () => {
-    try {
-      await loadCatalog(app.api, editors, kind);
-    } catch (error) {
-      editors.loadedKind = kind;
-      throw error;
-    } finally {
-      editors.catalogLoading = false;
-    }
-  }, (error) => noteEditor(app, error, `catalog:${kind}`));
-}
-
-function boardSurface(app, document, editor, t) {
-  const host = element(document, "div", { class: "board-host", "data-board-tool": editor.boardTool ?? "select" });
-  const canvas = element(document, "div", { class: "board-canvas" });
-  app.editors.selectedNodeId = editor.selectedNodeId ?? null;
-  editor.focus = app.editors.focus?.resourceId === editor.resourceId ? app.editors.focus : null;
-  editor.viewport = app.editors.viewport;
-  editor.panned = app.editors.panned === true && !editor.boardDraft;
-  const repaint = () => { renderBoard(document, canvas, editor); paintBoardSelection(app, document, host, editor, t); };
-  host.append(canvas, boardToolbar(app, document, editor, t), boardProperties(app, document, editor, t));
-  const editable = canEditResources(app) && !editor.authoritative.readOnly;
-  let gesture = null, suppressClick = false;
-  const targetAt = (event) => {
-    const point = boardPoint(canvas.querySelector("svg"), event);
-    const screenId = event.target?.getAttribute?.("data-screen");
-    if (screenId) return { kind: "screen", screenId, ...point };
-    const hit = hitBoardNode(boardDocument(editor), point);
-    return hit ? { kind: "node", ...hit, ...point } : { kind: "canvas", ...point };
-  };
-  const nativeStrokeHits = (event) => {
-    const ids = [];
-    for (const path of canvas.querySelectorAll("path[data-kind='pen']")) {
-      if (!path.isPointInStroke || !path.getScreenCTM || !canvas.querySelector("svg").createSVGPoint) continue;
-      const cursor = canvas.querySelector("svg").createSVGPoint(); cursor.x = event.clientX; cursor.y = event.clientY;
-      if (path.isPointInStroke(cursor.matrixTransform(path.getScreenCTM().inverse()))) ids.push(path.closest("[data-node]").getAttribute("data-node"));
-    }
-    return ids;
-  };
-  const cancel = () => {
-    if (!gesture) return;
-    editor.boardDraft = gesture.previous && JSON.stringify(gesture.previous) !== JSON.stringify(editor.authoritative.document) ? gesture.previous : null;
-    editor.dirty = Boolean(editor.boardDraft) || gesture.dirty && Boolean(editor.commentText || editor.nodeDraft);
-    const pointerId = gesture.pointerId;
-    gesture = null;
-    editor.boardGesture = false;
-    host.releasePointerCapture?.(pointerId);
-    renderShell(app);
-  };
-  host.addEventListener("pointerdown", (event) => {
-    if (gesture || event.button > 0) return;
-    if (event.target?.closest?.("button, input, textarea, details, [data-toolbar]")) {
-      if (!event.target?.closest?.("[data-resize]")) return;
-    }
-    const target = targetAt(event), board = boardDocument(editor), tool = editor.boardTool ?? "select";
-    const corner = event.target?.closest?.("[data-resize]")?.getAttribute("data-resize") ?? null;
-    if (tool === "comment") { chooseBoardTarget(app, editor, target); editor.commentPopover = true; renderShell(app); return; }
-    if (tool === "text") { if (editable) insertBoardText(app, editor, target, document, host); return; }
-    if (!editable || editor.conflict) return;
-    if (tool === "select" && !corner) chooseBoardTarget(app, editor, target, false);
-    const item = indexNodes(board).get(corner ? editor.selectedNodeId : target.nodeId);
-    if (tool === "select" && !item) { renderShell(app); return; }
-    const sketch = tool === "draw" ? [...(board.screens ?? [])].reverse().find((screen) => screen.root?.sketch && target.x >= screen.x && target.x <= screen.x + screen.w && target.y >= screen.y && target.y <= screen.y + screen.h) : null;
-    if (tool === "draw" && !sketch && editor.drawTool !== "eraser") return;
-    if (editor.boardErasing || (tool === "draw" && editor.drawTool === "eraser" && editor.boardDraft)) return;
-    gesture = { pointerId: event.pointerId, tool, corner, item, sketch, start: target, points: [target], previous: editor.boardDraft,
-      dirty: editor.dirty, base: structuredClone(board), removed: new Set(), moved: false };
-    if (tool === "draw" && editor.drawTool === "eraser") {
-      for (const id of [...touchedStrokes(board, target), ...nativeStrokeHits(event)]) gesture.removed.add(id);
-      gesture.moved = gesture.removed.size > 0;
-    }
-    editor.boardGesture = true;
-    suppressClick = true;
-    host.setPointerCapture?.(event.pointerId);
-    event.preventDefault?.();
-  });
-  host.addEventListener("pointermove", (event) => {
-    if (!gesture || event.pointerId !== gesture.pointerId) return;
-    const point = boardPoint(canvas.querySelector("svg"), event), current = gesture;
-    const next = structuredClone(current.base);
-    current.moved ||= Math.hypot(point.x - current.start.x, point.y - current.start.y) > 0.5;
-    if (current.tool === "select") {
-      const start = parentPoint(current.base, current.item.node.id, current.start), end = parentPoint(current.base, current.item.node.id, point);
-      Object.assign(indexNodes(next).get(current.item.node.id).node, dragNodeGeometry(current.item.node, end.x - start.x, end.y - start.y, current.corner));
-    } else if (current.tool === "frame") {
-      addBoardFrame(next, "preview-frame", { x: Math.min(point.x, current.start.x), y: Math.min(point.y, current.start.y) },
-        { w: Math.abs(point.x - current.start.x), h: Math.abs(point.y - current.start.y) }, boardColors(document, host));
-    } else if (editor.drawTool === "eraser") {
-      const last = current.points.at(-1);
-      for (const id of touchedStrokes(current.base, last, point)) current.removed.add(id);
-      // Native SVG geometry also covers retained curves from Lite boards.
-      for (const id of nativeStrokeHits(event)) current.removed.add(id);
-      current.points.push(point);
-      for (const item of indexNodes(next).values()) if (item.node.kids) item.node.kids = item.node.kids.filter((node) => !current.removed.has(node.id));
-    } else {
-      if (current.points.length < 180) current.points.push(point); else current.points[current.points.length - 1] = point;
-      sketchStroke(next, current.sketch, "preview-stroke", current.points, boardColors(document, host)[editor.drawColor ?? "text"], editor.drawTool === "marker");
-    }
-    editor.boardDraft = next;
-    repaint();
-  });
-  host.addEventListener("pointerup", (event) => {
-    if (!gesture || event.pointerId !== gesture.pointerId) return;
-    const current = gesture;
-    gesture = null;
-    editor.boardGesture = false;
-    host.releasePointerCapture?.(event.pointerId);
-    if (!current.moved) { editor.boardDraft = current.previous && JSON.stringify(current.previous) !== JSON.stringify(editor.authoritative.document) ? current.previous : null; renderShell(app); return; }
-    if (current.tool === "draw" && editor.drawTool === "eraser") {
-      editor.boardDraft = current.previous;
-      editor.boardErasing = true;
-      editorAct(app, `erase:${editor.resourceId}`, t("eraser"), async (record) => {
-        try {
-        for (const id of current.removed) {
-          if (!indexNodes(editor.authoritative.document).has(id)) continue;
-          await removeNode(app.api, editor, id, record.operation);
-          record.operation = null;
-        }
-        } finally { editor.boardErasing = false; }
-      });
-      return;
-    }
-    const next = editor.boardDraft;
-    if (current.tool === "frame") {
-      const frame = next.screens.at(-1), id = `frame-${operationId()}`;
-      frame.id = id; frame.root.id = `${id}-root`;
-      next.pages[0].order = next.pages[0].order.map((item) => item === "preview-frame" ? id : item);
-      if (next.pages[0].start === "preview-frame") next.pages[0].start = id;
-    } else if (current.tool === "draw") {
-      const stroke = indexNodes(next).get("preview-stroke").node; stroke.id = `stroke-${operationId()}`;
-    }
-    editor.boardDraft = current.previous;
-    setBoardDraft(editor, next);
-    saveBoardDraft(app, editor);
-  });
-  host.addEventListener("pointercancel", cancel);
-  host.addEventListener("lostpointercapture", cancel);
-  host.addEventListener("click", (event) => {
-    if (event.target?.closest?.("button, input, textarea, details, [data-toolbar]")) return;
-    if (suppressClick) { suppressClick = false; return; }
-    const target = targetAt(event);
-    chooseBoardTarget(app, editor, target);
-    if (editor.boardTool === "comment") { editor.commentPopover = true; renderShell(app); }
-  });
-  host.addEventListener("keydown", (event) => {
-    if (event.target?.closest?.("input, textarea")) return;
-    if (event.key === "Escape") { cancel(); editor.commentPopover = false; return; }
-    const nodeId = event.target?.closest?.("[data-node]")?.getAttribute("data-node") ?? editor.selectedNodeId;
-    const item = indexNodes(boardDocument(editor)).get(nodeId);
-    if (["Enter", " ", "c", "C"].includes(event.key) && item) {
-      event.preventDefault?.();
-      chooseBoardTarget(app, editor, { kind: "node", nodeId, screenId: item.screen.id, x: item.x, y: item.y }, false);
-      if (event.key.toLowerCase() === "c") editor.commentPopover = true;
-      renderShell(app);
-    } else if (editable && item && !editor.conflict && !editor.boardErasing && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
-      event.preventDefault?.();
-      const step = event.shiftKey ? 10 : 1, next = structuredClone(boardDocument(editor));
-      Object.assign(indexNodes(next).get(nodeId).node, dragNodeGeometry(item.node,
-        event.key === "ArrowLeft" ? -step : event.key === "ArrowRight" ? step : 0,
-        event.key === "ArrowUp" ? -step : event.key === "ArrowDown" ? step : 0));
-      setBoardDraft(editor, next); saveBoardDraft(app, editor);
-    }
-  });
-  repaint();
-  document.defaultView?.requestAnimationFrame?.(() => { if (host.isConnected) paintBoardSelection(app, document, host, editor, t); });
-  return host;
-}
-
-function boardProperties(app, document, editor, t) {
-  const host = element(document, "details", { class: "board-properties" });
-  host.append(element(document, "summary", { "aria-label": t("finalMore"), title: t("finalMore"), text: "⋯" }));
-  const nodes = (editor.authoritative.document ?? boardDocument(editor))?.screens?.[0];
-  const tools = element(document, "div", { class: "board-property-fields" });
-  const name = element(document, "input", { "data-node-name": "true", "data-keep": keepId("node", editor.resourceId) });
-  name.value = draftMap(app, "nodes").get(editor.resourceId) ?? "";
-  name.addEventListener("input", () => {
-    editor.nodeDraft = name.value;
-    rememberFormDraft(app, "nodes", editor.resourceId, name.value);
-  });
-  const selectedNode = app.editors.selectedNodeId;
-  tools.append(element(document, "button", {
-    type: "button", class: "btn primary", "data-action": "add-node",
-    onclick: () => addBoardShape(app, editor, nodes),
-  }, t("addShape")));
-  tools.append(labeledField(document, t("nodeName"), t("nodeNameHint"), name));
-  tools.append(element(document, "button", {
-    type: "button", class: "btn", "data-action": "patch-node",
-    disabled: selectedNode ? null : "",
-    "aria-describedby": selectedNode ? null : "reason-node",
-    onclick: () => {
-      const saved = name.value;
-      const nodeId = app.editors.selectedNodeId;
-      if (!nodeId) return;
-      editorAct(app, `node:${editor.resourceId}:${nodeId}`, text(app.language, "nodeName"), async (record) => {
-        await patchNode(app.api, editor, nodeId, { name: saved, value: saved }, record.operation);
-        if (draftMap(app, "nodes").get(editor.resourceId) === saved) editor.nodeDraft = "";
-        releaseFormDraft(app, "nodes", editor.resourceId, saved);
-      });
-    },
-  }, t("nodeName")));
-  tools.append(element(document, "button", {
-    type: "button", class: "btn", "data-action": "remove-node",
-    disabled: selectedNode ? null : "",
-    "aria-describedby": selectedNode ? null : "reason-node",
-    onclick: () => {
-      const nodeId = app.editors.selectedNodeId;
-      if (!nodeId) return;
-      editorAct(app, `node-remove:${editor.resourceId}:${nodeId}`, text(app.language, "removeShape"), async (record) => {
-        await removeNode(app.api, editor, nodeId, record.operation);
-      });
-    },
-  }, t("removeShape")));
-  if (!selectedNode) tools.append(element(document, "p", { id: "reason-node", class: "field-hint", "data-disabled-reason": "node", text: t("selectNode") }));
-  const file = element(document, "input", { type: "file", accept: "image/png,image/jpeg,image/webp", "data-asset": "true" });
-  file.addEventListener("change", () => {
-    const selected = file.files?.[0];
-    if (!selected) return;
-    editorAct(app, `upload:${editor.resourceId}`, text(app.language, "uploading"), async (record) => {
-      const asset = await uploadAsset(app.api, editor, selected, record.operation);
-      await addImageNode(app, editor, nodes, asset);
-    });
-  });
-  tools.append(labeledField(document, t("upload"), t("assetHint"), file));
-  tools.append(element(document, "button", {
-    type: "button", class: "btn", "data-action": "comment-node",
-    onclick: () => commentOnNode(app, editor),
-  }, t("comment")));
-  if (canEditResources(app)) appendStructureTools(app, document, editor, t, tools);
-  host.append(element(document, "div", { class: "board-property-menu" }, tools, boardOutline(app, document, editor, t)));
-  for (const issue of editor.assetIssues ?? []) {
-    host.append(element(document, "p", { "data-asset-issue": issue.code, text: t("assetMissing") }));
-  }
-  return host;
-}
-
-function addBoardShape(app, editor, screen) {
-  const key = `shape:${editor.resourceId}`;
-  if (activityPending(app, key)) return app.activity.get(key).promise;
-  const node = { id: `added-${operationId()}`, name: "Added", t: "box", place: { x: 16, y: 16 }, w: 40, h: 40, dir: "stack", kids: [] };
-  return editorAct(app, key, text(app.language, "addShape"), async (record) => {
-    await addNode(app.api, editor, {
-      screenId: screen.id,
-      parentId: screen.root.id,
-      node,
-    }, record.operation);
-  });
-}
-
-function addImageNode(app, editor, screen, asset) {
-  const nodeId = `image-${operationId()}`;
-  return editorAct(app, `image:${editor.resourceId}:${asset.src}`, text(app.language, "working"), async (record) => {
-    await addNode(app.api, editor, {
-      screenId: screen.id,
-      parentId: screen.root.id,
-      node: { id: nodeId, name: "Image", t: "image", place: { x: 20, y: 48 }, w: 32, h: 32, src: asset.src },
-    }, record.operation);
-  });
-}
-
-function commentOnNode(app, editor) {
-  const board = editor.authoritative.document;
-  const selected = app.editors.selectedNodeId;
-  let screen = board.screens?.[0];
-  let node = screen?.root;
-  for (const item of board.screens ?? []) {
-    const found = findBoardNode(item.root, selected);
-    if (found) {
-      screen = item;
-      node = found;
-    }
-  }
-  const supplied = typeof editor.commentText === "string" ? editor.commentText : "";
-  if (!supplied.trim()) {
-    explain(app, "commentNeedsText");
-    return;
-  }
-  const anchor = {
-    screen: screen.id,
-    screenTitle: screen.title,
-    element: node.id,
-    label: node.name ?? node.id,
-    path: [node.name ?? node.id],
-    point: { x: Math.round(node.place?.x ?? 0), y: Math.round(node.place?.y ?? 0) },
-  };
-  sendEditorComment(app, editor, anchor, supplied);
-}
-
-function findBoardNode(node, id) {
-  if (!node) return null;
-  if (node.id === id) return node;
-  for (const child of node.kids ?? []) {
-    const found = findBoardNode(child, id);
-    if (found) return found;
-  }
-  return null;
-}
-
-function chooseBoardTarget(app, editor, target, render = true) {
-  const located = { resourceId: editor.resourceId, x: target.x ?? 0, y: target.y ?? 0 };
-  if (target.kind === "node") {
-    app.editors.selectedNodeId = target.nodeId;
-    editor.selectedNodeId = target.nodeId;
-    app.editors.focus = { screenId: target.screenId, nodeId: target.nodeId, resourceId: editor.resourceId };
-    app.editors.commentTarget = { ...located, kind: "node", nodeId: target.nodeId, screenId: target.screenId };
-  } else if (target.kind === "screen") {
-    app.editors.selectedNodeId = null;
-    editor.selectedNodeId = null;
-    app.editors.focus = { screenId: target.screenId, nodeId: null, resourceId: editor.resourceId };
-    app.editors.commentTarget = { ...located, kind: "screen", screenId: target.screenId };
-  } else {
-    app.editors.selectedNodeId = null;
-    editor.selectedNodeId = null;
-    app.editors.commentTarget = { ...located, kind: "canvas" };
-  }
-  if (render) renderShell(app);
-}
-
-function boardOutline(app, document, editor, t) {
-  const board = boardDocument(editor);
-  const tree = element(document, "div", { class: "board-outline", role: "tree", "aria-label": t("boardOutline") });
-  for (const screen of board?.screens ?? []) {
-    const title = typeof screen.title === "string" && screen.title ? screen.title : screen.id;
-    tree.append(outlineButton(app, document, editor, { kind: "screen", screenId: screen.id, x: Number(screen.x) || 0, y: Number(screen.y) || 0, label: title }));
-    appendOutlineNodes(app, document, editor, tree, screen.root, screen);
-  }
-  return tree;
-}
-
-function appendOutlineNodes(app, document, editor, tree, node, screen) {
-  if (!node?.id) return;
-  tree.append(outlineButton(app, document, editor, {
-    kind: "node",
-    nodeId: node.id,
-    screenId: screen.id,
-    x: indexNodes(boardDocument(editor)).get(node.id)?.x ?? 0,
-    y: indexNodes(boardDocument(editor)).get(node.id)?.y ?? 0,
-    label: node.name || node.id,
-  }));
-  for (const child of node.kids ?? []) appendOutlineNodes(app, document, editor, tree, child, screen);
-}
-
-function outlineButton(app, document, editor, target) {
-  return element(document, "button", {
-    type: "button",
-    class: "btn",
-    role: "treeitem",
-    "data-outline": target.kind === "node" ? target.nodeId : target.screenId,
-    text: target.label,
-    onclick: () => chooseBoardTarget(app, editor, target),
-  });
-}
-
-function boardPoint(svg, event) {
-  if (!svg?.createSVGPoint || !svg.getScreenCTM?.()) return { x: event.offsetX ?? 0, y: event.offsetY ?? 0 };
-  const point = svg.createSVGPoint();
-  point.x = event.clientX;
-  point.y = event.clientY;
-  const local = point.matrixTransform(svg.getScreenCTM().inverse());
-  return { x: local.x, y: local.y };
-}
-
-function boardToolbar(app, document, editor, t) {
-  const bar = element(document, "div", { class: "toolbar board-toolbar", role: "toolbar", "aria-label": t("boards"), "data-toolbar": "board" });
-  const tools = element(document, "div", { class: "board-tools" });
-  const paths = { select: "M5 3v16l4-5 4 7 3-2-4-7h7z", frame: "M4 4h16v16H4z", text: "M4 5h16M12 5v15M8 20h8", draw: "M4 20l4-1L20 7l-4-4L4 15z", comment: "M4 5h16v12H9l-5 4z" };
-  // A module board is read only: it keeps selecting and commenting, and none of the tools that draw.
-  for (const tool of editor.authoritative.readOnly ? ["select", "comment"] : ["select", "frame", "text", "draw", "comment"]) {
-    const label = t(`board${tool[0].toUpperCase()}${tool.slice(1)}`);
-    const glyph = pathIcon(document, paths[tool]);
-    tools.append(element(document, "button", { type: "button", class: "board-tool", "data-board-tool": tool, "aria-label": label, title: label,
-      "aria-pressed": String((editor.boardTool ?? "select") === tool), disabled: tool !== "select" && !canEditResources(app) ? "" : null,
-      onclick: () => {
-        editor.boardTool = tool; editor.commentPopover = false;
-        if (tool === "draw" && !boardDocument(editor).screens?.some((screen) => screen.root?.sketch)) {
-          const board = structuredClone(boardDocument(editor));
-          const reference = board.screens.find((screen) => screen.id === app.editors.focus?.screenId) ?? board.screens.at(-1);
-          addBoardFrame(board, `sketch-${operationId()}`, { x: (reference?.x ?? 0) + 350, y: (reference?.y ?? 0) + 120 }, { w: 300, h: 560 }, boardColors(document, app.root), true, app.language);
-          editor.boardView = boardBounds(board); setBoardDraft(editor, board); saveBoardDraft(app, editor);
-        }
-        renderShell(app);
-      } }, glyph));
-  }
-  bar.append(tools, element(document, "span", { class: "board-divider", "aria-hidden": "true" }));
-  if (editor.boardTool === "draw") {
-    for (const color of ["text", "accent", "wait"]) bar.append(element(document, "button", { type: "button", class: `board-swatch board-swatch-${color}`,
-      "data-draw-color": color, "aria-label": t(`boardColor${color[0].toUpperCase()}${color.slice(1)}`), "aria-pressed": String((editor.drawColor ?? "text") === color),
-      onclick: () => { editor.drawColor = color; renderShell(app); } }, element(document, "span", { "aria-hidden": "true" })));
-    for (const tool of ["pen", "marker", "eraser"]) bar.append(element(document, "button", { type: "button", class: "board-draw-tool", "data-draw-tool": tool,
-      "aria-pressed": String((editor.drawTool ?? "pen") === tool), text: t(tool), onclick: () => { editor.drawTool = tool; renderShell(app); } }));
-    bar.append(element(document, "span", { class: "board-divider", "aria-hidden": "true" }));
-  }
-  return bar;
-}
-
-function saveBoardDraft(app, editor) {
-  syncViewerDirty(app);
-  if (editor.conflict || activityPending(app, `board:${editor.resourceId}`)) return;
-  return editorAct(app, `board:${editor.resourceId}`, text(app.language, "savingDocument"), async (record) => {
-    try {
-      while (editor.boardDraft && !editor.boardGesture && !editor.conflict) {
-        await replaceBoard(app.api, editor, structuredClone(editor.boardDraft), record.operation);
-        record.operation = null;
-      }
-      syncViewerDirty(app);
-    } catch (error) {
-      if (error.code === "revision_conflict") {
-        editor.remoteStale = true;
-        await refreshRemoteEditor(app.api, app.editors, editor.resourceId);
-      }
-      throw error;
-    }
-  });
-}
-
-function insertBoardText(app, editor, target, document, host) {
-  const board = structuredClone(boardDocument(editor));
-  const hit = indexNodes(board).get(target.nodeId);
-  const parent = hit?.node.t === "box" ? hit : hit?.ancestors.length ? indexNodes(board).get(hit.ancestors.at(-1).id) : null;
-  if (!parent) return;
-  const node = { id: `text-${operationId()}`, name: "Text", t: "text", value: "Text", size: 14, weight: 400, align: "left",
-    color: boardColors(document, host).text, place: { x: target.x - parent.x, y: target.y - parent.y }, w: 160, h: 24 };
-  appendBoardNode(board, parent.screen.id, parent.node.id, node);
-  editor.selectedNodeId = node.id; app.editors.selectedNodeId = node.id; editor.boardTool = "select";
-  setBoardDraft(editor, board); saveBoardDraft(app, editor);
-}
-
-function boardPixel(svg, host, point) {
-  if (!svg?.createSVGPoint || !svg.getScreenCTM?.()) return point;
-  const cursor = svg.createSVGPoint(); cursor.x = point.x; cursor.y = point.y;
-  const projected = cursor.matrixTransform(svg.getScreenCTM()), bounds = host.getBoundingClientRect();
-  return { x: projected.x - bounds.left + (host.scrollLeft ?? 0), y: projected.y - bounds.top + (host.scrollTop ?? 0) };
-}
-
-function paintBoardSelection(app, document, host, editor, t) {
-  const properties = host.querySelector(".board-properties");
-  if (properties) { properties.hidden = true; host.append(properties); }
-  for (const node of host.querySelectorAll("[data-board-overlay]")) node.remove();
-  const svg = host.querySelector(".board-svg"), board = boardDocument(editor);
-  const point = (value) => boardPixel(svg, host, value);
-  const position = (node, value) => { const pixel = point(value); node.style.left = `${pixel.x}px`; node.style.top = `${pixel.y}px`; return node; };
-  const item = indexNodes(board).get(editor.selectedNodeId);
-  if (item && ["select", "comment"].includes(editor.boardTool ?? "select")) {
-    const start = point(item), end = point({ x: item.x + item.node.w, y: item.y + item.node.h });
-    const outline = position(element(document, "div", { class: "board-selection", "data-board-overlay": "selection" }), item);
-    outline.style.width = `${end.x - start.x}px`; outline.style.height = `${end.y - start.y}px`; host.append(outline);
-    if ((editor.boardTool ?? "select") === "select" && canEditResources(app) && !editor.authoritative.readOnly && !editor.conflict) {
-      for (const corner of ["nw", "ne", "sw", "se"]) host.append(position(element(document, "button", { type: "button", class: "board-resize",
-        "data-board-overlay": "handle", "data-resize": corner, "aria-label": t("boardResize", { corner }),
-        onkeydown: (event) => {
-          if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
-          event.preventDefault?.(); event.stopPropagation?.();
-          const next = structuredClone(boardDocument(editor));
-          Object.assign(indexNodes(next).get(item.node.id).node, dragNodeGeometry(item.node, event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 : 0,
-            event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0, corner));
-          setBoardDraft(editor, next); saveBoardDraft(app, editor);
-        } }), { x: item.x + (corner.includes("e") ? item.node.w : 0), y: item.y + (corner.includes("s") ? item.node.h : 0) }));
-      const bar = element(document, "div", { class: "board-element-bar", "data-board-overlay": "element", "aria-label": t("boardElement") },
-        element(document, "strong", { text: item.node.name }), element(document, "span", { class: "board-dimensions", text: `${Math.round(item.node.w)} × ${Math.round(item.node.h)}` }));
-      const fill = element(document, "input", { type: "color", "aria-label": t("boardFill"), "data-node-fill": item.node.id });
-      fill.value = /^#[\da-f]{6}$/i.test(item.node.fill ?? item.node.color ?? "") ? item.node.fill ?? item.node.color : boardColors(document, app.root).card;
-      fill.addEventListener("change", () => {
-        const next = structuredClone(boardDocument(editor)), node = indexNodes(next).get(item.node.id).node;
-        node[node.t === "text" && node.fill === undefined ? "color" : "fill"] = fill.value;
-        setBoardDraft(editor, next); saveBoardDraft(app, editor);
-      });
-      bar.append(element(document, "label", {}, fill, t("boardFill")));
-      if (item.node.t === "text") {
-        const value = element(document, "input", { type: "text", maxlength: "20000", "data-node-text": item.node.id, "data-keep": keepId("board-text", editor.resourceId, item.node.id), "aria-label": t("boardText") });
-        value.value = item.node.value;
-        value.addEventListener("input", () => {
-          const next = structuredClone(boardDocument(editor)); indexNodes(next).get(item.node.id).node.value = value.value;
-          setBoardDraft(editor, next); saveBoardDraft(app, editor);
-        });
-        bar.append(value);
-      }
-      if (properties) { properties.hidden = false; bar.append(properties); }
-      const pixel = point({ x: item.x, y: item.y + item.node.h }); bar.style.left = `${pixel.x - 30}px`; bar.style.top = `${pixel.y + 16}px`; host.append(bar);
-    }
-  }
-  for (const [index, thread] of (editor.threads ?? []).filter((thread) => !thread.pending && thread.status !== "resolved").entries()) {
-    const anchor = thread.anchor;
-    if (!anchor?.point) continue;
-    const pin = position(element(document, "button", { type: "button", class: "board-comment-pin", "data-board-overlay": "pin", "data-comment-pin": thread.id,
-      "aria-label": t("boardCommentNumber", { count: index + 1 }), text: index + 1, onclick: () => {
-        app.editors.commentTarget = { resourceId: editor.resourceId, kind: anchor.element ? "node" : anchor.screen ? "screen" : "canvas",
-          nodeId: anchor.element, screenId: anchor.screen, ...anchor.point };
-        editor.commentPopover = true; renderShell(app);
-      } }), anchor.point); host.append(pin);
-  }
-  if (editor.commentPopover) {
-    const anchor = currentCommentAnchor(app);
-    if (!anchor) return;
-    const popover = element(document, "div", { class: "board-comment-popover", "data-board-overlay": "comment", role: "dialog", "aria-label": t("boardComment") }, element(document, "p", { class: "board-breadcrumb", text: anchor.path.join(" / ") }));
-    const field = element(document, "textarea", { "data-board-comment": "true", "data-keep": keepId("board-comment", editor.resourceId), "aria-label": t("boardComment") }); field.value = editor.commentText ?? "";
-    const submit = element(document, "button", { type: "button", class: "btn primary", text: t("boardComment"), disabled: !field.value.trim() ? "" : null, onclick: () => {
-      sendEditorComment(app, editor, anchor, field.value); editor.commentPopover = false;
-    } });
-    field.addEventListener("input", () => { editor.commentText = field.value; submit.disabled = !field.value.trim(); syncViewerDirty(app); });
-    popover.append(field, commentPreferenceControl(app, document, editor, t), element(document, "div", { class: "board-comment-actions" }, element(document, "button", { type: "button", class: "btn", text: t("cancel"), onclick: () => { editor.commentPopover = false; renderShell(app); } }), submit));
-    const pixel = point(anchor.point); popover.style.left = `${Math.max(0, Math.min(host.clientWidth - 320, pixel.x + 32))}px`; popover.style.top = `${pixel.y}px`; host.append(popover);
-  }
-  if (editor.conflict) host.append(boardConflict(app, document, editor, t));
-}
-
-function boardConflict(app, document, editor, t) {
-  const banner = element(document, "div", { class: "board-conflict", "data-board-overlay": "conflict", "data-conflict": "true" }, element(document, "span", { text: t("outsideChange") }));
-  const pending = app.activity.get(`board:${editor.resourceId}`);
-  const unconfirmed = editor.boardSaving || app.api.uncertain.has(pending?.operation?.id);
-  const uncertainDecision = editor.historyOperation?.body?.decision;
-  for (const [key, action] of [["showChanges", "show-changes"], ["keepMine", "reapply-draft"], ["reloadBoard", "discard-draft"]]) banner.append(element(document, "button", { type: "button", class: "btn", "data-action": action, text: t(key), disabled: key !== "showChanges" && (unconfirmed || editor.historyPending || uncertainDecision && uncertainDecision !== (key === "keepMine" ? "keep-mine" : "reload")) ? "" : null, onclick: async () => {
-    if (key === "showChanges") { editor.showChanges = !editor.showChanges; renderShell(app); return; }
-    await answerEditorConflict(app, editor, key === "keepMine" ? "keep-mine" : "reload");
-  } }));
-  if (editor.showChanges) banner.append(element(document, "div", { class: "board-change-preview", "data-board-changes": "true" },
-    element(document, "section", {}, element(document, "strong", { text: t("boardLocalVersion") }), element(document, "pre", { text: JSON.stringify(boardDocument(editor), null, 2) })),
-    element(document, "section", {}, element(document, "strong", { text: t("boardIncomingVersion") }), element(document, "pre", { text: JSON.stringify(editor.conflict.remote?.document, null, 2) }))));
-  return banner;
-}
-
-async function answerEditorConflict(app, editor, decision) {
-  try {
-    const pending = resolveEditorConflict(app.api, app.editors, decision, editor.historyOperation);
-    renderShell(app);
-    if (!await pending) return;
-    app.activity.delete(`board:${editor.resourceId}`);
-    editor.showChanges = false;
-    if (editor.kind === "blueprint") await loadAssets(app.api, editor);
-    if (editor.historyOpen) await loadHistory(app.api, app.editors);
-    syncViewerDirty(app);
-  } catch (error) { app.actionNote = actionText(app.language, error.code); }
-  renderShell(app);
-}
-
-function voidSurface(app, document, editor, t) {
-  editor.focus = app.editors.focus;
-  if (app.voidFind?.open && app.voidFind.resourceId !== editor.resourceId) {
-    app.voidFind.resourceId = editor.resourceId;
-    scheduleVoidFind(app);
-  }
-  const pages = editor.authoritative.document.pages ?? [];
-  if (!app.voidState || app.voidState.resourceId !== editor.resourceId) {
-    const requested = editor.page ?? editor.focus?.k;
-    app.voidState = { mode: app.mode, tools: app.mode !== "focus", page: pages.some((page) => page.k === requested) ? requested : pages[0]?.k, pages, resourceId: editor.resourceId };
-  } else {
-    app.voidState.pages = pages;
-    if (!pages.some((page) => page.k === app.voidState.page)) app.voidState.page = pages[0]?.k;
-  }
-  const lang = editor.findLanguage ?? (app.language === "es" ? "es" : "en"), k = app.voidState.page;
-  editor.page = k; editor.language = lang;
-  editor.textSelections ??= new Map();
-  const selectionEditor = { resourceId: editor.resourceId, page: k, language: lang, textSelections: editor.textSelections };
-  if (editor.pendingFindSelection) {
-    selectionEditor.textSelections.set(textDraftKey(editor.resourceId, k, lang), editor.pendingFindSelection);
-    editor.pendingFindSelection = null;
-    editor.restoreCaret = true;
-  }
-  const page = pages.find((item) => item.k === k);
-  const value = () => textDraft(editor, editor.resourceId, k, lang) ?? page?.[lang] ?? "";
-  const editable = canEditResources(app) && !editor.authoritative.readOnly && typeof page?.[lang] === "string";
-  const focused = app.mode === "focus", sourceMode = Boolean(editor.sourceMode && !focused);
-  const finding = !focused && !sourceMode && app.voidFind?.open;
-  const surface = element(document, "div", { class: `void-surface${editor.saveState === "not-saved" ? " is-not-saved" : ""}${finding ? " is-finding" : ""}` });
-  const host = element(document, "div", { class: "void-page reading-card", "data-void": "true", hidden: sourceMode ? "" : null });
-  const title = element(document, "h2", { class: "void-title", "data-void-title": "true", text: editor.authoritative.document.title,
-    contenteditable: editable && !focused ? "plaintext-only" : "false", role: "textbox", "aria-label": t("resourceTitle") });
-  title.addEventListener("input", () => {
-    editor.titleDraft = title.textContent;
-    editor.editGeneration = (editor.editGeneration ?? 0) + 1;
-    editor.dirty = true;
-    queueVoid(app, editor);
-  });
-  if (editor.titleDraft !== undefined) title.textContent = editor.titleDraft;
-  const body = element(document, "div", { class: "void-body", "data-void-body": "true", contenteditable: editable ? "true" : "false", role: "textbox", "aria-multiline": "true", "aria-label": t("document"), lang });
-  renderDocument(document, body, editor);
-  host.append(title, element(document, "p", { class: "void-subtitle", text: editor.authoritative.document.subtitle ?? k }), body);
-  const source = element(document, "textarea", { class: "void-source-input", "data-source": "true", "aria-label": t("sourceLabel"), "data-keep": keepId("source", editor.resourceId, k, lang), readonly: editable ? null : "" });
-  source.value = value();
-  const sourceCard = element(document, "section", { class: "void-source", "data-source-edit": "true", hidden: sourceMode ? null : "" }, labeledField(document, t("sourceLabel"), t("sourceCaretHint"), source));
-  const selectionHost = sourceMode ? source : body;
-  editor.captureSelection = () => {
-    if (!selectionHost.isConnected) return;
-    const active = document.activeElement;
-    const range = captureTextSelection(document, selectionHost, selectionEditor, value(), sourceMode);
-    if (range && (active === selectionHost || selectionHost.contains?.(active))) editor.restoreCaret = true;
-  };
-  editor.restoreSelection = () => {
-    if (!editor.restoreCaret) return;
-    editor.restoreCaret = false;
-    restoreTextSelection(document, selectionHost, selectionEditor, value(), sourceMode);
-  };
-  const apply = (change) => {
-    if (!change || !editable) return;
-    selectionEditor.textSelections.set(textDraftKey(editor.resourceId, k, lang), { start: change.start, end: change.end });
-    rememberTextDraft(editor, editor.resourceId, k, lang, change.source);
-    source.value = change.source;
-    renderDocument(document, body, editor);
-    restoreTextSelection(document, body, selectionEditor, change.source);
-    updateFormats();
-    queueVoid(app, editor);
-  };
-  let composing = false, composition = null;
-  body.addEventListener("compositionstart", () => { composing = true; editor.textComposing = true; composition = { source: value(), text: plainText(value()) }; });
-  body.addEventListener("compositionend", () => { composing = false; editor.textComposing = false; reconcileInput(); composition = null; });
-  const renderedText = () => body.textContent ?? "";
-  function reconcileInput() {
-    if (composing || !editable) return;
-    const before = composition?.text ?? plainText(value()), after = renderedText();
-    let start = 0, end = before.length, nextEnd = after.length;
-    while (start < end && start < nextEnd && before[start] === after[start]) start += 1;
-    while (end > start && nextEnd > start && before[end - 1] === after[nextEnd - 1]) { end -= 1; nextEnd -= 1; }
-    while (!validUtf16Boundary(before, start) || !validUtf16Boundary(after, start)) start -= 1;
-    while (!validUtf16Boundary(before, end)) end += 1;
-    while (!validUtf16Boundary(after, nextEnd)) nextEnd += 1;
-    if (before !== after) apply(replaceVisible(composition?.source ?? value(), { start, end }, after.slice(start, nextEnd)));
-  }
-  body.addEventListener("input", reconcileInput);
-  body.addEventListener("beforeinput", (event) => {
-    if (composing || event.isComposing || event.cancelable === false || !editable) return;
-    const selection = document.getSelection?.() ?? document.defaultView?.getSelection?.();
-    const target = event.getTargetRanges?.()[0];
-    let range = target ? plainOffsets(target.startContainer, target.startOffset, target.endContainer, target.endOffset)
-      : selection?.anchorNode && body.contains?.(selection.anchorNode) && body.contains?.(selection.focusNode) ? plainOffsets(selection.anchorNode, selection.anchorOffset, selection.focusNode, selection.focusOffset) : null;
-    if (!range) range = { start: 0, end: 0 };
-    const caret = captureTextSelection(document, body, selectionEditor, value());
-    if (range.start === range.end && caret && caret.start === caret.end) range.sourceStart = caret.start;
-    let inserted = event.data ?? "";
-    const input = event.inputType ?? "insertText";
-    if (input === "insertParagraph" || input === "insertLineBreak") inserted = "\n";
-    else if (["insertFromPaste", "insertFromDrop"].includes(input)) inserted = event.dataTransfer?.getData("text/plain") ?? inserted;
-    else if (input.startsWith("delete")) {
-      inserted = "";
-      if (range.start === range.end && !target) {
-        const visible = plainText(value());
-        if (input.endsWith("Backward")) { range.start = Math.max(0, range.start - 1); if (!validUtf16Boundary(visible, range.start)) range.start -= 1; }
-        else { range.end = Math.min(visible.length, range.end + 1); if (!validUtf16Boundary(visible, range.end)) range.end += 1; }
-      }
-    } else if (input.startsWith("format")) {
-      const format = { formatBold: "bold", formatItalic: "italic", formatStrikeThrough: "strikethrough" }[input];
-      event.preventDefault(); if (format) apply(formatSelection(value(), range, format)); return;
-    } else if (!input.startsWith("insert")) return;
-    event.preventDefault();
-    apply(replaceVisible(value(), range, inserted));
-  });
-  source.addEventListener("input", () => {
-    if (!editable) return;
-    rememberTextDraft(editor, editor.resourceId, k, lang, source.value);
-    captureTextSelection(document, source, selectionEditor, source.value, true);
-    queueVoid(app, editor);
-  });
-  const tools = element(document, "div", { class: `void-tools${app.voidState.tools ? " is-visible" : ""}`, "data-tools": app.voidState.tools ? "visible" : "hidden" });
-  const button = (action, label, work, attributes = {}) => {
-    const control = element(document, "button", { type: "button", class: "btn", "data-action": action, "aria-label": label, title: label, text: label, onclick: work, ...attributes });
-    control.addEventListener("pointerdown", () => editor.captureSelection());
-    return control;
-  };
-  const watchUnit = editor.attached?.[0];
-  const attach = button("void-attach", t("finalAttached"), () => openEditorForm(app, "attach"));
-  if (focused) {
-    tools.append(button("leave-focus", t("document"), () => { editor.captureSelection(); editor.restoreCaret = true; editor.sourceMode = false; leaveFocus(app.voidState); app.mode = "document"; renderShell(app); }));
-    tools.append(element(document, "span", { text: t("voidPage", { page: pages.findIndex((page) => page.k === k) + 1, pages: pages.length }) }));
-  } else tools.append(attach);
-  if (watchUnit) tools.append(element(document, "span", { class: "void-attached", text: unitDisplayName(unitById(app, watchUnit)) }));
-  tools.append(button("void-watch", t(app.editors.watch?.state === "watching" ? "finalWatching" : "finalWatch"), () => app.editors.watch?.state === "watching" ? stopEditorWatch(app) : followEditor(app), { disabled: watchUnit ? null : "" }));
-  if (!focused) {
-    const findButton = button("toggle-find", t("findReplace"), () => {
-      app.voidFind ??= { finder: createTextFinder({ createWorker: app.createFindWorker }), resourceId: editor.resourceId, query: '', replacement: '', scope: 'document', options: { caseSensitive: false, wholeWord: false, regularExpression: false }, matches: [], current: 0, generation: 0 };
-      app.voidFind.open = !app.voidFind.open;
-      if (!app.voidFind.open) { clearTimeout(app.voidFind.timer); app.voidFind.finder.cancel(); app.voidFind.generation++; app.voidFind.pending = false; }
-      else { editor.sourceMode = false; scheduleVoidFind(app); }
-      renderShell(app);
-    }, { "aria-pressed": String(Boolean(app.voidFind?.open)), class: "btn void-find-toggle" });
-    findButton.replaceChildren(pathIcon(document, 'M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14M15 15l6 6'));
-    tools.append(findButton);
-    tools.append(button("toggle-source", t("sourceLabel"), () => { editor.captureSelection(); editor.sourceMode = !editor.sourceMode; editor.restoreCaret = true; renderShell(app); }, { "aria-pressed": String(sourceMode) }));
-    tools.append(button("enter-focus", t("focus"), () => { editor.captureSelection(); editor.restoreCaret = true; enterFocus(app.voidState); app.mode = "focus"; renderShell(app); }));
-  }
-  const status = element(document, "span", { class: "void-save-status", "data-void-save": editor.saveState ?? "saved", role: "status", "aria-live": "polite", text: t(editor.saveState === "saving" ? "voidSaving" : editor.saveState === "not-saved" ? "voidNotSaved" : "saved") });
-  tools.append(status);
-  const formatBar = element(document, "div", { class: "void-format-bar", "data-format-bar": "true", role: "toolbar", "aria-label": t("voidFormat"), hidden: "" });
-  const formatCopy = { h1: "H1", h2: "H2", h3: "H3" };
-  for (const format of TEXT_FORMATS) {
-    if (format === "h1" || format === "list") formatBar.append(element(document, "span", { class: "void-format-divider", role: "separator" }));
-    const label = formatCopy[format] ?? t(format === "comment" ? "comment" : `void${format[0].toUpperCase() + format.slice(1)}`);
-    const control = button(format === "comment" ? "comment-quote" : `format-${format}`, label, async () => {
-      const range = selectedPlainRange(document.getSelection?.() ?? document.defaultView?.getSelection?.()) ?? editor.visibleSelection;
-      if (!range) return;
-      if (format === "comment") { commentOnQuote(app, editor); return; }
-      if (format === "link" || format === "image") { voidFormatTarget(app, editor, format, range, apply); return; }
-      apply(formatSelection(value(), range, format));
-    }, { "data-format": format });
-    const glyph = { bold: "B", italic: "I", strikethrough: "S", list: "☷", quote: "❞", code: "<>", link: "↗", table: "⊞", image: "▧", comment: "◌" }[format] ?? label;
-    control.textContent = glyph;
-    control.addEventListener("pointerdown", (event) => { event.preventDefault(); editor.captureSelection(); });
-    formatBar.append(control);
-  }
-  function updateFormats() {
-    const selection = document.getSelection?.() ?? document.defaultView?.getSelection?.();
-    const valid = !sourceMode && editable && selection?.anchorNode && body.contains?.(selection.anchorNode) && body.contains?.(selection.focusNode);
-    editor.visibleSelection = valid ? selectedPlainRange(selection) : null;
-    formatBar.hidden = !editor.visibleSelection;
-    if (formatBar.hidden) { formatBar.setAttribute("hidden", ""); return; }
-    formatBar.removeAttribute("hidden");
-    const rect = selection?.rangeCount ? selection.getRangeAt?.(0)?.getBoundingClientRect?.() : null;
-    const ground = surface.getBoundingClientRect?.();
-    if (rect && ground && formatBar.style?.setProperty) {
-      formatBar.style.setProperty("left", `${Math.max(4, Math.min(rect.left - ground.left, ground.width - 460))}px`);
-      formatBar.style.setProperty("top", `${Math.max(44, rect.top - ground.top - 44)}px`);
-    }
-  }
-  if (!app.onVoidSelection) {
-    app.onVoidSelection = () => { app.editors?.current?.captureSelection?.(); app.editors?.current?.updateFormats?.(); };
-    document.addEventListener?.("selectionchange", app.onVoidSelection);
-  }
-  editor.updateFormats = updateFormats;
-  body.addEventListener("keyup", updateFormats); body.addEventListener("pointerup", updateFormats);
-  surface.append(tools);
-  if (finding) surface.append(voidFindBar(app, document, editor, t));
-  if (editor.saveState === "not-saved") surface.append(element(document, "div", { class: "void-save-error", "data-void-error": "true", role: "alert" },
-    icon(document, "alert"), element(document, "span", { text: t("voidSaveError") }), button("retry-void-save", t("retry"), () => editor.voidSaver?.retry().catch(() => {}))));
-  surface.append(host, sourceCard, formatBar);
-  const find = app.voidFind;
-  const hits = finding ? find.matches.filter((match) => match.resourceId === editor.resourceId && match.k === k && match.lang === lang) : [];
-  host.setAttribute('data-find-hits', String(hits.length));
-  highlightFind(document, body, hits, find?.matches[find.current]);
-  const suggestionTokens = tokenizeMarkup(value());
-  const suggestions = (editor.proposals ?? []).filter((proposal) => proposal.state === "pending" && proposal.k === k && proposal.lang === lang && !proposalStale(editor, proposal))
-    .map((proposal) => ({ start: plainCaretFromSource(suggestionTokens, proposal.start), end: plainCaretFromSource(suggestionTokens, proposal.end) }));
-  highlightFind(document, body, suggestions, null, 'void-suggestion');
-  if (focused) {
-    surface.append(element(document, "p", { class: "void-focus-hint", "data-focus-hint": "true", text: t("focusHint") }));
-    const dots = element(document, "div", { class: "void-page-dots" });
-    for (const page of pages) dots.append(button("void-page", t("voidPage", { page: pages.indexOf(page) + 1, pages: pages.length }), () => { editor.captureSelection(); app.voidState.page = page.k; editor.restoreCaret = true; renderShell(app); }, { "data-page-dot": page.k, "aria-pressed": String(page.k === k) }));
-    surface.append(dots);
-  }
-  updateFormats();
-  void loadVoidAssets(app, editor, value());
-  return surface;
-}
-
-function queueVoid(app, editor) {
-  if (!editor.voidSaver) editor.voidSaver = documentSaver(app.api, editor, ({ state }) => {
-    syncViewerDirty(app);
-    if (app.disposed) return;
-    const status = app.root.querySelector?.("[data-void-save]");
-    if (status && app.editors.current === editor) {
-      status.setAttribute("data-void-save", state);
-      status.textContent = text(app.language, state === "saving" ? "voidSaving" : state === "not-saved" ? "voidNotSaved" : "saved");
-      if (state === "not-saved" || app.root.querySelector?.("[data-void-error]")) renderShell(app);
-    }
-  });
-  const snapshot = JSON.parse(draftSnapshot(editor));
-  if (editor.titleDraft !== undefined) snapshot.document.title = editor.titleDraft;
-  editor.voidSaver.queue(JSON.stringify(snapshot));
-  if (app.voidFind?.open) scheduleVoidFind(app);
-  syncViewerDirty(app);
-}
-
-function scheduleVoidFind(app) {
-  const find = app.voidFind;
-  clearTimeout(find.timer); find.finder.cancel(); find.generation++;
-  find.matches = []; find.current = 0; find.error = null; find.pending = true;
-  find.timer = setTimeout(() => { void runVoidFind(app); }, 120);
-}
-
-async function runVoidFind(app) {
-  const find = app.voidFind, generation = find.generation, editor = app.editors.current;
-  try {
-    const drafts = find.scope === 'all' ? [...app.editors.drafts.values()].filter((item) => item.kind === 'void') : [editor];
-    for (const draft of drafts) {
-      await draft.voidSaver?.flush();
-      if (draft.dirty) throw Object.assign(new Error('The draft must be saved first.'), { code: 'find_unsaved' });
-    }
-    if (find.generation !== generation || app.disposed || !find.open) return;
-    const matches = await find.finder.find(app.api, editor, find.query, { ...find.options }, find.scope);
-    if (find.generation !== generation || app.disposed) return;
-    find.matches = matches;
-    const index = matches.findIndex((match) => match.resourceId === editor.resourceId && match.k === editor.page && match.lang === editor.language);
-    find.current = Math.max(0, index);
-  } catch (error) {
-    if (find.generation !== generation || app.disposed || error.code === 'canceled') return;
-    find.error = error.code ?? 'find_unavailable';
-  } finally {
-    if (find.generation === generation && !app.disposed) { find.pending = false; renderShell(app); }
-  }
-}
-
-function voidFindBar(app, document, editor, t) {
-  const find = app.voidFind;
-  const bar = element(document, 'section', { class: 'void-find-bar', 'data-find-bar': 'true', 'aria-label': t('findReplace') });
-  const input = (name, label) => {
-    const field = element(document, 'input', { type: 'text', 'aria-label': label, 'data-find-field': name, 'data-keep': `void-find|${name}`, disabled: find.busy ? '' : null });
-    field.value = find[name];
-    field.addEventListener('input', () => { find[name] = field.value; if (name === 'query') scheduleVoidFind(app); renderShell(app); });
-    return field;
-  };
-  const button = (action, label, onclick, attributes = {}) => element(document, 'button', { type: 'button', class: 'btn', 'data-action': action, text: label, 'aria-label': label, title: label, onclick, ...attributes });
-  const unavailable = find.pending || find.busy || find.error || !find.matches.length;
-  const row = element(document, 'div', { class: 'void-find-row' }, element(document, 'div', { class: 'void-find-input' }, input('query', t('findReplace')),
-    element(document, 'span', { 'data-find-count': 'true', role: 'status', 'aria-live': 'polite', text: t('findCount', { current: find.matches.length ? find.current + 1 : 0, total: find.matches.length }) })));
-  for (const [key, glyph, label] of [['caseSensitive', 'Aa', 'findCase'], ['wholeWord', 'W', 'findWord'], ['regularExpression', '.*', 'findRegex']]) {
-    const toggle = button(`find-${key}`, t(label), () => { find.options[key] = !find.options[key]; scheduleVoidFind(app); renderShell(app); }, { class: 'void-find-option', 'aria-pressed': String(find.options[key]), disabled: find.busy ? '' : null });
-    toggle.textContent = glyph; row.append(toggle);
-  }
-  row.append(button('find-previous', t('findPrevious'), () => selectVoidMatch(app, -1), { class: 'void-find-nav', disabled: unavailable ? '' : null }), button('find-next', t('findNext'), () => selectVoidMatch(app, 1), { class: 'void-find-nav', disabled: unavailable ? '' : null }));
-  row.children[row.children.length - 2].textContent = '↑'; row.children[row.children.length - 1].textContent = '↓';
-  bar.append(row, element(document, 'div', { class: 'void-find-row' }, element(document, 'div', { class: 'void-replace-input' }, input('replacement', t('findReplacement'))),
-    button('replace-match', t('findReplaceOne'), () => applyVoidReplace(app, false), { disabled: unavailable || !canEditResources(app) ? '' : null }),
-    button('replace-all', t('findReplaceAll', { count: find.matches.length }), () => applyVoidReplace(app, true), { class: 'btn primary', disabled: unavailable || !canEditResources(app) ? '' : null })));
-  const scopes = element(document, 'div', { class: 'void-find-scopes' });
-  for (const [scope, label] of [['document', 'findDocument'], ['all', 'findAll']]) scopes.append(button(`find-${scope}`, t(label), () => { find.scope = scope; scheduleVoidFind(app); renderShell(app); }, { 'aria-pressed': String(find.scope === scope), disabled: find.busy ? '' : null }));
-  scopes.append(element(document, 'span', { text: t('findUndoHint') }));
-  bar.append(scopes);
-  if (find.undoId) bar.append(button('undo-replace', t('undo'), () => applyVoidReplace(app, false, true), { disabled: find.busy ? '' : null }));
-  if (find.error) bar.append(element(document, 'p', { 'data-find-error': find.error, role: 'alert', text: text(app.language, ({ pattern_too_slow: 'findSlow', invalid_pattern: 'findInvalid', too_many_matches: 'findTooMany', find_unsaved: 'findUnsaved', undo_conflict: 'findUndoConflict', range_changed: 'findChanged', revision_conflict: 'findChanged' })[find.error] ?? 'actionFailed') }));
-  if (find.operation) bar.append(button('retry-replace', t('retry'), () => applyVoidReplace(app, false, find.undoPending)));
-  return bar;
-}
-
-async function selectVoidMatch(app, direction) {
-  const find = app.voidFind;
-  find.current = (find.current + direction + find.matches.length) % find.matches.length;
-  const match = find.matches[find.current];
-  find.resourceId = match.resourceId;
-  if (app.editors.current.resourceId !== match.resourceId) await openEditor(app.api, app.editors, { id: match.resourceId, kind: 'void' });
-  const editor = app.editors.current;
-  if (editor.resourceId !== match.resourceId) return;
-  editor.page = match.k; editor.findLanguage = match.lang;
-  if (app.voidState?.resourceId === match.resourceId) app.voidState.page = match.k;
-  editor.pendingFindSelection = { start: sourceBoundary(match.source, match.start, 'end'), end: sourceBoundary(match.source, match.end, 'start') };
-  renderShell(app);
-}
-
-async function applyVoidReplace(app, all, undo = false) {
-  const find = app.voidFind;
-  if (find.busy) return;
-  const matches = all ? find.matches : [find.matches[find.current]].filter(Boolean);
-  if (!undo && !matches.length && !find.operation) return;
-  const drafts = [...app.editors.drafts.values()].filter((editor) => editor.dirty && (undo || matches.some((match) => match.resourceId === editor.resourceId)));
-  if (drafts.length) { find.error = 'find_unsaved'; renderShell(app); return; }
-  find.busy = true; find.error = null; find.undoPending = undo;
-  clearTimeout(find.timer); find.finder.cancel(); find.generation++;
-  renderShell(app);
-  try {
-    const result = undo ? await undoReplace(app.api, app.editors, find.undoId, find.operation)
-      : await replaceMatches(app.api, app.editors, matches, find.replacement, find.options.regularExpression, find.operation);
-    find.operation = null; find.undoId = undo ? null : result.data.changeId;
-    find.busy = false;
-    for (const editor of app.editors.drafts.values()) if (editor.kind === 'void' && editor.dirty && result.data.editors.some((value) => value.id === editor.resourceId)) queueVoid(app, editor);
-    scheduleVoidFind(app);
-  } catch (error) { find.error = error.code; find.operation = app.api.uncertain.has(error.operation?.id) ? error.operation : null; }
-  finally { find.busy = false; if (!app.disposed) renderShell(app); }
-}
-
-async function loadVoidAssets(app, editor, source) {
-  const references = [...new Set(tokenizeMarkup(source).map((token) => token.image).filter(Boolean))];
-  editor.assets ??= new Map();
-  editor.loadingAssets ??= new Set();
-  for (const src of references) {
-    if (!assetIdentity(src) || editor.assets.has(src) || editor.loadingAssets.has(src)) continue;
-    editor.loadingAssets.add(src);
-    try {
-      const image = await fetchAsset(app.api, { url: `/api/v1/editors/${encodeURIComponent(editor.resourceId)}/assets/${assetIdentity(src)}` });
-      // An editor dropped while its image loaded keeps nothing: the image is released at once.
-      if (app.editors?.drafts?.get?.(editor.resourceId) !== editor) { image?.revoke?.(); continue; }
-      editor.assets.set(src, image);
-      if (!app.disposed && app.editors.current === editor) renderShell(app);
-    } catch { editor.assets.set(src, null); }
-    finally { editor.loadingAssets.delete(src); }
-  }
-}
-
-function voidFormatTarget(app, editor, format, range, apply) {
-  const document = app.root.ownerDocument, t = (key) => text(app.language, key);
-  const dialog = element(document, "dialog", { class: "dialog", "data-void-format-dialog": format });
-  const heading = element(document, "h2", { text: t(format === "link" ? "voidLink" : "voidImage") });
-  labelDialog(dialog, heading);
-  const input = element(document, "input", { type: "text", "data-format-target": "true" });
-  const error = element(document, "p", { role: "alert", class: "field-error" });
-  const original = textDraft(editor, editor.resourceId, editor.page, editor.language) ?? editor.authoritative.document.pages.find((page) => page.k === editor.page)[editor.language];
-  dialog.append(heading, labeledField(document, t("voidTarget"), t(format === "link" ? "voidLinkHint" : "voidImageHint"), input), error,
-    element(document, "button", { type: "button", class: "btn", text: t("cancel"), onclick: () => dialog.close() }),
-    element(document, "button", { type: "button", class: "btn primary", text: t("apply"), "data-action": "apply-format-target", onclick: () => {
-      try { apply(formatSelection(original, range, format, input.value)); dialog.close(); }
-      catch { error.textContent = t("voidInvalidTarget"); }
-    } }));
-  dialog.addEventListener("close", () => { dialog.remove(); editor.restoreCaret = true; editor.restoreSelection?.(); });
-  document.body.append(dialog); dialog.showModal(); input.focus();
-}
-
-function appendProposals(app, document, host, editor, t, proposalId = null, discussion = null) {
-  for (const proposal of (editor.proposals ?? []).filter((item) => proposalId ? item.id === proposalId : !(editor.threads ?? []).some((thread) => thread.messages?.some((message) => message.proposal?.id === item.id)))) {
-    const actions = { busy: activityPending(app, `proposal:${proposal.id}`) || activityPending(app, `proposal-ask:${proposal.id}`) };
-    if (app.store.capabilities.includes("proposal.answer")) {
-      actions["accept-change"] = () => answerVoid(app, editor, proposal, "accept");
-      actions["discard"] = () => answerVoid(app, editor, proposal, "discard");
-      actions["edit-change"] = () => { editProposal(editor, proposal, editor.proposalDrafts?.get(proposal.id) ?? proposal.replacement); renderShell(app); app.root.querySelector?.(`[data-proposal-draft='${proposal.id}']`)?.focus?.(); };
-      if (canEditResources(app)) actions["edit-passage"] = () => editVoidPassage(app, editor, proposal);
-      if (app.store.capabilities.includes("comment.write")) actions["ask-again"] = () => askVoidAgain(app, editor, proposal);
-    }
-    host.append(renderProposal(document, proposal, { editor, t, actions, discussion }));
-  }
-}
-
-
-function commentOnQuote(app, editor) {
-  const page = editor.authoritative.document.pages.find((item) => item.k === (editor.page ?? app.voidState.page));
-  const lang = app.language === "es" ? "es" : "en";
-  const host = app.root.querySelector?.("[data-void]");
-  const document = app.root.ownerDocument;
-  const selection = document.getSelection?.() ?? document.defaultView?.getSelection?.();
-  if (host && selection?.anchorNode && !host.contains(selection.anchorNode)) return;
-  const range = selectedPlainRange(selection) ?? editor.visibleSelection;
-  if (!page || !range) {
-    explain(app, "quoteNeedsSelection");
-    return;
-  }
-  const anchor = textAnchor(editor, page.k, lang, range.start, range.end);
-  sendEditorComment(app, editor, anchor, editor.commentText || anchor.quote);
-}
-
-function answerVoid(app, editor, proposal, decision) {
-  if (activityPending(app, `proposal:${proposal.id}`)) return;
-  if (decision === "accept" && editor.dirty) { explain(app, "suggestionUnsaved"); return; }
-  const previous = app.activity.get(`proposal:${proposal.id}`);
-  if (previous?.operation && (!app.api.uncertain.has(previous.operation.id) || previous.operation.body.decision !== decision)) previous.operation = null;
-  return editorAct(app, `proposal:${proposal.id}`, text(app.language, "answering"), async (record) => {
-    try {
-      await answerProposal(app.api, editor, proposal, decision, record.operation);
-      if (decision === "accept") { editor.voidSaver?.dispose(); editor.voidSaver = null; }
-    } catch (error) {
-      if (error.code === "proposal_stale") {
-        editor.staleProposals ??= new Set(); editor.staleProposals.add(proposal.id);
-        editor.remoteStale = true;
-        await refreshRemoteEditor(app.api, app.editors, editor.resourceId);
-      }
-      throw error;
-    }
-  });
-}
-
-function editVoidPassage(app, editor, proposal) {
-  if (editor.dirty) { explain(app, "suggestionUnsaved"); return; }
-  return editorAct(app, `proposal-edit:${proposal.id}`, text(app.language, "editPassage"), async () => {
-    editor.remoteStale = true;
-    await refreshRemoteEditor(app.api, app.editors, editor.resourceId);
-    const passage = proposalPassage(editor, proposal);
-    if (!passage) { explain(app, "quoteNeedsSelection"); return; }
-    editor.page = proposal.k; editor.findLanguage = proposal.lang; editor.sourceMode = true;
-    editor.textSelections ??= new Map();
-    editor.textSelections.set(textDraftKey(editor.resourceId, proposal.k, proposal.lang), { start: passage.start, end: passage.end });
-    editor.restoreCaret = true;
-    if (app.voidState) app.voidState.page = proposal.k;
-    if (app.voidFind) app.voidFind.open = false;
-    app.mode = "document";
-  });
-}
-
-function askVoidAgain(app, editor, proposal) {
-  if (editor.dirty) { explain(app, "suggestionUnsaved"); return; }
-  const key = `proposal-ask:${proposal.id}`;
-  if (activityPending(app, key)) return;
-  const previous = app.activity.get(key);
-  if (previous?.operation && !app.api.uncertain.has(previous.operation.id)) previous.operation = null;
-  return editorAct(app, key, text(app.language, "sending"), async (record) => {
-    if (!record.operation) {
-      editor.remoteStale = true;
-      await refreshRemoteEditor(app.api, app.editors, editor.resourceId);
-      await loadComments(app.api, { ...app.editors, current: editor });
-    }
-    const comment = proposalComment(editor, proposal);
-    if (!comment && !record.operation) { explain(app, "quoteNeedsSelection"); return; }
-    await createComment(app.api, { ...app.editors, current: editor }, comment?.anchor, comment?.text, record.operation, commentChoice(app.editors, editor));
-  });
-}
-
-// One Escape closes the topmost open layer and nothing under it: a menu, the phone panel, Activity, the Map's help, Waiting, then a drawer.
-// It works wherever the focus is: the shell is drawn again after every change, and the focus can end up outside what is open.
-// A context menu, the Map's help and a library menu with the focus inside answer for themselves before this runs, and the help
-// yields to the panels above it.
 function onEscapeKey(app, event) {
   if (event.key !== 'Escape' || app.layout === 'phone' || event.defaultPrevented) return;
   if (event.target?.closest?.('[data-context-menu]') || app.root.ownerDocument.querySelector?.('dialog[open]')) return;
   let opener = null;
-  const menu = [...(app.editors?.libraries?.values() ?? [])].find(state => state.menu);
-  if (menu) { opener = menu.menu.opener; menu.menu = null; }
-  else if (app.phonePanelOpen) { app.phonePanelOpen = false; opener = 'open-phone'; }
+  if (app.phonePanelOpen) { app.phonePanelOpen = false; opener = 'open-phone'; }
   else if (app.queuePanelOpen) { app.queuePanelOpen = false; opener = 'open-notifications'; }
   else if (app.waitingOpen) app.waitingOpen = false;
   else if (app.inspectorOpen && app.mode === 'map' && windowAtMost(app, INSPECTOR_DRAWER_WIDTH)) { app.inspectorOpen = false; opener = 'toggle-inspector'; }
   else if (app.catalogOpen && windowAtMost(app, SIDE_DRAWER_WIDTH)) { app.catalogOpen = false; opener = 'toggle-catalog'; }
-  else if (app.commentsOpen && app.mode !== 'map' && windowAtMost(app, SIDE_DRAWER_WIDTH)) { app.commentsOpen = false; opener = 'toggle-comments'; }
   else return;
   event.preventDefault?.();
   renderShell(app);
@@ -3203,960 +1970,6 @@ function onPickKey(app, event) {
     if (units.length || app.store.selected.groupId) { event.preventDefault?.(); app.mapState?.onDelete?.({ units, cluster: units.length ? null : app.store.selected.groupId }); }
   }
 }
-
-function onFocusKey(app, event) {
-  if (app.mode !== "focus" || !app.voidState) return;
-  if (event.key === "Escape" && !app.root.ownerDocument.querySelector?.("dialog[open]")) {
-    app.editors.current?.captureSelection?.();
-    if (app.editors.current) { app.editors.current.restoreCaret = true; app.editors.current.sourceMode = false; }
-    leaveFocus(app.voidState);
-    app.mode = "document";
-    renderShell(app);
-    const editor = app.editors.current;
-    if (!editor?.textSelections?.has(textDraftKey(editor.resourceId, editor.page, editor.language))) {
-      app.root.querySelector?.("[data-action='enter-focus']")?.focus?.();
-    }
-    event.preventDefault();
-    return;
-  }
-  const tag = event.target?.tagName;
-  if (tag === "INPUT" || tag === "TEXTAREA") return;
-  if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
-  app.editors.current?.captureSelection?.();
-  if (app.editors.current) app.editors.current.restoreCaret = true;
-  moveFocus(app.voidState, event.key);
-  event.preventDefault();
-  renderShell(app);
-}
-
-function renderFocusWorkspace(app, t) {
-  const document = app.root.ownerDocument;
-  const current = editorsOf(app).current;
-  const reading = element(document, "div", { class: "focus-reading", "data-focus-layout": "document" });
-  if (current?.kind === "void" && current.authoritative?.document) reading.append(voidSurface(app, document, current, t));
-  return element(document, "div", { class: "workspace workspace-focus" }, reading);
-}
-
-function renderEditorWorkspace(app, t) {
-  const document = app.root.ownerDocument;
-  const surfaces = renderEditorSurfaces(app, t);
-  return element(document, "div", {
-    class: "workspace workspace-editor",
-    "data-editor-layout": app.mode,
-  }, surfaces.catalog, surfaces.resource, surfaces.comments);
-}
-
-function renderEditor(app, t) {
-  const document = app.root.ownerDocument;
-  const surfaces = renderEditorSurfaces(app, t);
-  return element(document, "div", { class: "editor-panel" }, surfaces.catalog, surfaces.resource, surfaces.comments);
-}
-
-function renderEditorSurfaces(app, t) {
-  const document = app.root.ownerDocument;
-  const editors = editorsOf(app);
-  const kind = app.mode === "blueprint" ? "blueprint" : "void";
-  queueCatalog(app, kind);
-  const current = editors.current?.kind === kind ? editors.current : null;
-  const title = current?.authoritative?.title ?? current?.authoritative?.legacy?.id ?? t(app.mode);
-  const watch = editors.watch;
-  const watchText = !watch || watch.state === "off" ? t("watchOff") : watch.state === "watching" ? t("watching", { unit: watch.unitId }) : t("watchWaiting", { unit: watch.unitId });
-  const watchStatus = watch?.state === "waiting"
-    ? progressMark(document, watchText, { "data-watch": "waiting" })
-    : element(document, "p", { class: "watch-status", "data-watch": watch?.state ?? "off", text: watchText });
-  const catalog = renderLibrary(document, { kind, project: current?.authoritative?.project, data: editors, t, actions: libraryActions(app, kind) });
-  if (app.catalogOpen) catalog.className += " is-open";
-  const resource = element(document, "section", { class: "panel editor-resource", "data-editor-column": "resource" },
-    app.layout === "phone" ? null : catalogToggle(app, t, kind === "blueprint" ? "boards" : "texts"),
-    element(document, "h2", { "data-editor-title": title, "data-editor-kind": kind, text: current ? `${t(app.mode)} ${title}` : title }),
-  );
-  if (app.syncConflict) {
-    resource.append(element(document, "p", {
-      class: "action-note",
-      "data-sync-conflict": "true",
-      text: t("syncConflict", { path: app.syncConflict.copyPath || t("unknown") }),
-    }));
-  }
-  if (outcomeVisible(app) && app.actionScope === "editor") {
-    // A result is a marked row: red for a failure, plain for anything else.
-    resource.append(element(document, "div", { class: `notice ${app.actionTone === "error" ? "notice-error" : "notice-info"}`, role: app.actionTone === "error" ? "alert" : "status" },
-      element(document, "p", {
-        class: "action-note",
-        "data-action-note": "true",
-        "data-code": app.actionCode ?? "",
-        text: app.actionNote,
-      })));
-  }
-  const commentsHead = element(document, "div", { class: "editor-comments-head" }, element(document, "h2", { text: t(current?.historyOpen ? "history" : "comments") }));
-  const commentsColumn = element(document, "aside", { class: `panel editor-comments-column${app.commentsOpen ? " is-open" : ""}`, "data-editor-column": "comments" }, commentsHead);
-  const tools = element(document, "div", { class: "editor-tools", "data-editor-tools": "true" },
-    watchStatus,
-  );
-  resource.append(tools);
-  if (app.libraryToast) resource.append(renderLibraryToast(app, t));
-  if (current?.conflict && current.kind !== "blueprint") {
-    resource.append(element(document, "p", { "data-conflict": "true", text: t("outsideChange") }));
-    resource.append(element(document, "button", {
-      type: "button",
-      class: "btn",
-      "data-action": "discard-draft",
-      text: t("discardDraft"),
-      disabled: current.historyPending || current.historyOperation && current.historyOperation.body?.decision !== "reload" ? "" : null,
-      onclick: () => answerEditorConflict(app, current, "reload"),
-    }));
-    resource.append(element(document, "button", {
-      type: "button",
-      class: "btn",
-      "data-action": "reapply-draft",
-      text: t("reapplyDraft"),
-      disabled: current.historyPending || current.historyOperation && current.historyOperation.body?.decision !== "keep-mine" ? "" : null,
-      onclick: () => answerEditorConflict(app, current, "keep-mine"),
-    }));
-    resource.append(element(document, "button", { type: "button", class: "btn", "data-action": "show-changes", text: t("showChanges"), onclick: () => { current.showChanges = !current.showChanges; renderShell(app); } }));
-    if (current.showChanges) resource.append(element(document, "div", { "data-editor-changes": "true" },
-      element(document, "pre", { "aria-label": t("boardLocalVersion"), text: JSON.stringify(editorDraftDocument(current), null, 2) }),
-      element(document, "pre", { "aria-label": t("boardIncomingVersion"), text: JSON.stringify(current.conflict.remote?.document, null, 2) })));
-  }
-  if (current?.kind === "blueprint" && current.authoritative?.document) resource.append(boardSurface(app, document, current, t));
-  if (current?.kind === "void" && current.authoritative?.document) resource.append(voidSurface(app, document, current, t));
-  if (current?.authoritative?.legacy?.reason === "conversion_required") {
-    const path = current.authoritative.legacy.path ?? "";
-    const converted = legacyBoard(app, current);
-    const copyButton = () => canEditResources(app) ? element(document, "button", {
-      type: "button", class: "btn", "data-action": "copy-json",
-      onclick: () => submitJsonCopy(app, current),
-    }, t("copyJson")) : null;
-    if (converted.document) {
-      current.document = converted.document;
-      resource.append(element(document, "div", { class: "board-notice", "data-legacy": path },
-        element(document, "span", { text: t("moduleReadOnly") }), copyButton()), boardSurface(app, document, current, t));
-    } else {
-      resource.append(element(document, "p", { "data-legacy": path, text: path }));
-      // Until the module has been read there is nothing to say yet; the old message is for a module that cannot be read.
-      if (converted.error) {
-        resource.append(element(document, "p", { text: t("conversionRequired") }));
-        resource.append(element(document, "p", { class: "field-hint", "data-legacy-reason": converted.error.code ?? "", text: actionText(app.language, converted.error.code) }));
-      } else resource.append(progressMark(document, t("loading"), { "data-legacy-progress": "true" }));
-      resource.append(copyButton());
-    }
-  }
-  if (!current) {
-    const idle = kind === "blueprint" ? ["blueprint", "pickBoardTitle", "pickBoardHint"] : ["pen", "pickTextTitle", "pickTextHint"];
-    resource.append(element(document, "div", { class: "editor-idle", "data-editor-idle": kind },
-      icon(document, idle[0]), element(document, "p", { class: "editor-idle-title", text: t(idle[1]) }), element(document, "p", { text: t(idle[2]) })));
-  }
-  if (editors.error?.code === "corrupt_resource") resource.append(element(document, "div", { class: "notice notice-error", role: "alert" }, element(document, "p", { text: t("corruptResource") })));
-  const forms = resourceForms(app, document, t);
-  // Register sits on the footer line with Refresh; without a footer it keeps its own row.
-  const footer = catalog.querySelector?.(".library-footer");
-  if (forms && footer) footer.append(...forms.children);
-  else if (forms) catalog.append(forms);
-  const surfaces = { catalog, resource, comments: commentsColumn };
-  if (!current) {
-    commentsColumn.append(element(document, "p", { class: "editor-comments-idle", text: t(kind === "void" ? "commentsIdleText" : "commentsIdleBoard") }));
-    return surfaces;
-  }
-  if (!current.authoritative.readOnly) {
-    tools.append(element(document, "button", { type: "button", class: "btn", "data-action": "editor-history", text: t("history"), "aria-expanded": String(Boolean(current.historyOpen)), "aria-pressed": String(Boolean(current.historyOpen)), onclick: async () => {
-      current.historyOpen = !current.historyOpen;
-      if (current.historyOpen) await loadHistory(app.api, editors).catch((error) => { editors.error = error; });
-      renderShell(app);
-    } }));
-    if (current.historyOpen) {
-      const onRestore = async (item) => {
-        try {
-          const pending = restoreEditorHistory(app.api, editors, item, current.historyOperation); renderShell(app);
-          await pending; await loadHistory(app.api, editors); syncViewerDirty(app);
-        } catch (error) { app.actionNote = actionText(app.language, error.code); }
-        renderShell(app);
-      };
-      const panel = renderEditorHistory(document, current.history ?? [], t, onRestore, {
-        author: item => {
-          const unit = unitById(app, item.by);
-          return item.by === "root:master" || item.by === "root:person" ? text(app.language, "person")
-            : unit ? unitDisplayName(unit) : readableIdentity(item.by, text(app.language, "person"));
-        },
-        time: item => formatShortTime(app.language, item.at),
-      });
-      for (const button of panel.querySelectorAll("button")) {
-        const historyId = button.closest("[data-history-id]")?.getAttribute("data-history-id");
-        button.disabled = !canEditResources(app) || current.dirty || Boolean(current.historyPending) || Boolean(current.historyOperation && !current.historyOperation.path.endsWith(`/${historyId}/restore`));
-      }
-      commentsColumn.append(panel);
-      surfaces.comments = commentsColumn;
-      return surfaces;
-    }
-  }
-  if (current.attachmentResource !== current.resourceId) {
-    current.attachmentChoice = new Set(current.attached ?? []);
-    current.attachmentResource = current.resourceId;
-  }
-  const choice = current.attachmentChoice;
-  const units = app.unitList?.catalog ?? [];
-  const chips = element(document, "div", { class: "attach-chips", "data-attached": [...choice].join(" ") });
-  for (const id of current.attached ?? []) {
-    const unit = units.find((item) => item.id === id);
-    chips.append(element(document, "span", { class: "chip", "data-chip": id, text: unit?.unit || id }));
-  }
-  const actions = element(document, "div", { class: "editor-actions" });
-  actions.append(element(document, "button", {
-    type: "button",
-    class: "btn",
-    "data-action": "attach",
-    text: t(current.kind === "blueprint" ? "attachAgents" : "attach"),
-    onclick: () => openAttachChooser(app),
-  }));
-  actions.append(element(document, "button", { type: "button", class: "btn", "data-action": "watch", onclick: () => followEditor(app) }, t("watch")));
-  if (current.kind !== "blueprint" || watch?.watchId) actions.append(element(document, "button", { type: "button", class: "btn", "data-action": "stop-watch", onclick: () => editorAct(app, `watch-stop:${editors.current?.resourceId ?? "none"}`, text(app.language, "working"), async (record) => {
-    await stopWatch(app.api, editors, record.operation);
-  }) }, t("stopWatch")));
-  if (current.attachmentConflict) {
-    actions.append(element(document, "p", { "data-attachment-conflict": "true", text: t("attachmentChanged") }));
-    actions.append(element(document, "button", {
-      type: "button",
-      class: "btn",
-      "data-action": "use-attachments",
-      text: t("useSavedAttachments"),
-      onclick: () => {
-        current.attachmentChoice = new Set(current.attached ?? []);
-        current.attachmentConflict = null;
-        renderShell(app);
-      },
-    }));
-  }
-  if (current.kind === "blueprint") {
-    if (!(current.attached?.length)) chips.append(element(document, "span", { class: "field-hint", text: t("noAgentsAttached") }));
-    const toolbar = resource.querySelector("[data-toolbar='board']");
-    toolbar?.append(chips);
-    if (current.boardTool !== "draw") toolbar?.append(actions);
-  } else tools.append(chips, actions);
-  const comments = element(document, "div", { class: "editor-comments", "data-comment-total": String(current.commentsTotal ?? current.threads?.length ?? 0) });
-  // The list shows one group of threads at a time, the open ones first; the cap on what is drawn counts within the group.
-  const threads = current.threads ?? [];
-  const resolved = threads.filter((thread) => thread.status === "resolved"), open = threads.filter((thread) => thread.status !== "resolved");
-  const shown = current.commentFilter === "resolved" ? "resolved" : "open";
-  const group = shown === "resolved" ? resolved : open;
-  const filterChip = (name, count) => element(document, "button", {
-    type: "button", class: "comment-chip", "data-comment-filter": name, "aria-pressed": String(shown === name),
-    onclick: () => { current.commentFilter = name; current.commentWindow = 40; renderShell(app); },
-  }, t(name === "open" ? "commentsOpenCount" : "commentsResolvedCount", { count }));
-  commentsHead.append(element(document, "div", { class: "comment-chips" }, filterChip("open", open.length), filterChip("resolved", resolved.length)));
-  if (!threads.length) {
-    comments.append(element(document, "p", {
-      "data-empty": "comments",
-      text: t(current.kind === "void" ? "emptyCommentsText" : "emptyCommentsBoard"),
-    }));
-  } else if (!group.length) comments.append(element(document, "p", { class: "editor-comments-none", "data-empty": shown, text: t(shown === "open" ? "commentsNoneOpen" : "commentsNoneResolved") }));
-  const commentBound = Math.min(group.length, current.commentWindow ?? 40);
-  for (const thread of group.slice(0, commentBound)) {
-    const box = element(document, "article", { class: "comment-box", "data-thread": thread.id, "data-status": thread.status ?? "open" });
-    const replies = Math.max(0, (thread.messages?.length ?? 0) - 1);
-    (thread.messages ?? []).forEach((message, position) => {
-      const line = element(document, "p", { class: "comment-line", "data-comment-message": message.id ?? "" });
-      line.append(element(document, "span", { class: "comment-author", text: commentAuthor(app, message.author ?? message.authorId) }));
-      if (message.at) line.append(element(document, "time", { datetime: message.at, text: formatShortTime(app.language, message.at) }));
-      if (position === 0 && replies) line.append(element(document, "span", { class: "comment-replies", text: cardinal(app.language, "commentReplies", replies) }));
-      line.append(element(document, "span", { class: "comment-text", text: message.text ?? "" }));
-      if (current.kind === "void" && message.proposal && current.proposals?.some((item) => item.id === message.proposal.id)) appendProposals(app, document, box, current, t, message.proposal.id, line);
-      else box.append(line);
-      if (message.sendToAgent === false && message.authorId === "root:master") box.append(element(document, "p", { class: "field-hint", "data-comment-note": message.id, text: t("keptAsNote") }));
-    });
-    const links = element(document, "div", { class: "comment-actions" },
-      element(document, "button", { type: "button", class: "comment-action", "data-action": "reply", onclick: () => replyToThread(app, thread.id) }, t("reply")));
-    if (thread.status !== "resolved") links.append(element(document, "button", { type: "button", class: "comment-action", "data-action": "resolve", onclick: () => resolveThread(app, thread.id) }, t("resolve")));
-    box.append(links);
-    comments.append(box);
-  }
-  if (current.kind === "void") appendProposals(app, document, comments, current, t);
-  if (group.length > commentBound) {
-    comments.append(element(document, "button", {
-      type: "button",
-      class: "btn",
-      "data-action": "more-comments",
-      text: t("loadOlder"),
-      onclick: () => {
-        current.commentWindow = commentBound + 40;
-        renderShell(app);
-      },
-    }));
-  }
-  const composeLabel = t(current.threads?.length ? current.kind === "void" ? "replyOnText" : "replyOnBoard" : "comment");
-  const compose = element(document, "textarea", { "data-comment": "true", "data-keep": keepId("comment", current.resourceId), "aria-label": composeLabel, placeholder: composeLabel });
-  compose.value = current.commentText ?? "";
-  const commentButton = element(document, "button", {
-    type: "button",
-    class: "btn primary comment-send",
-    "data-action": "comment",
-    "aria-label": t("send"),
-    disabled: commentCanSubmit(app, compose.value) ? null : "",
-    onclick: () => addEditorComment(app, compose),
-  }, element(document, "span", { "aria-hidden": "true", text: "↑" }));
-  commentButton.disabled = !commentCanSubmit(app, compose.value);
-  compose.addEventListener("input", () => {
-    current.commentText = compose.value;
-    setCommentEnabled(commentButton, commentCanSubmit(app, compose.value));
-    syncViewerDirty(app);
-  });
-  const owner = document;
-  if (app.onCommentSelection) owner.removeEventListener?.("selectionchange", app.onCommentSelection);
-  app.onCommentSelection = () => {
-    const field = app.root.querySelector?.("[data-comment]");
-    const button = app.root.querySelector?.("[data-action='comment']");
-    if (!field || !button) return;
-    setCommentEnabled(button, commentCanSubmit(app, field.value));
-  };
-  owner.addEventListener?.("selectionchange", app.onCommentSelection);
-  const commentField = labeledField(document, composeLabel, t(commentHintKey(app)), compose);
-  const composer = element(document, "div", { class: "comment-composer" }, element(document, "div", { class: "comment-input-row" }, commentField, commentButton), commentPreferenceControl(app, document, current, t));
-  commentButton.setAttribute("aria-describedby", compose.getAttribute("aria-describedby"));
-  if (!commentCanSubmit(app, compose.value)) {
-    const reason = element(document, "p", {
-      id: "reason-comment",
-      class: "field-hint",
-      "data-disabled-reason": "comment",
-      text: currentCommentAnchor(app) ? t("commentNeedsText") : t(commentMissingKey(app)),
-    });
-    commentButton.setAttribute("aria-describedby", "reason-comment");
-    composer.append(reason);
-  }
-  commentsColumn.append(comments, composer);
-  const notices = current.notices ?? [];
-  const submitted = notices.filter(notice => notice.state === "submitted");
-  if (submitted.length) {
-    const recipients = [...new Set(submitted.map(notice => {
-      const unit = unitById(app, notice.unitId);
-      return unit ? unitDisplayName(unit) : readableIdentity(notice.unitId, text(app.language, "person"));
-    }))];
-    const recipientText = recipients.length < 2 ? recipients[0] ?? "" : `${recipients.slice(0, -1).join(", ")} ${app.language === "es" ? "y" : "and"} ${recipients.at(-1)}`;
-    commentsColumn.append(element(document, "p", { "data-notice": "submitted", text: t("sentTo", { recipients: recipientText }) }));
-  }
-  for (const notice of notices.filter(item => ["ambiguous", "failed"].includes(item.state))) {
-    commentsColumn.append(element(document, "p", { "data-notice": notice.state, text: t(notice.state === "failed" ? "noticeFailed" : "noticeUnconfirmed") }));
-  }
-  return surfaces;
-}
-
-function selectEditor(app, summary) {
-  const editors = editorsOf(app);
-  app.store.selected.resourceId = summary.id;
-  app.store.open.editors.set(summary.id, summary.kind);
-  app.store.open.comments.add(summary.id);
-  // Opening a board again is a new try for a module that could not be converted.
-  for (const [key, entry] of editors.converted) if (entry.error && key.startsWith(`${summary.id}:`)) editors.converted.delete(key);
-  const name = summary.title || summary.id;
-  editorAct(app, `editor:${summary.id}`, text(app.language, "loadingDetails", { name }), async () => {
-    const before = editors.error;
-    await openEditor(app.api, editors, summary);
-    if (editors.error && editors.error !== before) throw editors.error;
-  });
-}
-
-function saveAttachments(app) {
-  const editors = editorsOf(app);
-  const choice = editors.current?.attachmentChoice;
-  return editorAct(app, `attach:${editors.current?.resourceId ?? "none"}`, text(app.language, "attach"), async (record) => {
-    const units = app.unitList?.catalog ?? [...app.store.indexes.units.values()];
-    const groups = [...app.store.indexes.groups.values()];
-    await setAttachments(app.api, editors, expandAttachments(units, groups, [...(choice ?? [])]), record.operation);
-  });
-}
-
-function followEditor(app) {
-  const editors = editorsOf(app);
-  const unitId = [...(editors.current?.attachmentChoice ?? [])][0] ?? editors.current?.attached?.[0];
-  if (!unitId || !editors.current) {
-    showOutcome(app, text(app.language, "attachFirst"), "attach_required");
-    if (!app.disposed) renderShell(app);
-    return;
-  }
-  editorAct(app, `watch:${editors.current.resourceId}`, text(app.language, "working"), async (record) => {
-    await startWatch(app.api, editors, { unitId, resourceId: editors.current.resourceId }, record.operation);
-  });
-}
-
-function commentHintKey(app) {
-  return app.editors?.current?.kind === "void" ? "commentHintText" : "commentHint";
-}
-
-function commentMissingKey(app) {
-  return app.editors?.current?.kind === "void" ? "quoteNeedsSelection" : "commentNeedsTarget";
-}
-
-function commentCanSubmit(app, value) {
-  return Boolean(currentCommentAnchor(app)) && typeof value === "string" && value.trim().length > 0;
-}
-
-function setCommentEnabled(button, enabled) {
-  button.disabled = !enabled;
-  if (enabled) button.removeAttribute("disabled");
-  else button.setAttribute("disabled", "");
-}
-
-function currentCommentAnchor(app) {
-  const editor = app.editors?.current;
-  const board = editor?.kind === "blueprint" ? boardDocument(editor) : editor?.authoritative?.document ?? editor?.document;
-  if (!editor || !board) return null;
-  if (editor.kind === "void") {
-    const host = app.root.querySelector?.("[data-void]");
-    const document = app.root.ownerDocument;
-    const selection = document?.getSelection?.() ?? document?.defaultView?.getSelection?.();
-    if (!host || !selection?.anchorNode || !host.contains(selection.anchorNode)) return null;
-    const range = selectedPlainRange(selection);
-    const k = editor.page ?? app.voidState?.page;
-    const lang = app.language === "es" ? "es" : "en";
-    const page = board.pages?.find((item) => item.k === k);
-    if (!range || !page || typeof page[lang] !== "string") return null;
-    return textAnchor(editor, k, lang, range.start, range.end);
-  }
-  const target = app.editors.commentTarget;
-  if (!target || target.resourceId !== editor.resourceId) return null;
-  return boardCommentAnchor(board, target);
-}
-
-function addEditorComment(app, compose) {
-  const editors = editorsOf(app);
-  const current = editors.current;
-  if (!current) return;
-  const value = compose.value;
-  current.commentText = value;
-  const anchor = currentCommentAnchor(app);
-  if (!anchor || !value.trim()) {
-    explain(app, anchor ? "commentNeedsText" : commentMissingKey(app));
-    return;
-  }
-  sendEditorComment(app, current, anchor, value);
-}
-
-function sendEditorComment(app, editor, anchor, value) {
-  const editors = editorsOf(app);
-  const current = editor;
-  if (!current || !value.trim()) return;
-  const key = `comment:${current.resourceId}`;
-  if (activityPending(app, key)) return;
-  const previous = app.activity.get(key);
-  if (app.api.uncertain.has(previous?.operation?.id)) { previous.retry?.(); return; }
-  let row = (current.threads ?? []).find((thread) => thread.pending);
-  if (!row) {
-    row = { id: "pending-comment", status: "open", pending: true, failed: false, messages: [{ text: value }] };
-    current.threads = [...(current.threads ?? []), row];
-  }
-  row.failed = false;
-  row.messages = [{ text: value }];
-  const choice = commentChoice(editors, current);
-  const target = { ...editors, current };
-  let operation = null;
-  editorAct(app, key, text(app.language, "sending"), async (record) => {
-    record.operation = operation;
-    record.commentChoice = choice;
-    try {
-      await createComment(app.api, target, anchor, value, operation, choice);
-      record.operation = null;
-      current.threads = (current.threads ?? []).filter((thread) => !thread.pending);
-      syncViewerDirty(app);
-    } catch (error) {
-      operation = error.operation;
-      const pending = (current.threads ?? []).find((thread) => thread.pending);
-      if (pending) pending.failed = true;
-      throw error;
-    }
-  });
-}
-
-function replyToThread(app, threadId) {
-  const editors = editorsOf(app);
-  const current = editors.current;
-  const supplied = current?.commentText;
-  if (typeof supplied !== "string" || !supplied.trim()) {
-    explain(app, "commentNeedsText");
-    return;
-  }
-  const choice = commentChoice(editors, current);
-  const target = { ...editors, current };
-  const key = `reply:${threadId}`;
-  if (activityPending(app, key)) return;
-  const previous = app.activity.get(key);
-  if (app.api.uncertain.has(previous?.operation?.id)) { previous.retry?.(); return; }
-  let operation = null;
-  editorAct(app, key, text(app.language, "sending"), async (record) => {
-    record.operation = operation;
-    record.commentChoice = choice;
-    try {
-      await replyComment(app.api, target, threadId, supplied, operation, choice);
-      record.operation = null;
-    } catch (error) { operation = error.operation; throw error; }
-  });
-}
-
-function commentPreferenceControl(app, document, current, t) {
-  if (app.layout === "phone") return null;
-  const choice = commentChoice(editorsOf(app), current);
-  const none = choice.attached.length === 0;
-  const disabled = none || !app.store.capabilities.includes("settings.write") || activityPending(app, "settings");
-  const input = element(document, "input", { type: "checkbox", "data-send-to-agent": current.kind,
-    "aria-label": t("sendToAgent"), "data-keep": keepId("send-to-agent", current.resourceId),
-    disabled: disabled ? "" : null });
-  input.disabled = disabled;
-  input.checked = choice.sendToAgent;
-  input.addEventListener("change", () => {
-    homeState(app).sendToAgentChoice = input.checked;
-    editorsOf(app).sendToAgent = input.checked;
-    chooseSetting(app, { sendToAgent: input.checked });
-  });
-  return element(document, "div", { class: `comment-preference${none ? " no-agents" : ""}` },
-    element(document, "label", { class: "comment-preference-label" }, element(document, "span", { class: "comment-checkbox-hit" }, input, element(document, "span", { class: "comment-checkbox", "aria-hidden": "true" })), t("sendToAgent")),
-    element(document, "span", { class: "comment-preference-hint", text: t(none ? "noAgentsAttached" : choice.sendToAgent ? choice.attached.length === 1 ? "notifiesAttachedAgent" : "notifiesAttachedAgents" : "keptAsNote", { count: choice.attached.length }) }));
-}
-
-function resolveThread(app, threadId) {
-  const editors = editorsOf(app);
-  editorAct(app, `resolve:${threadId}`, text(app.language, "working"), async (record) => {
-    await resolveComment(app.api, editors, threadId, record.operation);
-  });
-}
-
-function noteEditor(app, error, key = null) {
-  if (app.editors) app.editors.error = error;
-  noteAction(app, error, key);
-}
-
-function canEditResources(app) {
-  return (app.store.capabilities ?? []).includes("editor.write");
-}
-
-function editorDraft(app) {
-  if (!app.editorDraft) app.editorDraft = { project: "shop", path: "", createPath: "", id: "", title: "", width: "", height: "", documentTitle: "" };
-  return app.editorDraft;
-}
-
-const FIELD_HINTS = {
-  "register-project": "projectHint",
-  "register-path": "pathHint",
-  "create-id": "idHint",
-  "create-title": "titleHint",
-  "create-path": "pathHint",
-  "screen-width": "sizeHint",
-  "screen-height": "sizeHint",
-  "document-title": "titleHint",
-};
-
-function editorField(document, app, t, key, labelKey, field) {
-  const input = element(document, "input", { "data-field": field, "data-keep": keepId("resource", key) });
-  input.value = editorDraft(app)[key] ?? "";
-  input.addEventListener("input", () => {
-    editorDraft(app)[key] = input.value;
-    rememberFormDraft(app, "resources", key, input.value);
-  });
-  return labeledField(document, t(labelKey), t(FIELD_HINTS[field] ?? "fieldHint"), input);
-}
-
-function syncStructureDraft(app, current) {
-  if (!current || app.structureResource === current.resourceId) return;
-  app.structureResource = current.resourceId;
-  const draft = editorDraft(app);
-  const screen = current.authoritative?.document?.screens?.[0];
-  draft.width = screen ? String(screen.w ?? "") : "";
-  draft.height = screen ? String(screen.h ?? "") : "";
-  draft.documentTitle = current.authoritative?.document?.title ?? current.authoritative?.title ?? "";
-}
-
-function resourceForms(app, document, t) {
-  if (!canEditResources(app)) return null;
-  const kind = app.mode === "blueprint" ? "blueprint" : "void";
-  const box = element(document, "div", { class: "editor-actions", "data-editor-forms": kind });
-  box.append(
-    element(document, "button", {
-      type: "button",
-      class: "btn ghost",
-      "data-action": "open-register",
-      "data-kind": kind,
-      text: t("registerResource"),
-      onclick: () => openResourceForm(app, kind, "register"),
-    }),
-  );
-  return box;
-}
-
-function openResourceForm(app, kind, mode) {
-  if (mode === "create") return openLibraryCreate(app, kind);
-  const document = app.root.ownerDocument;
-  if (document.querySelector?.(`[data-form="${mode}"]`)) return;
-  const t = (key) => text(app.language, key);
-  const dialog = element(document, "dialog", { class: "dialog", "data-form": mode });
-  const form = element(document, "form", { method: "dialog" });
-  const heading = element(document, "h2", { text: t(mode === "register" ? "registerForm" : "createForm") });
-  labelDialog(dialog, heading);
-  form.append(heading);
-  form.append(
-    editorField(document, app, t, "project", "registerProject", "register-project"),
-    editorField(document, app, t, "path", "registerPath", "register-path"),
-  );
-  form.append(element(document, "button", {
-    type: "button",
-    class: "btn primary",
-    "data-action": mode === "register" ? "register-resource" : "create-resource",
-    "data-kind": kind,
-    text: t(mode === "register" ? "registerResource" : "createResource"),
-    onclick: () => {
-      dialog.close();
-      if (mode === "register") submitRegister(app, kind);
-    },
-  }), element(document, "button", {
-    type: "button",
-    class: "btn",
-    "data-action": "cancel-form",
-    text: t("cancel"),
-    onclick: () => dialog.close(),
-  }));
-  dialog.append(form);
-  dialog.addEventListener("close", () => {
-    dialog.remove();
-    restoreInvoker(app, mode === "register" ? "open-register" : "open-create");
-  });
-  document.body.append(dialog);
-  if (typeof dialog.showModal === "function") dialog.showModal();
-}
-
-function openAttachChooser(app) {
-  const document = app.root.ownerDocument;
-  const editors = editorsOf(app);
-  const current = editors.current;
-  if (!current || document.querySelector?.("[data-form='attach']")) return;
-  const choice = current.attachmentChoice ?? new Set();
-  current.attachmentChoice = choice;
-  current.attachmentChoiceRevision = current.attachmentRevision;
-  const dialog = element(document, "dialog", { class: "dialog", "data-form": "attach" });
-  const form = element(document, "form", { method: "dialog" });
-  const heading = element(document, "h2", { text: text(app.language, "attachAgents") });
-  labelDialog(dialog, heading);
-  const search = element(document, "input", {
-    type: "search",
-    "data-attach-search": "true",
-    "aria-label": text(app.language, "searchUnitsGroups"),
-    placeholder: text(app.language, "searchUnitsGroups"),
-  });
-  const list = element(document, "div", { class: "attach-choices", role: "listbox" });
-  const paint = () => {
-    const query = search.value.trim().toLowerCase();
-    const units = (app.unitList?.catalog ?? []).map((unit) => ({ id: unit.id, label: unitDisplayName(unit), kind: "unit", search: `${unit.id} ${unit.unit} ${unit.alias ?? ""}` }));
-    const groups = [...app.store.indexes.groups.values()].filter((group) => !group.deleted).map((group) => ({ id: `group:${group.id}`, label: displayName(group.title), kind: "group", search: group.title }));
-    const entries = [...units, ...groups].filter((entry) => !query || entry.search.toLowerCase().includes(query));
-    list.replaceChildren(...entries.map((unit) => element(document, "button", {
-      type: "button",
-      class: "attach-choice",
-      [unit.kind === "unit" ? "data-attach-unit" : "data-attach-group"]: unit.id,
-      "aria-pressed": choice.has(unit.id) ? "true" : "false",
-      text: unit.label,
-      onclick: () => {
-        if (choice.has(unit.id)) choice.delete(unit.id);
-        else if (choice.size >= 256) editors.error = { code: "invalid_body" };
-        else choice.add(unit.id);
-        paint();
-      },
-    })));
-    try { confirm.textContent = text(app.language, "attachCount", { count: expandAttachments(app.unitList?.catalog ?? [], [...app.store.indexes.groups.values()], [...choice]).length }); }
-    catch { confirm.textContent = text(app.language, "tooLarge"); }
-  };
-  search.addEventListener("input", paint);
-  const confirm = element(document, "button", {
-    type: "button",
-    class: "btn primary",
-    "data-action": "save-attachments",
-    text: text(app.language, "attachCount", { count: choice.size }),
-  });
-  confirm.addEventListener("click", async () => {
-    if (confirm.getAttribute("aria-busy") === "true") return;
-    setBusy(confirm, true);
-    form.querySelector("[data-dialog-error]")?.remove();
-    form.querySelector("[data-attach-progress]")?.remove();
-    form.append(progressMark(document, text(app.language, "attaching"), { "data-attach-progress": "true" }));
-    const resourceId = current.resourceId;
-    await saveAttachments(app);
-    form.querySelector("[data-attach-progress]")?.remove();
-    const record = app.activity?.get(`attach:${resourceId}`);
-    if (record?.phase === "error") {
-      setBusy(confirm, false);
-      confirm.replaceChildren();
-      confirm.append(document.createTextNode(text(app.language, "retry")));
-      const note = element(document, "p", {
-        class: "action-note",
-        "data-dialog-error": "true",
-        role: "alert",
-        text: activityMessage(app, record),
-      });
-      if (record.error?.code) note.setAttribute("data-code", record.error.code);
-      form.append(note);
-      return;
-    }
-    dialog.close();
-  });
-  form.append(heading, search, list, confirm, element(document, "button", {
-    type: "button",
-    class: "btn",
-    "data-action": "cancel-form",
-    text: text(app.language, "cancel"),
-    onclick: () => { current.attachmentChoice = new Set(current.attached); delete current.attachmentChoiceRevision; dialog.close(); },
-  }));
-  dialog.append(form);
-  dialog.addEventListener("close", () => {
-    if (app.attachRepaint === paint) app.attachRepaint = null;
-    dialog.remove();
-    restoreInvoker(app, "attach");
-  });
-  document.body.append(dialog);
-  app.attachRepaint = paint;
-  paint();
-  const bounds = app.root.querySelector(".board-host")?.getBoundingClientRect() ?? app.root.getBoundingClientRect();
-  dialog.style.left = `${Math.max(12, Math.min(document.defaultView.innerWidth - 312, bounds.left + bounds.width / 2 - 150))}px`;
-  dialog.style.top = `${bounds.top + 64}px`;
-  if (dialog.show) dialog.show(); else dialog.setAttribute("open", "");
-  search.focus?.();
-}
-
-function submitRegister(app, kind) {
-  const draft = editorDraft(app);
-  const savedPath = draft.path;
-  editorAct(app, `register:${kind}`, text(app.language, "working"), async (record) => {
-    const result = await registerResource(app.api, { kind, project: draft.project.trim(), path: draft.path.trim() }, record.operation);
-    releaseFormDraft(app, "resources", "path", savedPath);
-    await openCreated(app, result.data, kind);
-  });
-}
-
-// A module board is drawn from the document its module makes. The conversion runs in memory once per revision of the board:
-// nothing is written or imported, and opening the board again reads the kept document.
-function legacyBoard(app, editor) {
-  const kept = editorsOf(app).converted, key = `${editor.resourceId}:${editor.revision}`;
-  if (kept.has(key)) return kept.get(key);
-  for (const other of kept.keys()) if (other.startsWith(`${editor.resourceId}:`)) kept.delete(other);
-  const entry = { document: null, error: null };
-  kept.set(key, entry);
-  convertLegacyBoard(app.api, editor.authoritative, (manifest) => exportLegacyDocument(app.root.ownerDocument, manifest, { maxNodes: READ_ONLY_BOARD_NODES }))
-    .then((result) => { entry.document = result.document; }, (error) => { entry.error = error; })
-    .finally(() => { if (!app.disposed) renderShell(app); });
-  return entry;
-}
-
-function submitJsonCopy(app, current) {
-  const legacy = current?.authoritative?.legacy;
-  if (!legacy || !canEditResources(app)) return;
-  editorAct(app, `copy:${current.resourceId}`, text(app.language, "working"), async (record) => {
-    const result = await importLegacyBoard(app.api, current.authoritative, { title: current.authoritative.title, folderId: current.authoritative.folderId ?? null }, record.operation, (manifest) => exportLegacyDocument(app.root.ownerDocument, manifest));
-    await openCreated(app, result.data, "blueprint");
-  });
-}
-
-/** Resolve the verified, bounded module graph without fetching executable URLs. */
-export function legacyModuleUrls(manifest, makeUrl) {
-  const urls = new Map(), loading = new Set();
-  let bytes = 0;
-  const build = (key) => {
-    if (urls.has(key)) return urls.get(key);
-    const module = manifest.modules[key];
-    if (!module || loading.has(key)) throw new ApiError(422, "import_unavailable", "The module cannot be exported.");
-    loading.add(key);
-    let source = module.source;
-    for (const reference of [...module.imports].reverse()) {
-      source = `${source.slice(0, reference.start)}${JSON.stringify(build(reference.key))}${source.slice(reference.end)}`;
-      if (source.length > 16_000_000) throw new ApiError(422, "import_unavailable", "The module export exceeds its limit.");
-    }
-    if ((bytes += new TextEncoder().encode(source).length) > 16_000_000) throw new ApiError(422, "import_unavailable", "The module export exceeds its limit.");
-    const url = makeUrl(source); loading.delete(key); urls.set(key, url); return url;
-  };
-  return Object.fromEntries(["module", "kit", "skins", "exporter", "schema", "icons", "nodes"].filter((key) => manifest[key]).map((key) => [key, build(manifest[key])]));
-}
-
-// A drawn module board is never saved, so it may hold more nodes than a JSON board; the 3.0 board has about 21,000.
-const READ_ONLY_BOARD_NODES = 100_000;
-
-async function exportLegacyDocument(document, manifest, { maxNodes = null } = {}) {
-  const env = document.defaultView;
-  const dataUrl = (source) => {
-    const bytes = new TextEncoder().encode(source), chunks = [];
-    for (let at = 0; at < bytes.length; at += 32768) chunks.push(String.fromCharCode(...bytes.subarray(at, at + 32768)));
-    return `data:text/javascript;base64,${env.btoa(chunks.join(""))}`;
-  };
-  const urls = legacyModuleUrls(manifest, dataUrl);
-  const script = `try {
-    const [source, kit, skins, exporter, schema] = await Promise.all(${JSON.stringify([urls.module, urls.kit, urls.skins, urls.exporter, urls.schema])}.map(url => import(url)));
-    const skin = skins.skins?.design ?? Object.values(skins.skins ?? {})[0]; if (!skin) throw new Error();
-    kit.useSkin?.(skin);
-    ${urls.icons ? `const icons = await import(${JSON.stringify(urls.icons)}); kit.useIcons?.(icons.default ?? icons.ICONS);` : ""}
-    ${urls.nodes ? `const nodes = await import(${JSON.stringify(urls.nodes)}); kit.useNodes?.(nodes.default ?? nodes.NODES);` : ""}
-    const document = exporter.exportBoard(source.default, {layout: kit.layout, normalize: ${maxNodes ? `(board, options) => schema.normalizeBoard(board, { ...options, maxNodes: ${Number(maxNodes)} })` : "schema.normalizeBoard"}, skin, sketch: ${JSON.stringify(manifest.sketch)}});
-    parent.postMessage({document}, "*");
-  } catch { parent.postMessage({error: "import_unavailable"}, "*"); }`;
-  const iframe = document.createElement("iframe");
-  iframe.hidden = true; iframe.setAttribute("sandbox", "allow-scripts");
-  const html = new Blob([`<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src data:; connect-src 'none'; object-src 'none'; base-uri 'none'"><script type="module" src="${dataUrl(script)}"></script>`], { type: "text/html" });
-  const url = env.URL.createObjectURL(html);
-  try {
-    return await new Promise((resolve, reject) => {
-      const finish = (error, result) => { env.clearTimeout(timer); env.removeEventListener("message", receive); error ? reject(error) : resolve(result); };
-      const receive = (event) => {
-        if (event.source !== iframe.contentWindow) return;
-        if (event.data?.error || !event.data?.document) finish(new ApiError(422, "import_unavailable", "The module cannot be exported."));
-        else finish(null, event.data.document);
-      };
-      const timer = env.setTimeout(() => finish(new ApiError(422, "import_unavailable", "The module cannot be exported.")), 30_000);
-      env.addEventListener("message", receive); iframe.src = url; document.body.append(iframe);
-    });
-  } finally { iframe.remove(); env.URL.revokeObjectURL(url); }
-}
-
-// Runs a module board in the sandbox and returns the document it draws, with the manifest it came from. Nothing is written.
-export async function convertLegacyBoard(api, source, exportDocument = (manifest) => exportLegacyDocument(globalThis.document, manifest)) {
-  const manifest = (await request(api, "GET", "/blueprint/boards/:resourceId/export", { params: { resourceId: source.id } })).data;
-  let document;
-  try {
-    document = await exportDocument(manifest);
-    if (!document || typeof document !== "object" || Array.isArray(document)) throw new Error();
-  } catch { throw new ApiError(422, "import_unavailable", "The module cannot be exported."); }
-  return { manifest, document };
-}
-
-export async function importLegacyBoard(api, source, { title, folderId = null, project = source?.project } = {}, retained = null, exportDocument = (manifest) => exportLegacyDocument(globalThis.document, manifest)) {
-  if (retained) return perform(api, null, retained);
-  if (!source?.readOnly || project !== source.project) throw new ApiError(422, "import_unavailable", "Choose a registered module in the selected project.");
-  const { manifest, document } = await convertLegacyBoard(api, source, exportDocument);
-  document.legacySource = manifest.sourceRevisions;
-  return perform(api, { method: "POST", path: "/blueprint/boards/import", body: { project, path: manifest.path, title, folderId, legacyResourceId: source.id, document, expectedRevision: manifest.expectedRevision } });
-}
-
-function openCreated(app, data, kind) {
-  const editors = editorsOf(app);
-  const summary = { id: data.id, kind: data.kind ?? kind, title: data.title ?? data.id };
-  editors.loadedKind = null;
-  editors.catalogLoading = false;
-  app.store.selected.resourceId = summary.id;
-  return openEditor(app.api, editors, summary).then(() => {
-    queueCatalog(app, summary.kind === "void" ? "void" : "blueprint");
-    if (!app.disposed) renderShell(app);
-  });
-}
-
-function starterBoard(id, title) {
-  return {
-    formatVersion: 1,
-    id,
-    title,
-    note: "",
-    pages: [
-      { id: "main", title: "Main", objects: [], order: ["empty"], start: "empty" },
-    ],
-    screens: [
-      screenBox("empty", "Empty", 0),
-    ],
-    links: [],
-    components: [],
-    fonts: [],
-    threads: [],
-  };
-}
-
-function screenBox(id, title, x) {
-  return {
-    id,
-    title,
-    pageId: "main",
-    x,
-    y: 0,
-    w: 390,
-    h: 844,
-    root: { id: `${id}-root`, name: "Root", t: "box", place: { x: 0, y: 0 }, w: 390, h: 844, dir: "stack", kids: [] },
-  };
-}
-
-function starterText(id, title) {
-  return { formatVersion: 1, id, title, pages: [{ k: "Intro.Welcome", en: "", es: "" }] };
-}
-
-function appendStructureTools(app, document, editor, t, tools) {
-  syncStructureDraft(app, editor);
-  const board = editor.authoritative?.document;
-  if (!board || editor.authoritative.readOnly) return;
-  tools.setAttribute("data-structure", "true");
-  const canMovePage = (board.pages?.length ?? 0) >= 2;
-  const canMoveScreen = (board.pages ?? []).some((page) => (page.order?.length ?? 0) >= 2);
-  const canLink = (board.screens?.length ?? 0) >= 2;
-  tools.append(...[
-    editorField(document, app, t, "width", "screenWidth", "screen-width"),
-    editorField(document, app, t, "height", "screenHeight", "screen-height"),
-    element(document, "button", { type: "button", class: "btn", "data-action": "resize-screen", onclick: () => resizeBoard(app, editor) }, t("resizeScreen")),
-    element(document, "button", { type: "button", class: "btn", "data-action": "move-page", disabled: canMovePage ? null : "", "aria-describedby": canMovePage ? null : "reason-move-page", onclick: () => moveBoardPage(app, editor) }, t("movePage")),
-    canMovePage ? null : element(document, "p", { id: "reason-move-page", class: "field-hint", "data-disabled-reason": "move-page", text: t("needTwoPages") }),
-    element(document, "button", { type: "button", class: "btn", "data-action": "move-screen", disabled: canMoveScreen ? null : "", "aria-describedby": canMoveScreen ? null : "reason-move-screen", onclick: () => moveBoardScreen(app, editor) }, t("moveScreen")),
-    canMoveScreen ? null : element(document, "p", { id: "reason-move-screen", class: "field-hint", "data-disabled-reason": "move-screen", text: t("needTwoScreens") }),
-    element(document, "button", { type: "button", class: "btn", "data-action": "add-link", disabled: canLink ? null : "", "aria-describedby": canLink ? null : "reason-add-link", onclick: () => addBoardLink(app, editor) }, t("addLink")),
-    canLink ? null : element(document, "p", { id: "reason-add-link", class: "field-hint", "data-disabled-reason": "add-link", text: t("needLinkScreens") }),
-  ].filter(child => child != null));
-}
-
-function resizeBoard(app, editor) {
-  const draft = editorDraft(app);
-  const width = Number(draft.width);
-  const height = Number(draft.height);
-  if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || width > 16000 || height > 16000) {
-    explain(app, "resizeNeedsSize");
-    return;
-  }
-  const selected = app.editors?.focus?.screenId;
-  const savedWidth = draft.width;
-  const savedHeight = draft.height;
-  saveBoardStructure(app, editor, (document) => {
-    const screen = document.screens?.find((item) => item.id === selected) ?? document.screens?.[0];
-    if (!screen) return;
-    screen.w = width;
-    screen.h = height;
-    if (screen.root?.t === "box") {
-      screen.root.w = width;
-      screen.root.h = height;
-    }
-  }, () => {
-    releaseFormDraft(app, "resources", "width", savedWidth);
-    releaseFormDraft(app, "resources", "height", savedHeight);
-  });
-}
-
-function moveBoardPage(app, editor) {
-  if ((editor.authoritative?.document?.pages?.length ?? 0) < 2) return;
-  saveBoardStructure(app, editor, (document) => {
-    const [first, second] = document.pages;
-    document.pages.splice(0, 2, second, first);
-  });
-}
-
-function moveBoardScreen(app, editor) {
-  if (!(editor.authoritative?.document?.pages ?? []).some((page) => (page.order?.length ?? 0) >= 2)) return;
-  saveBoardStructure(app, editor, (document) => {
-    const page = document.pages.find((item) => (item.order?.length ?? 0) >= 2);
-    const [first, second, ...rest] = page.order;
-    page.order = [second, first, ...rest];
-  });
-}
-
-function addBoardLink(app, editor) {
-  const screens = editor.authoritative?.document?.screens ?? [];
-  if (screens.length < 2) return;
-  const from = screens[0].id;
-  const to = screens[1].id;
-  const id = `link-${from}-${to}`;
-  if ((editor.authoritative.document.links ?? []).some((link) => link.id === id)) {
-    explain(app, "linkExists");
-    return;
-  }
-  saveBoardStructure(app, editor, (document) => {
-    document.links = [...(document.links ?? []), { id, from, to, transition: "cut" }];
-  });
-}
-
-function saveBoardStructure(app, editor, edit, onSaved) {
-  if (!canEditResources(app) || !editor?.authoritative?.document || editor.authoritative.readOnly) return;
-  const next = editedBoard({ document: boardDocument(editor), revision: editor.revision }, edit);
-  setBoardDraft(editor, next.document);
-  const saved = saveBoardDraft(app, editor);
-  saved?.then(() => { if (!editor.boardDraft && !editor.conflict) { onSaved?.(); syncViewerDirty(app); } });
-}
-
 
 function viewStorage(document) {
   try { return document.defaultView?.localStorage ?? null; } catch { return null; }
@@ -5007,8 +2820,8 @@ async function openPlanDraft(app, cluster) {
 }
 
 async function chooseVoidText(app, state) {
-  const document = app.root.ownerDocument, editors = editorsOf(app);
-  const texts = editors.catalogKind === 'void' && editors.catalog.length ? editors.catalog : (await collectPages(app.api, '/void/texts', { limit: 50 })).items;
+  const document = app.root.ownerDocument;
+  const texts = (await collectPages(app.api, '/void/texts', { limit: 50 })).items;
   const dialog = showDialog(document, { title: startText(app.language, 'fromVoid'), body: texts.length ? '' : startText(app.language, 'noVoidTexts'), cancel: startText(app.language, 'cancel') });
   dialog.setAttribute('data-plan-void', 'true');
   const list = element(document, 'div', { class: 'plan-void-list' });
@@ -6299,7 +4112,6 @@ function applySettingsResult(app, result) {
   app.store.settings.revision = result.data.revision;
   const home = homeState(app);
   applySettingsRead(home, app.store.settings);
-  editorsOf(app).sendToAgent = home.sendToAgentChoice ?? home.settings.sendToAgent;
   applyChoice(app, presentation(app.store.viewer, result.data.settings));
 }
 
@@ -6389,411 +4201,6 @@ function waitForActivity(app, record, work, previous) {
   });
 }
 
-const LIBRARY_SEARCH_PAUSE_MS = 200;
-
-function libraryActions(app, kind) {
-  const editors = editorsOf(app);
-  const state = libraryState(editors, kind);
-  const refresh = () => editorAct(app, `library:${kind}:${JSON.stringify([state.query, state.filters])}`, text(app.language, "loadingList"), async () => loadCatalog(app.api, editors, kind));
-  return {
-    // The row is read when it is pressed: if the catalog has changed under it and it is gone, nothing opens.
-    select: (id) => {
-      const item = editors.catalog.find((entry) => entry.id === id && entry.kind === kind);
-      if (item) selectEditor(app, item);
-    },
-    refresh,
-    // One request per pause in typing; an emptied box does not wait.
-    query: (value) => {
-      state.query = value;
-      clearTimeout(state.searchTimer);
-      if (!value) { refresh(); return; }
-      state.searchTimer = setTimeout(() => { state.searchTimer = null; if (!app.disposed) refresh(); }, LIBRARY_SEARCH_PAUSE_MS);
-      state.searchTimer.unref?.();
-    },
-    filter: (key, value) => {
-      if (value == null) delete state.filters[key]; else state.filters[key] = value;
-      refresh();
-    },
-    toggle: (key, open) => {
-      if (state.query || Object.keys(state.filters).length) state.matchingCollapsed[open ? "delete" : "add"](key);
-      else { state.opened[open ? "add" : "delete"](key); state.collapsed[open ? "delete" : "add"](key); }
-      renderShell(app);
-    },
-    issues: () => { state.issuesOpen = !state.issuesOpen; renderShell(app); },
-    menu: (type, entry, control) => {
-      const box = control.getBoundingClientRect();
-      const view = app.root.ownerDocument.defaultView;
-      state.menu = state.menu?.type === type && state.menu.entry?.id === entry?.id ? null : {
-        type, entry, opener: control.getAttribute("data-action"), x: Math.max(8, Math.min(box.left, (view?.innerWidth ?? 1440) - 238)),
-        y: Math.max(8, Math.min(box.bottom ?? box.top + 32, (view?.innerHeight ?? 900) - 240)),
-      };
-      renderShell(app);
-      app.root.querySelector("[data-library-menu]")?.querySelector("button")?.focus?.();
-    },
-    closeMenu: () => { const opener = state.menu?.opener; state.menu = null; renderShell(app); restoreInvoker(app, opener); },
-    create: canEditResources(app) ? () => openResourceForm(app, kind, "create") : null,
-    register: canEditResources(app) ? () => openResourceForm(app, kind, "register") : null,
-    folder: () => newLibraryFolder(app, kind),
-    manage: canEditResources(app) ? (action, entry, type) => {
-      state.menu = null;
-      if (action === "rename") beginLibraryRename(app, kind, entry, type);
-      else if (action === "delete") deleteLibraryEntry(app, kind, entry, type);
-      else if (action === "duplicate") openLibraryCreate(app, kind, entry);
-      else openLibraryMove(app, kind, entry);
-    } : null,
-    saveRename: () => saveLibraryRename(app, kind),
-    cancelRename: () => { const entry = state.rename; if (entry?.busy) return; state.rename = null; renderShell(app); focusLibraryEntry(app, entry); },
-  };
-}
-
-function focusLibraryEntry(app, entry) {
-  const selector = entry?.type === "folder" ? `[data-action="folder-${entry.id}"]` : `[data-id="${entry?.id}"]`;
-  (app.root.querySelector(selector) ?? app.root.querySelector("[data-library-search]"))?.focus?.();
-}
-
-function beginLibraryRename(app, kind, entry, type) {
-  const state = libraryState(editorsOf(app), kind);
-  state.rename = { id: entry.id, type, project: entry.project, title: entry.title, entry, operation: null, busy: false, error: null };
-  if (type === "item") {
-    const editing = state.rename;
-    editing.read = request(app.api, "GET", kind === "blueprint" ? "/blueprint/boards/:resourceId" : "/void/texts/:resourceId", { params: { resourceId: entry.id } })
-      .then((result) => { editing.record = result.data; }).catch((error) => { editing.readError = error; });
-  } else {
-    // The folder being named is shown: every folder above it opens.
-    const reveal = (key) => { state.collapsed.delete(key); state.opened.add(key); state.matchingCollapsed.delete(key); };
-    reveal(`project:${entry.project}`);
-    let parentId = entry.parentId;
-    const parents = new Set();
-    while (parentId && !parents.has(parentId)) {
-      parents.add(parentId);
-      reveal(`${entry.project}:${parentId}`);
-      parentId = state.folders.find((folder) => folder.id === parentId && folder.project === entry.project)?.parentId;
-    }
-  }
-  renderShell(app);
-  const input = app.root.querySelector(`[data-library-rename="${entry.id}"]`);
-  input?.focus?.(); input?.setSelectionRange?.(0, entry.title.length);
-}
-
-async function saveLibraryRename(app, kind) {
-  const editors = editorsOf(app), state = libraryState(editors, kind), editing = state.rename;
-  if (!editing || editing.busy) return;
-  const title = editing.title.trim();
-  if (!title || title.length > 240 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(title)) {
-    editing.error = text(app.language, "groupNameRequired"); renderShell(app); return;
-  }
-  editing.busy = true; editing.error = null;
-  renderShell(app);
-  try {
-    let result;
-    if (editing.type === "folder") {
-      const operation = editing.operation ?? createOperation({ method: "PATCH", path: "/library/folders/:folderId", params: { folderId: editing.id }, body: { project: editing.project, title, expectedRevision: editing.entry.revision } });
-      editing.operation = operation;
-      result = await request(app.api, "PATCH", operation.path, { operation });
-    } else {
-      await editing.read;
-      if (editing.readError) throw editing.readError;
-      result = await libraryChange(app.api, editing.record, title, editing.record.folderId, editing.record.libraryRevision, editing.operation);
-      applyLibraryRecord(app, result.data, editing.id);
-    }
-    state.rename = null;
-    await loadCatalog(app.api, editors, kind);
-    if (!app.disposed) { renderShell(app); focusLibraryEntry(app, editing); }
-  } catch (error) {
-    editing.operation = error.operation ?? editing.operation;
-    editing.error = actionText(app.language, error.code);
-    editing.busy = false;
-    if (!app.disposed) { renderShell(app); app.root.querySelector(`[data-library-rename="${editing.id}"]`)?.focus?.(); }
-  }
-}
-
-function applyLibraryRecord(app, record, previousId = record.id) {
-  const editors = editorsOf(app);
-  const draft = editors.drafts.get(previousId) ?? (editors.current?.resourceId === previousId ? editors.current : null);
-  if (!draft) return;
-  if (previousId !== record.id) {
-    editors.drafts.delete(previousId);
-    if (app.store.open.editors.delete(previousId)) app.store.open.editors.set(record.id, record.kind);
-    if (app.store.open.comments.delete(previousId)) app.store.open.comments.add(record.id);
-    if (editors.focus?.resourceId === previousId) editors.focus.resourceId = record.id;
-    if (draft.textDrafts?.size) draft.textDrafts = new Map([...draft.textDrafts].map(([key, value]) => {
-      const [resourceId, k, language] = key.split("\0");
-      return [resourceId === previousId ? textDraftKey(record.id, k, language) : key, value];
-    }));
-    const nodes = draftMap(app, "nodes");
-    if (nodes.has(previousId)) { nodes.set(record.id, nodes.get(previousId)); nodes.delete(previousId); }
-  }
-  draft.resourceId = record.id;
-  draft.authoritative = record;
-  draft.revision = record.revision;
-  draft.commentsRevision = record.commentsRevision;
-  draft.attachmentRevision = record.attachmentRevision;
-  editors.drafts.set(record.id, draft);
-  if (app.store.selected.resourceId === previousId) app.store.selected.resourceId = record.id;
-}
-
-function libraryProjects(app, kind) {
-  return libraryState(editorsOf(app), kind).projects.filter((entry) => entry.eligible !== false);
-}
-
-function libraryProjectField(app, form, kind, value = "") {
-  const document = form.ownerDocument;
-  const select = element(document, "select", { name: "project", "data-field": "create-project", required: "" }, element(document, "option", { value: "", text: text(app.language, "chooseProject") }));
-  for (const project of libraryProjects(app, kind)) select.append(element(document, "option", { value: project.id ?? project.name, text: project.name ?? project.id }));
-  select.value = value;
-  form.append(labeledField(document, text(app.language, "registerProject"), text(app.language, kind === "blueprint" ? "boardRepositoryHint" : "textRepositoryHint"), select));
-  return select;
-}
-
-function libraryFolderField(app, form, kind, project, folderId = null) {
-  const document = form.ownerDocument;
-  const select = element(document, "select", { name: "folderId", "data-field": "create-folder" });
-  const paint = () => {
-    select.replaceChildren(element(document, "option", { value: "", text: text(app.language, "projectRoot") }));
-    const folders = libraryState(editorsOf(app), kind).folders.filter((folder) => folder.project === project.value);
-    const title = (folder) => { const parent = folders.find((entry) => entry.id === folder.parentId); return parent ? `${title(parent)} / ${folder.title}` : folder.title; };
-    for (const folder of folders) select.append(element(document, "option", { value: folder.id, text: title(folder) }));
-    select.value = folders.some((folder) => folder.id === folderId) ? folderId : "";
-    folderId = null;
-  };
-  project.addEventListener("change", paint); paint();
-  form.append(element(document, "label", { class: "field" }, element(document, "span", { class: "field-label", text: text(app.language, "folder") }), select));
-  return select;
-}
-
-function openLibraryCreate(app, kind, source = null) {
-  const document = app.root.ownerDocument;
-  if (document.querySelector('[data-form="library-create"]')) return;
-  const state = libraryState(editorsOf(app), kind);
-  state.menu = null;
-  renderShell(app);
-  let operation = null;
-  openChoiceForm(app, "library-create", text(app.language, kind === "blueprint" ? "newBoard" : "newText"), (form, confirm) => {
-    confirm.setAttribute("data-action", "create-resource");
-    confirm.textContent = text(app.language, kind === "blueprint" ? "finalCreateBoard" : "createText");
-    const heading = form.querySelector("h2"); heading.remove();
-    form.append(element(document, "div", { class: "library-dialog-heading" }, heading, element(document, "p", { text: text(app.language, kind === "blueprint" ? "finalNewBoardHint" : "newTextHint") })));
-    const pair = element(document, "div", { class: "library-field-pair" });
-    const name = editorField(document, app, (key) => text(app.language, key), "title", "name", "create-title");
-    name.querySelector(".field-hint")?.remove();
-    name.querySelector("input").removeAttribute("aria-describedby");
-    name.querySelector("input").value = source ? text(app.language, "duplicateTitle", { title: source.title }) : editorDraft(app).title;
-    pair.append(name);
-    const project = libraryProjectField(app, pair, kind, source?.project ?? "");
-    form.append(pair);
-    libraryFolderField(app, form, kind, project, source?.folderId);
-    let method = source ? "duplicate" : "empty";
-    let chosen = source?.id ?? "";
-    const sources = element(document, "select", { name: "source", "aria-label": text(app.language, "sourceBoard"), "data-library-source": "true" });
-    const paint = () => {
-      sources.replaceChildren(element(document, "option", { value: "", text: text(app.language, "chooseBoard") }));
-      for (const item of state.sources ?? editorsOf(app).catalog) if ((method === "import") === item.readOnly && (method !== "import" || item.project === project.value)) sources.append(element(document, "option", { value: item.id, text: `${item.project} / ${item.title}` }));
-      sources.value = chosen;
-      sources.hidden = method === "empty";
-      confirm.disabled = false;
-    };
-    if (kind === "blueprint" || source) {
-      const options = element(document, "div", { class: "library-create-options" });
-      for (const [value, key, hint] of [["empty", "emptyBoard", "finalEmptyHint"], ["duplicate", kind === "blueprint" ? "duplicateBoard" : "duplicateText", "finalDuplicateHint"], ["import", "importBoard", "finalImportHint"]].filter(([value]) => kind === "blueprint" || value === "duplicate")) {
-        const input = element(document, "input", { type: "radio", name: "creation", value }); input.checked = method === value;
-        input.addEventListener("change", () => { method = value; chosen = ""; paint(); });
-        options.append(element(document, "label", { class: "library-create-option" }, input, element(document, "span", {}, element(document, "strong", { text: text(app.language, key) }), element(document, "small", { text: text(app.language, hint) }))));
-      }
-      sources.addEventListener("change", () => { chosen = sources.value; });
-      project.addEventListener("change", () => { chosen = ""; paint(); });
-      form.append(options, sources); paint();
-      collectPages(app.api, kind === "blueprint" ? "/blueprint/boards" : "/void/texts", { limit: 50 }).then((page) => { state.sources = page.items; if (document.querySelector('[data-form="library-create"]')) paint(); }).catch(() => {});
-    }
-    form.libraryCreation = () => ({ method, source: sources.value || chosen });
-    form.problems = () => {
-      const problems = [];
-      const title = form.querySelector('[data-field="create-title"]').value.trim();
-      if (!title || title.length > 240 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(title)) problems.push({ name: "title", message: text(app.language, "groupNameRequired") });
-      if (!project.value) problems.push({ name: "project", message: text(app.language, "projectRequired") });
-      if (method !== "empty" && !form.libraryCreation().source) problems.push({ name: "source", message: text(app.language, "chooseBoard") });
-      return problems;
-    };
-    name.querySelector("input").setAttribute("name", "title");
-  }, async (form) => {
-    const title = form.querySelector('[name="title"]').value.trim();
-    const project = fieldValue(form, "project"), folderId = fieldValue(form, "folderId") || null;
-    const id = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || operationId();
-    const path = kind === "blueprint" ? `docs/flows/boards/${id}.json` : `docs/${id}.json`;
-    const choice = form.libraryCreation();
-    try {
-      let result;
-      if (choice.method === "duplicate") {
-        const selected = (state.sources ?? editorsOf(app).catalog).find((entry) => entry.id === choice.source);
-        result = await duplicateEditor(app.api, selected, { project, folderId, title, path }, operation);
-      } else if (choice.method === "import") {
-        const selected = (state.sources ?? editorsOf(app).catalog).find((entry) => entry.id === choice.source);
-        result = await importLegacyBoard(app.api, selected, { project, folderId, title }, operation, (manifest) => exportLegacyDocument(document, manifest));
-      } else {
-        result = await createResource(app.api, kind, { project, folderId, path, document: kind === "blueprint" ? starterBoard(id, title) : starterText(id, title) }, operation);
-      }
-      releaseFormDraft(app, "resources", "title", editorDraft(app).title);
-      editorDraft(app).title = "";
-      await openCreated(app, result.data, kind);
-      return true;
-    } catch (error) { operation = error.operation ?? operation; throw error; }
-  }, "open-create");
-}
-
-async function libraryRevision(app, kind, project) {
-  const state = libraryState(editorsOf(app), kind);
-  const folder = state.folders.find((entry) => entry.project === project);
-  if (folder) return folder.revision;
-  const page = await collectPages(app.api, kind === "blueprint" ? "/blueprint/boards" : "/void/texts", { query: { project }, limit: 50 });
-  if (page.items.length) return (await request(app.api, "GET", kind === "blueprint" ? "/blueprint/boards/:resourceId" : "/void/texts/:resourceId", { params: { resourceId: page.items[0].id } })).data.libraryRevision;
-  const otherKind = kind === "blueprint" ? "void" : "blueprint";
-  const folders = await collectPages(app.api, "/library/folders", { query: { kind: otherKind, project }, limit: 50 });
-  if (folders.items.length) return folders.items[0].revision;
-  const other = await collectPages(app.api, otherKind === "blueprint" ? "/blueprint/boards" : "/void/texts", { query: { project }, limit: 50 });
-  return other.items.length ? (await request(app.api, "GET", otherKind === "blueprint" ? "/blueprint/boards/:resourceId" : "/void/texts/:resourceId", { params: { resourceId: other.items[0].id } })).data.libraryRevision : null;
-}
-
-function newLibraryFolder(app, kind) {
-  const current = editorsOf(app).current?.authoritative;
-  let operation = null;
-  openChoiceForm(app, "library-folder", text(app.language, "newFolder"), (form, confirm) => {
-    const project = libraryProjectField(app, form, kind, current?.project ?? libraryState(editorsOf(app), kind).filters.project ?? "");
-    libraryFolderField(app, form, kind, project, current?.folderId);
-    confirm.textContent = text(app.language, "newFolder");
-    form.problems = () => project.value ? [] : [{ name: "project", message: text(app.language, "projectRequired") }];
-  }, async (form) => {
-    try {
-      const project = fieldValue(form, "project");
-      const retained = operation ?? createOperation({ method: "POST", path: "/library/folders", body: { project, kind, title: text(app.language, "newFolder"), parentId: fieldValue(form, "folderId") || null, expectedRevision: await libraryRevision(app, kind, project) } });
-      operation = retained;
-      const result = await request(app.api, "POST", retained.path, { operation: retained });
-      await loadCatalog(app.api, editorsOf(app), kind);
-      const state = libraryState(editorsOf(app), kind);
-      if (!state.folders.some((folder) => folder.id === result.data.folder.id)) state.folders.push(result.data.folder);
-      state.created.add(result.data.folder.id);
-      beginLibraryRename(app, kind, result.data.folder, "folder");
-      return true;
-    } catch (error) { operation = error.operation ?? operation; throw error; }
-  }, "new-folder");
-  app.root.ownerDocument.querySelector('[data-form="library-folder"]')?.addEventListener("close", () => {
-    const editing = libraryState(editorsOf(app), kind).rename;
-    if (editing) app.root.querySelector(`[data-library-rename="${editing.id}"]`)?.focus?.();
-  });
-}
-
-function deleteLibraryEntry(app, kind, entry, type) {
-  editorAct(app, `library-delete-form:${entry.id}`, text(app.language, "working"), async () => {
-    const record = type === "item" ? (await request(app.api, "GET", kind === "blueprint" ? "/blueprint/boards/:resourceId" : "/void/texts/:resourceId", { params: { resourceId: entry.id } })).data : entry;
-    const previous = editorsOf(app).current;
-    let operation = null;
-    const dialog = showDialog(app.root.ownerDocument, {
-      title: text(app.language, "finalDeleteTitle", { title: record.title }),
-      body: `${type === "folder" ? cardinal(app.language, kind === "blueprint" ? "deleteBoardFolderScope" : "deleteTextFolderScope", record.count) : text(app.language, kind === "blueprint" ? "finalDeleteBoardScope" : "deleteTextScope", { count: record.count })} ${text(app.language, "undoTenSeconds")}`,
-      confirm: text(app.language, type === "folder" ? "deleteFolder" : kind === "blueprint" ? "deleteBoard" : "deleteText"), cancel: text(app.language, "cancel"), retry: text(app.language, "retry"),
-      onConfirm: async () => {
-        try {
-          let result;
-          if (type === "folder") {
-            operation ??= createOperation({ method: "DELETE", path: "/library/folders/:folderId", params: { folderId: record.id }, body: { project: record.project, confirmed: true, expectedRevision: record.revision } });
-            result = await request(app.api, "DELETE", operation.path, { operation });
-          } else result = await deleteEditor(app.api, record, record.libraryRevision, operation);
-          const removed = result.data.removedResourceIds ?? [record.id];
-          const editors = editorsOf(app);
-          for (const id of removed) { app.store.open.editors.delete(id); app.store.open.comments.delete(id); }
-          if (removed.includes(editors.current?.resourceId)) { editors.current = null; app.store.selected.resourceId = null; }
-          await loadCatalog(app.api, editors, kind);
-          showLibraryUndo(app, kind, result, text(app.language, "libraryDeleted", { title: record.title }), async (retained) => {
-            await undoChange(app.api, result.data.changeId, retained);
-            await loadCatalog(app.api, editors, kind);
-            if (previous && removed.includes(previous.resourceId)) {
-              editors.current = previous; app.store.selected.resourceId = previous.resourceId;
-              app.store.open.editors.set(previous.resourceId, previous.kind); app.store.open.comments.add(previous.resourceId);
-            }
-          });
-          renderShell(app);
-        } catch (error) { operation = error.operation ?? operation; throw Object.assign(new Error(actionText(app.language, error.code)), { code: error.code }); }
-      },
-    });
-    dialog.className += " library-dialog";
-    dialog.querySelector("button.primary").className += " library-danger";
-    dialog.setAttribute("data-library-delete", type);
-    dialog.addEventListener("close", () => focusLibraryEntry(app, { ...entry, type }));
-  });
-}
-
-function openLibraryMove(app, kind, entry) {
-  editorAct(app, `library-move-form:${entry.id}`, text(app.language, "working"), async () => {
-    const record = (await request(app.api, "GET", kind === "blueprint" ? "/blueprint/boards/:resourceId" : "/void/texts/:resourceId", { params: { resourceId: entry.id } })).data;
-    let operation = null;
-    const commit = async (destination) => {
-      try {
-        const result = await moveEditor(app.api, record, destination, record.libraryRevision, operation);
-        applyLibraryRecord(app, result.data.editor, record.id);
-        await loadCatalog(app.api, editorsOf(app), kind);
-        showLibraryUndo(app, kind, result, text(app.language, "libraryMoved", { title: record.title }), async (retained) => {
-          await undoChange(app.api, result.data.changeId, retained);
-          const restored = (await request(app.api, "GET", kind === "blueprint" ? "/blueprint/boards/:resourceId" : "/void/texts/:resourceId", { params: { resourceId: record.id } })).data;
-          applyLibraryRecord(app, restored, result.data.editor.id);
-          await loadCatalog(app.api, editorsOf(app), kind);
-        });
-        renderShell(app);
-      } catch (error) { operation = error.operation ?? operation; throw Object.assign(new Error(actionText(app.language, error.code)), { code: error.code }); }
-    };
-    openChoiceForm(app, "library-move", text(app.language, "moveToFolder"), (form, confirm) => {
-      const project = libraryProjectField(app, form, kind, record.project);
-      libraryFolderField(app, form, kind, project, record.folderId);
-      confirm.textContent = text(app.language, "moveToFolder");
-      form.problems = () => project.value ? [] : [{ name: "project", message: text(app.language, "projectRequired") }];
-    }, async (form) => {
-      const project = fieldValue(form, "project"), folderId = fieldValue(form, "folderId") || null;
-      const destination = { project, folderId, path: record.path, confirmedRepositoryChange: project !== record.project };
-      if (project === record.project) { await commit(destination); return true; }
-      const folder = libraryState(editorsOf(app), kind).folders.find((entry) => entry.id === folderId)?.title ?? project;
-      form.closest("dialog").close();
-      const dialog = showDialog(app.root.ownerDocument, {
-        title: text(app.language, "finalMoveTitle", { title: record.title, folder }),
-        body: text(app.language, kind === "blueprint" ? "finalMoveScope" : "moveTextScope", { folder, source: record.project, destination: project }),
-        confirm: text(app.language, "finalMoveAction", { folder }), cancel: text(app.language, "cancel"), retry: text(app.language, "retry"),
-        onConfirm: () => commit(destination),
-      });
-      dialog.className += " library-dialog"; dialog.setAttribute("data-library-repository-confirm", "true");
-      dialog.addEventListener("close", () => focusLibraryEntry(app, { id: editorsOf(app).current?.resourceId ?? record.id }));
-      return false;
-    });
-  });
-}
-
-function showLibraryUndo(app, kind, result, label, undo) {
-  clearTimeout(app.libraryToastTimer);
-  const until = app.api.now() + Math.min(10000, Math.max(0, Date.parse(result.data.undoUntil) - Date.parse(result.meta.readAt)));
-  const toast = { kind, label, until, undo, operation: null, busy: false, error: null };
-  app.libraryToast = toast;
-  const tick = () => {
-    if (app.disposed || app.libraryToast !== toast) return;
-    if (app.api.now() >= until) app.libraryToast = null;
-    else app.libraryToastTimer = setTimeout(tick, Math.min(1000, until - app.api.now()));
-    renderShell(app);
-  };
-  app.libraryToastTimer = setTimeout(tick, Math.min(1000, Math.max(0, until - app.api.now())));
-}
-
-function renderLibraryToast(app, t) {
-  const toast = app.libraryToast, document = app.root.ownerDocument;
-  const node = element(document, "div", { class: "library-toast", role: "status", "data-library-toast": "true" }, element(document, "span", { text: toast.label }));
-  if (app.api.now() < toast.until) node.append(element(document, "span", { "data-library-countdown": "true", text: t("undoRemaining", { seconds: Math.ceil((toast.until - app.api.now()) / 1000) }) }), element(document, "button", {
-    type: "button", class: "btn", "data-action": "library-undo", text: t("undo"), disabled: toast.busy ? "" : null,
-    onclick: async () => {
-      if (toast.busy || app.api.now() >= toast.until) return;
-      toast.busy = true; renderShell(app);
-      try { await toast.undo(toast.operation); if (app.libraryToast === toast) app.libraryToast = null; }
-      catch (error) { toast.operation = error.operation ?? toast.operation; toast.error = error.code === "undo_conflict" ? text(app.language, "libraryUndoConflict") : actionText(app.language, error.code); toast.busy = false; }
-      if (!app.disposed) renderShell(app);
-    },
-  }));
-  if (toast.error) node.append(element(document, "p", { role: "alert", text: toast.error }));
-  return node;
-}
-
-// The label of an action reads as a sentence of its own ("Loading the conversation."), so its stop is dropped before the verdict.
 function activityMessage(app, records) {
   const list = Array.isArray(records) ? records : [records];
   const record = list[0];
@@ -6804,10 +4211,6 @@ function activityMessage(app, records) {
   const action = String(record?.action || record?.label || "").replace(/[.\s]+$/, "");
   if (!action) return `${cause}${text(app.language, "actionFailed")}`.trim();
   return text(app.language, "activityFailed", { action, cause });
-}
-
-function editorAct(app, key, label, work) {
-  return settle(app, key, label, work, (error) => noteEditor(app, error, key));
 }
 
 function activityPending(app, key) {
@@ -7331,7 +4734,7 @@ function releaseBootstrapAnnouncement(app, failureText = null) {
 function viewTitle(app, t) {
   if (app.mode === "waiting") return t("waiting");
   if (app.layout === "phone" && app.tab === "chats") return app.thread?.chat?.title || t("chats");
-  return t(app.mode);
+  return t(app.mode === "document" ? "voidMode" : app.mode);
 }
 
 function attached(node) {
@@ -7513,7 +4916,7 @@ function clearMatchedError(app, key) {
 }
 
 function noteScope(app) {
-  if (app.mode === "blueprint" || app.mode === "document" || app.mode === "focus") return "editor";
+  if (embeddedName(app.mode)) return "embedded";
   if (app.mode === "settings") return "settings";
   return "unit";
 }
@@ -8356,13 +5759,6 @@ function messageSender(app, message) {
   return unit ? unitDisplayName(unit) : readableIdentity(message.fromId, text(app.language, 'person'));
 }
 
-function commentAuthor(app, authorId) {
-  const unit = unitById(app, authorId);
-  // The person signs as "You" ("Persona"), whether the record carries the root id or the root's name.
-  if (["root:master", "root:person", "master"].includes(authorId) || unit?.role === "master") return text(app.language, "person");
-  return unit ? unitDisplayName(unit) : readableIdentity(authorId, text(app.language, "person"));
-}
-
 function frameAgentTabs(app, panel, subject) {
   const document = app.root.ownerDocument;
   const sessionView = sessionViewFor(app, sessionForUnit(app, subject.id));
@@ -8647,7 +6043,7 @@ const CHAT_IMAGES_HELD = 120;
 
 function chatActionTitle(app, action) {
   if (action.kind === "task") return app.store.indexes.tasks.get(action.target)?.title ?? "";
-  return app.editors?.catalog?.find((item) => item.id === action.target)?.title ?? "";
+  return "";
 }
 
 function openChatAction(app, action) {
@@ -8661,13 +6057,7 @@ function openChatAction(app, action) {
     }
     return;
   }
-  if (app.layout === "phone" || !(app.store.capabilities ?? []).includes("editor.read")) {
-    explain(app, "chatOpensOnComputer");
-    return;
-  }
-  const kind = action.kind === "text" ? "void" : "blueprint";
-  app.mode = kind === "void" ? "document" : "blueprint";
-  selectEditor(app, { id: action.target, kind, title: action.label || chatActionTitle(app, action) });
+  navigate(app, action.kind === "text" ? "document" : "blueprint");
 }
 
 async function openAttachDialog(app, thread) {

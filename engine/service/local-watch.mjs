@@ -5,6 +5,7 @@ import { hashBytes } from './identity.mjs';
 import { assertNoLinks, resolveTarget } from './paths.mjs';
 import { noteProjectionChange, readBytes, withLocalChanges, withoutLocalChanges } from './store.mjs';
 import { observeExternal, readComments, readEditor } from './editors.mjs';
+import { appAgentsChanged, observeAppFiles, setAppObservationScheduler, stopAppObservation } from './app-bridge.mjs';
 import { eligibleTargets, observationSnapshot, observeLocalChange, settleAppliedMarker, targetKey, withVersionBatch } from '../sync/store.mjs';
 
 const SLICE_MS = 60;
@@ -38,7 +39,10 @@ export async function watchLocalChanges(runtime, onChanges, { deferBaseline = fa
   let localError = null;
   let baselineDone = false;
   let baselineRun = null;
+  let appTimer = null;
+  let appRunning = null;
   context.store.localChangesWatched = true;
+  setAppObservationScheduler(context, schedule);
 
   function schedule() {
     if (closed) return;
@@ -207,11 +211,39 @@ export async function watchLocalChanges(runtime, onChanges, { deferBaseline = fa
       await runtime.pulse.changed(unique.map(change => change.id));
       await onChanges?.(unique);
     }
+    if (!closed) {
+      await observeApps(baseline, true);
+      if (!baseline) {
+        const changed = changes.filter(change => change.target?.kind === 'mind' && /(?:\/state\/|\/wake\/|\/units\/|\/sessions\/|\/editors\/)/.test(change.target.path));
+        const projects = changed.map(change => /^user\/projects\/([^/]+)\//.exec(change.target.path)?.[1]);
+        if (projects.some(project => !project)) appAgentsChanged(context);
+        else for (const project of new Set(projects)) appAgentsChanged(context, project);
+      }
+    }
     if (!baseline) scheduleSave();
     if (previousError && !localError && runtime.lastError === previousError) {
       runtime.lastError = null;
       runtime.bus?.emit({ name: 'issue.changed', data: { issue: 'local_change_recovered' } });
     }
+  }
+
+  async function observeApps(baseline = false, rescan = false) {
+    const previous = appRunning;
+    const observation = Promise.resolve(previous).then(async () => {
+      if (closed) return;
+      const result = await observeAppFiles(context, { baseline, rescan });
+      if (result.pending && !closed && !appTimer) {
+        appTimer = setTimeout(() => {
+          appTimer = null;
+          if (closed) return;
+          withoutLocalChanges(() => observeApps()).catch(() => {}).finally(scheduleSave);
+        }, 25);
+        appTimer.unref?.();
+      }
+    }).catch(() => {}); // Optional app observation must not prevent sync or startup.
+    appRunning = observation;
+    await observation;
+    if (appRunning === observation) appRunning = null;
   }
 
   async function reconcileSlice(entries, from, baseline, changes) {
@@ -308,11 +340,15 @@ export async function watchLocalChanges(runtime, onChanges, { deferBaseline = fa
     closed = true;
     dirty = false;
     if (timer) clearTimeout(timer);
+    clearTimeout(appTimer);
+    appTimer = null;
     timer = null;
     for (const { watcher } of handles.values()) watcher.close();
     handles.clear();
     await running;
     await baselineRun?.catch(() => {});
+    await appRunning;
+    await stopAppObservation(context);
     clearTimeout(saveTimer);
     if (baselineDone) await saveSignatures();
     for (const { watcher } of handles.values()) watcher.close();

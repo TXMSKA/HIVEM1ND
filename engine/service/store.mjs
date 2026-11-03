@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { lstat, mkdir, open, readdir, rename, unlink } from 'node:fs/promises';
+import { lstat, mkdir, open, opendir, readdir, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { CoreError, canonicalJson, hashBytes, hashText, isUuid, uuidV8 } from './identity.mjs';
 import { assertNoLinks, safeRelative } from './paths.mjs';
@@ -9,6 +9,8 @@ import { clearResource } from './watch.mjs';
 
 export const RECEIPT_TTL_MS = 24 * 60 * 60 * 1000;
 const localChanges = new AsyncLocalStorage();
+const receiptOperations = new AsyncLocalStorage();
+const receiptScans = new WeakMap();
 
 // The projection of the M1ND is built from many files. A service keeps the last build in this cache and throws it away
 // when anything it could be built from changes: a write through the store, or a change seen by the file watcher.
@@ -405,7 +407,12 @@ function journalBytes(journal) {
   return Buffer.from(`${canonicalJson(journal)}\n`, 'utf8');
 }
 
-async function writeReceipt(store, receipt) {
+function receiptResponse(receipt, response) {
+  if (!Array.isArray(receipt.responseFields) || !response || typeof response !== 'object') return response;
+  return Object.fromEntries(receipt.responseFields.filter(field => Object.hasOwn(response, field)).map(field => [field, response[field]]));
+}
+
+export async function writeReceipt(store, receipt) {
   const safe = {
     principalHash: receipt.principalHash,
     key: receipt.key,
@@ -413,7 +420,8 @@ async function writeReceipt(store, receipt) {
     path: receipt.path,
     bodyHash: receipt.bodyHash,
     status: receipt.status,
-    response: receipt.response,
+    response: receiptResponse(receipt, receipt.response),
+    sync: receipt.sync ?? 'local',
     requestId: receipt.requestId,
     eventCursor: receipt.eventCursor ?? null,
     createdAt: receipt.createdAt,
@@ -427,6 +435,87 @@ async function readReceipt(store, principalHash, key) {
   const bytes = await readBytesRaw(receiptFile(store, principalHash, key));
   if (!bytes) return null;
   return JSON.parse(bytes.toString('utf8'));
+}
+
+async function* receiptEntries(store) {
+  const root = path.join(store.localDirectory, 'receipts');
+  let directory;
+  try {
+    await assertNoLinks(root);
+    directory = await opendir(root);
+  } catch (error) {
+    if (error.code === 'ENOENT') return;
+    throw error;
+  }
+  for await (const principal of directory) {
+    yield null;
+    if (!principal.isDirectory() || !/^[a-f0-9]{64}$/.test(principal.name)) continue;
+    const target = path.join(root, principal.name);
+    try {
+      await assertNoLinks(target);
+      const files = await opendir(target);
+      for await (const file of files) {
+        yield file.isFile() && file.name.endsWith('.json') && isUuid(file.name.slice(0, -5))
+          ? { principalHash: principal.name, key: file.name.slice(0, -5) } : null;
+      }
+    } catch (error) {
+      if (!['ENOENT', 'EACCES', 'EPERM', 'EBUSY'].includes(error.code)) throw error;
+    }
+  }
+}
+
+export async function pruneReceipts(store, { limit = 128 } = {}) {
+  return withLocks(store, ['receipt-cleanup'], async () => {
+    let entries = receiptScans.get(store);
+    if (!entries) {
+      entries = receiptEntries(store);
+      receiptScans.set(store, entries);
+    }
+    let removed = 0;
+    try {
+      for (let count = 0; count < limit; count++) {
+        const entry = await entries.next();
+        if (entry.done) { receiptScans.delete(store); break; }
+        if (!entry.value) continue;
+        const { principalHash, key } = entry.value;
+        await withLocks(store, [`receipt:${principalHash}:${key}`], async () => {
+          const file = receiptFile(store, principalHash, key);
+          let handle;
+          try {
+            await assertNoLinks(file);
+            if (!(await lstat(file)).isFile()) return;
+            handle = await open(file, 'r');
+            // Generated receipts put expiry before response; old document responses need no allocation or parsing.
+            const prefix = Buffer.alloc(4096);
+            const { bytesRead } = await handle.read(prefix, 0, prefix.length, 0);
+            const expiresAt = /"expiresAt"\s*:\s*"([^"]+)"/.exec(prefix.subarray(0, bytesRead).toString('utf8'))?.[1];
+            await handle.close();
+            handle = null;
+            if (Date.parse(expiresAt) <= store.now()) {
+              await unlink(file);
+              removed++;
+            }
+          } catch (error) {
+            if (!['ENOENT', 'EACCES', 'EPERM', 'EBUSY', 'unsafe_path'].includes(error.code)) throw error;
+          } finally {
+            await handle?.close();
+          }
+        });
+      }
+    } catch (error) {
+      await entries.return();
+      receiptScans.delete(store);
+      throw error;
+    }
+    return { removed };
+  });
+}
+
+export async function closeReceiptCleanup(store) {
+  return withLocks(store, ['receipt-cleanup'], async () => {
+    await receiptScans.get(store)?.return();
+    receiptScans.delete(store);
+  });
 }
 
 function emit(store, events) {
@@ -531,7 +620,7 @@ async function commitLocked(store, prepared) {
     path: prepared.receipt.path,
     bodyHash: prepared.receipt.bodyHash,
     status: prepared.response?.status ?? 200,
-    response: prepared.response?.body ?? null,
+    response: receiptResponse(prepared.receipt, prepared.response?.body ?? null),
     requestId: prepared.receipt.requestId,
     eventCursor: prepared.receipt.eventCursor ?? null,
     createdAt: prepared.receipt.createdAt,
@@ -898,6 +987,7 @@ export async function withReceipt(store, input, operation) {
   if (!isUuid(input.requestId)) throw new CoreError(422, 'invalid_body', 'The request id must be a UUID.');
   const principalHash = hashText(String(input.principal));
   const bodyHash = hashText(canonicalJson(input.body ?? null));
+  if (receiptOperations.getStore() !== store && !holdsLocalChanges(store)) await pruneReceipts(store);
   return withLocks(store, [`receipt:${principalHash}:${input.key}`], async () => {
     await ensureRecovered(store);
     const existing = await readReceipt(store, principalHash, input.key);
@@ -918,7 +1008,8 @@ export async function withReceipt(store, input, operation) {
       eventCursor: input.eventCursor ?? null,
       createdAt: new Date(now).toISOString(),
       expiresAt: new Date(now + RECEIPT_TTL_MS).toISOString(),
+      ...(input.responseFields ? { responseFields: input.responseFields } : {}),
     };
-    return operation(receipt);
+    return receiptOperations.run(store, () => operation(receipt));
   });
 }

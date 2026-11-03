@@ -5,7 +5,8 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { helpText, parseArgs, runCli, runTerminalSetup } from "../cli/index.mjs";
-import { createWindowOptions, parseElectronOptions, secureWebPreferences, startElectronApp } from "../gui/electron.mjs";
+import { createWindowOptions, parseElectronOptions, startElectronApp } from "../gui/electron.mjs";
+import { secureWebPreferences } from "../gui/electron-preferences.mjs";
 import { EventEmitter } from 'node:events';
 import { execFileSync } from 'node:child_process';
 import { createSetupSession } from "../engine/setup.mjs";
@@ -229,15 +230,6 @@ test("Electron renderer has no Node access and uses a sandbox", () => {
   });
   assert.deepEqual(createWindowOptions("icon.ico").webPreferences, secureWebPreferences);
   assert.equal(createWindowOptions("icon.ico").icon, "icon.ico");
-});
-
-test("Electron entry does not await startup readiness", async () => {
-  const source = await readFile(new URL("../gui/electron.mjs", import.meta.url), "utf8");
-  const entry = source.slice(source.indexOf("if (process.versions.electron"));
-  assert.match(entry, /await import\("electron"\)/);
-  assert.doesNotMatch(entry, /await\s+startElectronApp/);
-  assert.match(entry, /void startElectronApp/);
-  assert.match(entry, /electron\.app\.exit\(1\)/);
 });
 
 test("Electron shows the window after the local wizard finishes loading", async () => {

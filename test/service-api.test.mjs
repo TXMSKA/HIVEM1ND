@@ -976,6 +976,18 @@ test('every contract route has a success result and an authority or boundary fai
   const token = local.json.data.token;
   const seen = new Set(['POST /auth/local']);
   const hit = (method, template) => seen.add(`${method} ${template}`);
+  const appBridge = { app: 'blueprint', method: 'blueprint.locations', params: {}, clientId: 'route-coverage' };
+  expectStatus(await call(port, 'POST', '/api/v1/app-bridge/call', { token, body: appBridge, headers: { 'idempotency-key': randomUUID() } }), 200, 'desktop app bridge');
+  expectStatus(await call(port, 'POST', '/api/v1/app-bridge/call', { token, body: { ...appBridge, method: 'void.files.read' }, headers: { 'idempotency-key': randomUUID() } }), 422, 'app method boundary');
+  hit('POST', '/app-bridge/call');
+  const appActivity = { clientId: 'route-coverage', apps: ['blueprint'] };
+  expectStatus(await call(port, 'POST', '/api/v1/app-bridge/activity', { token, body: appActivity }), 200, 'desktop app activity');
+  expectStatus(await call(port, 'POST', '/api/v1/app-bridge/activity', { token, body: { ...appActivity, apps: ['unknown'] } }), 422, 'app activity boundary');
+  for (const audience of ['phone', 'agent']) {
+    const caller = core.credentials.issue({ audience, unitId: 'root:master', capabilities: ['editor.write'], expiresAt: null });
+    expectStatus(await call(port, 'POST', '/api/v1/app-bridge/activity', { token: caller.token, body: appActivity }), 403, 'app activity desktop authority');
+  }
+  hit('POST', '/app-bridge/activity');
   const relanFixture = await makeCoreFixture();
   let relanCore;
   t.after(async () => {

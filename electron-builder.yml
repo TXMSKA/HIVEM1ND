@@ -3,7 +3,7 @@ productName: ONEM1ND
 copyright: Copyright (c) 2026 TXMSKA
 asar: false # The registered Node service needs real CLI files and a real working directory.
 extraMetadata:
-  main: gui/electron.mjs
+  main: gui/electron-entry.cjs
 directories:
   output: dist
 files:

@@ -1,11 +1,12 @@
 import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { appAgentsChanged, callAppBridge, stopAppObservation, updateAppActivity } from './app-bridge.mjs';
 import { createServer } from 'node:http';
 import { lstat, readFile, realpath } from 'node:fs/promises';
 import { networkInterfaces } from 'node:os';
 import path from 'node:path';
-import { CoreError, canonicalJson, hashText, isUuid } from './identity.mjs';
+import { CoreError, canonicalJson, hashText, isUuid, parseUnitId } from './identity.mjs';
 import { assertNoLinks } from './paths.mjs';
-import { atomicWrite, undoChange, withReceipt } from './store.mjs';
+import { closeReceiptCleanup, pruneReceipts, undoChange, withReceipt, writeReceipt } from './store.mjs';
 import { authorize, checkHost, checkLimits, checkOrigin, checkPeer, createSecuritySink, safeError } from './security.mjs';
 import { readCollection, readDetail, readProjection, readSync, viewBatch } from './projection.mjs';
 import { connectLead, createUnit, patchLayout, patchSettings, removeUnit, resolveUnitCluster, setUnitAlias, setUnitRunsIn } from './units.mjs';
@@ -44,13 +45,15 @@ export const BROWSER_STATIC_FILES = Object.freeze([
   'start-api.mjs', 'start-copy.mjs', 'cluster-geometry.mjs', 'clusters.mjs',
   'plan-view.mjs', 'session-work.mjs', 'plan-controller.mjs', 'queue.mjs',
   'add-api.mjs', 'add-view.mjs', 'add-controller.mjs',
-  'settings.mjs', 'qr.mjs', 'qr-render.mjs', 'phone.mjs', 'embed.mjs', 'editors.mjs', 'blueprint.mjs', 'void.mjs', 'markup.mjs', 'find-worker.mjs',
+  'settings.mjs', 'qr.mjs', 'qr-render.mjs', 'phone.mjs', 'embed.mjs', 'embedded-apps.mjs', 'markup.mjs',
   'mark.svg', 'favicon.svg',
   'atkinson-400.woff2', 'atkinson-400-italic.woff2', 'atkinson-700.woff2', 'atkinson-700-italic.woff2',
 ]);
 const STATIC_FILES = new Set(BROWSER_STATIC_FILES);
 
 const ROUTES = [
+  ['POST', '/app-bridge/call', 'editor.write', 'D', 'appBridge'],
+  ['POST', '/app-bridge/activity', 'editor.write', 'D', 'appActivity'],
   ['GET', '/plans', 'read', 'D', 'plan', 'list'],
   ['GET', '/plans/:planId', 'read', 'D', 'plan', 'read'],
   ['POST', '/plans', 'chat.post', 'D', 'plan', 'create'],
@@ -223,8 +226,16 @@ export function decodeId(raw) {
 
 const JSON_LIMIT = 2_000_000;
 const REPLACEMENT_LIMIT = 16_000_000;
+const APP_WRITE_RESPONSE_FIELDS = new Map([
+  ['blueprint.save', ['id', 'location', 'revision']],
+  ['blueprint.upload', ['id', 'path', 'mime', 'size', 'revision']],
+  ['void.files.write', ['path', 'revision']],
+  ['void.storage.save', ['revision']],
+  ['agents.send', ['sent', 'unit', 'id']],
+]);
 
 function bodyLimitFor(route, pathname) {
+  if (route?.handler === 'appBridge') return 24_000_000;
   if (route?.collection === 'chunk' && route.handler === 'addition') return 96000;
   if (pathname === '/mcp') return REPLACEMENT_LIMIT;
   if (route?.method === 'PUT' && (route.template === '/blueprint/boards/:resourceId' || route.template === '/void/texts/:resourceId')) return REPLACEMENT_LIMIT;
@@ -456,6 +467,19 @@ export async function createHttpServer(options) {
   const sockets = new Set();
   const requests = new Set();
   let closing = false;
+  const appAgentEvents = new Set(['unit.changed', 'session.changed', 'session.request.changed', 'editor.attachments.changed', 'cluster.changed']);
+  const appSubscriber = bus.subscribe({ stableId: randomUUID(), audience: 'desktop' }, {}, frame => {
+    if (!appAgentEvents.has(frame.name) || closing) return;
+    const data = frame.data?.data;
+    const unitId = data?.unitId ?? data?.unit?.id ?? data?.session?.unitId ?? frame.data?.source?.unitId;
+    let project = null;
+    try { project = parseUnitId(unitId).project; } catch { /* Unscoped changes can affect every project. */ }
+    appAgentsChanged(domainContext(options, null, bus), project);
+  });
+  const cleanupReceipts = () => pruneReceipts(options.store).catch(() => {});
+  const receiptCleanupTimer = setInterval(cleanupReceipts, 60_000);
+  receiptCleanupTimer.unref?.();
+  void cleanupReceipts();
   let viewServed = false;
   const server = createServer({ maxHeaderSize: 8192 }, (req, res) => acceptRequest(req, res));
   homeState.serve = (req, res) => acceptRequest(req, res);
@@ -539,7 +563,9 @@ export async function createHttpServer(options) {
     const bucket = principalBucket(principals, req, requested.path, caller, now);
     // The desktop app on this computer reads several lists for every change it is told about; while an agent works that is
     // well over the general budget, and a refused read there stops the live connection.
-    checkLimits(bucket, { url, headerBytes, stream: requested.path === '/api/v1/events', limit: caller?.audience === 'desktop' ? DESKTOP_REQUEST_LIMIT : undefined }, now);
+    const appRoute = requested.path.startsWith('/api/v1/app-bridge/');
+    const appActivity = requested.path === '/api/v1/app-bridge/activity';
+    checkLimits(bucket, { url, headerBytes, stream: requested.path === '/api/v1/events', limit: appRoute ? appActivity ? 12 : 180 : caller?.audience === 'desktop' ? DESKTOP_REQUEST_LIMIT : undefined }, now);
     if (requested.path === '/mcp') {
       if (listener.kind === 'lan') throw new CoreError(403, 'forbidden', 'A desktop credential is not accepted on the home network.');
       await serveMcp(req, res, options, credentials);
@@ -639,7 +665,8 @@ export async function createHttpServer(options) {
       respond(res, outcome.status ?? 200, successEnvelope(outcome, { requestId, readAt, eventCursor: readCursor }));
       return;
     }
-    let outcome = applySync(route.method === 'GET'
+    const appRead = route.handler === 'appActivity' || route.handler === 'appBridge' && !APP_WRITE_RESPONSE_FIELDS.has(body?.method);
+    let outcome = applySync(route.method === 'GET' || appRead
       ? await run()
       : await mutate(options, credential, req, relative, body, requestId, eventCursor, run, domain), domain);
     if (outcome.replayed && (route.handler === 'postChat' || route.handler === 'postMailbox')) {
@@ -703,7 +730,11 @@ export async function createHttpServer(options) {
     drainRequests,
     drain,
     async close() {
+      clearInterval(receiptCleanupTimer);
+      bus.release(appSubscriber);
       await drain();
+      await stopAppObservation(domainContext(options, null, bus));
+      await closeReceiptCleanup(options.store);
       await closeAdditionJobs(domainContext(options, null, bus));
       disposeWatch(watch);
       await closeHome(homeState, { quiet: true }).catch(() => {});
@@ -813,7 +844,8 @@ function principalBucket(principals, req, pathname, credential, now) {
   expireIdleBuckets(principals, now);
   const anonymous = pathname === '/' || pathname === '/mark.svg' || pathname.startsWith('/app/') || pathname.startsWith('/gui/')
     || pathname === '/api/v1/auth/local' || pathname === '/api/v1/auth/home' || pathname === '/api/v1/auth/logout';
-  const key = !anonymous && credential?.token ? `principal:${credential.token}` : `peer:${peerAddress(req)}`;
+  const app = pathname.startsWith('/api/v1/app-bridge/') ? pathname === '/api/v1/app-bridge/activity' ? 'app-activity:' : 'apps:' : '';
+  const key = app + (!anonymous && credential?.token ? `principal:${credential.token}` : `peer:${peerAddress(req)}`);
   let bucket = principals.get(key);
   if (!bucket) {
     bucket = { requests: [], streams: new Set(), seen: now };
@@ -1138,6 +1170,8 @@ function boundRecord(value, label, limit) {
 
 function allowedBody(route) {
   const table = {
+    'POST /app-bridge/call': ['app', 'method', 'params', 'clientId'],
+    'POST /app-bridge/activity': ['clientId', 'apps', 'location'],
     'POST /plans': ['clusterId', 'chatId', 'machine', 'title', 'branch', 'mode', 'tasks', 'roles', 'expectedChatRevision'],
     'PATCH /plans/:planId': ['title', 'branch', 'mode', 'tasks', 'roles', 'expectedRevision'],
     'POST /plans/:planId/run': ['confirmed', 'expectedRevision'],
@@ -1378,6 +1412,8 @@ async function watchRoute(route, domain, params, body, credential) {
 async function invoke(route, scope) {
   const { domain, params, query, body, credential, viewers, options, homeState } = scope;
   validateQuery(route, query);
+  if (route.handler === 'appBridge') return { status: 200, body: await callAppBridge(domain, body) };
+  if (route.handler === 'appActivity') return { status: 200, body: updateAppActivity(domain, body) };
   if (route.handler === 'relan') {
     if (!options.relanControl) throw new CoreError(503, 'relan_unavailable', 'This service is not configured for ReLAN.');
     return { status: 200, body: await options.relanControl(body) };
@@ -1643,16 +1679,17 @@ async function mutate(options, credential, req, relative, body, requestId, event
     body,
     requestId,
     eventCursor,
+    ...(relative === '/app-bridge/call' ? { responseFields: APP_WRITE_RESPONSE_FIELDS.get(body.method) } : {}),
   }, async (receipt) => {
     if (domain) domain.receipt = receipt;
     try {
       const outcome = await run();
-      await atomicWrite(options.store, path.join(options.store.localDirectory, 'receipts', receipt.principalHash, `${receipt.key}.json`), Buffer.from(`${canonicalJson({
+      await writeReceipt(options.store, {
         ...receipt,
         status: outcome.status ?? 200,
         sync: outcome.sync ?? 'local',
         response: outcome.body ?? null,
-      })}\n`));
+      });
       return outcome;
     } finally {
       if (domain) domain.receipt = null;

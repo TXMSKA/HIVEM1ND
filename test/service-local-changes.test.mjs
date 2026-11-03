@@ -199,7 +199,7 @@ test('own saves and incoming application do not create outside history or republ
   const packed = encodePack({ machine: 'OTHER', sequence: 1, changes: [change], objects: [{ hash: change.hash, raw: incoming }] });
   const applied = await applyPack(core.runtime.sync, packed, { projects: context.projects });
   assert.equal(applied.status, 'applied');
-  await delay(200);
+  await until(async () => (await readEditor(context, created.id)).document.pages[0].en === 'Imported');
   assert.equal((await readFile(history, 'utf8')).includes('"by":"outside"'), false);
   assert.equal((await listStaged(core.runtime.sync)).some(item => item.hash === change.hash), false);
   assert.equal((await readEditor(context, created.id)).document.pages[0].en, 'Imported');
