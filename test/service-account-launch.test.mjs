@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 import { EventEmitter } from 'node:events';
@@ -56,10 +56,18 @@ test('a unit keeps its account, the launch gets that home and models and quota c
   const started = await enqueueStart(context, { unitId: first.unit.id, runMode: 'chat', stateRevision: first.unit.revision });
   assert.equal(launches[0].accountHome, work);
   assert.deepEqual(launches[0].runsIn, onWork);
+  // The session record notes the account; the session id depends on the unit, not on the account.
+  const records = [];
+  const sessionsDir = path.join(fixture.paths.mind, 'user', 'relay', 'sessions');
+  for (const name of await readdir(sessionsDir)) records.push(JSON.parse(await readFile(path.join(sessionsDir, name), 'utf8')));
+  assert.equal(records.find(item => item.sessionId === started.result.sessionId).account, 'work');
   await stopSession(context, started.result.sessionId, { confirmed: true });
   const startedPlain = await enqueueStart(context, { unitId: second.unit.id, runMode: 'chat', stateRevision: second.unit.revision });
   assert.equal(launches[1].accountHome, null);
   assert.deepEqual(launches[1].runsIn, plain);
+  const after = [];
+  for (const name of await readdir(sessionsDir)) after.push(JSON.parse(await readFile(path.join(sessionsDir, name), 'utf8')));
+  assert.equal(after.find(item => item.sessionId === startedPlain.result.sessionId).account, null);
   await stopSession(context, startedPlain.result.sessionId, { confirmed: true });
 });
 

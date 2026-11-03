@@ -378,7 +378,8 @@ async function runBoot(app) {
     const reports = app.layout === 'desktop' ? loadStartReports(app) : Promise.resolve();
     await Promise.all([presentation, lists, reports]);
     if (app.disposed || app.bootFailed) return app;
-    if (app.layout === 'desktop') { maybeStartDiscovery(app); maybeOfferAccounts(app); }
+    // The accounts are asked about first, so the first agent can already be given one; the repository offer follows.
+    if (app.layout === 'desktop' && !await maybeOfferAccounts(app)) maybeStartDiscovery(app);
     startOwnEmbed(app);
   } catch (error) {
     if (!app.disposed) {
@@ -2104,20 +2105,21 @@ function mindHasClusters(app) {
 
 // The first start asks about each extra account home found on this machine, one at a time. Nothing is added without the person's answer.
 export async function maybeOfferAccounts(app) {
-  if (app.disposed || app.startDialog || app.layout !== 'desktop' || app.accountOfferBusy || !app.store.capabilities.includes('settings.write')) return;
+  if (app.disposed || app.startDialog || app.layout !== 'desktop' || app.accountOfferBusy || !app.store.capabilities.includes('settings.write')) return false;
   app.accountOfferBusy = true;
   try {
     let data;
-    try { data = (await request(app.api, 'GET', '/settings/accounts')).data; } catch { return; }
-    if (app.disposed || app.startDialog || !data?.pending?.length) return;
+    try { data = (await request(app.api, 'GET', '/settings/accounts')).data; } catch { return false; }
+    if (app.disposed || app.startDialog || !data?.pending?.length) return false;
     const offer = data.pending[0];
     const model = { language: app.language, offer, folder: String(offer.home).split(/[\\/]/).pop(), label: offer.label };
     let flow;
     const answer = (action, body) => flow.run(`${action}-account`, async () => {
       const path = `/settings/accounts/${action}`;
       await request(app.api, 'POST', path, { operation: createOperation({ method: 'POST', path, body }) });
-      flow.dialog.close(); await loadStartReports(app);
-      app.accountOfferBusy = false; await maybeOfferAccounts(app);
+      flow.dialog.close(); if (app.startDialog === flow) app.startDialog = null;
+      await loadStartReports(app);
+      app.accountOfferBusy = false; if (!await maybeOfferAccounts(app)) maybeStartDiscovery(app);
     });
     flow = startDialog(app.root.ownerDocument, { view: 'account-offer', language: app.language, onCancel: () => { if (!flow.busy) flow.dialog.close(); },
       onClose: () => { if (app.startDialog === flow) app.startDialog = null; }, render: () => renderAccountOffer(app.root.ownerDocument, model, {
@@ -2125,6 +2127,7 @@ export async function maybeOfferAccounts(app) {
         onConfirm: () => answer('confirm', { client: offer.client, home: offer.home, label: model.label.trim() || offer.label }),
       }) });
     flow.model = model; app.startDialog = flow;
+    return true;
   } finally { app.accountOfferBusy = false; }
 }
 
@@ -2140,7 +2143,7 @@ export function maybeStartDiscovery(app) {
         await startApi.answerRepositoryOffer(app.api, offer.id, { machine: startMachine(app), repositoryIds: confirmed ? [...model.selected] : [], confirmed, expectedRevision: offer.revision }, retained);
       } catch (error) { retained = unconfirmedStartOperation(error); throw error; }
       app.answeredOffers ??= new Set(); app.answeredOffers.add(offer.id);
-      flow.dialog.close(); await loadStartReports(app); maybeStartDiscovery(app); maybeOfferAccounts(app);
+      flow.dialog.close(); await loadStartReports(app); maybeStartDiscovery(app);
     });
     flow = startDialog(app.root.ownerDocument, { view: 'discovery', language: app.language, onCancel: () => answer(false),
       onClose: () => { if (app.startDialog === flow) app.startDialog = null; }, render: () => renderRepositoryOffer(app.root.ownerDocument, model, {
