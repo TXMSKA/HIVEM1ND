@@ -23,6 +23,12 @@ export function validateRunsIn(choice, clients) {
   }else if(choice.mode!==null||typeof choice.effort!=='string'||!model.efforts.includes(choice.effort))invalid();
   return Object.freeze({client:choice.client,model:choice.model,effort:choice.effort,mode:choice.mode,...(account===null?{}:{account})});
 }
+// A pick checked against the report of the one account it runs on.
+export function launchChoiceOn(runsIn, report) {
+  const account=choiceAccount(runsIn);
+  const choice=launchChoice({runsIn:withoutAccount(runsIn)},report?[report]:[]);
+  return Object.freeze({...choice,...(account===null?{}:{account})});
+}
 export function launchChoice(unit, clients) {
   if(!unit.runsIn)throw new CoreError(409,'scope_unresolved','Choose Runs in before launching this agent.');
   return validateRunsIn(unit.runsIn,clients);

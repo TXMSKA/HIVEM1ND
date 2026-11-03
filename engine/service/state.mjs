@@ -47,7 +47,9 @@ export function stateRunsIn(bytes) {
   if (!raw) return null;
   let choice;
   try { choice = JSON.parse(raw); } catch { /* A malformed stored choice must never fall back. */ }
-  if (!choice || Object.keys(choice).sort().join(',') !== 'client,effort,mode,model'
+  // `account` is optional: a record without it runs on the client's default account.
+  if (!choice || Object.keys(choice).filter(key => key !== 'account').sort().join(',') !== 'client,effort,mode,model'
+    || Object.hasOwn(choice, 'account') && (typeof choice.account !== 'string' || !choice.account || choice.account === 'default' || !['claude', 'codex'].includes(choice.client))
     || !['claude', 'codex', 'cursor', 'lyra'].includes(choice.client) || typeof choice.model !== 'string' || !choice.model
     || choice.client === 'lyra' && (choice.effort !== null || !['fast', 'normal', 'thinking'].includes(choice.mode))
     || choice.client !== 'lyra' && (typeof choice.effort !== 'string' || !choice.effort || choice.mode !== null)) {

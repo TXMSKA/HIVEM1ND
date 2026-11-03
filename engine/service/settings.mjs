@@ -16,6 +16,7 @@ import { directoryIdentity, pathKey, readRepositoryIdentity } from './cluster-gi
 import { EVENT_NAMES, publishDomainEvents } from './events.mjs';
 import { protectLocalFile } from './security.mjs';
 import { probeClients, reloadReviewedClient } from './adapters.mjs';
+import { ACCOUNT_CLIENTS, readAccounts } from './accounts.mjs';
 import { launchBoundary, validateRunsIn } from './runs-in.mjs';
 import { readUnitState, stateHeader, stateRunsIn } from './state.mjs';
 import { configureOwnedService } from './install.mjs';
@@ -36,23 +37,37 @@ function bytes(value) { return Buffer.from(`${canonicalJson(value)}\n`); }
 function revision(value) { return hashBytes(bytes(value)); }
 function stamp(context) { return new Date(context.now()).toISOString(); }
 
+// One client's report in the shape Settings keeps and the pickers read; null when the client is not connected with a model.
+function clientReport(id, report) {
+  if (!report || report.id !== id || report.connected !== true) return null;
+  if (!['claude', 'codex', 'cursor', 'lyra'].includes(id) || !Array.isArray(report.models)) return null;
+  const models = report.models.filter(model => text(model.id, 256) && model.id && text(model.title, 256)
+    && Array.isArray(model.efforts) && model.efforts.every(value => text(value, 64))
+    && Array.isArray(model.modes) && model.modes.every(value => ['fast', 'normal', 'thinking'].includes(value)))
+    .slice(0, 256).map(model => ({ id: model.id, title: model.title, efforts: [...model.efforts], modes: [...model.modes] }));
+  if (!models.length) return null;
+  const known = id !== 'lyra' && report.quota?.known === true && Number.isFinite(report.quota.remainingPercent)
+    && report.quota.remainingPercent >= 0 && report.quota.remainingPercent <= 100;
+  const boundary = launchBoundary({ ...report, id, connected: true });
+  return { id, title: text(report.title, 128) ? report.title : id, connected: true, models,
+    quota: { remainingPercent: known ? report.quota.remainingPercent : null, period: known && text(report.quota.period, 128) ? report.quota.period : null, known },
+    scopeEnforced: boundary === 'confined', boundary, context: { known: report.context?.known === true, compact: report.context?.compact === true } };
+}
+
 export async function connectedClients(context) {
   const reports = [];
-  for (const [id, adapter] of Object.entries(context.adapters ?? context.settingsOwner?.adapters ?? {})) {
-    const report = await Promise.resolve().then(() => adapter.describe?.({ localDirectory: context.paths?.localDirectory, store: context.store })).catch(() => null);
-    if (!report || report.id !== id || report.connected !== true) continue;
-    if (!['claude', 'codex', 'cursor', 'lyra'].includes(id) || !Array.isArray(report.models)) continue;
-    const models = report.models.filter(model => text(model.id, 256) && model.id && text(model.title, 256)
-      && Array.isArray(model.efforts) && model.efforts.every(value => text(value, 64))
-      && Array.isArray(model.modes) && model.modes.every(value => ['fast', 'normal', 'thinking'].includes(value)))
-      .slice(0, 256).map(model => ({ id: model.id, title: model.title, efforts: [...model.efforts], modes: [...model.modes] }));
-    if (!models.length) continue;
-    const known = id !== 'lyra' && report.quota?.known === true && Number.isFinite(report.quota.remainingPercent)
-      && report.quota.remainingPercent >= 0 && report.quota.remainingPercent <= 100;
-    const boundary = launchBoundary({ ...report, id, connected: true });
-    reports.push({ id, title: text(report.title, 128) ? report.title : id, connected: true, models,
-      quota: { remainingPercent: known ? report.quota.remainingPercent : null, period: known && text(report.quota.period, 128) ? report.quota.period : null, known },
-      scopeEnforced: boundary === 'confined', boundary, context: { known: report.context?.known === true, compact: report.context?.compact === true } });
+  const adapters = context.adapters ?? context.settingsOwner?.adapters ?? {};
+  const describe = (adapter, accountHome) => Promise.resolve().then(() => adapter.describe?.({ localDirectory: context.paths?.localDirectory, store: context.store, ...(accountHome === undefined ? {} : { accountHome }) })).catch(() => null);
+  for (const [id, adapter] of Object.entries(adapters)) {
+    const report = clientReport(id, await describe(adapter, ACCOUNT_CLIENTS.includes(id) ? null : undefined));
+    if (!report) continue;
+    // The accounts of a client beyond the default one, each with its own models and quota. The client's own fields stay the default account's.
+    const extras = ACCOUNT_CLIENTS.includes(id) && context.paths?.localDirectory ? (await readAccounts(context)).accounts[id] : [];
+    const accounts = (await Promise.all(extras.map(async extra => {
+      const one = clientReport(id, await describe(adapter, extra.home));
+      return one ? { id: extra.id, label: extra.label, connected: true, models: one.models, quota: one.quota } : null;
+    }))).filter(Boolean);
+    reports.push(accounts.length ? { ...report, accounts } : report);
   }
   return reports;
 }
@@ -197,7 +212,7 @@ function reportShape(record, machine) {
   if (record.discoveryOffer != null) validatePublicOffer(record.discoveryOffer);
   if (record.connectedClients !== undefined && (!Array.isArray(record.connectedClients) || record.connectedClients.length > 4)) fail(422, 'corrupt_resource', 'The client capabilities are invalid.');
   for (const client of record.connectedClients ?? []) {
-    exact(client, ['id', 'title', 'connected', 'models', 'quota', 'scopeEnforced', 'boundary', 'context']);
+    exact(client, ['id', 'title', 'connected', 'models', 'quota', 'scopeEnforced', 'boundary', 'context', 'accounts']);
     exact(client.quota, ['remainingPercent', 'period', 'known']); exact(client.context, ['known', 'compact']);
     if (!['claude', 'codex', 'cursor', 'lyra'].includes(client.id) || !text(client.title, 128) || client.connected !== true
       || typeof client.scopeEnforced !== 'boolean' || client.boundary !== undefined && ![null, 'confined', 'supervised'].includes(client.boundary)
@@ -209,6 +224,20 @@ function reportShape(record, machine) {
       exact(model, ['id', 'title', 'efforts', 'modes']);
       if (!text(model.id, 256) || !text(model.title, 256) || !Array.isArray(model.efforts) || !model.efforts.every(value => text(value, 64))
         || !Array.isArray(model.modes) || !model.modes.every(value => ['fast', 'normal', 'thinking'].includes(value))) fail(422, 'corrupt_resource', 'The model capability is invalid.');
+    }
+    if (client.accounts !== undefined) {
+      if (!ACCOUNT_CLIENTS.includes(client.id) || !Array.isArray(client.accounts) || client.accounts.length > 32) fail(422, 'corrupt_resource', 'The account capabilities are invalid.');
+      for (const account of client.accounts) {
+        exact(account, ['id', 'label', 'connected', 'models', 'quota']); exact(account.quota, ['remainingPercent', 'period', 'known']);
+        if (!text(account.id, 64) || !account.id || !text(account.label, 64) || account.connected !== true || !Array.isArray(account.models) || account.models.length > 256 || typeof account.quota.known !== 'boolean'
+          || account.quota.remainingPercent !== null && (!Number.isFinite(account.quota.remainingPercent) || account.quota.remainingPercent < 0 || account.quota.remainingPercent > 100)
+          || account.quota.period !== null && !text(account.quota.period, 128)) fail(422, 'corrupt_resource', 'The account capabilities are invalid.');
+        for (const model of account.models) {
+          exact(model, ['id', 'title', 'efforts', 'modes']);
+          if (!text(model.id, 256) || !text(model.title, 256) || !Array.isArray(model.efforts) || !model.efforts.every(value => text(value, 64))
+            || !Array.isArray(model.modes) || !model.modes.every(value => ['fast', 'normal', 'thinking'].includes(value))) fail(422, 'corrupt_resource', 'The model capability is invalid.');
+        }
+      }
     }
   }
   return record;
