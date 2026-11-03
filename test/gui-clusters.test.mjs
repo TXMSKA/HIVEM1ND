@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { acceptedRepositoryCluster, clusterLead, connectedChoices, customRoleProblems, filterRepositories, initialRunsIn, launchable, readable, renderAgentForm, renderRepositoryOffer, renderRunsInPicker, repositorySelection, runsInLabel, startDialog, supervisedClient, validRunsIn } from '../gui/app/clusters.mjs';
+import { acceptedRepositoryCluster, clusterLead, connectedChoices, customRoleProblems, filterRepositories, initialRunsIn, launchable, readable, renderAccountOffer, renderAgentForm, renderRepositoryOffer, renderRunsInPicker, repositorySelection, runsInLabel, startDialog, supervisedClient, validRunsIn } from '../gui/app/clusters.mjs';
 import { renderApproval } from '../gui/app/inspector.mjs';
 import { renderSessionWork } from '../gui/app/session-work.mjs';
 import { AGENT_ROLES, roleLabel, startText } from '../gui/app/start-copy.mjs';
@@ -592,4 +592,54 @@ test('a folded chip, the pick and the services have rules for their controls', a
   assert.match(css, /\.map-node\.is-selected, \.map-node\.is-picked\s*\{/);
   assert.doesNotMatch(css, /map-service|map-services/);
   assert.match(css, /\.map-group-badge\s*\{[^}]*background:\s*var\(--card2\)[^}]*color:\s*var\(--body\)[^}]*font-size:\s*11px;[^}]*font-weight:\s*700/);
+});
+
+const claudeAccounts = (extra = true) => [{ id: 'claude', title: 'Claude Code', connected: true, scopeEnforced: false, boundary: 'supervised',
+  models: [{ id: 'base-model', title: 'Base', efforts: ['high'], modes: [] }], quota: { known: true, remainingPercent: 80, period: '5h' },
+  ...(extra ? { accounts: [{ id: 'work', label: 'Work', connected: true, models: [{ id: 'work-model', title: 'Work only', efforts: ['low', 'high'], modes: [] }], quota: { known: true, remainingPercent: 12, period: '7d' } }] } : {}) }];
+
+test('the picker hides the Account choice with one account and shows it, with that account models and quota, with two', () => {
+  const one = claudeAccounts(false), two = claudeAccounts(true);
+  const plain = renderRunsInPicker(document, { language: 'en', clients: one, choice: initialRunsIn(one) }, {});
+  assert.equal(nodes(plain).some(node => String(node.attributes?.['data-action'] ?? '').startsWith('runs-account-')), false);
+  assert.doesNotMatch(copy(plain), /Account/);
+  assert.equal(nodes(plain).find(node => node.attributes?.['data-columns'])?.attributes['data-columns'], '3');
+
+  const choice = initialRunsIn(two);
+  assert.equal(Object.hasOwn(choice, 'account'), false);
+  const picked = [];
+  const view = renderRunsInPicker(document, { language: 'en', clients: two, choice }, { onChoice: value => picked.push(value) });
+  const actions = nodes(view).map(node => node.attributes?.['data-action']).filter(Boolean);
+  assert.deepEqual(actions.filter(action => action.startsWith('runs-account-')), ['runs-account-default', 'runs-account-work']);
+  assert.equal(nodes(view).find(node => node.attributes?.['data-columns']).attributes['data-columns'], '4');
+  assert.match(copy(view), /Account/); assert.match(copy(view), /Default account/);
+  assert.equal(nodes(view).find(node => node.attributes?.['data-action'] === 'runs-account-default').getAttribute('aria-pressed'), 'true');
+  assert.doesNotMatch(copy(view), /Work only/);
+  nodes(view).find(node => node.attributes?.['data-action'] === 'runs-account-work').listeners.click();
+  assert.deepEqual(picked[0], { client: 'claude', model: 'work-model', effort: 'high', mode: null, account: 'work' });
+  assert.equal(validRunsIn(picked[0], two), true);
+  assert.equal(validRunsIn({ ...picked[0], account: 'gone' }, two), false);
+  assert.equal(validRunsIn({ ...picked[0], model: 'base-model' }, two), false);
+
+  const onWork = renderRunsInPicker(document, { language: 'en', clients: two, choice: picked[0] }, { onChoice: value => picked.push(value) });
+  assert.match(copy(onWork), /Work only/); assert.doesNotMatch(copy(onWork), /Base/);
+  assert.match(copy(onWork), /12% left/);
+  assert.equal(nodes(onWork).find(node => node.attributes?.['data-action'] === 'runs-account-work').getAttribute('aria-pressed'), 'true');
+  nodes(onWork).find(node => node.attributes?.['data-action'] === 'runs-account-default').listeners.click();
+  assert.deepEqual(picked[1], { client: 'claude', model: 'base-model', effort: 'high', mode: null });
+  assert.equal(runsInLabel(picked[0], two, 'en'), 'Claude Code (Work), Work only, High');
+  assert.equal(runsInLabel(picked[1], two, 'en'), 'Claude Code, Base, High');
+  const spanish = renderRunsInPicker(document, { language: 'es', clients: two, choice }, {});
+  assert.match(copy(spanish), /Cuenta/); assert.match(copy(spanish), /Cuenta predeterminada/);
+});
+
+test('the first-start question shows the suggested label, editable, with Skip and Add', () => {
+  const offer = { client: 'claude', label: 'alt', home: 'C:/Users/x/.claude-alt' };
+  const labels = [];
+  const view = renderAccountOffer(document, { language: 'en', offer, folder: '.claude-alt', label: 'alt' }, { onLabel: value => labels.push(value), onSkip() {}, onConfirm() {} });
+  assert.match(copy(view), /Another Claude Code account was found/); assert.match(copy(view), /\.claude-alt/);
+  const names = nodes(view);
+  assert.equal(names.find(node => node.attributes?.['data-start-field'] === 'label').value, 'alt');
+  assert.ok(names.some(node => node.attributes?.['data-action'] === 'skip-account') && names.some(node => node.attributes?.['data-action'] === 'confirm-account'));
+  assert.match(copy(renderAccountOffer(document, { language: 'es', offer, folder: '.claude-alt', label: 'alt' }, {})), /Se encontró otra cuenta de Claude Code/);
 });

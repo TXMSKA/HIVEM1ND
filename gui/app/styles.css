@@ -921,6 +921,18 @@ button, input { font: inherit; color: inherit; }
 .settings-section small { color: var(--mute); font-size: 12px; }
 .settings-agent-row { display: flex; align-items: center; min-height: 58px; gap: 12px; padding: 12px 14px; border: 1px solid transparent; border-radius: 12px; background: var(--card); }
 /* An agent that is not on this machine is drawn as an empty place, not as a row. */
+/* The accounts card: one block per client, one row per account, the same row shape as the agents above. */
+.settings-account-block { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.settings-account-block > strong { color: var(--text); font-size: 13.5px; font-weight: 700; }
+.settings-account-block > .btn { align-self: flex-start; min-height: 28px; padding: 5px 10px; border-radius: 8px; font-size: 12px; }
+.settings-account-row { display: flex; align-items: center; min-height: 48px; gap: 12px; padding: 8px 14px; border-radius: 12px; background: var(--card); }
+.settings-account-identity { display: grid; gap: 2px; min-width: 0; flex: 1 1 auto; }
+.settings-account-identity strong { color: var(--text); font-size: 13px; font-weight: 700; }
+.settings-account-identity small { color: var(--mute); font-size: 11.5px; overflow-wrap: anywhere; }
+.settings-account-state { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; font-size: 12.5px; }
+.settings-account-row .btn.is-secondary { min-height: 28px; padding: 5px 10px; border-radius: 8px; font-size: 12px; }
+.settings-account-row .btn .icon { width: 13px; height: 13px; }
+.start-account-offer { width: 460px; max-width: calc(100vw - 32px); }
 .settings-agent-row.is-missing { border-color: var(--line); border-style: dashed; background: transparent; }
 .settings-avatar { display: grid; place-items: center; width: 32px; height: 32px; flex: 0 0 32px; border-radius: 10px; background: var(--card2); }
 .settings-agent-identity { display: grid; gap: 2px; width: 230px; max-width: 100%; flex: 0 0 230px; }
@@ -1329,6 +1341,8 @@ button, [role="button"], a[href], summary, select, textarea, [contenteditable="t
 .start-picker { width: 560px; padding: 0; border-radius: 16px; background: var(--card2); }
 .start-picker > .runs-in-picker { gap: 0; }
 .runs-in-columns { display: grid; grid-template-columns: minmax(0, 200fr) minmax(0, 180fr) minmax(0, 170fr); min-height: 230px; }
+.runs-in-columns[data-columns="4"] { grid-template-columns: minmax(0, 190fr) minmax(0, 170fr) minmax(0, 180fr) minmax(0, 150fr); }
+.start-picker:has(.runs-in-columns[data-columns="4"]) { width: 720px; max-width: calc(100vw - 32px); }
 .runs-in-column { display: flex; flex-direction: column; gap: 2px; padding: 10px 8px; }
 .runs-in-column + .runs-in-column { border-left: 1px solid var(--line); }
 .runs-in-column h3 { margin: 0 10px 4px; color: var(--mute); font-size: 11px; text-transform: uppercase; }

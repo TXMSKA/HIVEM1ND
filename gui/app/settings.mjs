@@ -452,8 +452,46 @@ function renderAgents(document, model, t, actions, permissionsOpen = false) {
   if (model.machine !== model.localMachine && !model.readOnly) section.append(element(document, "p", { class: "settings-hint", text: t("settingsReviewOwner", { machine: model.machine }) }));
   for (const key of ["finalCliExplanation", "finalAppExplanation", "finalManualExplanation"]) section.append(element(document, "p", { class: "settings-hint", text: t(key) }));
   const standing = model.permissions ? (model.permissions.unitGrants?.length ?? 0) + (model.permissions.agentPermissions?.length ?? 0) : null;
-  return element(document, "div", { class: "settings-column" }, section, settingsDisclosure(document, "settings-permissions", t("settingsPermissions"),
+  const accounts = renderAccounts(document, model, t, actions);
+  return element(document, "div", { class: "settings-column" }, section, ...(accounts ? [accounts] : []), settingsDisclosure(document, "settings-permissions", t("settingsPermissions"),
     standing === null ? "" : standing ? cardinal(model.language, "settingsPermissionsCount", standing) : t("settingsPermissionsNone"), permissionsOpen, renderPermissions(document, model, t, actions)));
+}
+
+// The accounts of Claude Code and Codex on this machine, each with its setup state. Accounts belong to the machine the app runs on.
+function renderAccounts(document, model, t, actions) {
+  const data = model.accounts;
+  if (!data || model.machine !== model.localMachine) return null;
+  const disabled = !model.canWrite || model.readOnly || model.loading;
+  const section = settingsCard(document, t("accountsTitle"), null);
+  section.setAttribute("data-accounts", "true");
+  section.append(element(document, "p", { class: "settings-hint", text: t("accountsHint") }));
+  for (const client of ["claude", "codex"]) {
+    const list = data.clients?.[client] ?? [];
+    const name = catalogLabel(model.agents?.connectedClients?.find(item => item.id === client)?.title, client, model.language);
+    const block = element(document, "div", { class: "settings-account-block", "data-account-client": client }, element(document, "strong", { text: name }));
+    for (const account of list) {
+      const setup = data.setup?.[client]?.[account.id];
+      const row = element(document, "div", { class: "settings-account-row", "data-account": `${client}:${account.id}` },
+        element(document, "div", { class: "settings-account-identity" }, element(document, "strong", { text: account.default ? t("accountDefaultName") : account.label }),
+          element(document, "small", { text: account.home })));
+      const state = element(document, "div", { class: "settings-account-state" });
+      if (setup?.state === "connected") state.append(element(document, "span", { class: "settings-connected", text: t("settingsConnected") }));
+      else if (setup?.state === "missing") state.append(element(document, "span", { text: t("accountNotSignedIn") }));
+      else if (setup) {
+        const count = cardinal(model.language, "settingsChanges", setup.changes ?? 0);
+        const link = element(document, "button", { type: "button", class: "btn is-link", "data-action": `settings-account-review-${client}-${account.id}`, "aria-label": `${account.label}: ${count}`,
+          onclick: () => actions.onReviewAccount?.(client, account) }, count, icon(document, "chevronRight"));
+        link.disabled = disabled || model.machine !== model.localMachine;
+        state.append(link);
+      }
+      row.append(state);
+      if (!account.default) row.append(settingsButton(document, `settings-account-remove-${client}-${account.id}`, t("accountRemove"), () => actions.onRemoveAccount?.(client, account), disabled, true));
+      block.append(row);
+    }
+    block.append(settingsButton(document, `settings-account-add-${client}`, t("accountAdd"), () => actions.onAddAccount?.(client, name), disabled, true));
+    section.append(block);
+  }
+  return section;
 }
 
 // Every agent that is behind needs the same rules, commands and Relay entry, so one notice offers to read and apply them together.

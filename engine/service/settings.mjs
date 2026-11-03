@@ -16,7 +16,7 @@ import { directoryIdentity, pathKey, readRepositoryIdentity } from './cluster-gi
 import { EVENT_NAMES, publishDomainEvents } from './events.mjs';
 import { protectLocalFile } from './security.mjs';
 import { probeClients, reloadReviewedClient } from './adapters.mjs';
-import { ACCOUNT_CLIENTS, accountEnv, accountHome, accountList, readAccounts } from './accounts.mjs';
+import { ACCOUNT_CLIENTS, accountEnv, accountHome, accountList, accountsView, addAccount, confirmDetected, readAccounts, removeAccount, skipDetected } from './accounts.mjs';
 import { launchBoundary, validateRunsIn } from './runs-in.mjs';
 import { readUnitState, stateHeader, stateRunsIn } from './state.mjs';
 import { configureOwnedService } from './install.mjs';
@@ -771,6 +771,34 @@ export async function disconnectClientConfiguration(context, client, input) {
   await reloadReviewedClient(context, { client, target: connection.app ? 'app' : 'cli', previewId: 'disconnect', checkOnly: false });
   const updated = await publishMachineSettings(context, 'agents');
   return { machine: context.paths.machine, client, state: 'disconnected', revision: updated.agents.revision };
+}
+
+// Accounts of Claude Code and Codex on this machine: the list, the homes waiting for the person's answer and each account's setup state.
+export async function readAccountsPanel(context) {
+  if (context.principal?.audience !== 'desktop') fail(403, 'forbidden', 'Only the desktop may read the accounts.');
+  const owner = ownerOf(context);
+  return { ...await accountsView(owner), setup: await accountSetupStates(owner) };
+}
+
+const ACCOUNT_BODIES = { add: ['client', 'label'], confirm: ['client', 'home', 'label'], skip: ['client', 'home'], remove: ['client', 'accountId', 'confirmed'] };
+
+export async function changeAccounts(context, operation, input) {
+  if (context.principal?.audience !== 'desktop') fail(403, 'forbidden', 'Only the desktop may change the accounts.');
+  const fields = ACCOUNT_BODIES[operation];
+  if (!fields) fail(422, 'invalid_body', 'The accounts operation is not valid.');
+  exact(input, fields); required(input, fields.filter(key => key !== 'label'));
+  if (operation === 'remove' && input.confirmed !== true) fail(422, 'invalid_body', 'Confirmation is required.');
+  const owner = ownerOf(context);
+  if (context.active === false) fail(409, 'machine_unavailable', 'The machine is unavailable.');
+  await withLocks(owner.store, [`settings-operation:${owner.paths.machine}`], async () => {
+    if (operation === 'add') await addAccount(owner, input);
+    else if (operation === 'confirm') await confirmDetected(owner, input);
+    else if (operation === 'skip') await skipDetected(owner, input);
+    else await removeAccount(owner, input);
+    // The pickers read each account's models and quota from the machine report.
+    await publishMachineSettings(owner, 'agents');
+  });
+  return readAccountsPanel(context);
 }
 
 export async function mutateMachineSettings(context, operation, input, id = null) {

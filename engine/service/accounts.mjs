@@ -181,26 +181,27 @@ export async function skipDetected(context, { client, home }) {
 
 function quote(value) { return `'${String(value).replace(/'/g, "''")}'`; }
 
-// Opens a terminal for the client's own sign-in with that account's variable set. The home path is chosen here, never taken from the request.
-function openLoginTerminal(context, client, home) {
-  const script = `$env:${ACCOUNT_VARIABLES[client]} = ${quote(home)}; ${LOGIN_COMMAND[client]}`;
-  if (typeof context.openTerminal === 'function') return context.openTerminal({ client, home, script });
-  if (process.platform !== 'win32') return null;
+// The real terminal launcher. The running service configures it; a service composed without it (tests, embedders) opens no window.
+export function systemTerminal({ script }) {
+  if (process.platform !== 'win32') throw new CoreError(409, 'terminal_unavailable', 'This platform has no terminal launcher yet.');
   const child = spawn('cmd.exe', ['/c', 'start', '""', 'powershell.exe', '-NoExit', '-NoProfile', '-Command', script], { shell: false, detached: true, stdio: 'ignore', windowsHide: false });
   child.unref();
-  return null;
 }
+
+// Opens a terminal for the client's own sign-in with that account's variable set. The home path is chosen here, never taken from the request.
+function loginScript(client, home) { return `$env:${ACCOUNT_VARIABLES[client]} = ${quote(home)}; ${LOGIN_COMMAND[client]}`; }
 
 export async function addAccount(context, { client, label }) {
   validateAccountClient(client);
   const name = validateLabel(label);
+  if (typeof context.openTerminal !== 'function') fail(409, 'terminal_unavailable', 'No terminal launcher is configured.');
   const record = await readAccounts(context);
   const base = path.join(userHome(context), `${FOLDER_PREFIX[client]}${slug(name)}`);
   let home = base, count = 2;
   while (ACCOUNT_CLIENTS.some(other => record.accounts[other].some(item => sameHome(item.home, home))) || await stat(home).then(() => true, () => false)) home = `${base}-${count++}`;
   insert(record, client, name, home);
   await writeAccounts(context, record);
-  await openLoginTerminal(context, client, home);
+  await context.openTerminal({ client, home, script: loginScript(client, home) });
   return accountsView(context);
 }
 

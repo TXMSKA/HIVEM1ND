@@ -701,6 +701,8 @@ export async function registerNative(context, input) {
     runMode: input.runMode ?? 'chat',
     taskId: input.taskId ?? null,
     launchKind: input.launchKind ?? 'manual-app',
+    // The account the session runs on; the unit is the same unit on any account. Null is the client's default account.
+    account: input.account ?? null,
   };
   assertNoSecret(canonicalJson(registration));
   await writeJson(context, `user/relay/sessions/${registration.registrationId}.json`, registration);
@@ -1092,7 +1094,7 @@ async function launch(context, request) {
   const ownership = created.executionId ? { executionId: created.executionId } : {};
   await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'spawned', pid, ...ownership, sessionId: null, createAttempted: true, nativeSessionId: created.nativeSessionId, at: stamp(context) });
   if (context.launchFault === 'spawned') throw new CoreError(500, 'injected_crash', 'Injected crash after spawn.');
-  const registration = await registerNative(context, { client: request.client, nativeSessionId: created.nativeSessionId, unitId: request.unitId, runMode: request.runMode, taskId: request.taskId, launchKind: 'cli' });
+  const registration = await registerNative(context, { client: request.client, nativeSessionId: created.nativeSessionId, unitId: request.unitId, runMode: request.runMode, taskId: request.taskId, launchKind: 'cli', account: choiceAccount(request.runsIn) });
   if (scope) await bindLaunchScope(context, scope.scope, registration, pid, created.executionId);
   await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'registered', pid, ...ownership, nativeSessionId: created.nativeSessionId, sessionId: registration.sessionId,
     contextSequence: Math.max(0, ...journals.map(item => item.contextSequence ?? 0)) + 1, createAttempted: true, ...permissionBinding, at: stamp(context) });

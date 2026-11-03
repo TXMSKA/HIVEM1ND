@@ -17,8 +17,23 @@ export function supervisedClient(client) {
   return client?.boundary === 'supervised' && client.scopeEnforced !== true;
 }
 
+// The accounts a client can run on, the default one first, when it has two or more; otherwise none, and no Account choice is shown.
+// The default account is the client itself. An account without `account` in a stored choice is the default one.
+export function clientAccounts(client) {
+  const extras = Array.isArray(client?.accounts) ? client.accounts.filter(item => item?.connected !== false) : [];
+  return extras.length ? [{ id: 'default', label: null, models: client.models, quota: client.quota }, ...extras] : [];
+}
+
+// The client as one account sees it: that account's own models and quota.
+export function accountClient(client, accountId) {
+  if (!accountId || accountId === 'default') return client;
+  const account = clientAccounts(client).find(item => item.id === accountId);
+  return account ? { ...client, models: account.models, quota: account.quota } : null;
+}
+
 export function validRunsIn(choice, clients) {
-  const client = connectedChoices(clients).find(item => item.id === choice?.client);
+  const found = connectedChoices(clients).find(item => item.id === choice?.client);
+  const client = found ? accountClient(found, choice?.account) : null;
   const model = client?.models.find(item => item.id === choice?.model);
   return Boolean(launchable(client) && model && (client.id === 'lyra'
     ? choice.effort === null && model.modes.includes(choice.mode)
@@ -34,6 +49,15 @@ export function initialRunsIn(clients, preferred = null, kind = null) {
     if (validRunsIn(value, available)) return value;
   }
   return null;
+}
+
+// The pick moved to another account of the same client: the model and effort stay when that account has them, otherwise its first.
+export function accountChoice(client, choice, accountId) {
+  const shown = accountClient(client, accountId);
+  const model = shown.models.find(item => item.id === choice.model) ?? shown.models[0];
+  const effort = model.efforts.includes(choice.effort) ? choice.effort : model.efforts[0] ?? null;
+  const { account, ...rest } = choice;
+  return { ...rest, model: model.id, effort: client.id === 'lyra' ? null : effort, ...(accountId === 'default' ? {} : { account: accountId }) };
 }
 
 const CLIENT_KEYS = { codex: 'clientCodex', claude: 'clientClaude', cursor: 'clientCursor', lyra: 'clientLyra' };
@@ -75,10 +99,11 @@ export function runsInLabel(choice, clients = [], language = 'en', { brief = fal
   const client = clients.find(item => item.id === choice.client);
   const effort = choice.mode ?? choice.effort;
   const clientName = catalogLabel(client?.title, choice.client, language);
-  let modelName = catalogLabel(client?.models.find(item => item.id === choice.model)?.title, choice.model, language);
+  const accountName = choice.account ? clientAccounts(client).find(item => item.id === choice.account)?.label ?? choice.account : null;
+  let modelName = catalogLabel(accountClient(client, choice.account)?.models.find(item => item.id === choice.model)?.title, choice.model, language);
   const vendor = `${clientName.split(' ')[0]} `;
   if (brief && modelName.length > vendor.length && modelName.startsWith(vendor)) modelName = modelName.slice(vendor.length);
-  return [clientName, modelName, effortLabel(effort, language)].filter(Boolean).join(', ');
+  return [accountName ? `${clientName} (${accountName})` : clientName, modelName, effortLabel(effort, language)].filter(Boolean).join(', ');
 }
 
 export function repositorySelection(offer) {
@@ -172,10 +197,13 @@ export function renderRepositoryOffer(document, model, actions) {
 export function renderRunsInPicker(document, model, actions) {
   const t = (key, values) => startText(model.language, key, values);
   const clients = connectedChoices(model.clients);
-  const current = clients.find(item => item.id === model.choice?.client);
+  const picked = clients.find(item => item.id === model.choice?.client);
+  // Models and quota shown are those of the chosen account.
+  const current = picked ? accountClient(picked, model.choice?.account) ?? picked : picked;
+  const accounts = clientAccounts(picked);
   const selectedModel = current?.models.find(item => item.id === model.choice?.model);
   const root = element(document, 'section', { class: 'runs-in-picker', 'data-runs-picker': 'true' });
-  const columns = element(document, 'div', { class: 'runs-in-columns' });
+  const columns = element(document, 'div', { class: 'runs-in-columns', 'data-columns': String(accounts.length ? 4 : 3) });
   const column = (label, items) => element(document, 'div', { class: 'runs-in-column', role: 'group', 'aria-label': label },
     element(document, 'h3', { text: label }), ...items);
   const option = (id, title, note, selected, choose, disabled = false) => {
@@ -187,12 +215,23 @@ export function renderRunsInPicker(document, model, actions) {
       selected ? element(document, 'span', { 'aria-hidden': 'true', text: '✓' }) : null].filter(Boolean));
     return node;
   };
-  columns.append(column(t('agent'), clients.map(client => {
+  columns.append(column(t('agent'), clients.map(shown => {
+    const client = shown.id === picked?.id ? current : shown;
     const quota = client.id === 'lyra' ? t('localQuota') : client.quota?.known && Number.isFinite(client.quota.remainingPercent)
       ? t('quota', { label: client.quota.period ?? client.title, percent: client.quota.remainingPercent }) : t('quotaUnknown');
     return option(`runs-client-${client.id}`, displayName(client.title, client.id, id => clientLabel(id, model.language)), launchable(client) ? quota : t('scopeUnavailable'), current?.id === client.id,
-      () => actions.onChoice(initialRunsIn([client])), !launchable(client) || !initialRunsIn([client]));
+      () => actions.onChoice(initialRunsIn([shown])), !launchable(client) || !initialRunsIn([shown]));
   })));
+  // The Account choice sits next to the agent, and only for a client with two or more accounts.
+  if (accounts.length) {
+    const active = model.choice?.account ?? 'default';
+    columns.append(column(t('account'), accounts.map(account => {
+      const known = account.quota?.known && Number.isFinite(account.quota.remainingPercent);
+      const note = known ? t('quota', { label: account.quota.period ?? picked.title, percent: account.quota.remainingPercent }) : t('quotaUnknown');
+      return option(`runs-account-${account.id}`, account.id === 'default' ? t('accountDefault') : account.label, note, active === account.id,
+        () => actions.onChoice(accountChoice(picked, model.choice, account.id)));
+    })));
+  }
   // "Default" and the model it stands for can share an id; only the first of them reads as chosen, so one row is checked.
   const models = current?.models ?? [];
   const chosenIndex = models.findIndex(item => item.id === selectedModel?.id);
@@ -298,6 +337,20 @@ export function renderAgentForm(document, model, actions) {
   const create = button(document, t('create'), 'create-agent', actions.onCreate, true);
   create.disabled = !validRunsIn(model.choice, model.clients);
   root.append(element(document, 'footer', { class: 'dialog-actions' }, button(document, t(overseer ? 'later' : 'cancel'), 'cancel-agent', actions.onCancel), create));
+  return root;
+}
+
+// The first-start question about one detected account home. The label is suggested from the folder name and can be edited.
+export function renderAccountOffer(document, model, actions) {
+  const t = (key, values) => startText(model.language, key, values);
+  const root = element(document, 'section', { class: 'account-offer-view', 'data-account-offer': model.offer.home },
+    element(document, 'h2', { text: t('accountOfferTitle', { client: clientLabel(model.offer.client, model.language) }) }),
+    element(document, 'p', { class: 'start-hint', text: t('accountOfferBody', { folder: model.folder }) }));
+  const name = element(document, 'input', { name: 'label', 'data-start-field': 'label', maxlength: 40, 'aria-label': t('accountOfferName'), oninput: () => actions.onLabel(name.value) });
+  name.value = model.label;
+  root.append(element(document, 'label', { class: 'field' }, t('accountOfferName'), name),
+    element(document, 'footer', { class: 'dialog-actions' }, button(document, t('accountOfferSkip'), 'skip-account', actions.onSkip),
+      button(document, t('accountOfferAdd'), 'confirm-account', actions.onConfirm, true)));
   return root;
 }
 

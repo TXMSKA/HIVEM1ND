@@ -924,10 +924,14 @@ test('every contract route has a success result and an authority or boundary fai
     '{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thread-1"}}}',
   ];
   const contextReplacements = new Map();
+  const spareClaude = path.join(fixture.home, '.claude-spare'), spareCodex = path.join(fixture.home, '.codex-extra');
+  await mkdir(spareClaude, { recursive: true }); await writeFile(path.join(spareClaude, '.credentials.json'), 'never read');
+  await mkdir(spareCodex, { recursive: true }); await writeFile(path.join(spareCodex, 'auth.json'), 'never read');
   const core = await composeCore({
     store: fixture.store,
     paths,
     now: () => fixture.clock.now,
+    openTerminal: () => {},
     projects: [{ name: 'shop', localPath }],
     gitRunner: async (_exe, args, settings) => {
       assert.equal(settings.shell, false); assert.equal(settings.windowsHide, true);
@@ -1055,6 +1059,12 @@ test('every contract route has a success result and an authority or boundary fai
     expectStatus(await call(port, 'GET', `/api/v1${template}?unknown=true`, { token }), 400, 'Settings unknown query');
     hit('GET', template);
   }
+  const accountsReport = await call(port, 'GET', '/api/v1/settings/accounts', { token });
+  expectStatus(accountsReport, 200, '/settings/accounts');
+  assert.deepEqual(accountsReport.json.data.pending.map(item => item.client).sort(), ['claude', 'codex']);
+  assert.equal(accountsReport.json.data.clients.claude[0].id, 'default');
+  expectStatus(await call(port, 'GET', '/api/v1/settings/accounts?unknown=true', { token }), 400, 'accounts unknown query');
+  hit('GET', '/settings/accounts');
   const knownBinary = path.join(fixture.root, 'codex.cmd');
   await writeFile(knownBinary, 'Fixture binary; never executed.\n');
   const agentsReport = await call(port, 'GET', '/api/v1/settings/agents', { token });
@@ -1064,6 +1074,10 @@ test('every contract route has a success result and an authority or boundary fai
   const previewId = randomUUID();
   assert.deepEqual(permissionsReport.json.data.agentPermissions.map(item => item.id), [permissionId]);
   const settingsRoutes = [
+    ['POST', '/settings/accounts', '/settings/accounts', { client: 'claude', label: 'Second' }],
+    ['POST', '/settings/accounts/confirm', '/settings/accounts/confirm', { client: 'codex', home: spareCodex, label: 'Extra' }],
+    ['POST', '/settings/accounts/skip', '/settings/accounts/skip', { client: 'claude', home: spareClaude }],
+    ['POST', '/settings/accounts/remove', '/settings/accounts/remove', { client: 'claude', accountId: 'second', confirmed: true }],
     ['POST', '/settings/agents/scan', '/settings/agents/scan', { machine: fixture.machine }],
     ['POST', '/settings/agents/find', '/settings/agents/find', { machine: fixture.machine, client: 'codex', path: knownBinary }],
     ['POST', '/settings/agents/:client/preview', '/settings/agents/codex/preview', { machine: fixture.machine, mode: 'on-demand', target: 'cli', allowGit: false }],
