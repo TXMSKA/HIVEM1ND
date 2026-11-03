@@ -2,5 +2,10 @@
   { "id": "onem1nd", "letter": "O1", "short": "ONEM1ND", "title": "ONEM1ND: main screens" },
   { "id": "hivem1nd-3-flow", "letter": "H3", "short": "3.0", "title": "HIVEM1ND 3.0" },
   { "id": "hivem1nd-3-start", "letter": "HW", "short": "Start", "title": "HIVEM1ND 3.0: start working" },
-  { "id": "hivem1nd-relay", "letter": "RL", "short": "Relay", "title": "HIVEM1ND 3.0: Relay LAN and Relay+" }
+  { "id": "hivem1nd-relay", "letter": "RL", "short": "Relay", "title": "HIVEM1ND 3.0: Relay LAN and Relay+" },
+  { "id": "hivem1nd-3-flow-setup", "letter": "S1", "short": "Setup", "title": "3.0 GUI: Setup and first use" },
+  { "id": "hivem1nd-3-flow-map", "letter": "S2", "short": "Map", "title": "3.0 GUI: The Map" },
+  { "id": "hivem1nd-3-flow-chats", "letter": "S3", "short": "Chats", "title": "3.0 GUI: Chats and what waits for you" },
+  { "id": "hivem1nd-3-flow-apps", "letter": "S4", "short": "Apps", "title": "3.0 GUI: Blueprint and Void" },
+  { "id": "hivem1nd-3-flow-settings", "letter": "S5", "short": "Settings", "title": "3.0 GUI: Settings, service and phone" }
 ]
