@@ -123,3 +123,15 @@ test('adding opens a terminal for that home; removing drops only the entry', asy
   await assert.rejects(removeAccount(context, { client: 'codex', accountId: added.id }), error => error.code === 'account_unavailable');
   assert.equal((await listAccounts(context, 'codex')).length, 2);
 });
+
+test('a plan task step stores the account and an old step reads as the default', async () => {
+  const { validatePlanAssignment } = await import('../engine/service/plans.mjs');
+  const supervised = [{ ...clients[0], boundary: 'supervised', scopeEnforced: false }];
+  const work = { client: 'claude', model: 'm-work', effort: 'high', mode: null, account: 'work' };
+  const plain = { client: 'claude', model: 'm-default', effort: 'high', mode: null };
+  const stored = await validatePlanAssignment({}, { kind: 'client', client: 'claude', runsIn: work, reuseRole: null }, [], supervised, 'builder');
+  assert.deepEqual(stored.runsIn, work);
+  const old = await validatePlanAssignment({}, { kind: 'client', client: 'claude', runsIn: plain, reuseRole: null }, [], supervised, 'builder');
+  assert.deepEqual(old.runsIn, plain);
+  await assert.rejects(validatePlanAssignment({}, { kind: 'client', client: 'claude', runsIn: { ...work, account: 'gone' }, reuseRole: null }, [], supervised, 'builder'), { code: 'unsupported_launch_choice' });
+});

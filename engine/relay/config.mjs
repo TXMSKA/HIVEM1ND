@@ -409,10 +409,20 @@ function replaceOwnedTomlBlock(text, markerAt, headerAt, replacement) {
   return `${text.slice(0, start)}${replacement}${text.slice(end)}`;
 }
 
-export function clientConfigPaths({ client, homeDir, env = process.env } = {}) {
+// `accountHome` is the folder of one extra account of the client (its CODEX_HOME or CLAUDE_CONFIG_DIR), used even when the user home
+// is passed; without it the default account is addressed.
+export function clientConfigPaths({ client, homeDir, env = process.env, accountHome } = {}) {
   if (!SUPPORTED.has(client)) throw new Error(`Unsupported Relay client: ${client}`);
   const explicitHome = homeDir !== undefined;
   const home = path.resolve(homeDir ?? os.homedir());
+  if (accountHome && client === 'codex') {
+    const root = path.resolve(accountHome);
+    return { mcp: path.join(root, 'config.toml'), hooks: path.join(root, 'hooks.json'), mcpRoot: root, hooksRoot: root };
+  }
+  if (accountHome && client === 'claude') {
+    const root = path.resolve(accountHome);
+    return { mcp: path.join(root, '.claude.json'), hooks: path.join(root, 'settings.json'), mcpRoot: root, hooksRoot: root };
+  }
   if (client === 'codex') {
     const root = path.resolve(explicitHome ? path.join(home, '.codex') : env.CODEX_HOME || path.join(home, '.codex'));
     return { mcp: path.join(root, 'config.toml'), hooks: path.join(root, 'hooks.json'), mcpRoot: root, hooksRoot: root };

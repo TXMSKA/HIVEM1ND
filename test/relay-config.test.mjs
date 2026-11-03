@@ -506,3 +506,16 @@ test('a partial reviewed write removes newly created files, directories and copi
   assert.deepEqual(await legacyTreeInventory(root), changed);
   assert.equal((await readFile(`${paths.mcp}.relay-owned.json`)).equals(original), true);
 });
+
+test('an account home addresses that account even when the user home is passed', () => {
+  const home = path.join(os.tmpdir(), 'relay-user-home');
+  const codex = clientConfigPaths({ client: 'codex', homeDir: home, env: { CODEX_HOME: 'C:/must-not-use' }, accountHome: path.join(home, '.codex-alt') });
+  assert.equal(codex.mcp, path.join(home, '.codex-alt', 'config.toml'));
+  assert.equal(codex.hooks, path.join(home, '.codex-alt', 'hooks.json'));
+  const claude = clientConfigPaths({ client: 'claude', homeDir: home, accountHome: path.join(home, '.claude-alt') });
+  assert.equal(claude.mcp, path.join(home, '.claude-alt', '.claude.json'));
+  assert.equal(claude.hooks, path.join(home, '.claude-alt', 'settings.json'));
+  assert.equal(claude.mcpRoot, path.join(home, '.claude-alt'));
+  assert.equal(clientConfigPaths({ client: 'claude', homeDir: home }).mcp, path.join(home, '.claude.json'));
+  assert.equal(clientConfigPaths({ client: 'cursor', homeDir: home, accountHome: path.join(home, 'x') }).mcp, path.join(home, '.cursor', 'mcp.json'));
+});
