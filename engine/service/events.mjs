@@ -185,7 +185,12 @@ export function createEventBus({ now = () => Date.now(), machine = 'DESKTOP', st
     return true;
   }
 
-  return { captureCursor, emit, subscribe, replay, release, closePrincipal, startupId };
+  function listening(audience) {
+    for (const subscriber of subscribers) if (!subscriber.closed && subscriber.principal.audience === audience) return true;
+    return false;
+  }
+
+  return { captureCursor, emit, subscribe, replay, release, closePrincipal, listening, startupId };
 }
 
 export function matches(filters, record) {

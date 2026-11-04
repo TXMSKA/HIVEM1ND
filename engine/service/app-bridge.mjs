@@ -583,3 +583,39 @@ export function appAgentsChanged(context, projectName = null) {
   }, 50);
   state.agentTimer.unref?.();
 }
+
+const BOARD_FILE = /^docs\/flows\/boards\/([A-Za-z0-9][A-Za-z0-9_-]{0,127})\.json$/;
+
+// Shows one file of an attached project to the person in the embedded app; only a running desktop app can show it.
+export async function openInApp(context, input) {
+  if (!input || !Object.hasOwn(METHODS, input.app) || typeof input.path !== 'string' || !input.path || input.project !== undefined && typeof input.project !== 'string') fail('invalid');
+  let value = input.path;
+  let project = input.project ? projectFor(context, input.project) : null;
+  if (path.isAbsolute(value)) {
+    project ??= attached(context).filter(item => insideAppPath(item.localPath, value)).sort((a, b) => b.localPath.length - a.localPath.length)[0];
+    if (!project) fail('denied');
+    value = path.relative(project.localPath, value).split(path.sep).join('/');
+  }
+  project ??= attached(context).length === 1 ? attached(context)[0] : null;
+  if (!project) fail('invalid');
+  const file = await contained(project, value);
+  const found = identity(project);
+  let params;
+  if (input.app === 'blueprint') {
+    const board = BOARD_FILE.exec(value);
+    if (!board || board[1] === 'index') fail('invalid');
+    params = { location: found.id, id: board[1] };
+  } else {
+    if (!TEXT_EXTENSIONS.has(path.extname(value).toLowerCase()) || /\.(?:orig|comments)\.json$|\.versions\.jsonl$/.test(value)) fail('invalid');
+    params = { project: found, path: value };
+  }
+  if (!await bytesOf(file)) fail('not_found');
+  if (!context.bus?.listening?.('desktop')) return { opened: false, status: 'not_running' };
+  if (input.app === 'void') {
+    // Void restores its page from this position when the host sends the project again.
+    const key = `position:${found.id}`, saved = await storageCall(context, 'void.storage.load', { location: found.id, key }, null);
+    await storageCall(context, 'void.storage.save', { location: found.id, key, value: { path: value, scroll: 0, section: 0 }, expectedRevision: saved.revision }, null);
+  }
+  appEvent(context, input.app, 'app.open', params);
+  return { opened: true, app: input.app, project: project.name, path: value };
+}

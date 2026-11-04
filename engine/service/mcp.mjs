@@ -5,7 +5,7 @@ import { admitMessage } from '../sync/limits.mjs';
 import { noteSync, openSync, stageTransaction } from '../sync/store.mjs';
 import { CoreError, ROLES, canonicalJson, hashBytes, isUuid, parseTaskId, parseUnitId, uuidV8 } from './identity.mjs';
 import { safeError } from './security.mjs';
-import { readEditor, addNode, updateNode, removeNode, replaceRange, replyComment, requireAttachment, createBoard, createText } from './editors.mjs';
+import { readEditor, locateEditor, addNode, updateNode, removeNode, replaceRange, replyComment, requireAttachment, createBoard, createText } from './editors.mjs';
 import { publishDomainEvents } from './events.mjs';
 import { readApproval, requestApproval } from './approvals.mjs';
 import { completeSessionTask, ownsSessionExecution } from './adapters.mjs';
@@ -20,6 +20,7 @@ import { loadTask } from './tasks.mjs';
 import { customRoleText } from './state.mjs';
 import { additionsForUnit, readScopedAdditions } from './additions.mjs';
 import { assertNoLinks } from './paths.mjs';
+import { openInApp } from './app-bridge.mjs';
 import { assertPlanActor, callPlanTool, planToolSchemas, planBindingForSession, planFileTool, assertOrdinaryRunSend, readPlanInbox } from './runs.mjs';
 
 const PROTOCOL = '2025-03-26';
@@ -260,6 +261,7 @@ export function toolSchemas() {
     tool('blueprint_update_node', 'Merge format 4 properties into a design node; id, t and kids cannot change. Screens and page objects follow the format 4 tree.', { resourceId, nodeId: label, changes: { type: 'object' }, expectedRevision: revision, requestId }, ['resourceId', 'nodeId', 'changes', 'expectedRevision', 'requestId']),
     tool('blueprint_remove_node', 'Remove a format 4 design node, descendants and their links; comment threads remain as orphans. A screen root cannot be removed.', { resourceId, nodeId: label, expectedRevision: revision, requestId }, ['resourceId', 'nodeId', 'expectedRevision', 'requestId']),
     tool('blueprint_reply_comment', 'Append a plain-text reply to a format 4 board thread as this unit, preserving resolved. expectedCommentsRevision is the board SHA-256; stale revisions return conflict.', { resourceId, threadId: label, text, expectedCommentsRevision: revision, requestId }, ['resourceId', 'threadId', 'text', 'expectedCommentsRevision', 'requestId']),
+    tool('app_open', 'Show one Blueprint board or Void text to the person in the embedded app of ONEM1ND: give resourceId, or path (project-relative or absolute) with an optional project. Returns not_running when the desktop app is not open; nothing is started and no window takes focus.', { app: { type: 'string', enum: ['blueprint', 'void'] }, resourceId, path: { type: 'string', maxLength: 4096 }, project: label }, ['app']),
     tool('void_create', 'Create a Void text in this agent\'s project, for a document or copy; the agent is attached to it.', { title: documentTitle, requestId }, ['title', 'requestId']),
     tool('void_open', 'Read one Void text.', { resourceId }, ['resourceId']),
     tool('void_replace_range', 'Apply or propose a text range.', { resourceId, k: { type: 'string', maxLength: 240 }, lang: { type: 'string', maxLength: 16 }, start: { type: 'integer', minimum: 0 }, end: { type: 'integer', minimum: 0 }, expectedText: text, replacement: text, expectedRevision: revision, mode: { type: 'string', enum: ['apply', 'propose'] }, threadId: label, expectedCommentsRevision: revision, requestId }, ['resourceId', 'k', 'lang', 'start', 'end', 'expectedText', 'replacement', 'expectedRevision', 'requestId']),
@@ -372,6 +374,7 @@ async function runTool(context, name, args) {
   if (typeof args?.resourceId === 'string' && (name.startsWith('blueprint_') || name.startsWith('void_'))) {
     await requireAttachment(context, args.resourceId);
   }
+  if (name === 'app_open') return openApp(context, args);
   if (name === 'blueprint_open' || name === 'void_open') {
     const value = await readEditor(context, args.resourceId);
     noteActivity(context, args.resourceId, null, name === 'void_open' ? 'void' : 'blueprint');
@@ -381,6 +384,15 @@ async function runTool(context, name, args) {
   const legacy = await legacyCall(context, name, args);
   if (legacy !== undefined) return legacy;
   throw new CoreError(404, 'not_found', 'The tool does not exist.');
+}
+
+async function openApp(context, args) {
+  if ((args.resourceId === undefined) === (args.path === undefined)) throw new CoreError(422, 'invalid_body', 'Give either resourceId or path.');
+  if (args.resourceId === undefined) return openInApp(context, args);
+  await requireAttachment(context, args.resourceId);
+  const found = await locateEditor(context, args.resourceId);
+  if ((found.kind === 'void') !== (args.app === 'void') || args.project !== undefined && args.project !== found.project) throw new CoreError(422, 'invalid_body', 'The resource does not belong to that app.');
+  return openInApp(context, { app: args.app, project: found.project, path: found.path });
 }
 
 async function mutateTool(context, name, args) {
