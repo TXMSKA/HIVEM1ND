@@ -8,6 +8,7 @@ import { listAppAgents, sendAppAgent } from './app-agents.mjs';
 import { loadPersonAliases } from './projection.mjs';
 import { verifiedImage } from './editors.mjs';
 import { appPathKey, insideAppPath, sameAppPath } from './app-paths.mjs';
+import { validateBoard } from './blueprint-format.mjs';
 
 export const APP_UPLOAD_LIMITS = Object.freeze({ fileBytes: 10_000_000, count: 200, totalBytes: 50_000_000 });
 const FILE_LIMIT = 16_000_000;
@@ -213,9 +214,11 @@ async function blueprintCall(context, method, params, clientId) {
       return { id, location, document, text: bytes.toString('utf8'), revision: hashBytes(bytes) };
     }
     const bytes = textBytes(params);
+    if (bytes.length > 5_000_000) fail('invalid');
     let document;
     try { document = JSON.parse(bytes); } catch { fail('invalid'); }
-    if (!document || typeof document !== 'object' || Array.isArray(document)) fail('invalid');
+    try { validateBoard(document); } catch { fail('invalid'); }
+    if (document.formatVersion !== 4 || document.id !== id) fail('invalid');
     const revision = await putFile(context, project, relative, bytes, params.expectedRevision, clientId);
     return { id, location, revision };
   }

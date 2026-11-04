@@ -156,11 +156,11 @@ test('HTTP whole replace and Undo bind desktop permission exact bodies bounded m
 function legacyModule(id = 'legacy') {
   return `import { board } from "blueprint/board.mjs";
 import { col, row, text } from "blueprint/kit.mjs";
-export default board({id: ${JSON.stringify(id)}, title: "Real legacy", future: {kept: true},
-  pages: [{id: "first-page", title: "First page", objects: [], order: ["first"]}, {id: "second-page", title: "Second page", objects: [], order: ["second"]}],
-  screens: [{id: "first", title: "First", pageId: "first-page", w: 400, h: 300, root: () => col({pad: 12, fill: "surface", radius: "lg", future: {node: true}}, row({name: "continue", gap: 8}, text("Actual nested text", {size: 22, weight: 700, color: "accent"})))},
-    {id: "second", title: "Second", pageId: "second-page", col: 1, root: col({}, text("Actual second page"))}],
-  links: [{from: "first", to: "second", at: "continue", label: "Continue", future: true}]});`;
+export default board({id: ${JSON.stringify(id)}, title: "Real legacy",
+  pages: [{id: "first-page", title: "First page", objects: [], order: ["first", "second"]}, {id: "second-page", title: "Second page", objects: [], order: []}],
+  screens: [{id: "first", title: "First", pageId: "first-page", w: 400, h: 300, root: () => col({pad: 12, fill: "surface", radius: "lg"}, row({name: "continue", gap: 8}, text("Actual nested text", {size: 22, weight: 700, color: "accent"})))},
+    {id: "second", title: "Second", pageId: "first-page", col: 1, root: col({}, text("Actual second page"))}],
+  links: [{from: "first", to: "second", at: "continue", label: "Continue"}]});`;
 }
 
 async function evaluateExport(manifest) {
@@ -171,6 +171,14 @@ async function evaluateExport(manifest) {
     const [source, kit, skins, exporter, schema] = await Promise.all([urls.module, urls.kit, urls.skins, urls.exporter, urls.schema].map((url) => import(url)));
     kit.useSkin(skins.skins.design);
     const document = exporter.exportBoard(source.default, { layout: kit.layout, normalize: schema.normalizeBoard, skin: skins.skins.design, sketch: manifest.sketch });
+    // The desktop converter removes layout-only options before submitting format 4.
+    const clean = (node) => {
+      for (const key of ['pad', 'gap', 'face', 'font', 'label']) delete node[key];
+      for (const child of node.kids ?? []) clean(child);
+    };
+    for (const screen of document.screens) { delete screen.col; delete screen.row; clean(screen.root); }
+    for (const link of document.links) { delete link.at; delete link.label; }
+    document.formatVersion = 4;
     document.legacySource = manifest.sourceRevisions;
     return document;
   } finally { if (before === undefined) delete globalThis.document; else globalThis.document = before; }
@@ -184,12 +192,15 @@ async function registeredLegacy(context, localPath, id = 'legacy', source = lega
   return { editor, file, relative };
 }
 
-test('legacy import retains real screens nested text two pages links sketches unknown fields and read-only source history', async (t) => {
+test('legacy import retains format 4 screens nested text pages links sketches and read-only source history', async (t) => {
   const { context, localPath, fixture } = await shop(t);
   const { editor: legacy, file } = await registeredLegacy(context, localPath);
-  const sketchDocument = sketch('legacy'); sketchDocument.future = { drawing: true };
-  sketchDocument.screens[0].root.kids.push({ id: 'hand-pen', name: 'Hand pen', t: 'vector', kind: 'pen', place: { x: 2, y: 3 }, w: 60, h: 30, d: 'M0 0 L100 100', stroke: '#112233', strokeWidth: 4, opacity: 0.4, futureStroke: true });
+  const sketchDocument = sketch('legacy');
+  sketchDocument.screens[0].root.kids.push({ id: 'hand-pen', name: 'Hand pen', t: 'vector', kind: 'pen', place: { x: 2, y: 3 }, w: 60, h: 30, d: 'M0 0 L100 100', stroke: '#112233', strokeWidth: 4, opacity: 0.4 });
   const sketchFile = path.join(localPath, 'docs/flows/sketches/legacy.json'); await mkdir(path.dirname(sketchFile), { recursive: true }); await writeFile(sketchFile, JSON.stringify(sketchDocument));
+  const commentsFile = path.join(localPath, 'docs/flows/comments/legacy.json'); await mkdir(path.dirname(commentsFile), { recursive: true });
+  const comments = { board: 'legacy', threads: [{ id: 'legacy-thread', anchor: { screen: 'first', element: 'continue' }, status: 'open', messages: [{ author: 'Tom', text: 'Keep this comment', at: '2026-10-31T00:00:00.000Z' }] }] };
+  await writeFile(commentsFile, JSON.stringify(comments));
   const oldHistory = path.join(localPath, `docs/flows/history/${legacy.id}/prior.json`); await mkdir(path.dirname(oldHistory), { recursive: true }); await writeFile(oldHistory, '{"readOnly":true}');
   const original = await readFile(file), originalStat = await stat(file), oldSketch = await readFile(sketchFile), history = await readFile(oldHistory);
   const exported = await readLegacyExport(context, legacy.id), document = await evaluateExport(exported);
@@ -198,9 +209,12 @@ test('legacy import retains real screens nested text two pages links sketches un
   assert.notEqual(imported.id, legacy.id); assert.equal(imported.readOnly, false);
   assert.equal(imported.document.screens.length, 2 + sketchDocument.screens.length); assert.equal(imported.document.pages.length, 3);
   assert.equal(imported.document.screens[0].root.kids[0].kids[0].value, 'Actual nested text');
-  assert.equal(imported.document.screens[0].root.radius, 14); assert.equal(imported.document.screens[0].root.future.node, true);
+  assert.equal(imported.document.screens[0].root.radius, 14); assert.equal(imported.document.formatVersion, 4);
   assert.equal(imported.document.links[0].element, imported.document.screens[0].root.kids[0].id);
-  assert.equal(imported.document.legacySketch.future.drawing, true); assert.deepEqual(imported.document.screens.at(-1), sketchDocument.screens[0]);
+  assert.equal(imported.document.legacySketch, undefined); assert.equal(imported.document.legacySource, undefined); assert.deepEqual(imported.document.screens.at(-1), sketchDocument.screens[0]);
+  assert.equal(imported.document.threads[0].replies[0].text, 'Keep this comment');
+  assert.deepEqual(imported.document.threads[0].path, ['first', imported.document.screens[0].root.id, imported.document.screens[0].root.kids[0].id]);
+  assert.deepEqual(JSON.parse(await readFile(commentsFile, 'utf8')), comments);
   assert.deepEqual(await readFile(file), original); assert.equal((await stat(file)).mtimeMs, originalStat.mtimeMs);
   assert.deepEqual(await readFile(sketchFile), oldSketch); assert.deepEqual(await readFile(oldHistory), history);
   assert.equal(fixture.store.writes.includes(file), false);
@@ -211,7 +225,8 @@ test('legacy import retains real screens nested text two pages links sketches un
   assert.equal(index[0].path, imported.path); assert.equal(index[0].futureIndex, true); assert.equal(index[0].legacyPath, legacy.path);
   assert.equal((await readEditor(context, legacy.id)).readOnly, true);
   const saved = await replaceBoard(context, imported.id, { document: { ...imported.document, note: 'Retained after saving' }, expectedRevision: imported.revision });
-  assert.equal(saved.document.future.kept, true);
+  assert.equal(saved.document.note, 'Retained after saving');
+  await assert.rejects(() => replaceBoard(context, imported.id, { document: { ...saved.document, unknown: true }, expectedRevision: saved.revision }), { code: 'invalid_document' });
   await assert.rejects(() => importBoard(context, { project: 'shop', path: exported.path, title: 'Again', folderId: null, legacyResourceId: legacy.id, document, expectedRevision: legacy.revision }), { code: 'revision_conflict' });
 });
 
@@ -254,9 +269,9 @@ test('HTTP legacy export and import require exact desktop bodies and never evalu
   const manifest = await call(core.http.port, 'GET', `/api/v1/blueprint/boards/${editor.id}/export`, { token });
   assert.equal(manifest.status, 200); assert.equal(globalThis.legacyExecutionMarker, undefined);
   const data = manifest.json.data, document = await evaluateExport(data); delete globalThis.legacyExecutionMarker;
-  document.uploadedCode = 'globalThis.uploadedExecutionMarker = true';
+  document.note = 'globalThis.uploadedExecutionMarker = true';
   const body = { project: 'shop', path: data.path, title: 'HTTP real board', folderId: null, legacyResourceId: editor.id, document, expectedRevision: data.expectedRevision };
-  for (const invalid of [{ ...body, module: 'globalThis.uploadedExecutionMarker = true' }, { ...body, expectedRevision: undefined }, { ...body, document: 'export default {}' }]) {
+  for (const invalid of [{ ...body, module: 'globalThis.uploadedExecutionMarker = true' }, { ...body, document: { ...document, uploadedCode: 'globalThis.uploadedExecutionMarker = true' } }, { ...body, expectedRevision: undefined }, { ...body, document: 'export default {}' }]) {
     const response = await call(core.http.port, 'POST', '/api/v1/blueprint/boards/import', { token, body: invalid, headers: { 'idempotency-key': randomUUID() } });
     assert.ok([400, 422].includes(response.status));
   }
@@ -266,7 +281,7 @@ test('HTTP legacy export and import require exact desktop bodies and never evalu
   const replay = await call(core.http.port, 'POST', '/api/v1/blueprint/boards/import', { token, body, headers: { 'idempotency-key': key } });
   assert.equal(replay.status, 201); assert.equal(replay.json.data.id, imported.json.data.id);
   assert.equal(globalThis.legacyExecutionMarker, undefined); assert.equal(globalThis.uploadedExecutionMarker, undefined);
-  assert.equal(imported.json.data.document.screens.length, 2); assert.equal(imported.json.data.document.uploadedCode, document.uploadedCode);
+  assert.equal(imported.json.data.document.screens.length, 2); assert.equal(imported.json.data.document.note, document.note); assert.equal(imported.json.data.document.formatVersion, 4);
   assert.deepEqual(await readFile(file), original);
 });
 
@@ -383,7 +398,7 @@ test('History versions every board title comment node and sketch with trusted au
   editor = await restoreHistory(context, editor.id, history.items.at(-1).id, { expectedRevision: editor.revision, expectedCommentsRevision: editor.commentsRevision });
   assert.equal(editor.title, initial.title); assert.equal(editor.threads.length, 0);
   const restored = await restoreHistory(context, editor.id, history.items[0].id, { expectedRevision: editor.revision, expectedCommentsRevision: editor.commentsRevision });
-  assert.equal(restored.title, 'Renamed board'); assert.equal(restored.threads[0].status, 'resolved');
+  assert.equal(restored.title, 'Renamed board'); assert.equal(restored.threads[0].resolved, true);
   assert.equal(restored.document.screens[0].root.kids.at(-1).kind, 'pen');
 });
 
@@ -705,19 +720,19 @@ test('board moves recover each journal phase and preserve index history comments
       await mkdir(api, { recursive: true });
       context.projects.push({ name: 'api', localPath: api });
       const document = sketch('move-crash');
-      document.foreign = { nested: ['preserved'] };
+      document.texts = [{ id: 'copy-book', name: 'Copy', values: { en: { value: 'preserved' } } }];
       const board = await createBoard(context, { project: 'shop', document });
       const asset = await createAsset({ ...context, converter: null }, board.id, { contentType: 'image/png', bytesBase64: PNG.toString('base64') });
       const current = await readEditor(context, board.id);
       const original = await readFile(path.join(localPath, board.path));
       fixture.store.fault = fault;
-      await assert.rejects(() => moveEditor(context, board.id, { project: 'api', path: 'docs/flows/boards/moved.json', folderId: null,
+      await assert.rejects(() => moveEditor(context, board.id, { project: 'api', path: 'docs/flows/boards/move-crash.json', folderId: null,
         confirmedRepositoryChange: true, ...managementRevisions(current) }), { code: 'injected_crash' });
       const restarted = createStore({ root: fixture.root, confineRoot: fixture.root, mindPath: fixture.paths.mind,
         localDirectory: fixture.paths.localDirectory, projects: context.projects, now: context.now });
       await recoverTransactions(restarted);
       await assert.rejects(() => readFile(path.join(localPath, board.path)), { code: 'ENOENT' });
-      assert.deepEqual(await readFile(path.join(api, 'docs/flows/boards/moved.json')), original);
+      assert.deepEqual(await readFile(path.join(api, 'docs/flows/boards/move-crash.json')), original);
       assert.equal(JSON.parse(await readFile(path.join(api, 'docs/flows/boards/index.json')))[0].id, document.id);
       assert.deepEqual(JSON.parse(await readFile(path.join(localPath, 'docs/flows/boards/index.json'))), []);
       assert.deepEqual(await readFile(path.join(api, 'docs/flows/assets', asset.id)), PNG);
@@ -752,20 +767,18 @@ test('a stale bundle entry rejects every write and destination collisions and re
   assert.deepEqual(await readFile(path.join(localPath, text.path)), original);
 });
 
-test('unknown fields survive a full save and a dropped field is refused', async (t) => {
-  const { context } = await shop(t);
+test('format 4 rejects unknown board and node fields before any write', async (t) => {
+  const { context, fixture } = await shop(t);
   const document = sketch();
-  document.script = 'keep';
-  document.screens[0].root.kids.push(rectangleNode(document, { x: 8, y: 8, w: 40, h: 20 }, { stroke: '#111111', fill: 'none' }));
-  document.screens[0].root.kids[0].note = 'box note';
+  const writes = fixture.store.writes.length;
+  await assert.rejects(() => createBoard(context, { project: 'shop', document: { ...document, script: 'keep' } }), { code: 'invalid_document' });
+  document.screens[0].root.note = 'unknown node property';
+  await assert.rejects(() => createBoard(context, { project: 'shop', document }), { code: 'invalid_document' });
+  assert.equal(fixture.store.writes.length, writes);
+  delete document.screens[0].root.note;
   const created = await createBoard(context, { project: 'shop', document });
-  assert.equal(created.document.script, 'keep');
-  assert.equal(created.document.screens[0].root.kids[0].note, 'box note');
-  const dropped = structuredClone(created.document);
-  delete dropped.script;
-  await assert.rejects(() => replaceBoard(context, created.id, { document: dropped, expectedRevision: created.revision }), { status: 409, code: 'unsupported_fields_lost' });
   const saved = await replaceBoard(context, created.id, { document: created.document, expectedRevision: created.revision });
-  assert.equal(saved.document.script, 'keep');
+  assert.equal(saved.document.formatVersion, 4);
   assert.equal(preserveUnknown(created.document, saved.document), true);
 });
 
@@ -799,8 +812,10 @@ test('a module stays read-only and a board id cannot be registered twice', async
   assert.equal(moduleComment.thread.anchor.screen, 's-from-the-viewer');
   assert.equal(moduleComment.thread.place, null);
   const created = await createBoard(context, { project: 'shop', document: sketch('cart') });
-  await assert.rejects(() => createBoard(context, { project: 'shop', path: 'docs/flows/boards/other.json', document: sketch('cart') }), { status: 409, code: 'board_id_exists' });
-  await assert.rejects(() => createBoard(context, { project: 'shop', path: created.path, document: sketch('other') }), { status: 409, code: 'resource_exists' });
+  // Format 4 saves a board only at docs/flows/boards/<id>.json, so a taken id is a taken path.
+  await assert.rejects(() => createBoard(context, { project: 'shop', document: sketch('cart') }), { status: 409, code: 'resource_exists' });
+  await assert.rejects(() => createBoard(context, { project: 'shop', path: 'docs/flows/boards/other.json', document: sketch('cart') }), { status: 422, code: 'invalid_path' });
+  await assert.rejects(() => createBoard(context, { project: 'shop', path: created.path, document: sketch('other') }), { status: 422, code: 'invalid_path' });
   const sidecar = path.join(localPath, 'docs', 'notes.orig.json');
   await writeFile(sidecar, '{}\n');
   const found = await discoverResources(context, 'shop');
@@ -859,13 +874,14 @@ test('attachments can be replaced and a removed node comment stays readable', as
   assert.deepEqual(attachments.attached, ['root:builder']);
   const detached = await writeAttachments(context, created.id, { attached: [], expectedRevision: attachments.revision });
   assert.deepEqual(detached.attached, []);
-  const commentsPath = path.join(localPath, 'docs', 'flows', 'comments', 'cart.json');
-  await writeFile(commentsPath, `${JSON.stringify({ board: 'cart', threads: [{ id: 'thread-1', nodeId: box.id, text: 'still here' }] })}\n`);
-  const removed = await removeNode(context, created.id, box.id, { expectedRevision: created.revision });
+  const thread = { id: 'thread-1', screen: document.screens[0].id,
+    path: [document.screens[0].id, document.screens[0].root.id, box.id], resolved: false,
+    replies: [{ id: 'reply-1', author: 'User', text: 'still here', createdAt: '2026-10-10T12:00:00.000Z' }] };
+  const commented = await replaceBoard(context, created.id, { document: { ...created.document, threads: [thread] }, expectedRevision: created.revision });
+  const removed = await removeNode(context, created.id, box.id, { expectedRevision: commented.revision });
   assert.equal(removed.document.screens[0].root.kids.some((kid) => kid.id === box.id), false);
   const comments = await readComments(context, created.id);
-  assert.equal(comments.threads[0].text, 'still here');
-  assert.equal(comments.threads[0].nodeId, box.id);
+  assert.deepEqual(comments.threads[0], thread);
 });
 
 test('a stale revision conflicts and assets reject traversal, markup and oversized files', async (t) => {
@@ -874,7 +890,7 @@ test('a stale revision conflicts and assets reject traversal, markup and oversiz
   const next = structuredClone(created.document);
   next.title = 'Cart two';
   const saved = await replaceBoard(context, created.id, { document: next, expectedRevision: created.revision });
-  await assert.rejects(() => replaceBoard(context, created.id, { document: created.document, expectedRevision: created.revision }), { status: 409, code: 'revision_conflict' });
+  await assert.rejects(() => replaceBoard(context, created.id, { document: created.document, expectedRevision: created.revision }), { status: 409, code: 'conflict' });
   const added = await addNode(context, created.id, {
     screenId: saved.document.screens[0].id,
     parentId: saved.document.screens[0].root.id,
@@ -930,7 +946,7 @@ test('a stale revision conflicts and assets reject traversal, markup and oversiz
   const parentId = linkedBoard.document.screens[0].root.id;
   const elsewhere = addScreen(structuredClone(linkedBoard.document), { title: 'Other', x: 400, y: 0 });
   const tile = rectangleNode(linkedBoard.document, { x: 2, y: 2, w: 12, h: 12 }, { stroke: '#111111', fill: 'none' });
-  tile.mark = { keep: true, note: 'stay' };
+  tile.states = { hover: { fill: '#112233', scale: 1.1 } };
   await assert.rejects(() => addNode(context, created.id, {
     screenId: elsewhere.id,
     parentId,
@@ -943,10 +959,10 @@ test('a stale revision conflicts and assets reject traversal, markup and oversiz
   assert.equal(seen.at(-1).data.focus.screenId, screenId);
   assert.equal(seen.at(-1).data.focus.nodeId, placed.nodeId);
   await assert.rejects(() => updateNode(context, created.id, placed.nodeId, { changes: { kids: [] }, expectedRevision: placed.editor.revision }), { status: 422, code: 'invalid_node' });
-  const merged = await updateNode(context, created.id, placed.nodeId, { changes: { mark: { note: 'next' } }, expectedRevision: placed.editor.revision });
+  const merged = await updateNode(context, created.id, placed.nodeId, { changes: { states: { hover: { scale: 1.2 } } }, expectedRevision: placed.editor.revision });
   const kept = merged.document.screens[0].root.kids.find((item) => item.id === placed.nodeId);
-  assert.equal(kept.mark.keep, true);
-  assert.equal(kept.mark.note, 'next');
+  assert.equal(kept.states.hover.fill, '#112233');
+  assert.equal(kept.states.hover.scale, 1.2);
   const joined = structuredClone(merged.document);
   const second = addScreen(joined, { title: 'Other', x: 400, y: 0 });
   joined.links.push({ id: 'to-other', from: joined.screens[0].id, to: second.id, element: placed.nodeId, transition: 'cut' });
@@ -1091,7 +1107,7 @@ test('a project asset quota is reserved before conversion and released on failur
   await assert.rejects(() => createAsset({ ...context, converter: null, assetCountLimit: 1 }, created.id, { contentType: 'image/png', bytesBase64: PNG.toString('base64') }), { status: 413, code: 'asset_quota' });
 });
 
-test('the board routes keep an unknown field through HTTP', async (t) => {
+test('the board routes validate format 4 and keep optional fields through HTTP', async (t) => {
   const fixture = await makeCoreFixture();
   const localPath = path.join(fixture.paths.localDirectory, 'shop');
   await mkdir(localPath, { recursive: true });
@@ -1111,17 +1127,17 @@ test('the board routes keep an unknown field through HTTP', async (t) => {
   });
   const token = local.json.data.token;
   const document = sketch();
-  document.script = 'from http';
+  document.texts = [{ id: 'shared-copy', name: 'Copy', values: { en: { value: 'from http' } } }];
   const created = await call(core.http.port, 'POST', '/api/v1/blueprint/boards', {
     token,
     body: { project: 'shop', document },
     headers: { 'idempotency-key': randomUUID() },
   });
   assert.equal(created.status, 201);
-  assert.equal(created.json.data.document.script, 'from http');
+  assert.equal(created.json.data.document.texts[0].values.en.value, 'from http');
   const read = await call(core.http.port, 'GET', `/api/v1/blueprint/boards/${created.json.data.id}`, { token });
   assert.equal(read.status, 200);
-  assert.equal(read.json.data.document.script, 'from http');
+  assert.equal(read.json.data.document.texts[0].values.en.value, 'from http');
   const unauthenticated = await call(core.http.port, 'POST', `/api/v1/editors/${created.json.data.id}/assets`, {
     body: { contentType: 'image/png', bytesBase64: 'qq' },
     headers: { 'content-type': 'text/plain' },
@@ -1160,7 +1176,7 @@ test('the board routes keep an unknown field through HTTP', async (t) => {
   });
   assert.equal(denied.status, 403);
   const editor = await readEditor({ store: fixture.store, paths: fixture.paths, projects: [{ name: 'shop', localPath }] }, created.json.data.id);
-  assert.equal(editor.document.script, 'from http');
+  assert.equal(editor.document.texts[0].values.en.value, 'from http');
 });
 
 function release() {
@@ -1707,7 +1723,7 @@ test('editor lists and detail project live sidecars and pages', async (t) => {
   assert.equal(detail.attachmentRevision, attached.revision);
   assert.equal(detail.commentsRevision, commented.commentsRevision);
   assert.equal(detail.openThreads, 1);
-  assert.equal(detail.threads[0].messages[0].text, 'Check the bag.');
+  assert.equal(detail.threads[0].replies[0].text, 'Check the bag.');
   assert.deepEqual(detail.attached, ['root:master']);
   assert.deepEqual(detail.activity, { unitId: 'root:master', at: new Date(context.now()).toISOString() });
   const page = await list(context, { kind: 'blueprint', limit: 1 });
@@ -1794,15 +1810,16 @@ test('a person note and its reply persist without message admission or fanout', 
     expectedCommentsRevision: (await readComments(context, board.id)).commentsRevision,
     anchor: { screen: board.document.screens[0].id, label: 'Bag' },
   });
-  assert.equal(note.thread.messages[0].sendToAgent, false);
+  assert.equal(note.thread.replies.length, 1);
+  assert.equal(note.thread.screen, board.document.screens[0].id);
   const replied = await replyComment(context, board.id, note.thread.id, {
     text: 'The note remains local.', sendToAgent: false,
     expectedCommentsRevision: note.commentsRevision,
   });
-  assert.equal(replied.thread.messages.at(-1).sendToAgent, false);
+  assert.equal(replied.thread.replies.length, 2);
   const stored = await readComments(context, board.id);
-  assert.equal(stored.threads[0].messages.length, 2);
-  for (const message of stored.threads[0].messages) {
+  assert.equal(stored.threads[0].replies.length, 2);
+  for (const message of stored.threads[0].replies) {
     const fanout = path.join(fixture.paths.mind, 'user', 'relay', 'fanout', message.id + '.json');
     await assert.rejects(readFile(fanout), { code: 'ENOENT' });
   }

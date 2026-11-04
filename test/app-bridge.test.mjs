@@ -16,6 +16,9 @@ import { watchLocalChanges } from '../engine/service/local-watch.mjs';
 import { makeCoreFixture, dispose } from './core-fixture.mjs';
 
 const CLIENT = '062-bridge-tests';
+function boardDocument(id, title = 'Board') {
+  return { formatVersion: 4, id, title, note: '', pages: [{ id: 'page', title: 'Page', objects: [], order: [] }], screens: [], links: [], components: [], fonts: [], threads: [] };
+}
 async function observePass(context, options = {}) {
   let result;
   do { result = await observeAppFiles(context, options); } while (result.pending);
@@ -74,17 +77,22 @@ test('bridge method capabilities are exact per app, hello checks app and protoco
   await assert.rejects(blueprint('locations'), { code: 'denied' });
 });
 
-test('Blueprint read preserves exact stored bytes and unknown fields; SHA revisions reject stale and concurrent saves', async t => {
+test('Blueprint read preserves exact stored bytes and optional fields; SHA revisions reject stale and concurrent saves', async t => {
   const { blueprint, project } = await setup(t);
-  const text = '{ "format":4, "title":"Board", "threads": [], "future": {"kept":true} }\r\n';
+  const document = { ...boardDocument('checkout'), texts: [{ id: 'shared', name: 'Label', values: { en: { value: 'Kept' } } }] };
+  const text = `${JSON.stringify(document, null, 2)}\r\n`;
   const saved = await blueprint('save', { id: 'checkout', text, expectedRevision: null });
   assert.equal(saved.revision, hashBytes(Buffer.from(text)));
   const read = await blueprint('read', { id: 'checkout' });
   assert.equal(read.text, text);
-  assert.deepEqual(read.document.future, { kept: true });
-  await assert.rejects(blueprint('save', { id: 'checkout', text: '{}', expectedRevision: null }), { code: 'conflict' });
-  await assert.rejects(blueprint('save', { id: 'checkout', text: '{}', expectedRevision: '0'.repeat(64) }), { code: 'conflict' });
-  const outcomes = await Promise.allSettled(['One', 'Two'].map(title => blueprint('save', { id: 'checkout', document: { title }, expectedRevision: read.revision })));
+  assert.deepEqual(read.document.texts, document.texts);
+  await assert.rejects(blueprint('save', { id: 'checkout', text, expectedRevision: null }), { code: 'conflict' });
+  await assert.rejects(blueprint('save', { id: 'checkout', text, expectedRevision: '0'.repeat(64) }), { code: 'conflict' });
+  for (const invalid of [{}, { ...document, future: true }, { ...document, formatVersion: 5 }, { ...document, id: 'other' }]) {
+    await assert.rejects(blueprint('save', { id: 'checkout', document: invalid, expectedRevision: read.revision }), { code: 'invalid' });
+  }
+  assert.equal((await blueprint('read', { id: 'checkout' })).text, text);
+  const outcomes = await Promise.allSettled(['One', 'Two'].map(title => blueprint('save', { id: 'checkout', document: { ...document, title }, expectedRevision: read.revision })));
   assert.equal(outcomes.filter(item => item.status === 'fulfilled').length, 1);
   assert.equal(outcomes.find(item => item.status === 'rejected').reason.code, 'conflict');
   assert.equal((await blueprint('list')).length, 1);
@@ -149,7 +157,7 @@ test('events carry only metadata, suppress own watcher echoes, retain changes fr
   const { context, blueprint, project, events, call } = await setup(t);
   await call('void', 'hello', { app: 'void', appVersion: '1', protocol: 1 });
   await observePass(context, { baseline: true });
-  await blueprint('save', { id: 'board', text: '{"format":4}', expectedRevision: null });
+  await blueprint('save', { id: 'board', document: boardDocument('board'), expectedRevision: null });
   const own = events.find(event => event.data.name === 'blueprint.changed');
   assert.equal(own.data.clientId, CLIENT);
   assert.equal(events.find(event => event.data.name === 'void.files.changed').data.clientId, undefined);
@@ -157,7 +165,7 @@ test('events carry only metadata, suppress own watcher echoes, retain changes fr
   await observePass(context);
   assert.equal(events.length, length, 'watcher must not echo a bridge save');
   const relative = 'docs/flows/boards/board.json', file = path.join(project, relative);
-  const bytes = Buffer.from('{"format":4,"title":"Agent"}');
+  const bytes = Buffer.from(JSON.stringify(boardDocument('board', 'Agent')));
   await mkdir(path.join(context.paths.mind, 'user/gui'), { recursive: true });
   await writeFile(path.join(context.paths.mind, 'user/gui/resources.json'), JSON.stringify({ resources: [{ id: 'resource', project: 'shop', path: relative }] }));
   context.store.events.push({ resourceId: 'resource', revision: hashBytes(bytes), source: { unitId: 'project:shop:executor' } });
@@ -181,7 +189,7 @@ test('a scanner read overlapping a bridge save never emits the previous bytes as
   const { context, blueprint, project, events, call } = await setup(t);
   await call('blueprint', 'hello', { app: 'blueprint', appVersion: '1', protocol: 1 });
   const file = path.join(project, 'docs/flows/boards/overlap.json');
-  const bytes = Buffer.from('{"format":4}');
+  const bytes = Buffer.from(JSON.stringify(boardDocument('overlap')));
   await writeFile(file, bytes);
   await observePass(context, { baseline: true });
   await utimes(file, new Date(), new Date(Date.now() + 10000));
@@ -202,7 +210,7 @@ test('a scanner read overlapping a bridge save never emits the previous bytes as
   try {
     observing = observePass(context);
     await entered.promise;
-    saving = blueprint('save', { id: 'overlap', text: '{"format":4,"title":"Own"}', expectedRevision: hashBytes(bytes) });
+    saving = blueprint('save', { id: 'overlap', document: boardDocument('overlap', 'Own'), expectedRevision: hashBytes(bytes) });
     // A correctly serialized writer waits until the scanner releases its read.
     const wroteBeforeReadCompleted = await Promise.race([saving.then(() => true), delay(500).then(() => false)]);
     assert.equal(wroteBeforeReadCompleted, false, 'The bridge write must wait for the overlapping scanner read.');
@@ -289,7 +297,7 @@ test('bridge HTTP routes reuse desktop bearer, Origin, Host and idempotency guar
   assert.equal(agentEvents[0].name, 'unit.changed', 'derived app events follow their source cursor');
   const origin = `http://127.0.0.1:${http.port}`;
   const desktop = credentials.issue({ audience: 'desktop', unitId: 'root:master', viewerId: randomUUID(), expiresAt: null });
-  const payload = { app: 'blueprint', method: 'blueprint.save', params: { location: project, id: 'http', text: '{}', expectedRevision: null }, clientId: CLIENT };
+  const payload = { app: 'blueprint', method: 'blueprint.save', params: { location: project, id: 'http', document: boardDocument('http'), expectedRevision: null }, clientId: CLIENT };
   function request(token, extra = {}, key = randomUUID(), body = payload) {
     return new Promise((resolve, reject) => {
       const outgoing = httpRequest(`${origin}/api/v1/app-bridge/call`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, Origin: origin, 'Content-Type': 'application/json', 'Idempotency-Key': key, ...extra } }, response => {
@@ -356,8 +364,13 @@ test('observer bounds each slice, continues and skips unreadable and rejected en
     let result = await observeAppFiles(context, { baseline: true });
     assert.equal(result.pending, true);
     assert.ok(result.entries <= 400);
-    let skipped = result.skipped, slices = 1;
-    while (result.pending && slices++ < 20) { result = await observeAppFiles(context, { baseline: true }); skipped += result.skipped; }
+    let skipped = result.skipped;
+    const deadline = Date.now() + 60000;
+    while (result.pending && Date.now() < deadline) {
+      result = await observeAppFiles(context, { baseline: true });
+      assert.ok(result.entries <= 400);
+      skipped += result.skipped;
+    }
     assert.equal(result.pending, false);
     assert.ok(skipped >= 1);
   } finally { fsPromises.lstat = original; syncBuiltinESMExports(); }
@@ -386,9 +399,10 @@ test('each observation slice batches file changes and coalesces agent notificati
 
 test('Windows case variants select the same project and serialize the same file lock', { skip: process.platform !== 'win32' }, async t => {
   const { blueprint, voidCall, project } = await setup(t);
-  const saved = await blueprint('save', { location: project.toUpperCase(), id: 'case', text: '{}', expectedRevision: null });
-  assert.equal((await voidCall('open.pick', { location: undefined, path: path.join(project, 'docs/flows/boards/case.json').toUpperCase() })).text, '{}');
-  const outcomes = await Promise.allSettled([project, project.toUpperCase()].map(location => blueprint('save', { location, id: 'case', text: '{"next":true}', expectedRevision: saved.revision })));
+  const text = JSON.stringify(boardDocument('case'));
+  const saved = await blueprint('save', { location: project.toUpperCase(), id: 'case', text, expectedRevision: null });
+  assert.equal((await voidCall('open.pick', { location: undefined, path: path.join(project, 'docs/flows/boards/case.json').toUpperCase() })).text, text);
+  const outcomes = await Promise.allSettled([project, project.toUpperCase()].map(location => blueprint('save', { location, id: 'case', document: boardDocument('case', 'Next'), expectedRevision: saved.revision })));
   assert.equal(outcomes.filter(item => item.status === 'fulfilled').length, 1);
   assert.equal(outcomes.find(item => item.status === 'rejected').reason.code, 'conflict');
 });
