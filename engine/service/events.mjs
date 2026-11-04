@@ -186,7 +186,8 @@ export function createEventBus({ now = () => Date.now(), machine = 'DESKTOP', st
   }
 
   function listening(audience) {
-    for (const subscriber of subscribers) if (!subscriber.closed && subscriber.principal.audience === audience) return true;
+    // Only a viewer's stream counts; the service's own listeners share the desktop audience.
+    for (const subscriber of subscribers) if (!subscriber.closed && subscriber.principal.audience === audience && subscriber.principal.viewerId) return true;
     return false;
   }
 

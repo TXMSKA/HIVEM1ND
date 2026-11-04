@@ -30,7 +30,9 @@ async function setup(t, { running = true } = {}) {
 test('a bus reports a desktop stream only while one is open', () => {
   const bus = createEventBus();
   assert.equal(bus.listening('desktop'), false);
-  const subscriber = bus.subscribe({ stableId: 'desktop-1', audience: 'desktop' });
+  bus.subscribe({ stableId: 'service-internal', audience: 'desktop' });
+  assert.equal(bus.listening('desktop'), false);
+  const subscriber = bus.subscribe({ stableId: 'desktop-1', audience: 'desktop', viewerId: 'viewer-1' });
   assert.equal(bus.listening('desktop'), true);
   assert.equal(bus.listening('phone'), false);
   bus.release(subscriber);
