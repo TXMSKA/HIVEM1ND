@@ -179,17 +179,16 @@ export async function skipDetected(context, { client, home }) {
   return answered(context, record);
 }
 
-function quote(value) { return `'${String(value).replace(/'/g, "''")}'`; }
 
 // The real terminal launcher. The running service configures it; a service composed without it (tests, embedders) opens no window.
-export function systemTerminal({ script }) {
+export function systemTerminal({ variable, home, command }) {
   if (process.platform !== 'win32') throw new CoreError(409, 'terminal_unavailable', 'This platform has no terminal launcher yet.');
-  const child = spawn('cmd.exe', ['/c', 'start', '""', 'powershell.exe', '-NoExit', '-NoProfile', '-Command', script], { shell: false, detached: true, stdio: 'ignore', windowsHide: false });
+  // The account home travels in the environment of the new console, so no shell string carries it.
+  const child = spawn('cmd.exe', ['/d', '/c', 'start', '""', 'cmd.exe', '/k', command], { shell: false, detached: true, stdio: 'ignore', windowsHide: false, env: { ...process.env, [variable]: home } });
   child.unref();
 }
 
 // Opens a terminal for the client's own sign-in with that account's variable set. The home path is chosen here, never taken from the request.
-function loginScript(client, home) { return `$env:${ACCOUNT_VARIABLES[client]} = ${quote(home)}; ${LOGIN_COMMAND[client]}`; }
 
 export async function addAccount(context, { client, label }) {
   validateAccountClient(client);
@@ -201,7 +200,7 @@ export async function addAccount(context, { client, label }) {
   while (ACCOUNT_CLIENTS.some(other => record.accounts[other].some(item => sameHome(item.home, home))) || await stat(home).then(() => true, () => false)) home = `${base}-${count++}`;
   insert(record, client, name, home);
   await writeAccounts(context, record);
-  await context.openTerminal({ client, home, script: loginScript(client, home) });
+  await context.openTerminal({ client, home, variable: ACCOUNT_VARIABLES[client], command: LOGIN_COMMAND[client] });
   return accountsView(context);
 }
 

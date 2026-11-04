@@ -107,8 +107,9 @@ test('adding opens a terminal for that home; removing drops only the entry', asy
   assert.equal(opened.length, 1);
   assert.equal(opened[0].client, 'codex');
   assert.equal(opened[0].home, added.home);
-  assert.match(opened[0].script, /^\$env:CODEX_HOME = '.*'; codex login$/);
-  assert.ok(!opened[0].script.includes('Work team'));
+  assert.equal(opened[0].variable, 'CODEX_HOME');
+  assert.equal(opened[0].command, 'codex login');
+  assert.ok(!JSON.stringify(opened[0]).includes('Work team'));
   await mkdir(added.home, { recursive: true });
   await writeFile(path.join(added.home, 'auth.json'), 'keep');
   const second = await addAccount(context, { client: 'codex', label: 'Work team' });
