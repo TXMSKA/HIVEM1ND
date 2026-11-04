@@ -93,6 +93,13 @@ export function startEmbeddedApps(app, repaint) {
   });
 }
 
+// The mode an agent's open request switches to; null when this window cannot embed the app.
+export function embeddedOpenMode(app, event) {
+  const data = event?.envelope?.data;
+  if (event?.name !== "app.bridge" || data?.name !== "app.open" || app.layout === "phone" || typeof hostOf(app)?.embeddedUpdate !== "function") return null;
+  return data.app === "blueprint" ? "blueprint" : data.app === "void" ? "document" : null;
+}
+
 export function forwardEmbeddedEvent(app, event) {
   if (event?.name === "app.bridge") hostOf(app)?.embeddedEvent?.(event);
 }

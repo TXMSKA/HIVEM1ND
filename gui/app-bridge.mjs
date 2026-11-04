@@ -18,6 +18,11 @@ const clipboardPermissions = new Set(['clipboard-read', 'clipboard-sanitized-wri
 const fail = code => { throw { code }; };
 const errorResult = error => ({ error: { code: errors.has(error?.code) ? error.code : 'unavailable' } });
 
+// The route that shows one board; the folder is the location id the bridge lists in blueprint.locations.
+export function blueprintOpenUrl({ location, id }) {
+  return `${APP_TARGETS.blueprint.origin}/review/${encodeURIComponent(id)}?folder=${encodeURIComponent(location)}&host=ONEM1ND`;
+}
+
 export function appOrigin(app, value) {
   try {
     const url = new URL(value);
@@ -155,6 +160,8 @@ export function createEmbeddedApps({ window, WebContentsView, session, shell, di
   let closePending;
   let selectionPending = Promise.resolve();
   let activitySignature;
+  let pendingBoard = null;
+  let pendingText = null;
 
   const activity = ({ empty = false, force = false } = {}) => {
     const origin = serviceOrigin();
@@ -198,6 +205,28 @@ export function createEmbeddedApps({ window, WebContentsView, session, shell, di
       if (url.href.length > 2048 || !['http:', 'https:'].includes(url.protocol) || url.username || url.password) return;
       Promise.resolve(shell.openExternal(url.href)).catch(() => {});
     } catch { /* An invalid or privileged URL never leaves the view. */ }
+  };
+  // The person's window is never raised for an agent's request; a window that is hidden or not in front only flashes.
+  const notice = () => {
+    try { if (!window.isDestroyed() && (!window.isVisible() || window.isMinimized() || !window.isFocused())) window.flashFrame?.(true); } catch { /* A notice is optional. */ }
+  };
+  // The service already stored the position; the project event makes Void read it again.
+  const showText = () => {
+    const open = pendingText, record = records.get('void');
+    if (!open || !record?.loaded) return;
+    pendingText = null;
+    selectionPending = selectionPending.then(async () => {
+      if (disposed) return;
+      const selected = await serviceCall('void', 'void.open.switchTo', { location: open.project.id });
+      if (!disposed && record.loaded) send(record, 'void.project', selected);
+    }).catch(() => {});
+  };
+  const showBoard = () => {
+    const open = pendingBoard, record = records.get('blueprint');
+    if (!open || !record) return;
+    pendingBoard = null;
+    status(record, 'loading');
+    Promise.resolve(record.view.webContents.loadURL(blueprintOpenUrl(open))).catch(() => { if (disposed) return; record.loaded = false; status(record, 'unavailable'); layout(); activity(); });
   };
   const makeRecord = app => {
     const partition = `persist:app-${app}`;
@@ -246,6 +275,7 @@ export function createEmbeddedApps({ window, WebContentsView, session, shell, di
       send(record, 'host.locale', { locale });
       send(record, 'host.tokens', { tokens });
       activity();
+      if (app === 'void') showText();
     });
     contents.on('did-fail-load', (_event, code, _description, _url, mainFrame) => {
       if (mainFrame === false || code === -3) return;
@@ -330,7 +360,9 @@ export function createEmbeddedApps({ window, WebContentsView, session, shell, di
         const record = records.get(active) ?? makeRecord(active);
         if (record.state === 'idle' || record.state === 'unavailable') {
           status(record, 'loading');
-          Promise.resolve(record.view.webContents.loadURL(APP_TARGETS[active].url)).catch(() => { if (disposed) return; record.loaded = false; status(record, 'unavailable'); layout(); activity(); });
+          const target = active === 'blueprint' && pendingBoard ? blueprintOpenUrl(pendingBoard) : APP_TARGETS[active].url;
+          if (active === 'blueprint') pendingBoard = null;
+          Promise.resolve(record.view.webContents.loadURL(target)).catch(() => { if (disposed) return; record.loaded = false; status(record, 'unavailable'); layout(); activity(); });
         }
       }
       layout();
@@ -372,6 +404,12 @@ export function createEmbeddedApps({ window, WebContentsView, session, shell, di
     event(frame) {
       if (disposed || frame?.name !== 'app.bridge') return;
       const data = frame.envelope?.data;
+      if (data?.name === 'app.open') {
+        const params = data.params;
+        if (data.app === 'blueprint' && typeof params?.id === 'string' && typeof params.location === 'string') { pendingBoard = params; showBoard(); notice(); }
+        else if (data.app === 'void' && typeof params?.project?.id === 'string' && typeof params.path === 'string') { pendingText = params; showText(); notice(); }
+        return;
+      }
       if (!data || data.clientId === clientId || !events.has(data.name)) return;
       if (data.name.startsWith('host.') || data.name === 'app.save') return;
       for (const record of records.values()) {

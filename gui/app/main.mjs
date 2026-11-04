@@ -44,7 +44,7 @@ import { cardinal, formatClock, formatNumber, formatRecent, formatShortDate, for
 import { collectPages, createPagedList, loadAll, loadNext, reloadList, renderWindow, setQuery } from "./lists.mjs";
 import { adoptInitialLayout, applyRemoteLayout, centerUnit, createMap, keepLocalPosition, renderMap, retrySavedLayout, settlePositions, useIncomingPosition } from "./map.mjs";
 import { dispose as disposeEmbed, publishDirty, publishReady, startEmbedChannel } from "./embed.mjs";
-import { disposeEmbeddedApps, embeddedName, forwardEmbeddedEvent, openBrowserApp, renderEmbeddedApp, startEmbeddedApps, syncEmbeddedApp } from "./embedded-apps.mjs";
+import { disposeEmbeddedApps, embeddedName, embeddedOpenMode, forwardEmbeddedEvent, openBrowserApp, renderEmbeddedApp, startEmbeddedApps, syncEmbeddedApp } from "./embedded-apps.mjs";
 import { PHONE_NAV, exchangeCode, exchangeHomeFragment, logout, renderCodeEntry, renderPhone } from "./phone.mjs";
 import { applyAgent, applyIssueChange, applyServiceBeat, applySettingsRead, applySyncSnapshot, armExpiry, clearGrant, closeHome, LOOK_IDS, noteHomeChange, openHome, previewAgent, renderClientReview, renderReviewAll, renderSettings, saveSettings, takeGrant } from "./settings.mjs";
 import { acceptStreamEvent, createStore, loadSnapshot } from "./state.mjs";
@@ -758,7 +758,12 @@ export function dispose(app) {
 
 async function onStream(app, event) {
   if (app.disposed || app.bootFailed) return;
-  if (event?.name === 'app.bridge') { forwardEmbeddedEvent(app, event); return; }
+  if (event?.name === 'app.bridge') {
+    const mode = embeddedOpenMode(app, event);
+    if (mode) navigate(app, mode);
+    forwardEmbeddedEvent(app, event);
+    return;
+  }
   const result = await acceptStreamEvent(app.store, app.api, event);
   if (app.disposed || result?.dropped) return;
   if (app.layout !== 'phone' && ['plan.changed', 'run.changed', 'run.log', 'session.work', 'session.context', 'stream.reset'].includes(event?.name)) {
