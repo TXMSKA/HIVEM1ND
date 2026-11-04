@@ -98,6 +98,12 @@ Module boards in `docs/flows/boards/*.mjs` and their `docs/flows/kit/*` support 
 
 Conversion uses Blueprint's `tools/convert-flows/` only with the person's explicit approval. Do not convert automatically on open, rewrite existing module boards or remove originals. JSON formats 1, 2 and 3 migrate in memory to format 4 without adding optional fields; saving writes format 4. Newer unsupported formats are never rewritten.
 
+## Show
+
+When the person asks to see a board, open `https://blueprint.txmska.com/review/<boardId>` with the system's default handler (`start` on Windows, `open` on macOS, `xdg-open` on Linux); the installed Blueprint app takes the link over when it is set to open links. No ONEM1ND service method opens a board in its Blueprint entry, so there is no other way to show one. The `boardId` is the board's `id`, as `blueprint_open` returns it.
+
+The app lists only folders the person added in its Files page. The first time, say in one line that the repository folder has to be added there; until then the link shows that the board is not in the folder. A module board (`.mjs`) is not shown there: offer the conversion above.
+
 ## End
 
 Stop when the requested change is verified with `blueprint_open`. Report the board, the revision reached and any refused change with its error code.

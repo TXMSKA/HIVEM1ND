@@ -71,6 +71,12 @@ A JSON file whose name ends in `.json`:
 - `to` is the unit it was sent to; `status` is `open` or `resolved`.
 - `author` is `person` for the person and the unit for an agent; through the tools every message of the person reads `master`.
 
+## Show
+
+When the person asks to see a text, open `https://void.txmska.com` with the system's default handler (`start` on Windows, `open` on macOS, `xdg-open` on Linux); the installed Void app takes the link over when it is set to open links. No ONEM1ND service method opens a text in its Void entry, so there is no other way to show one.
+
+The app lists only folders the person added in it. The first time, say in one line that the repository folder has to be added there, then the text is chosen from its pages.
+
 ## End
 
 - Stops when the change asked for is made and verified with `void_open`.
