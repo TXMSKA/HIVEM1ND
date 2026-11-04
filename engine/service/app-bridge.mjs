@@ -13,6 +13,8 @@ export const APP_UPLOAD_LIMITS = Object.freeze({ fileBytes: 10_000_000, count: 2
 const FILE_LIMIT = 16_000_000;
 const TEXT_EXTENSIONS = new Set(['.json', '.md', '.txt', '.html', '.htm', '.void']);
 const IMAGE_TYPES = new Map([['image/png', 'png'], ['image/jpeg', 'jpg'], ['image/webp', 'webp']]);
+const FONT_TYPES = new Map([['woff2', 'font/woff2'], ['woff', 'font/woff'], ['ttf', 'font/ttf'], ['otf', 'font/otf']]);
+const LIST_LIMIT = 10_000;
 const SKIP_DIRECTORIES = new Set(['node_modules', 'dist', 'build', 'coverage', 'vendor']);
 const METHODS = {
   blueprint: ['blueprint.locations', 'blueprint.list', 'blueprint.read', 'blueprint.save', 'blueprint.asset', 'blueprint.upload'],
@@ -55,16 +57,18 @@ function projectFor(context, location) {
   return project;
 }
 
-function relativePath(value) {
+// `.void/` is Void's own project state: only the void.files calls open it, every other dot path stays refused.
+function relativePath(value, dotVoid = false) {
   if (typeof value !== 'string' || value.length > 2048 || !value || value.includes('\\') || /[\x00-\x1f:]/.test(value)) fail('denied');
   const parts = value.split('/');
-  if (parts.some(part => !part || part.startsWith('.') || /[. ]$/.test(part) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part))) fail('denied');
+  const dotted = (part, index) => part.startsWith('.') && !(dotVoid && index === 0 && part === '.void');
+  if (parts.some((part, index) => !part || dotted(part, index) || /[. ]$/.test(part) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part))) fail('denied');
   return value;
 }
 
-async function contained(project, relative) {
+async function contained(project, relative, dotVoid = false) {
   const root = path.resolve(project.localPath);
-  const file = path.resolve(root, ...relativePath(relative).split('/'));
+  const file = path.resolve(root, ...relativePath(relative, dotVoid).split('/'));
   if (!insideAppPath(root, file)) fail('denied');
   await assertNoLinks(file);
   return file;
@@ -95,7 +99,7 @@ async function voidFile(context, params, clientId) {
   }
   project ??= currentProject(context, clientId);
   if (!project) fail('denied');
-  const file = await contained(project, value);
+  const file = await contained(project, value, true);
   return { project, relative: value, file };
 }
 
@@ -110,25 +114,33 @@ function noteFile(context, project, relative, revision, { clientId = null, by = 
   files.set(key, { revision, project: project.name, relative, by });
   if (previous?.revision === revision) return;
   const board = /^docs\/flows\/boards\/([A-Za-z0-9_-]+)\.json$/.exec(relative);
-  if (board) appEvent(context, 'blueprint', 'blueprint.changed', { location: path.resolve(project.localPath, 'docs/flows'), id: board[1], ...(by ? { by } : {}) }, context.bridgeApp === 'blueprint' ? clientId : null);
-  const change = { path: absolute, kind: revision === null ? 'deleted' : previous && previous.revision !== null ? 'changed' : 'created', ...(by ? { by } : {}) };
+  if (board) appEvent(context, 'blueprint', 'blueprint.changed', { location: identity(project).id, id: board[1], ...(by ? { by } : {}) }, context.bridgeApp === 'blueprint' ? clientId : null);
+  const change = { path: relative, kind: revision === null ? 'deleted' : previous && previous.revision !== null ? 'changed' : 'created', ...(by ? { by } : {}) };
   if (context.appChanges) context.appChanges.push(change);
   else appEvent(context, 'void', 'void.files.changed', [change], context.bridgeApp === 'void' ? clientId : null);
 }
 
-async function putFile(context, project, relative, bytes, expectedRevision, clientId) {
-  if (bytes.length > FILE_LIMIT || expectedRevision !== null && !/^[a-f0-9]{64}$/.test(expectedRevision ?? '')) fail('invalid');
-  const file = await contained(project, relative);
+// `expectedRevision`: null means the file must not exist, undefined skips the check, otherwise the SHA-256 of what is replaced.
+// `bytes` null removes the file.
+async function putFile(context, project, relative, bytes, expectedRevision, clientId, dotVoid = false) {
+  if (bytes && bytes.length > FILE_LIMIT || expectedRevision !== undefined && expectedRevision !== null && !(typeof expectedRevision === 'string' && /^[a-f0-9]{64}$/.test(expectedRevision))) fail('invalid');
+  const file = await contained(project, relative, dotVoid);
   return withLocalChanges(context.store, () => withLocks(context.store, [`app-file:${appPathKey(file)}`], async () => {
     const before = await bytesOf(file);
-    if ((before ? hashBytes(before) : null) !== expectedRevision) fail('conflict');
+    if (expectedRevision !== undefined && (before ? hashBytes(before) : null) !== expectedRevision) fail('conflict');
+    if (bytes === null) {
+      if (!before) return '';
+      await rm(file);
+      noteFile(context, project, relative, null, { clientId, by: context.principal?.unitId ?? null });
+      return '';
+    }
     await mkdir(path.dirname(file), { recursive: true });
     await assertNoLinks(file);
     const temporary = `${file}.${randomUUID()}.tmp`;
     try {
       await writeFile(temporary, bytes, { flag: 'wx' });
       const fresh = await bytesOf(file);
-      if ((fresh ? hashBytes(fresh) : null) !== expectedRevision) fail('conflict');
+      if (expectedRevision !== undefined && (fresh ? hashBytes(fresh) : null) !== expectedRevision) fail('conflict');
       await assertNoLinks(file);
       await rename(temporary, file);
     } finally {
@@ -142,34 +154,17 @@ async function putFile(context, project, relative, bytes, expectedRevision, clie
   }));
 }
 
-async function* walk(project, relative = '', budget = { count: 0, files: 0, limited: true }) {
-  const directory = relative ? await contained(project, relative) : path.resolve(project.localPath);
-  await assertNoLinks(directory);
-  const entries = await readdir(directory, { withFileTypes: true }).catch(error => { if (error.code === 'ENOENT') return []; throw error; });
-  for (const entry of entries) {
-    if (budget.truncated) return;
-    if (++budget.count > 20_000 && budget.limited) { budget.truncated = true; budget.limit = 20_000; return; }
-    if (entry.isSymbolicLink() || entry.name.startsWith('.') || SKIP_DIRECTORIES.has(entry.name)) continue;
-    const name = relative ? `${relative}/${entry.name}` : entry.name;
-    if (entry.isDirectory()) yield* walk(project, name, budget);
-    else if (entry.isFile() && (TEXT_EXTENSIONS.has(path.extname(name).toLowerCase()) || /^docs\/flows\/assets\//.test(name))) {
-      if (/\.(?:orig|comments)\.json$|\.versions\.jsonl$/.test(name)) continue;
-      if (++budget.files > 2000 && budget.limited) { budget.truncated = true; budget.limit = 2000; return; }
-      yield name;
-    }
-  }
-}
-
 function boardId(value) {
   if (typeof value !== 'string' || value === 'index' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value)) fail('invalid');
   return value;
 }
 
-function textBytes(params) {
-  const text = params.text ?? params.content;
-  if (typeof text === 'string') return Buffer.from(text);
-  if (params.document && typeof params.document === 'object' && !Array.isArray(params.document)) return Buffer.from(`${JSON.stringify(params.document, null, 2)}\n`);
-  fail('invalid');
+function fileBytes(params) {
+  if (params.remove === true) return null;
+  if (typeof params.base64 !== 'string' || params.base64.length > Math.ceil(FILE_LIMIT / 3) * 4 || /[^A-Za-z0-9+/=]/.test(params.base64)) fail('invalid');
+  const bytes = Buffer.from(params.base64, 'base64');
+  if (bytes.length > FILE_LIMIT || bytes.toString('base64') !== params.base64) fail('invalid');
+  return bytes;
 }
 
 function binaryBytes(params) {
@@ -186,43 +181,75 @@ function imageType(bytes) {
   return image.type;
 }
 
+// A board font by its signature, never by its name or declared type.
+function fontExtension(bytes) {
+  const magic = bytes.subarray(0, 4).toString('latin1');
+  if (magic === 'wOF2') return 'woff2';
+  if (magic === 'wOFF') return 'woff';
+  if (magic === 'OTTO') return 'otf';
+  if (magic === 'true' || magic === 'ttcf' || bytes.subarray(0, 4).equals(Buffer.from([0, 1, 0, 0]))) return 'ttf';
+  return null;
+}
+
+function assetType(bytes, extension) {
+  if (FONT_TYPES.has(extension)) {
+    const font = fontExtension(bytes);
+    // An OpenType file with TrueType outlines may carry either name.
+    if (!font || font !== extension && !(['ttf', 'otf'].includes(font) && ['ttf', 'otf'].includes(extension))) fail('invalid');
+    return FONT_TYPES.get(extension);
+  }
+  const mime = imageType(bytes);
+  if (IMAGE_TYPES.get(mime) !== extension) fail('invalid');
+  return mime;
+}
+
 async function blueprintCall(context, method, params, clientId) {
-  if (method === 'blueprint.locations') return attached(context).map(project => ({ ...identity(project), path: path.resolve(project.localPath, 'docs/flows') }));
+  if (method === 'blueprint.locations') return { locations: attached(context).map(project => ({ ...identity(project), path: path.resolve(project.localPath, 'docs/flows') })) };
   const project = projectFor(context, params.location);
-  const location = path.resolve(project.localPath, 'docs/flows');
+  const location = identity(project).id;
   if (method === 'blueprint.list') {
     const directory = await contained(project, 'docs/flows/boards');
     const names = await readdir(directory).catch(error => { if (error.code === 'ENOENT') return []; throw error; });
     const boards = [];
     for (const name of names.filter(name => /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}\.json$/.test(name) && name !== 'index.json')) {
-      const bytes = await bytesOf(await contained(project, `docs/flows/boards/${name}`));
+      const file = await contained(project, `docs/flows/boards/${name}`);
+      const bytes = await bytesOf(file);
       if (!bytes) continue;
       let document;
       try { document = JSON.parse(bytes); } catch { continue; }
-      boards.push({ id: name.slice(0, -5), title: document.title ?? name.slice(0, -5), location, revision: hashBytes(bytes) });
+      boards.push({ id: name.slice(0, -5), title: document.title ?? name.slice(0, -5), updatedAt: Math.round((await lstat(file)).mtimeMs), location, revision: hashBytes(bytes) });
     }
-    return boards;
+    return { boards };
   }
-  if (method === 'blueprint.read' || method === 'blueprint.save') {
-    const id = boardId(params.id), relative = `docs/flows/boards/${id}.json`;
-    if (method === 'blueprint.read') {
-      const bytes = await bytesOf(await contained(project, relative));
-      if (!bytes) fail('not_found');
-      let document;
-      try { document = JSON.parse(bytes); } catch { fail('invalid'); }
-      return { id, location, document, text: bytes.toString('utf8'), revision: hashBytes(bytes) };
-    }
-    const bytes = textBytes(params);
-    let document;
-    try { document = JSON.parse(bytes); } catch { fail('invalid'); }
-    if (!document || typeof document !== 'object' || Array.isArray(document)) fail('invalid');
-    const revision = await putFile(context, project, relative, bytes, params.expectedRevision, clientId);
+  if (method === 'blueprint.read') {
+    const id = boardId(params.id);
+    const bytes = await bytesOf(await contained(project, `docs/flows/boards/${id}.json`));
+    if (!bytes) fail('not_found');
+    let board;
+    try { board = JSON.parse(bytes); } catch { fail('invalid'); }
+    return { id, location, board, revision: hashBytes(bytes) };
+  }
+  if (method === 'blueprint.save') {
+    const board = params.board;
+    if (!board || typeof board !== 'object' || Array.isArray(board) || params.revision !== null && typeof params.revision !== 'string') fail('invalid');
+    const id = boardId(board.id);
+    const revision = await putFile(context, project, `docs/flows/boards/${id}.json`, Buffer.from(`${JSON.stringify(board, null, 2)}\n`), params.revision, clientId);
     return { id, location, revision };
   }
   if (method === 'blueprint.upload') {
-    const bytes = binaryBytes(params), mime = imageType(bytes);
-    if (!bytes.length || bytes.length > APP_UPLOAD_LIMITS.fileBytes || (params.mime ?? params.contentType ?? mime) !== mime) fail('invalid');
-    return withLocks(context.store, [`app-assets:${appPathKey(location)}`], async () => {
+    const bytes = binaryBytes(params), font = fontExtension(bytes), declared = typeof params.type === 'string' ? params.type : null;
+    if (!bytes.length || bytes.length > APP_UPLOAD_LIMITS.fileBytes) fail('invalid');
+    let mime, extension;
+    if (font) {
+      if (declared && !/^(?:font\/|application\/(?:x-)?(?:font|octet-stream))/.test(declared)) fail('invalid');
+      extension = font;
+      mime = FONT_TYPES.get(font);
+    } else {
+      mime = imageType(bytes);
+      if ((declared ?? mime) !== mime) fail('invalid');
+      extension = IMAGE_TYPES.get(mime);
+    }
+    return withLocks(context.store, [`app-assets:${appPathKey(path.resolve(project.localPath, 'docs/flows'))}`], async () => {
       const directory = await contained(project, 'docs/flows/assets');
       const names = await readdir(directory).catch(error => { if (error.code === 'ENOENT') return []; throw error; });
       let total = 0, count = 0;
@@ -232,17 +259,18 @@ async function blueprintCall(context, method, params, clientId) {
         if (stats.isFile()) { count++; total += stats.size; }
       }
       if (count >= APP_UPLOAD_LIMITS.count || total + bytes.length > APP_UPLOAD_LIMITS.totalBytes) fail('invalid');
-      const id = `${randomUUID()}.${IMAGE_TYPES.get(mime)}`, relative = `docs/flows/assets/${id}`;
+      const id = `${randomUUID()}.${extension}`, relative = `docs/flows/assets/${id}`;
       const revision = await putFile(context, project, relative, bytes, null, clientId);
-      return { id, path: `assets/${id}`, mime, size: bytes.length, revision };
+      return { src: `assets/${id}`, id, path: `assets/${id}`, mime, size: bytes.length, revision };
     });
   }
   if (method === 'blueprint.asset') {
-    const id = String(params.id ?? params.path ?? '').replace(/^assets\//, '');
-    if (!/^[a-f0-9-]{36}\.(?:png|jpg|webp)$/.test(id)) fail('invalid');
+    const id = String(params.src ?? '').replace(/^assets\//, '');
+    const extension = /^[a-f0-9-]{36}\.(png|jpg|webp|woff2|woff|ttf|otf)$/.exec(id)?.[1];
+    if (!extension) fail('invalid');
     const bytes = await bytesOf(await contained(project, `docs/flows/assets/${id}`));
     if (!bytes) fail('not_found');
-    return { id, base64: bytes.toString('base64'), mime: imageType(bytes), revision: hashBytes(bytes) };
+    return { src: `assets/${id}`, base64: bytes.toString('base64'), type: assetType(bytes, extension), revision: hashBytes(bytes) };
   }
   fail('invalid');
 }
@@ -255,15 +283,31 @@ async function storageCall(context, method, params, clientId) {
   return withLocks(context.store, [`app-storage:${file}`], async () => {
     await assertNoLinks(file);
     const bytes = await readBytes(context.store, file);
-    const revision = bytes ? hashBytes(bytes) : null;
-    if (method === 'void.storage.load') return { value: bytes ? JSON.parse(bytes) : null, revision };
-    if (params.expectedRevision !== revision) fail('conflict');
+    if (method === 'void.storage.load') return bytes ? JSON.parse(bytes) : null;
     if (!Object.hasOwn(params, 'value')) fail('invalid');
     const next = Buffer.from(JSON.stringify(params.value));
     if (next.length > FILE_LIMIT) fail('invalid');
     await atomicWrite(context.store, file, next);
     return { revision: hashBytes(next) };
   });
+}
+
+async function listDirectory(context, project, relative) {
+  const directory = relative === '' ? path.resolve(project.localPath) : await contained(project, relative, true);
+  await assertNoLinks(directory);
+  const stats = await lstat(directory);
+  if (!stats.isDirectory()) fail('not_found');
+  const names = (await readdir(directory, { withFileTypes: true })).filter(entry => !entry.isSymbolicLink() && !entry.name.startsWith('.') && !SKIP_DIRECTORIES.has(entry.name));
+  const truncated = names.length > LIST_LIMIT;
+  const entries = [];
+  for (const entry of truncated ? names.sort((a, b) => a.name.localeCompare(b.name, 'en')).slice(0, LIST_LIMIT) : names) {
+    if (entry.isDirectory()) entries.push({ name: entry.name, kind: 'dir', size: 0, mtime: 0 });
+    else if (entry.isFile()) {
+      const found = await lstat(path.join(directory, entry.name));
+      entries.push({ name: entry.name, kind: 'file', size: found.size, mtime: Math.round(found.mtimeMs) });
+    }
+  }
+  return truncated ? { entries, truncated: true, limit: LIST_LIMIT } : entries;
 }
 
 async function voidCall(context, method, params, clientId) {
@@ -280,35 +324,29 @@ async function voidCall(context, method, params, clientId) {
     return identity(project);
   }
   if (method === 'void.files.list') {
-    const projects = params.location ? [projectFor(context, params.location)] : currentProject(context, clientId) ? [currentProject(context, clientId)] : attached(context);
-    const files = [];
-    const budget = { count: 0, files: 0, limited: true };
-    for (const project of projects) for await (const relative of walk(project, '', budget)) {
-      if (!TEXT_EXTENSIONS.has(path.extname(relative).toLowerCase())) continue;
-      const file = await contained(project, relative), stats = await lstat(file);
-      files.push({ path: file, name: path.basename(file), project: project.name, size: stats.size });
-    }
-    return budget.truncated ? { entries: files, truncated: true, limit: budget.limit } : files;
+    const project = params.location ? projectFor(context, params.location) : currentProject(context, clientId);
+    if (!project) fail('denied');
+    if (typeof params.path !== 'string') fail('invalid');
+    return listDirectory(context, project, params.path.split('/').filter(part => part && part !== '.').join('/'));
   }
   const { project, relative, file } = await voidFile(context, params, clientId);
   if (method === 'void.files.write') {
-    if (!TEXT_EXTENSIONS.has(path.extname(relative).toLowerCase())) fail('denied');
-    const revision = await putFile(context, project, relative, textBytes(params), params.expectedRevision, clientId);
-    return { path: file, revision };
+    if (relative !== '.void' && !relative.startsWith('.void/') && !TEXT_EXTENSIONS.has(path.extname(relative).toLowerCase())) fail('denied');
+    const revision = await putFile(context, project, relative, fileBytes(params), params.expected === '' ? null : params.expected, clientId, true);
+    return { path: relative, revision };
   }
   if (method === 'void.files.attribution') {
     const bytes = await bytesOf(file);
     if (!bytes) fail('not_found');
     await loadAppCatalog(context);
-    const by = writerFor(context, project, relative, hashBytes(bytes));
-    return { path: file, ...(by ? { by } : {}) };
+    return { path: relative, by: writerFor(context, project, relative, hashBytes(bytes)) };
   }
   const bytes = await bytesOf(file);
   if (!bytes) fail('not_found');
-  if (method === 'void.files.read') return { path: file, text: bytes.toString('utf8'), revision: hashBytes(bytes) };
+  if (method === 'void.files.read') return { path: relative, base64: bytes.toString('base64'), revision: hashBytes(bytes) };
   if (method === 'void.files.url' || method === 'void.files.asset') {
     const mime = TEXT_EXTENSIONS.has(path.extname(file).toLowerCase()) ? 'text/plain;charset=utf-8' : imageType(bytes);
-    return { path: file, ...(method === 'void.files.url' ? { url: `data:${mime};base64,${bytes.toString('base64')}` } : { base64: bytes.toString('base64') }), mime, revision: hashBytes(bytes) };
+    return { path: relative, ...(method === 'void.files.url' ? { url: `data:${mime};base64,${bytes.toString('base64')}` } : { base64: bytes.toString('base64') }), mime, revision: hashBytes(bytes) };
   }
   fail('unavailable');
 }

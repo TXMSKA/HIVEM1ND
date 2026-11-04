@@ -134,16 +134,63 @@ test('bridge checks the actual app main frame and emits exact handshake capabili
 
 test('service calls preserve revision conflicts and convert IPC binary uploads to bounded base64', async t => {
   const f = fixture(t, { status: 409, response: { error: { code: 'conflict', message: 'Private board body' } } }); f.update('blueprint');
-  assert.deepEqual(await f.host.call(f.event(), 'blueprint.upload', { bytes: new Uint8Array([1, 2]), expectedRevision: 'stale' }), { error: { code: 'conflict' } });
-  assert.deepEqual(f.calls[0].body.params, { base64: 'AQI=', expectedRevision: 'stale' });
+  assert.deepEqual(await f.host.call(f.event(), 'blueprint.upload', { bytes: new Uint8Array([1, 2]), name: 'pixel.png', type: 'image/png' }), { error: { code: 'conflict' } });
+  assert.deepEqual(f.calls[0].body.params, { name: 'pixel.png', type: 'image/png', base64: 'AQI=' });
   assert.equal(JSON.stringify(await f.host.call(f.event(), 'blueprint.read', {})).includes('Private'), false);
 });
 
 test('asset responses restore binary bytes across the authenticated JSON service boundary', async t => {
-  const f = fixture(t, { response: { data: { base64: 'AQI=', mime: 'image/png', revision: 'revision' } } }); f.update('blueprint');
-  const { result } = await f.host.call(f.event(), 'blueprint.asset', { location: '/attached/docs/flows', id: 'image.png' });
-  assert.equal(result.base64, 'AQI=');
+  const f = fixture(t, { response: { data: { src: 'assets/image.png', base64: 'AQI=', type: 'image/png', revision: 'revision' } } }); f.update('blueprint');
+  const { result } = await f.host.call(f.event(), 'blueprint.asset', { location: 'attached', src: 'assets/image.png' });
+  assert.deepEqual(f.calls[0].body.params, { location: 'attached', src: 'assets/image.png' });
+  assert.equal(result.type, 'image/png');
+  assert.equal(Object.hasOwn(result, 'base64'), false);
   assert.deepEqual([...new Uint8Array(result.bytes)], [1, 2]);
+});
+
+test('Blueprint calls carry the live app keys and refuse the host-only ones', async t => {
+  const f = fixture(t); f.update('blueprint');
+  const board = { formatVersion: 4, id: 'board', title: 'Board' };
+  assert.equal((await f.host.call(f.event(), 'blueprint.save', { location: 'attached', board, revision: null })).result.ok, true);
+  assert.equal((await f.host.call(f.event(), 'blueprint.save', { location: 'attached', board, revision: 'a'.repeat(64) })).result.ok, true);
+  assert.deepEqual(f.calls.map(call => call.body.params), [{ location: 'attached', board, revision: null }, { location: 'attached', board, revision: 'a'.repeat(64) }]);
+  for (const [method, params] of [
+    ['blueprint.save', { location: 'attached', id: 'board', text: '{}', expectedRevision: null }],
+    ['blueprint.save', { location: 'attached', board, expectedRevision: null }],
+    ['blueprint.asset', { location: 'attached', id: 'image.png' }],
+    ['blueprint.upload', { location: 'attached', mime: 'image/png', bytes: [1] }],
+    ['blueprint.upload', { location: 'attached', type: 'image/png', base64: 'AQI=' }],
+  ]) assert.deepEqual(await f.host.call(f.event(), method, params), { error: { code: 'invalid' } }, method);
+  assert.equal(f.calls.length, 2);
+  assert.equal((await f.host.call(f.event(), 'blueprint.locations', {})).result.ok, true);
+});
+
+test('Void files carry the live app keys: bytes in as base64, bytes out as data, null data removes, attribution is the unit', async t => {
+  const f = fixture(t, { response: { data: { path: 'note.md', base64: 'AQI=', revision: 'rev' } } }); f.update('void');
+  const read = (await f.host.call(f.event(), 'void.files.read', { path: 'note.md' })).result;
+  assert.deepEqual([...new Uint8Array(read.data)], [1, 2]);
+  assert.deepEqual([Object.hasOwn(read, 'base64'), read.revision], [false, 'rev']);
+  await f.host.call(f.event(), 'void.files.list', { path: '' });
+  await f.host.call(f.event(), 'void.files.write', { path: 'note.md', data: new Uint8Array([1, 2]), expected: '' });
+  await f.host.call(f.event(), 'void.files.write', { path: 'note.md', data: new Uint8Array(0) });
+  await f.host.call(f.event(), 'void.files.write', { path: '.void/trash.json', data: null, expected: 'a'.repeat(64) });
+  await f.host.call(f.event(), 'void.storage.save', { key: 'state', value: { tab: 1 } });
+  assert.deepEqual(f.calls.map(call => call.body.params), [
+    { path: 'note.md' }, { path: '' }, { path: 'note.md', expected: '', base64: 'AQI=' }, { path: 'note.md', base64: '' },
+    { path: '.void/trash.json', expected: 'a'.repeat(64), remove: true }, { key: 'state', value: { tab: 1 } },
+  ]);
+  for (const [method, params] of [
+    ['void.files.write', { path: 'note.md', expected: '' }],
+    ['void.files.write', { path: 'note.md', text: 'x', expectedRevision: null }],
+    ['void.files.write', { path: 'note.md', data: 'text' }],
+    ['void.files.write', { path: 'note.md', data: new Uint8Array(16_000_001) }],
+    ['void.storage.save', { key: 'state', value: 1, expectedRevision: null }],
+  ]) assert.deepEqual(await f.host.call(f.event(), method, params), { error: { code: 'invalid' } }, method);
+  assert.equal(f.calls.length, 6);
+  const attributed = fixture(t, { response: { data: { path: 'note.md', by: 'project:shop:executor' } } }); attributed.update('void');
+  assert.equal((await attributed.host.call(attributed.event(), 'void.files.attribution', { path: 'note.md' })).result, 'project:shop:executor');
+  const unknown = fixture(t, { response: { data: { path: 'note.md', by: null } } }); unknown.update('void');
+  assert.equal((await unknown.host.call(unknown.event(), 'void.files.attribution', { path: 'note.md' })).result, null);
 });
 
 test('stage bounds, mode, locale and colour roles update native views and host events', t => {
@@ -255,8 +302,8 @@ test('raw binary limits reject reads, document writes and exports before byte it
   for (const [method, params] of [
     ['void.files.read', { path: 'note.md', ignored: { bytes } }],
     ['void.files.read', { path: 'note.md', location: { bytes } }],
-    ['void.files.write', { path: 'note.md', document: { ignored: bytes }, expectedRevision: null }],
-    ['void.storage.save', { key: 'state', value: { ignored: bytes }, expectedRevision: null }],
+    ['void.files.write', { path: 'note.md', data: bytes, expected: '' }],
+    ['void.storage.save', { key: 'state', value: { ignored: bytes } }],
     ['void.export.save', { bytes }],
   ]) results.push([method, await f.host.call(f.event(), method, params)]);
   assert.deepEqual(results.map(([method, result]) => [method, result.error?.code]), [
@@ -284,7 +331,7 @@ test('raw text, structure and agent input limits stop before service serializati
   const f = fixture(t); f.update('void');
   const inputs = [
     ['void.files.read', { path: 'x'.repeat(70_000) }],
-    ['void.files.write', { path: 'note.md', text: 'x'.repeat(16_000_001) }],
+    ['void.files.write', { path: 'note.md', data: new Uint8Array(16_000_001) }],
     ['void.storage.save', { key: 'state', value: 'é'.repeat(8_000_001) }],
     ['agents.send', { location: '/attached', body: 'é'.repeat(8193) }],
     ['void.storage.save', { key: 'state', value: Array.from({ length: 100_001 }, () => null) }],
