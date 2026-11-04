@@ -142,7 +142,7 @@ function boundsInWindow(bounds, window) {
   return { x, y, width: Math.min(width - x, Math.max(0, Math.round(bounds.width))), height: Math.min(height - y, Math.max(0, Math.round(bounds.height))) };
 }
 
-export function createEmbeddedApps({ window, WebContentsView, session, shell, dialog, preload, secureWebPreferences, serviceOrigin, hostVersion, fetchImpl = fetch, writeFileImpl = writeFile, saveTimeout = 1500 }) {
+export function createEmbeddedApps({ window, WebContentsView, session, shell, dialog, preload, secureWebPreferences, serviceOrigin, hostVersion, hidden = false, fetchImpl = fetch, writeFileImpl = writeFile, saveTimeout = 1500 }) {
   const clientId = randomUUID();
   const records = new Map();
   let active = null;
@@ -183,7 +183,7 @@ export function createEmbeddedApps({ window, WebContentsView, session, shell, di
   };
   const layout = () => {
     if (disposed || window.isDestroyed()) return;
-    const visible = window.isVisible() && !window.isMinimized();
+    const visible = hidden || (window.isVisible() && !window.isMinimized());
     for (const record of records.values()) {
       const nextBounds = boundsInWindow(bounds, window);
       record.view.setBounds(nextBounds);
@@ -202,7 +202,8 @@ export function createEmbeddedApps({ window, WebContentsView, session, shell, di
   const makeRecord = app => {
     const partition = `persist:app-${app}`;
     const appSession = session.fromPartition(partition);
-    const view = new WebContentsView({ webPreferences: { ...secureWebPreferences, partition, preload } });
+    // A hidden test window never composites its native views, so its app views render offscreen to stay capturable.
+    const view = new WebContentsView({ webPreferences: { ...secureWebPreferences, partition, preload, ...(hidden ? { offscreen: true } : {}) } });
     const record = { app, view, loaded: false, visible: false, state: 'idle', saved: null };
     const permission = (contents, name, origin) => contents === view.webContents && clipboardPermissions.has(name) && appOrigin(app, origin) && appOrigin(app, contents.mainFrame.url);
     appSession.setPermissionCheckHandler((contents, name, origin) => permission(contents, name, origin));
@@ -301,6 +302,8 @@ export function createEmbeddedApps({ window, WebContentsView, session, shell, di
 
   return {
     clientId,
+    // The web contents of every loaded app view, for the hidden test mode's captures.
+    contents() { return [...records.values()].filter(record => !record.view.webContents.isDestroyed()).map(record => [record.app, record.view.webContents]); },
     update(input) {
       if (disposed || !input || ![null, 'blueprint', 'void'].includes(input.app)) fail('invalid');
       if (input.app === null && !input.token) {
