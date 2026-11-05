@@ -300,14 +300,15 @@ export async function startElectronApp(electron, argv = process.argv.slice(2), d
     const files = [];
     const save = async (label, contents) => {
       const file = path.join(target, `${name}-${label}.png`);
-      await writeFile(file, (await contents.capturePage()).toPNG());
+      // A window that was never shown paints only while a capture keeps it awake and hidden.
+      await writeFile(file, (await contents.capturePage(undefined, { stayHidden: true, stayAwake: true })).toPNG());
       files.push(file);
     };
     await save("window", window.webContents);
     for (const [label, contents] of embeddedApps?.contents() ?? []) await save(label, contents);
     return files;
   };
-  if (launchOptions.captureDir) await capture(launchOptions.captureDir, "load").catch(() => {});
+  if (launchOptions.captureDir) await capture(launchOptions.captureDir, "load").catch(error => console.error(`The load capture failed: ${error.message}`));
   app.on("before-quit", (event) => {
     if (!wizard || closing) return;
     event.preventDefault();

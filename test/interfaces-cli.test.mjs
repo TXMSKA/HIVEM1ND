@@ -577,7 +577,7 @@ test('the hidden mode never shows or focuses a window and saves PNG captures of 
   assert.equal(createWindowOptions('icon.ico').focusable, undefined);
   const calls = [];
   const png = Buffer.from('89504e470d0a1a0a', 'hex');
-  const contents = () => Object.assign(new EventEmitter(), { mainFrame: { url: '' }, setWindowOpenHandler() {}, async capturePage() { return { toPNG: () => png }; } });
+  const contents = () => Object.assign(new EventEmitter(), { mainFrame: { url: '' }, setWindowOpenHandler() {}, async capturePage(rect, opts) { calls.push(['capture', rect, opts]); return { toPNG: () => png }; } });
   class Window extends EventEmitter {
     constructor(options) { super(); this.options = options; this.webContents = contents(); }
     isDestroyed() { return false; }
@@ -598,7 +598,7 @@ test('the hidden mode never shows or focuses a window and saves PNG captures of 
   assert.equal(windows[0].options.focusable, false);
   app.emit('second-instance');
   app.emit('activate');
-  assert.deepEqual(calls, []);
+  assert.deepEqual(calls, [['capture', undefined, { stayHidden: true, stayAwake: true }]]);
   assert.deepEqual((await handle.capture(captureDir, 'second')).map(file => path.basename(file)), ['second-window.png']);
   for (const name of ['load-window.png', 'second-window.png']) assert.deepEqual(await readFile(path.join(captureDir, name)), png);
   await rm(captureDir, { recursive: true, force: true });
