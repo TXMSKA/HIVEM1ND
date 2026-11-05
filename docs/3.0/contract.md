@@ -962,8 +962,8 @@ The contract overrides incompatible 2.x behavior only where stated above. Source
 | [Wake service](../../engine/relay/wake.mjs), lines 116 to 133 and 653 to 670 | fixed consent window/handoff limits and ambiguous transport attempts |
 | [Wizard server](../../gui/server.mjs), lines 144 to 161, 185 to 222, 305 to 314 | random bearer, exact socket/Host/Origin, static bootstrap exception; LAN receives separate limited authority |
 | [View](../../engine/view.mjs), lines 303 to 351 and 475 to 501 | status/rollup precedence; old `chats` were unit states and become separate units in v3 |
-| [Blueprint server](../../features/blueprint/server.mjs), [Blueprint format](../../features/blueprint/review/sketch-format.mjs) | current board/sketch/comment paths and format; strict unknown-field rejection is superseded |
-| [Void server](../../features/void/server.mjs) | original/version/comment sidecars, stable page keys, numeric revision, and anchor relocation |
+| Blueprint server (`features/blueprint/server.mjs`, removed in 064), [Blueprint format](../../features/blueprint/review/sketch-format.mjs) | current board/sketch/comment paths and format; strict unknown-field rejection is superseded |
+| Void server (`features/void/server.mjs`, removed in 064) | original/version/comment sidecars, stable page keys, numeric revision, and anchor relocation |
 | [CLI](../../cli/index.mjs) and [Relay MCP](../../engine/relay/mcp.mjs) | existing commands and stdio tools remain; service, task status/undo, HTTP editor tools, and package GUI export are new |
 
 The uncommitted 2.x GUI worktree is reference-only. Its rendering and host handle informed interface names; its shared LAN bearer, lack of expiry, and unit-as-chat projection are not adopted. No file in that worktree is part of this delivery.

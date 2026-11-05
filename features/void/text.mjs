@@ -1,7 +1,7 @@
 // Void: the words of a page and the difference between two texts.
 //
 // The diff is the one the full Void app draws: runs of equal, deleted and
-// inserted words, so what Void Lite marks reads the same in both.
+// inserted words.
 
 // The text of a page as the reader shows it: the lines and paragraph breaks the
 // reader draws, without the bold and italic marks. Comment offsets count in

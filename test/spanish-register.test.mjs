@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import { helpText, runCli } from '../cli/index.mjs';
@@ -124,21 +124,6 @@ async function safeCoreCopy() {
   return entries;
 }
 
-async function htmlFiles(directory) {
-  const names = await readdir(new URL(directory, ROOT), { recursive: true });
-  return names.filter((name) => name.endsWith('.html')).map((name) => `${directory}${name.replaceAll('\\', '/')}`);
-}
-
-async function htmlCopy() {
-  const copy = [];
-  for (const file of [...await htmlFiles('features/'), ...await htmlFiles('gui/')]) {
-    const pages = (await read(file)).match(/^const PAGES=(\[.*\]);$/m)?.[1];
-    if (!pages) continue;
-    for (const page of JSON.parse(pages)) copy.push([`${file} ${page.k}.es`, plain(page.es)]);
-  }
-  return copy;
-}
-
 async function voidDocumentCopy() {
   const source = await read('features/void/void.md');
   return [...source.matchAll(/"es": ("(?:[^"\\\n]|\\.)*")/g)].map(
@@ -188,7 +173,6 @@ test('every Spanish source is read and holds no voseo and no tuteo', async () =>
     'the installer texts': [await installerCopy(), 100],
     'the terminal setup': [await terminalCopy(), 25],
     'the GUI source templates': [await guiSourceCopy('es'), 400],
-    'the Void pages': [await htmlCopy(), 4],
     'the Void document sample': [await voidDocumentCopy(), 1],
     'the Void board sample': [await boardCopy(), 8],
     'the Genesis role': [await genesisCopy(), 8],
