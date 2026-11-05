@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
 import { measureMind } from "./measure.mjs";
+import { compareRecords, formatVersionRecord, lineOfPackage, migrationApplies, parseVersionRecord } from "./version-line.mjs";
 import { assertSafePath as assertRecordSafePath, atomicWriteFile, parseMachineRecord, readManagedFiles } from "./records.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -117,6 +118,12 @@ function compareVersions(left, right) {
   return a.prerelease.localeCompare(b.prerelease, "en", { numeric: true });
 }
 
+// The mind's version record carries its release line; a bare version belongs to the HIVEM1ND line.
+function parseRecord(text, source) {
+  const record = parseVersionRecord(text);
+  return { line: record.line, version: parseVersion(record.version, source).text };
+}
+
 function isoDate(now = new Date()) {
   const date = now instanceof Date ? now : new Date(now);
   if (Number.isNaN(date.getTime())) {
@@ -191,11 +198,12 @@ async function readPackageManifest(kitPath) {
   if (!name) {
     throw lifecycleError("INVALID_PACKAGE", "package.json does not contain a package name.");
   }
-  return { name, version: parseVersion(manifest.version, "package.json").text };
+  return { name, line: lineOfPackage(name), version: parseVersion(manifest.version, "package.json").text };
 }
 
-async function readPackageVersion(kitPath) {
-  return (await readPackageManifest(kitPath)).version;
+async function readPackageRecord(kitPath) {
+  const { line, version } = await readPackageManifest(kitPath);
+  return { line, version };
 }
 
 async function gitRoot(directory) {
@@ -272,15 +280,15 @@ async function loadMigrations(kitPath) {
   return migrations;
 }
 
-async function applyMigrations({ kitPath, mindPath, fromVersion, toVersion, ...context }) {
+async function applyMigrations({ kitPath, mindPath, fromRecord, toRecord, ...context }) {
+  const fromVersion = fromRecord.version;
+  const toVersion = toRecord.version;
   const migrations = await loadMigrations(kitPath);
   const recordPath = path.join(mindPath, "user", "MIGRATIONS");
   const record = await readText(recordPath, "");
   const completed = new Set(record.split(/\r?\n/).map((line) => line.trim()).filter(Boolean));
   for (const version of completed) parseVersion(version, recordPath);
-  const selected = migrations.filter((migration) => (compareVersions(migration.version, fromVersion) > 0
-    || migration.version === '3.0.0-onem1nd' && compareVersions(fromVersion, '3.0.0') >= 0)
-    && compareVersions(migration.version, toVersion) <= 0);
+  const selected = migrations.filter((migration) => migrationApplies(migration.version, fromRecord, toRecord, compareVersions));
   const applied = [];
 
   for (const migration of selected) {
@@ -310,6 +318,8 @@ async function applyMigrations({ kitPath, mindPath, fromVersion, toVersion, ...c
       progressDirectory: path.join(mindPath, ".migration"),
       fromVersion,
       toVersion,
+      fromLine: fromRecord.line,
+      toLine: toRecord.line,
       version: migration.version,
     });
     applied.push(migration.version);
@@ -379,7 +389,8 @@ export async function evolve(options = {}) {
   await assertSafePath(resolved.mindPath, versionPath, { allowMissing: false });
   const selectedMachinePath = await machineFilePath(resolved.mindPath, resolved.hostname);
   await assertSafePath(resolved.mindPath, selectedMachinePath, { allowMissing: false });
-  const fromVersion = parseVersion(await readText(versionPath), versionPath).text;
+  const fromRecord = parseRecord(await readText(versionPath), versionPath);
+  const fromVersion = fromRecord.version;
   let pulled = false;
   const lifecycleWarnings = [];
 
@@ -407,8 +418,9 @@ export async function evolve(options = {}) {
     }
   }
 
-  const toVersion = await readPackageVersion(resolved.kitPath);
-  if (compareVersions(toVersion, fromVersion) < 0) {
+  const toRecord = await readPackageRecord(resolved.kitPath);
+  const toVersion = toRecord.version;
+  if (compareRecords(toRecord, fromRecord, compareVersions) < 0) {
     throw lifecycleError("VERSION_DOWNGRADE", `Installed version ${fromVersion} is newer than base version ${toVersion}.`);
   }
 
@@ -444,7 +456,7 @@ export async function evolve(options = {}) {
       action: "evolve",
       fromVersion,
       toVersion,
-      changed: compareVersions(fromVersion, toVersion) !== 0,
+      changed: compareRecords(fromRecord, toRecord, compareVersions) !== 0,
       pulled,
       migrations: [],
       baseFiles: preflight?.baseFiles ?? [],
@@ -463,8 +475,8 @@ export async function evolve(options = {}) {
     ...resolved,
     kitPath: resolved.kitPath,
     mindPath: resolved.mindPath,
-    fromVersion,
-    toVersion,
+    fromRecord,
+    toRecord,
   });
   const installation = await installAgentAssets(installOptions);
   const agents = installation?.agents ?? [];
@@ -511,7 +523,7 @@ export async function evolve(options = {}) {
     if (service?.status === "failed") completed = false;
   }
   if (completed) {
-    await writeText(versionPath, `${toVersion}\n`, resolved.mindPath);
+    await writeText(versionPath, formatVersionRecord(toVersion, toRecord.line), resolved.mindPath);
     await updateLastCheck(resolved.mindPath, resolved.hostname, lastCheck);
   }
 
@@ -519,7 +531,7 @@ export async function evolve(options = {}) {
     action: "evolve",
     fromVersion,
     toVersion,
-    changed: compareVersions(fromVersion, toVersion) !== 0
+    changed: compareRecords(fromRecord, toRecord, compareVersions) !== 0
       || migrations.length > 0
       || baseFiles.length > 0
       || removed.length > 0
@@ -553,7 +565,8 @@ export async function checkForUpdates(options = {}) {
   const packageManifest = await readPackageManifest(resolved.kitPath);
   const versionPath = path.join(resolved.mindPath, "user", "VERSION");
   await assertSafePath(resolved.mindPath, versionPath, { allowMissing: false });
-  const currentVersion = parseVersion(await readText(versionPath), versionPath).text;
+  const currentRecord = parseRecord(await readText(versionPath), versionPath);
+  const currentVersion = currentRecord.version;
   const sourceVersion = packageManifest.version;
   const date = isoDate(resolved.now);
   const policy = headerValue(machine, "update-check").toLowerCase() || "off";
@@ -565,6 +578,8 @@ export async function checkForUpdates(options = {}) {
       checked: false,
       reason: "off",
       currentVersion,
+      currentLine: currentRecord.line,
+      latestLine: packageManifest.line,
       sourceVersion,
       latestVersion: sourceVersion,
       updateAvailable: false,
@@ -579,6 +594,8 @@ export async function checkForUpdates(options = {}) {
       checked: false,
       reason: "already-checked",
       currentVersion,
+      currentLine: currentRecord.line,
+      latestLine: packageManifest.line,
       sourceVersion,
       latestVersion: sourceVersion,
       updateAvailable: false,
@@ -640,12 +657,14 @@ export async function checkForUpdates(options = {}) {
   }
 
   await writeText(machinePath, setHeader(machine, "last-check", date), resolved.mindPath);
-  const updateAvailable = compareVersions(latestVersion, currentVersion) > 0;
+  const updateAvailable = compareRecords({ line: packageManifest.line, version: latestVersion }, currentRecord, compareVersions) > 0;
   return {
     action: "check",
     checked: true,
     reason: "checked",
     currentVersion,
+    currentLine: currentRecord.line,
+    latestLine: packageManifest.line,
     sourceVersion,
     latestVersion,
     updateAvailable,
@@ -1203,7 +1222,9 @@ export async function check(options = {}) {
       checked: result.checked,
       currentVersion: result.currentVersion,
       latestVersion: result.latestVersion,
-      updateAvailable: compareVersions(result.latestVersion, result.currentVersion) > 0,
+      updateAvailable: result.currentLine === undefined
+        ? compareVersions(result.latestVersion, result.currentVersion) > 0
+        : compareRecords({ line: result.latestLine, version: result.latestVersion }, { line: result.currentLine, version: result.currentVersion }, compareVersions) > 0,
     };
     warnings.push(...result.warnings);
   }

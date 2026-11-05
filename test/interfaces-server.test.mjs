@@ -391,7 +391,7 @@ test("browser API completes the real setup engine inside an isolated home", asyn
   assert.equal(done.data.number, 4);
   assert.equal(done.data.done, true);
   const kitVersion = JSON.parse(await readFile(path.join(kitPath, "package.json"), "utf8")).version;
-  assert.equal(await readFile(path.join(mindPath, "user", "VERSION"), "utf8"), `${kitVersion}\n`);
+  assert.equal(await readFile(path.join(mindPath, "user", "VERSION"), "utf8"), `onem1nd ${kitVersion}\n`);
 });
 
 test("setup detects accurate repository and folder counts without editing projects", async (context) => {

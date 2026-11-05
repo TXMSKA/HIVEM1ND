@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { assertSafePath, bodyFirstLine, collectScopes, headerValue, listDirectories, listFiles } from "./lifecycle.mjs";
+import { parseVersionRecord } from "./version-line.mjs";
 
 export const VIEW_CONTRACT = "hivem1nd-view-v1"; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
 
@@ -468,7 +469,8 @@ export async function readView({ mindPath, project, hostname, now } = {}) {
     .sort((left, right) => left.unit.localeCompare(right.unit, "en") || sortStamp(left.date) - sortStamp(right.date) || left.path.localeCompare(right.path, "en"));
   products.sort((left, right) => left.project.localeCompare(right.project, "en"));
 
-  const version = orNull((await reader.read(path.join(userPath, "VERSION"), { optional: true }))?.trim());
+  const versionText = (await reader.read(path.join(userPath, "VERSION"), { optional: true }))?.trim();
+  const version = orNull(versionText ? parseVersionRecord(versionText).version : versionText);
 
   const issues = reader.issues.sort((left, right) => left.path.localeCompare(right.path, "en") || left.reason.localeCompare(right.reason, "en"));
   const count = (status) => tasks.filter((task) => task.status === status).length;

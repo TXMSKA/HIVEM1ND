@@ -6,6 +6,7 @@ import os from 'node:os';
 import { localCosmic, mindKeyFor } from './paths.mjs';
 import path from 'node:path';
 import { CoreError, parseUnitId } from './identity.mjs';
+import { ONEM1ND_LINE, parseVersionRecord } from '../version-line.mjs';
 
 // service.mjs and bridge.mjs each pull in the whole service. Hooks and MCP servers only talk to it, so they load them on use.
 const sessions = new Map();
@@ -173,7 +174,7 @@ export async function openRelayOperations(options = {}) {
 
 export async function serviceMind(options) {
   const version = await readFile(path.join(options.mindPath, 'user', 'VERSION'), 'utf8').catch(() => '');
-  if (Number(/^\s*(\d+)\./.exec(version)?.[1]) >= 3) return true;
+  if (parseVersionRecord(version).line === ONEM1ND_LINE || Number(/^\s*(\d+)\./.exec(version)?.[1]) >= 3) return true;
   try {
     const cosmic = options.cosmicPath ?? localCosmic({ platform: options.platform ?? process.platform, env: options.env ?? process.env, home: options.home ?? options.homeDir ?? os.homedir() });
     const root = path.join(cosmic, 'onem1nd-service');

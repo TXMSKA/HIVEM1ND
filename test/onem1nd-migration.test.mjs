@@ -157,14 +157,14 @@ test('destination collisions retain the source and the personal destination', as
   assert.equal(await readFile(path.join(f.source, 'user', 'VERSION'), 'utf8'), '3.0.0\n');
 });
 
-test('evolve applies and records the rebrand once from 3.0.0 without a version bump', async t => {
+test('evolve applies and records the rebrand once from 3.0.0 and moves the record to the ONEM1ND line', async t => {
   const f = await fixture(t);
   const options = { ...f.options, mindPath: f.source, pull: false,
     installAgentAssets: async () => ({ conflicts: [], agents: [], baseFiles: [], warnings: [] }) };
   const first = await evolve(options);
   assert.equal(first.completed, true);
   assert.equal(first.fromVersion, '3.0.0');
-  assert.equal(first.toVersion, '3.0.0');
+  assert.equal(first.toVersion, '1.0.0-beta.1');
   assert.deepEqual(first.migrations, ['3.0.0-onem1nd']);
   const second = await evolve({ ...options, mindPath: f.destination });
   assert.equal(second.completed, true);

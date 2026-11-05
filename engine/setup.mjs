@@ -17,6 +17,7 @@ import { assertLocalStaging, assertNoLinks, defaultMind, mindKeyFor, oneDriveRoo
 import { canonicalJson, CoreError } from './service/identity.mjs';
 import { protectLocalFile } from './service/security.mjs';
 import { copyLegacyTree, legacyTreeInventory } from './legacy-copy.mjs';
+import { ONEM1ND_LINE, formatVersionRecord, lineOfPackage, migrationApplies, parseVersionRecord } from './version-line.mjs';
 import { legacySessions, verifiedLegacyStop, writeLegacyClosure } from './relay/local-wake.mjs';
 import {
   applyInstallPlan,
@@ -494,7 +495,7 @@ class SetupSession {
       syncedRoots: oneDriveRoots({ platform: process.platform, env: this.env }), env: this.env });
     for (let ancestor = directory; ancestor !== path.dirname(ancestor); ancestor = path.dirname(ancestor)) {
       const mind = await this.inspectMind(ancestor);
-      if (/^[23]\./.test(mind?.version ?? '')) throw new CoreError(422, 'invalid_path', 'Local setup storage cannot be inside an existing M1ND.');
+      if (mind?.line === ONEM1ND_LINE || /^[23]\./.test(mind?.version ?? '')) throw new CoreError(422, 'invalid_path', 'Local setup storage cannot be inside an existing M1ND.');
     }
     await assertNoLinks(file);
     await atomicWriteFile(file, `${JSON.stringify(value, null, 2)}\n`, { root: directory });
@@ -1191,8 +1192,8 @@ class SetupSession {
 
   async inspectMind(candidate) {
     if (!await detectExistingMind(candidate)) return null;
-    const version = (await readTextIfPresent(path.join(candidate, 'user', 'VERSION')) ?? '').trim();
-    return { path: path.resolve(candidate), version };
+    const record = parseVersionRecord(await readTextIfPresent(path.join(candidate, 'user', 'VERSION')) ?? '');
+    return { path: path.resolve(candidate), version: record.version, line: record.line };
   }
 
   async findInstalledMind() {
@@ -1240,7 +1241,7 @@ class SetupSession {
     const peerHashes = await readPeerHashes(this.mindPath, this.hostname);
     // An attach writes what belongs to this machine. The kit copy, the preferences and the
     // recorded version belong to the mind and stay as the mind already has them.
-    const attach = this.answers.attach === true || /^3\./.test(this.existingMind?.version ?? '');
+    const attach = this.answers.attach === true || this.existingMind?.line === ONEM1ND_LINE || /^3\./.test(this.existingMind?.version ?? '');
     this.answers.attach = attach;
     const kitPlan = attach ? combinePlans() : await planKitCopy({
       kitPath: this.kitPath,
@@ -1266,7 +1267,7 @@ class SetupSession {
 
     if (attach) this.attachOutdated = await this.outdatedMind(packageJson.version);
     const mindPlans = attach ? [] : [
-      planDataFile({ destination: versionPath, content: `${packageJson.version}\n`, root: this.mindPath, managedHash: existingManaged[versionPath], kind: 'version', allowExisting: true, language: this.answers.language }),
+      planDataFile({ destination: versionPath, content: formatVersionRecord(packageJson.version, lineOfPackage(packageJson.name)), root: this.mindPath, managedHash: existingManaged[versionPath], kind: 'version', allowExisting: true, language: this.answers.language }),
       planDataFile({ destination: preferencesPath, content: preferences, root: this.mindPath, managedHash: existingManaged[preferencesPath], kind: 'preferences', allowExisting: true, language: this.answers.language }),
     ];
     const dataPlans = await Promise.all(attach ? [] : [
@@ -1455,12 +1456,13 @@ async function runSetupMigrations(session) {
   const directory = path.join(session.kitPath, 'migrations');
   await assertNoLinks(directory);
   const names = await readdir(directory);
-  const toVersion = JSON.parse(await readFile(path.join(session.kitPath, 'package.json'), 'utf8')).version;
+  const manifest = JSON.parse(await readFile(path.join(session.kitPath, 'package.json'), 'utf8'));
+  const from = { line: parseVersionRecord(session.checkpointProof.sourceVersion).line, version: session.checkpointProof.sourceVersion };
+  const toVersion = manifest.version;
+  const to = { line: lineOfPackage(manifest.name), version: toVersion };
   const selected = names.filter(name => /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\.mjs$/.test(name))
     .map(name => ({ name, version: name.slice(0, -4) }))
-    .filter(entry => (compareSetupVersions(entry.version, session.checkpointProof.sourceVersion) > 0
-      || entry.version === '3.0.0-onem1nd' && compareSetupVersions(session.checkpointProof.sourceVersion, '3.0.0') >= 0)
-      && compareSetupVersions(entry.version, toVersion) <= 0)
+    .filter(entry => migrationApplies(entry.version, from, to, compareSetupVersions))
     .sort((a, b) => compareSetupVersions(a.version, b.version));
   session.checkpointProof.migrations ??= [];
   for (const entry of selected) {
