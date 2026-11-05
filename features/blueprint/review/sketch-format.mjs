@@ -95,7 +95,7 @@ function fail(path, rule) {
 }
 
 function only(object, keys, path) {
-  for (const key of Object.keys(object)) if (!keys.has(key)) fail(`${path}.${key}`, "is not part of a Lite sketch.");
+  for (const key of Object.keys(object)) if (!keys.has(key)) fail(`${path}.${key}`, "is not part of the legacy sketch format.");
 }
 
 function checkNode(node, path, depth, seen, count, maxNodes = MAX_NODES) {
@@ -145,8 +145,8 @@ function checkNode(node, path, depth, seen, count, maxNodes = MAX_NODES) {
 }
 
 /**
- * Checks a sketch against Blueprint JSON v1 as Lite uses it: the v1 shape and
- * limits, with the subset of node fields Lite draws, lowercase ids, one empty
+ * Checks a sketch against Blueprint JSON v1 as the legacy sketch format uses it: the v1 shape and
+ * limits, with the subset of node fields it draws, lowercase ids, one empty
  * list each for components, fonts and threads (comments live in
  * comments/<board>.json), and no objects outside screens. A link may join
  * screens of the sketch and screens of the board module; the page ignores a
@@ -232,7 +232,7 @@ export function validateSketch(value, { maxNodes = MAX_NODES } = {}) {
   return JSON.parse(JSON.stringify(value));
 }
 
-/** Freeze a laid-out Lite module as editable, parent-relative JSON, retaining its data. */
+/** Freeze a laid-out legacy sketch module as editable, parent-relative JSON, retaining its data. */
 export function normalizeBoard(source, { skin, sketch = null, maxNodes = MAX_NODES } = {}) {
   const unavailable = () => { throw new SketchError("import_unavailable"); };
   const copy = (value, depth = 0) => {
