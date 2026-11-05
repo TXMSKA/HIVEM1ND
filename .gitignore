@@ -2,4 +2,6 @@
 node_modules/
 .tools/
 /dist/
+/.tmp/
 /*.tgz
+/engine/relay-plus/cosmic-keys/bin/

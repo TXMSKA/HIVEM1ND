@@ -137,6 +137,7 @@ const ROUTES = [
   ['PATCH', '/settings', 'settings.write', 'D', 'patchSettings'],
   ['POST', '/settings/home-network', 'home.manage', 'D', 'home'],
   ['POST', '/relan', 'home.manage', 'D', 'relan'],
+  ['POST', '/relay-plus', 'home.manage', 'D', 'relayPlus'],
   ['GET', '/settings/agents', 'read', 'D', 'machineSettings', 'agents'],
   ['GET', '/settings/permissions', 'read', 'D', 'machineSettings', 'permissions'],
   ['GET', '/settings/projects', 'read', 'D', 'machineSettings', 'projects'],
@@ -660,7 +661,7 @@ export async function createHttpServer(options) {
       return;
     }
     const run = async () => applySync(await invoke(route, { domain, params, query, body, credential, viewers, bus, options, homeState }), domain);
-    if (route.handler === 'home' || route.handler === 'relan' || route.handler === 'settingsMutation' && route.collection === 'preview') {
+    if (route.handler === 'home' || route.handler === 'relan' || route.handler === 'relayPlus' || route.handler === 'settingsMutation' && route.collection === 'preview') {
       const outcome = applySync(await rememberHome(homeMemory, credential, req, relative, body, requestId, run), domain);
       respond(res, outcome.status ?? 200, successEnvelope(outcome, { requestId, readAt, eventCursor: readCursor }));
       return;
@@ -1223,6 +1224,7 @@ function allowedBody(route) {
     'PATCH /settings': ['look', 'language', 'sendToAgent', 'expectedRevision'],
     'POST /settings/home-network': ['enabled', 'addresses'],
     'POST /relan': ['action', 'code', 'host', 'address'],
+    'POST /relay-plus': ['action', 'deviceId', 'messageId', 'fingerprint', 'phrase', 'ciphertext', 'after', 'limit'],
     'PATCH /settings/content': ['includedFeatures', 'includedKnowledge', 'preferences', 'expectedRevision'],
     'POST /settings/agents/scan': ['machine'],
     'POST /settings/agents/find': ['machine', 'client', 'path'],
@@ -1414,6 +1416,10 @@ async function invoke(route, scope) {
   validateQuery(route, query);
   if (route.handler === 'appBridge') return { status: 200, body: await callAppBridge(domain, body) };
   if (route.handler === 'appActivity') return { status: 200, body: updateAppActivity(domain, body) };
+  if (route.handler === 'relayPlus') {
+    if (!options.relayPlusControl) throw new CoreError(503, 'relay_plus_unavailable', 'Relay+ is unavailable.');
+    return { status: 200, body: await options.relayPlusControl(body) };
+  }
   if (route.handler === 'relan') {
     if (!options.relanControl) throw new CoreError(503, 'relan_unavailable', 'This service is not configured for ReLAN.');
     return { status: 200, body: await options.relanControl(body) };

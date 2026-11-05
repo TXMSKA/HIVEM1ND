@@ -8,7 +8,8 @@
   "main": "gui/index.mjs",
   "exports": {
     ".": "./gui/index.mjs",
-    "./gui": "./gui/index.mjs"
+    "./gui": "./gui/index.mjs",
+    "./relay-plus": "./engine/relay-plus/index.mjs"
   },
   "bin": {
     "onem1nd": "cli/index.mjs"

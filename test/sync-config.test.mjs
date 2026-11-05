@@ -1,9 +1,10 @@
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { bootstrapConfig, configureOwnedService } from '../engine/service/install.mjs';
-import { runConfiguredService } from '../engine/service/service.mjs';
+import { runConfiguredService, stopService } from '../engine/service/service.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
 function configOf(fixture, kind = 'folder') {
@@ -54,9 +55,10 @@ test('encryption configuration retains supported metadata and refuses unsupporte
   }
 });
 
-test('saved encryption survives configuration and cannot start a plaintext service', async t => {
+test('saved Relay+ encryption survives configuration and waits for the account key without plaintext publication', async t => {
   const fixture = await makeCoreFixture();
-  t.after(() => dispose(fixture));
+  let handle;
+  t.after(async () => { if (handle) await stopService(handle, { force: true }); await dispose(fixture); });
   const encryption = { algorithm: 'aes-256-gcm', keyId: 'paired-key' };
   const config = bootstrapConfig({ ...configOf(fixture, 'relay-plus'), encryption });
   await mkdir(fixture.paths.localDirectory, { recursive: true, mode: 0o700 });
@@ -67,8 +69,11 @@ test('saved encryption survives configuration and cannot start a plaintext servi
   };
   const planned = await configureOwnedService(options);
   assert.deepEqual(planned.state.configBody.encryption, encryption);
-  await assert.rejects(runConfiguredService(options), { code: 'encryption_unavailable' });
+  handle = await runConfiguredService({ ...options, store: fixture.store, env: fixture.env,
+    now: Date.now, userKey: randomUUID(), guardPort: 0, projects: [], clients: [] });
+  assert.equal(handle.runtime.relayPlus.ready(), false);
+  assert.equal((await handle.runtime.relayPlus.control({ action: 'status' })).state, 'signed-out');
+  assert.equal(handle.runtime.syncStarted, false);
   assert.deepEqual(JSON.parse(await readFile(fixture.paths.configFile, 'utf8')), config);
-  assert.deepEqual(await readdir(fixture.paths.localDirectory), ['config.json']);
   await assert.rejects(readFile(path.join(config.origin.path, 'machines', fixture.machine, 'head.json')), { code: 'ENOENT' });
 });
