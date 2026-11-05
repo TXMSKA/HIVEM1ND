@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import path from 'node:path';
-import { createSyncCoordinator } from 'hivem1nd/sync';
+import { createSyncCoordinator } from 'onem1nd/sync';
 import { createConsumer, createOrigin, fixtureClock, fixtureCodec, makeGroup } from './sync-consumer.mjs';
 
 const [fault, root] = process.argv.slice(2);

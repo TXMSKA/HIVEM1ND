@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, open, readFile, readdir, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { SYNC_API_VERSION, createSyncCoordinator } from 'hivem1nd/sync';
+import { SYNC_API_VERSION, createSyncCoordinator } from 'onem1nd/sync';
 
 const checkout = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const temporaryRoot = path.join(checkout, '.test-tmp');

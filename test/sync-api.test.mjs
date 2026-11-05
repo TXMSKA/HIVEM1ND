@@ -6,7 +6,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { SYNC_API_VERSION, createSyncCoordinator } from 'hivem1nd/sync';
+import { SYNC_API_VERSION, createSyncCoordinator } from 'onem1nd/sync';
 import { createFixture, filesBelow, fixtureClock, fixtureCodec, makeGroup, readJson } from '../fixtures/sync-consumer.mjs';
 
 const execute = promisify(execFile);
@@ -50,7 +50,7 @@ test('the supported package subpath exports only the v1 API and importing it own
   assert.equal(SYNC_API_VERSION, 1);
   assert.equal(typeof createSyncCoordinator, 'function');
   const result = await execute(process.execPath, ['--input-type=module', '-e',
-    "import assert from 'node:assert/strict'; import * as api from 'hivem1nd/sync'; assert.deepEqual(Object.keys(api).sort(), ['SYNC_API_VERSION','createSyncCoordinator']); assert.equal(api.SYNC_API_VERSION,1);"],
+    "import assert from 'node:assert/strict'; import * as api from 'onem1nd/sync'; assert.deepEqual(Object.keys(api).sort(), ['SYNC_API_VERSION','createSyncCoordinator']); assert.equal(api.SYNC_API_VERSION,1);"],
   { cwd: checkout, windowsHide: true, timeout: 5000, env: { ...process.env, TMP: fixture.root, TEMP: fixture.root } });
   assert.equal(result.stderr, '');
   assert.equal(result.stdout, '');

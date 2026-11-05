@@ -1,4 +1,4 @@
-import { createSyncCoordinator } from 'hivem1nd/sync';
+import { createSyncCoordinator } from 'onem1nd/sync';
 import { createConsumer, createOrigin, fixtureClock, fixtureCodec } from './sync-consumer.mjs';
 
 const [root, machine] = process.argv.slice(2);

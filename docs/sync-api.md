@@ -1,7 +1,7 @@
 # Shared sync API v1
 
 ```js
-import { SYNC_API_VERSION, createSyncCoordinator } from 'hivem1nd/sync';
+import { SYNC_API_VERSION, createSyncCoordinator } from 'onem1nd/sync';
 
 const sync = await createSyncCoordinator({ store, domain, codec, origin, limits, clock, events });
 await sync.resume();
