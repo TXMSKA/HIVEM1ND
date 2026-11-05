@@ -8,6 +8,7 @@ import { promisify, isDeepStrictEqual } from 'node:util';
 import { applyEdits, modify, parse as parseJsonc } from 'jsonc-parser';
 import { parse as parseToml } from 'smol-toml';
 import { hashContent, readMachineRecord } from '../engine/records.mjs';
+import { canonicalJson } from '../engine/service/identity.mjs';
 import { assertNoLinks, localCosmic, mindKeyFor } from '../engine/service/paths.mjs';
 import { ownershipRecord, planRegistration, queryRegistration } from '../engine/service/install.mjs';
 import { clientConfigPaths, RELAY_CLIENTS } from '../engine/relay/config.mjs';
@@ -332,6 +333,20 @@ async function planAgents(context) {
   }
 }
 
+// Service transaction journals name their records by absolute path, and startup recovery refuses a record outside the
+// moved local directory, so every moved journal must name the moved record.
+async function relocateJournals(state, rewrite, write) {
+  for (const move of state.moves.filter(item => inside(state.legacyServiceRoot, item.source))) {
+    for (const entry of move.inventory ?? []) {
+      if (entry.directory || !/(?:^|\/)transactions\/[^/]+\.json$/.test(entry.path)) continue;
+      const file = path.join(move.destination, entry.path), journal = await json(file);
+      if (!Array.isArray(journal?.entries)) continue;
+      const entries = journal.entries.map(item => typeof item.recordPath === 'string' ? { ...item, recordPath: rewrite(item.recordPath) } : item);
+      if (!isDeepStrictEqual(entries, journal.entries)) await write(file, Buffer.from(`${canonicalJson({ ...journal, entries })}\n`, 'utf8'));
+    }
+  }
+}
+
 async function migrateRegistrations(context) {
   const { state, options, save, rewrite, stage, flush, run } = context;
   for (const item of state.registrations) {
@@ -492,6 +507,7 @@ async function runMigration(input) {
   };
   if (state?.complete) {
     await repairDirectories();
+    await relocateJournals(state, pathRewriter(state.moves, options.platform), (file, content) => publish(file, content, options.protectFile, options.renameFile));
     return { migrated: false, mindPath: state.mindPath, relocatedPaths: state.moves, version };
   }
   const legacyRoots = [path.join(cosmic, LEGACY), path.join(cosmic, '.m1nd')];
@@ -645,6 +661,7 @@ async function runMigration(input) {
         await stage(file, Buffer.from(`${JSON.stringify(next, null, 2)}\n`));
       }
     }
+    await relocateJournals(state, rewrite, stage);
     await flush();
     await migrateRegistrations(context);
     state.phases.push('service');

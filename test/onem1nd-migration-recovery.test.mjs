@@ -305,6 +305,26 @@ test('private destination directories are protected before verification and comp
   await assert.rejects(lstat(removed), { code: 'ENOENT' });
 });
 
+test('moved transaction journals name the moved records, and a completed upgrade repairs journals left with old paths', async t => {
+  const f = await fixture(t, { service: true });
+  const oldLocal = path.join(f.cosmic, `${OLD}-service`, mindKeyFor(f.source, f.options.platform), 'TEST');
+  const journal = { id: 'fixture-journal', phase: 'committed', emitted: true, entries: [
+    { resource: 'cluster-mappings', operation: 'put', recordPath: path.join(oldLocal, 'cluster-links.json') },
+    { resource: 'user/VERSION', operation: 'put', recordPath: path.join(f.source, 'user', 'VERSION') },
+  ] };
+  await put(path.join(oldLocal, 'transactions', 'fixture-journal.json'), `${JSON.stringify(journal)}\n`);
+  await migrate(f.options);
+  const local = path.join(f.cosmic, 'onem1nd-service', mindKeyFor(f.destination, f.options.platform), 'TEST');
+  const moved = path.join(local, 'transactions', 'fixture-journal.json');
+  const expected = [path.join(local, 'cluster-links.json'), path.join(f.destination, 'user', 'VERSION')];
+  assert.deepEqual(JSON.parse(await readFile(moved, 'utf8')).entries.map(entry => entry.recordPath), expected);
+  await writeFile(moved, `${JSON.stringify(journal)}\n`);
+  const previous = await readFile(f.checkpoint);
+  assert.equal((await migrate(f.options)).migrated, false);
+  assert.deepEqual(await readFile(f.checkpoint), previous);
+  assert.deepEqual(JSON.parse(await readFile(moved, 'utf8')).entries.map(entry => entry.recordPath), expected);
+});
+
 test('real Windows ACLs protect migrated bootstrap folders and a completed upgrade repairs inheritance', { skip: process.platform !== 'win32' }, async t => {
   const f = await fixture(t, { service: true });
   const temporary = path.join(f.root, 'tmp');
