@@ -39,7 +39,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/TXMSKA/HIVEM1ND", "comment": "Compatibility: the canonical repository URL remains unchanged so source links resolve."
+    "url": "https://github.com/TXMSKA/ONEM1ND"
   },
   "scripts": {
     "lint": "markdownlint-cli2",

@@ -5,11 +5,11 @@
 
   One mind for every coding agent.
 
-  [![Release](https://img.shields.io/github/v/release/TXMSKA/HIVEM1ND?label=release)](https://github.com/TXMSKA/HIVEM1ND/releases/latest) <!-- Compatibility: repository URLs retain their existing hosting location. -->
-  [![License](https://img.shields.io/github/license/TXMSKA/HIVEM1ND)](LICENSE) <!-- Compatibility: repository URLs retain their existing hosting location. -->
-  [![CI](https://img.shields.io/github/actions/workflow/status/TXMSKA/HIVEM1ND/ci.yml?branch=master&label=CI)](https://github.com/TXMSKA/HIVEM1ND/actions/workflows/ci.yml) <!-- Compatibility: repository URLs retain their existing hosting location. -->
+  [![Release](https://img.shields.io/github/v/release/TXMSKA/ONEM1ND?label=release)](https://github.com/TXMSKA/ONEM1ND/releases/latest)
+  [![License](https://img.shields.io/github/license/TXMSKA/ONEM1ND)](LICENSE)
+  [![CI](https://img.shields.io/github/actions/workflow/status/TXMSKA/ONEM1ND/ci.yml?branch=master&label=CI)](https://github.com/TXMSKA/ONEM1ND/actions/workflows/ci.yml)
 
-  [Download](https://github.com/TXMSKA/HIVEM1ND/releases/latest) &middot; <!-- Compatibility: repository URLs retain their existing hosting location. -->
+  [Download](https://github.com/TXMSKA/ONEM1ND/releases/latest) &middot;
   [Quick start](#quick-start) &middot;
   [Commands](#commands) &middot;
   [Docs](files.md) &middot;
@@ -29,7 +29,7 @@ ONEM1ND is a folder of plain markdown that any coding agent can read and write. 
 
 | Method | Steps |
 | --- | --- |
-| Windows | Download `ONEM1ND-<version>-x64.zip` from [Releases](https://github.com/TXMSKA/HIVEM1ND/releases/latest), extract it, run `ONEM1ND\ONEM1ND.exe`. | <!-- Compatibility: repository URLs retain their existing hosting location. -->
+| Windows | Download `ONEM1ND-<version>-x64.zip` from [Releases](https://github.com/TXMSKA/ONEM1ND/releases/latest), extract it, run `ONEM1ND\ONEM1ND.exe`. |
 | npx | `npx onem1nd init` opens the terminal wizard; add `--gui` for the browser wizard. |
 | Clone | Clone this repository into the folder that will hold the mind. That is the install, with no setup step. |
 | Genesis | Paste the [setup prompt](roles/genesis.md) into any agent chat and it runs the setup in plain language. |
