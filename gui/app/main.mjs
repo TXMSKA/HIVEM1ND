@@ -4914,6 +4914,7 @@ const ACTION_COPY = {
   invalid_lead: "invalidLead",
   machine_unavailable: "machineDown",
   note_required: "noteRequired",
+  account_label_taken: "accountLabelTaken",
   revision_conflict: "revisionConflict",
   configuration_changed: "settingsConfigurationChanged",
   phone_read_only: "phoneReadOnly",

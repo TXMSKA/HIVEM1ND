@@ -131,8 +131,10 @@ function nextId(record, client, label) {
   return id;
 }
 
+// Two entries of one client with the same label would be indistinguishable in the picker, so the label must be new there.
 function insert(record, client, label, home) {
   if (record.accounts[client].some(item => sameHome(item.home, home))) fail(409, 'account_exists', 'That account is already in the list.');
+  if (record.accounts[client].some(item => item.label.trim().toLowerCase() === label.toLowerCase())) fail(409, 'account_label_taken', 'An account with that name already exists.');
   const id = nextId(record, client, label);
   record.accounts[client].push({ id, label, home });
   return id;

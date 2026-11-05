@@ -106,6 +106,20 @@ test('nothing to offer closes the first-start question', async t => {
   assert.equal((await readAccounts(context)).confirmed, true);
 });
 
+test('a label equal to another of the same client is refused, ignoring case and spaces; the other client may reuse it', async t => {
+  const { homeDir, context, opened } = await fixture(t);
+  await fakeHome(homeDir, '.claude-other', '.credentials.json');
+  await addAccount(context, { client: 'claude', label: 'Work' });
+  for (const label of ['Work', 'work', '  WORK ']) await assert.rejects(addAccount(context, { client: 'claude', label }), error => error.code === 'account_label_taken');
+  assert.equal(opened.length, 1);
+  assert.equal((await readAccounts(context)).accounts.claude.length, 1);
+  await addAccount(context, { client: 'codex', label: 'work' });
+  await assert.rejects(confirmDetected(context, { client: 'claude', home: path.join(homeDir, '.claude-other'), label: ' work' }), error => error.code === 'account_label_taken');
+  assert.equal((await accountsView(context)).pending.length, 1);
+  const view = await confirmDetected(context, { client: 'claude', home: path.join(homeDir, '.claude-other'), label: 'Other' });
+  assert.deepEqual(view.clients.claude.map(item => item.label), ['Default', 'Work', 'Other']);
+});
+
 test('adding opens a terminal for that home; removing drops only the entry', async t => {
   const { homeDir, context, opened } = await fixture(t);
   const view = await addAccount(context, { client: 'codex', label: 'Work team' });
@@ -120,7 +134,7 @@ test('adding opens a terminal for that home; removing drops only the entry', asy
   assert.ok(!JSON.stringify(opened[0]).includes('Work team'));
   await mkdir(added.home, { recursive: true });
   await writeFile(path.join(added.home, 'auth.json'), 'keep');
-  const second = await addAccount(context, { client: 'codex', label: 'Work team' });
+  const second = await addAccount(context, { client: 'codex', label: 'Other team' });
   assert.equal(second.clients.codex.length, 3);
   assert.notEqual(second.clients.codex[2].home, added.home);
   await assert.rejects(addAccount(context, { client: 'cursor', label: 'x' }), error => error.code === 'invalid_body');

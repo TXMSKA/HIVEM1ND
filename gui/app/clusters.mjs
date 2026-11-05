@@ -416,7 +416,7 @@ export function startDialog(document, { view, render, language, anchor = null, o
       if (uncertain) {
         for (const node of dialog.querySelectorAll('button, input, select, textarea')) if (node.getAttribute('data-action') !== action) node.disabled = true;
       }
-      dialog.append(element(document, 'p', { role: 'alert', 'data-start-error': error.code ?? 'request_failed', text: error.message || startText(language, 'unavailable') }));
+      dialog.append(element(document, 'p', { role: 'alert', 'data-start-error': error.code ?? 'request_failed', text: error.code === 'account_label_taken' ? startText(language, 'accountLabelTaken') : error.message || startText(language, 'unavailable') }));
       dialog.querySelector(`[data-action="${action}"]`)?.focus?.();
     } finally { busy = false; if (dialog.isConnected) { for (const node of enabled) node.disabled = false; control?.removeAttribute('aria-busy'); } }
   };

@@ -45,6 +45,7 @@ export const START_COPY=Object.freeze({
   accountOfferTitle:['Another {client} account was found','Se encontró otra cuenta de {client}'],
   accountOfferBody:['The folder {folder} holds a sign-in. Add it as an account?','La carpeta {folder} contiene un inicio de sesión. ¿Agregarla como cuenta?'],
   accountOfferName:['Account name','Nombre de la cuenta'],accountOfferSkip:['Skip','Omitir'],accountOfferAdd:['Add account','Agregar cuenta'],
+  accountLabelTaken:['An account with that name already exists. Choose another name.','Ya existe una cuenta con ese nombre. Elegir otro nombre.'],
   agent:['Agent','Agente'],account:['Account','Cuenta'],accountDefault:['Default account','Cuenta predeterminada'],model:['Model','Modelo'],effort:['Effort','Esfuerzo'],mode:['Mode','Modo'],defaultChoice:['Use for new agents from now on','Utilizar para los agentes nuevos de ahora en adelante'],
   quota:['{label}: {percent}% left','{label}: queda el {percent}%'],quotaUnknown:['Quota unavailable','Cuota no disponible'],
   localQuota:['On this machine, no quota','En esta máquina, sin cuota'],

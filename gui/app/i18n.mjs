@@ -743,6 +743,7 @@ const COPY = {
   accountRemoveBody: ["Only the ONEM1ND entry is removed. The folder, the sign-in and any setup written there stay.", "Solo se quita la entrada de ONEM1ND. La carpeta, el inicio de sesión y la configuración escrita allí permanecen."],
   accountNotSignedIn: ["Not signed in yet", "Aún sin iniciar sesión"],
   accountReview: ["Review setup", "Revisar la configuración"],
+  accountLabelTaken: ["An account with that name already exists. Choose another name.", "Ya existe una cuenta con ese nombre. Elegir otro nombre."],
 
   settingsFind: ["Find manually", "Buscar manualmente"],
   settingsFindIt: ["Find it", "Buscarla"],

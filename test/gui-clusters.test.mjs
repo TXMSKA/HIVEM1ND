@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { acceptedRepositoryCluster, clusterLead, connectedChoices, customRoleProblems, filterRepositories, initialRunsIn, launchable, readable, renderAccountOffer, renderAgentForm, renderRepositoryOffer, renderRunsInPicker, repositorySelection, runsInLabel, startDialog, supervisedClient, validRunsIn } from '../gui/app/clusters.mjs';
+import { text } from '../gui/app/i18n.mjs';
 import { renderApproval } from '../gui/app/inspector.mjs';
 import { renderSessionWork } from '../gui/app/session-work.mjs';
 import { AGENT_ROLES, roleLabel, startText } from '../gui/app/start-copy.mjs';
@@ -642,4 +643,26 @@ test('the first-start question shows the suggested label, editable, with Skip an
   assert.equal(names.find(node => node.attributes?.['data-start-field'] === 'label').value, 'alt');
   assert.ok(names.some(node => node.attributes?.['data-action'] === 'skip-account') && names.some(node => node.attributes?.['data-action'] === 'confirm-account'));
   assert.match(copy(renderAccountOffer(document, { language: 'es', offer, folder: '.claude-alt', label: 'alt' }, {})), /Se encontró otra cuenta de Claude Code/);
+});
+
+test('a taken account label shows its own message inline, in English and Spanish, in the first-start offer and the add dialog', async () => {
+  const refused = () => Object.assign(new Error('An account with that name already exists.'), { code: 'account_label_taken', status: 409 });
+  const dom = { ...document, body: { append() {} }, defaultView: { innerWidth: 1200, innerHeight: 700 }, activeElement: null,
+    createElement(name) {
+      const node = document.createElement(name);
+      Object.assign(node, { style: {}, querySelector: () => null, querySelectorAll: () => [], showModal() {}, close() {} });
+      return node;
+    } };
+  for (const [language, expected] of [['en', 'An account with that name already exists. Choose another name.'], ['es', 'Ya existe una cuenta con ese nombre. Elegir otro nombre.']]) {
+    const flow = startDialog(dom, { view: 'account-offer', language, render: () => dom.createElement('section') });
+    await flow.run('confirm-account', async () => { throw refused(); });
+    const alert = nodes(flow.dialog).find(node => node.attributes?.['data-start-error'] === 'account_label_taken');
+    assert.equal(copy(alert), expected);
+    assert.equal(startText(language, 'accountLabelTaken'), expected);
+  }
+  // The add dialog maps the service code through the shared action copy.
+  const main = await readFile(new URL('../gui/app/main.mjs', import.meta.url), 'utf8');
+  assert.match(main, /account_label_taken: "accountLabelTaken"/);
+  assert.equal(text('en', 'accountLabelTaken'), 'An account with that name already exists. Choose another name.');
+  assert.equal(text('es', 'accountLabelTaken'), 'Ya existe una cuenta con ese nombre. Elegir otro nombre.');
 });
