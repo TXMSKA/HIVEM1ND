@@ -363,6 +363,27 @@ test("Settings exposes four keyboard tabs, own-palette looks and machine-owned r
   assertVisibleCopy("es", mountedVisibleCopy(desktop));
 });
 
+test("A status line shown in Settings is written again when the language changes", async t => {
+  const desktop = await settingsApp(t);
+  const { root, app, document } = desktop;
+  click(root.querySelector("[data-settings-tab='agents']"));
+  click(root.querySelector("[data-action='settings-review-cursor']"));
+  await waitFor(() => document.querySelector("[data-settings-review='cursor']"), "The client review did not open.");
+  const dialog = document.querySelector("[data-settings-review]");
+  changeControl(dialog.querySelector("[data-review-change='git']"), true);
+  click(dialog.querySelector("[data-action='settings-apply']"));
+  const toast = () => root.querySelector("[data-settings-toast]")?.textContent;
+  await waitFor(() => app.actionNote, "No status line was shown after Apply.");
+  renderShell(app);
+  const shown = toast();
+  assert.equal(shown, text("en", "settingsConnected"));
+  app.language = "es"; renderShell(app);
+  assert.equal(toast(), text("es", "settingsConnected"));
+  assert.notEqual(toast(), shown);
+  app.language = "en"; renderShell(app);
+  assert.equal(toast(), shown);
+});
+
 test("Settings mode and named app changes are reviewed; Copy and Cancel write no client bytes", async t => {
   const writes = [];
   const desktop = await settingsApp(t, (input, init) => { if (!["GET", "HEAD"].includes(init.method)) writes.push(new URL(input).pathname); });

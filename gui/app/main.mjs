@@ -491,6 +491,7 @@ const SCROLL_QUIET_MS = 250;
 const scrollClock = () => globalThis.performance?.now?.() ?? Date.now();
 
 export function renderShell(app) {
+  if (app.actionNote && app.actionBuild) app.actionNote = app.actionBuild(app.language);
   const wait = (app.scrollingUntil ?? 0) - scrollClock();
   if (wait > 0) {
     if (!app.scrollRedraw) app.scrollRedraw = setTimeout(() => { app.scrollRedraw = null; if (!app.disposed) renderShell(app); }, wait + 10);
@@ -888,7 +889,7 @@ function noteSyncConflict(app, data) {
     copyPath: String(data?.copyPath ?? ""),
     winnerMachine: String(data?.winnerMachine ?? ""),
   };
-  showOutcome(app, text(app.language, "syncConflict", { path: app.syncConflict.copyPath || text(app.language, "unknown") }), "sync_conflict", "error");
+  showOutcome(app, (language) => text(language, "syncConflict", { path: app.syncConflict.copyPath || text(language, "unknown") }), "sync_conflict", "error");
 }
 
 async function loadPresentation(app, options = {}) {
@@ -3718,7 +3719,7 @@ function settingsMutation(app, method, path, body, onSuccess = null) {
       const result = await commitSettingsMutation(app, record, method, path, body);
       onSuccess?.(result.data);
       await loadSettingsSections(app);
-      showOutcome(app, text(app.language, path === "/settings/service/restart" ? "settingsRestartRequested" : "saved"), "settings_saved", "status", "settings");
+      showOutcome(app, (language) => text(language, path === "/settings/service/restart" ? "settingsRestartRequested" : "saved"), "settings_saved", "status", "settings");
       return result;
     } catch (error) {
       if (["revision_conflict", "configuration_changed", "machine_unavailable"].includes(error.code)) {
@@ -3868,7 +3869,7 @@ function applySettingsReview(app, dialog, review, ids) {
     await loadSettingsSections(app);
     const invoker = app.root.querySelector(`[data-action="${review.opener}"]`) ?? app.root.querySelector(`[data-agent="${review.agent.id}"] button`);
     invoker?.focus();
-    showOutcome(app, text(app.language, "settingsConnected"), "settings_connected", "status", "settings");
+    showOutcome(app, (language) => text(language, "settingsConnected"), "settings_connected", "status", "settings");
     return result;
   }).catch(error => {
     const unconfirmed = Boolean(findUncertain(app.api, "POST", path));
@@ -3955,7 +3956,7 @@ async function copyLinkPath(app, link) {
     await app.root.ownerDocument.defaultView.navigator.clipboard.writeText(link.localPath);
     showMapToast(app, text(app.language, "settingsPathCopied"), null, app.api.now() + 3000);
   } catch {
-    showOutcome(app, text(app.language, "settingsPathNotCopied"), "settings_path_not_copied", "error", "settings");
+    showOutcome(app, (language) => text(language, "settingsPathNotCopied"), "settings_path_not_copied", "error", "settings");
   }
   renderShell(app);
 }
@@ -4034,7 +4035,7 @@ function revokeSettingsGrant(app, item) {
       app.revocationRequestId = result.data.requestId ?? null; app.revocationUnitId = item.unitId;
     }
     await loadSettingsSections(app);
-    showOutcome(app, text(app.language, result.data.state === "revoked" ? "grantRevoked" : "grantPending"), "grant_revoke", "status", "settings");
+    showOutcome(app, (language) => text(language, result.data.state === "revoked" ? "grantRevoked" : "grantPending"), "grant_revoke", "status", "settings");
     return result;
   });
 }
@@ -4624,7 +4625,7 @@ function endPhoneAccess(app) {
   for (const value of Object.values(app.inputDrafts ?? {})) value?.clear?.();
   app.activity?.clear();
   app.store = { ...createStore(), audience: 'phone', signedOut: 410 };
-  for (const key of ['unitList', 'chatList', 'waitingList', 'activeList', 'activeRows', 'activeHandlers', 'thread', 'inputDrafts', 'inspectorData', 'waitingRecord', 'pendingChat', 'actionNote', 'phoneCode']) app[key] = null;
+  for (const key of ['unitList', 'chatList', 'waitingList', 'activeList', 'activeRows', 'activeHandlers', 'thread', 'inputDrafts', 'inspectorData', 'waitingRecord', 'pendingChat', 'actionNote', 'actionBuild', 'phoneCode']) app[key] = null;
   app.bootReading = false;
   app.bootFailed = false;
   app.phoneEnded = true;
@@ -4973,8 +4974,10 @@ const TASK_COPY = {
   closed: "taskClosed",
 };
 
+// The note is a finished line, or a function of the language so the line is written again when the language changes.
 function showOutcome(app, note, code = null, tone = "status", scope = null, key = null) {
-  app.actionNote = note;
+  app.actionBuild = typeof note === "function" ? note : null;
+  app.actionNote = app.actionBuild ? app.actionBuild(app.language) : note;
   app.actionCode = code;
   app.actionTone = tone;
   app.actionScope = scope ?? noteScope(app);
@@ -4984,6 +4987,7 @@ function showOutcome(app, note, code = null, tone = "status", scope = null, key 
 function clearMatchedError(app, key) {
   if (!key || app.actionTone !== "error" || app.actionKey !== key) return;
   app.actionNote = null;
+  app.actionBuild = null;
   app.actionCode = null;
   app.actionTone = null;
   app.actionScope = null;
@@ -4997,7 +5001,7 @@ function noteScope(app) {
 }
 
 function explain(app, key) {
-  showOutcome(app, text(app.language, key), key);
+  showOutcome(app, (language) => text(language, key), key);
   if (!app.disposed && app.layout !== "unknown") renderShell(app);
 }
 
@@ -5506,7 +5510,7 @@ function confirmConnection(app, sourceId, targetIds, retained = null, priorError
           error.code = failed.some((result) => result.uncertain) ? "unknown_result" : (failed[0].error?.code ?? "request_failed");
           throw error;
         }
-        showOutcome(app, targets.map((target) => text(app.language, "unitConnected", { unit: target.unit, lead: source.unit })).join(" "), "connected");
+        showOutcome(app, (language) => targets.map((target) => text(language, "unitConnected", { unit: target.unit, lead: source.unit })).join(" "), "connected");
         app.connectionSaving = null;
         app.mapState.pendingConnect = null;
         const undoOperations = new Map();
@@ -5628,10 +5632,10 @@ function openSessionForm(app, unit) {
     app.sessionOperations.set(unit.id, operation);
     let started;
     try { started = await startSession(app.api, unit, null, prompt, operation, mode); }
-    catch (error) { showOutcome(app, actionText(app.language, error.code), error.code); if (!app.disposed) renderShell(app); throw error; }
+    catch (error) { showOutcome(app, (language) => actionText(language, error.code), error.code); if (!app.disposed) renderShell(app); throw error; }
     app.sessionOperations.delete(unit.id);
     app.sessionRequestId = started.data.requestId; app.sessionRequest = { ...started.data, unitId: unit.id };
-    showOutcome(app, text(app.language, SESSION_COPY[started.data.state] ?? 'actionFailed'), started.data.state ?? null);
+    showOutcome(app, (language) => text(language, SESSION_COPY[started.data.state] ?? 'actionFailed'), started.data.state ?? null);
     if (['queued', 'starting'].includes(started.data.state)) await recheckTracked(app);
     if (!app.disposed) renderShell(app);
     return true;
@@ -5649,11 +5653,11 @@ function confirmStop(app, sessionId, unit) {
       try {
         const stopped = await stopSession(app.api, sessionId, app.stopOperation ?? null);
         app.stopOperation = null;
-        showOutcome(app, text(app.language, SESSION_COPY[stopped.data.state] ?? "sessionStopping"), stopped.data.state ?? null);
+        showOutcome(app, (language) => text(language, SESSION_COPY[stopped.data.state] ?? "sessionStopping"), stopped.data.state ?? null);
         if (!app.disposed) renderShell(app);
       } catch (error) {
         app.stopOperation = error?.operation ?? app.stopOperation ?? null;
-        showOutcome(app, actionText(app.language, error?.code), error?.code ?? null);
+        showOutcome(app, (language) => actionText(language, error?.code), error?.code ?? null);
         if (!app.disposed) renderShell(app);
         throw error;
       }
@@ -5802,7 +5806,7 @@ function leadChoices(app) {
 function noteSession(app, data) {
   const state = data.session?.state;
   if (!state || !SESSION_COPY[state]) return;
-  showOutcome(app, text(app.language, SESSION_COPY[state]), state);
+  showOutcome(app, (language) => text(language, SESSION_COPY[state]), state);
 }
 
 function noteSessionRequest(app, data) {
@@ -5814,7 +5818,7 @@ function noteSessionRequest(app, data) {
   if (data.requestId) app.sessionRequestId = data.requestId;
   app.sessionRequest = data;
   if (previous === state) return;
-  showOutcome(app, text(app.language, data.error?.code === 'launch_ambiguous' ? 'launchAmbiguous' : SESSION_COPY[state]), state);
+  showOutcome(app, (language) => text(language, data.error?.code === 'launch_ambiguous' ? 'launchAmbiguous' : SESSION_COPY[state]), state);
   if (state === 'started' && data.unitId && !app.disposed) loadInspector(app, data.unitId);
 }
 
@@ -6158,7 +6162,7 @@ async function openAttachDialog(app, thread) {
 // A picture the service would refuse is named at once, and so is one it did refuse; any other failure reads as usual.
 function noteImage(app, error, key) {
   if (!["asset_too_large", "invalid_asset"].includes(error?.code)) return noteAction(app, error, key);
-  showOutcome(app, text(app.language, "attachImageRejected"), error.code, "error", null, key);
+  showOutcome(app, (language) => text(language, "attachImageRejected"), error.code, "error", null, key);
   if (!app.disposed) renderShell(app);
 }
 
@@ -6391,7 +6395,7 @@ function submitComposer(app, composer) {
 }
 
 function noteAction(app, error, key = null) {
-  showOutcome(app, actionText(app.language, error?.code), error?.code ?? null, "error", null, key);
+  showOutcome(app, (language) => actionText(language, error?.code), error?.code ?? null, "error", null, key);
   if (!app.disposed) renderShell(app);
 }
 
@@ -6624,7 +6628,7 @@ function answerSelected(app, approval, decision) {
     app.answerApprovalId = next?.id ?? approval.id;
     if (next) replaceApproval(app, next);
     const label = next ? approvalLabel(app, next) : text(app.language, "answerQueued");
-    if (label) showOutcome(app, label, next?.state ?? "answering");
+    if (label) showOutcome(app, (language) => next ? approvalLabel({ language }, next) : text(language, "answerQueued"), next?.state ?? "answering");
     if (finalApprovalState(next?.state)) refreshOwnerSurface(app, next.unitId ?? approval.unitId);
     else if (!app.disposed) renderShell(app);
     return result;
@@ -6638,11 +6642,11 @@ function revokeSelectedGrant(app, unit, grant) {
     app.revocationRequestId = result.data.requestId ?? null;
     app.revocationUnitId = result.data.unitId ?? unit.id;
     if (result.data.state === "revoked") {
-      showOutcome(app, text(app.language, "grantRevoked"), "revoked");
+      showOutcome(app, (language) => text(language, "grantRevoked"), "revoked");
       refreshOwnerSurface(app, app.revocationUnitId);
       return;
     }
-    showOutcome(app, text(app.language, "grantPending"), result.data.state ?? "pending");
+    showOutcome(app, (language) => text(language, "grantPending"), result.data.state ?? "pending");
     if (!app.disposed) renderShell(app);
     return result;
   });
@@ -6671,7 +6675,7 @@ function setTaskStatus(app, task, status, note) {
         replaceTask(app, undone.data.task);
         await refreshWaiting(app);
       });
-    } else showOutcome(app, taskText(app.language, result.data.task.status), result.data.task.status);
+    } else showOutcome(app, (language) => taskText(language, result.data.task.status), result.data.task.status);
     replaceTask(app, result.data.task);
     await refreshWaiting(app);
     return result;
@@ -6682,7 +6686,7 @@ function undoSelected(app, task) {
   settle(app, `undo:${task.id}`, text(app.language, "working"), async (record) => {
     const result = await undoTask(app.api, task, record.operation);
     record.operation = result.operation ?? record.operation;
-    showOutcome(app, taskText(app.language, result.data.task.status), result.data.task.status);
+    showOutcome(app, (language) => taskText(language, result.data.task.status), result.data.task.status);
     replaceTask(app, result.data.task);
     await refreshWaiting(app);
     return result;
@@ -6735,13 +6739,13 @@ async function noteApproval(app, data) {
   if (!approval?.id) return;
   replaceApproval(app, approval);
   const label = approvalLabel(app, approval);
-  if (label) showOutcome(app, label, approval.state);
+  if (label) showOutcome(app, (language) => approvalLabel({ language }, approval), approval.state);
   if (finalApprovalState(approval.state)) await refreshOwnerSurface(app, approval.unitId);
 }
 
 async function noteGrant(app, data) {
   if (!data?.unitId || (data.operation !== "granted" && data.operation !== "revoked")) return;
-  if (data.operation === "revoked") showOutcome(app, text(app.language, "grantRevoked"), "revoked");
+  if (data.operation === "revoked") showOutcome(app, (language) => text(language, "grantRevoked"), "revoked");
   await refreshOwnerSurface(app, data.unitId);
   if (app.settingsState) await loadSettingsSections(app);
 }
@@ -6790,7 +6794,7 @@ async function recheckTracked(app) {
       });
       replaceApproval(app, approval.data);
       const label = approvalLabel(app, approval.data);
-      if (label) showOutcome(app, label, approval.data.state);
+      if (label) showOutcome(app, (language) => approvalLabel({ language }, approval.data), approval.data.state);
       if (finalApprovalState(approval.data.state)) await refreshOwnerSurface(app, approval.data.unitId);
     })());
   }
