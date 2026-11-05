@@ -181,6 +181,8 @@ test('board fonts travel as assets by signature with the same containment and si
   await assert.rejects(blueprint('upload', { type: 'font/woff2', base64: Buffer.alloc(APP_UPLOAD_LIMITS.fileBytes + 1, 1).toString('base64') }), { code: 'invalid' });
   await assert.rejects(blueprint('upload', { type: 'font/woff2', base64: Buffer.concat([fontBytes('woff2'), Buffer.alloc(APP_UPLOAD_LIMITS.fileBytes)]).toString('base64') }), { code: 'invalid' });
   await assert.rejects(blueprint('asset', { location: path.join(project, '..'), src: `assets/${named}.woff2` }), { code: 'denied' });
+  await writeFile(path.join(directory, `${named}.ttf`), Buffer.concat([fontBytes('ttf'), Buffer.alloc(APP_UPLOAD_LIMITS.fileBytes)]));
+  await assert.rejects(blueprint('asset', { src: `assets/${named}.ttf` }), { code: 'invalid' });
 });
 
 test('Void files follow the app: one directory per list, bytes in and out, expected revisions, removal, and the project state folder', async t => {

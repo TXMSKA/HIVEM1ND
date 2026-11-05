@@ -74,12 +74,12 @@ async function contained(project, relative, dotVoid = false) {
   return file;
 }
 
-async function bytesOf(file) {
+async function bytesOf(file, limit = FILE_LIMIT) {
   await assertNoLinks(file);
   const stats = await lstat(file).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
   if (!stats) return null;
   if (!stats.isFile()) fail('denied');
-  if (stats.size > FILE_LIMIT) fail('invalid');
+  if (stats.size > limit) fail('invalid');
   return readFile(file);
 }
 
@@ -268,7 +268,7 @@ async function blueprintCall(context, method, params, clientId) {
     const id = String(params.src ?? '').replace(/^assets\//, '');
     const extension = /^[a-f0-9-]{36}\.(png|jpg|webp|woff2|woff|ttf|otf)$/.exec(id)?.[1];
     if (!extension) fail('invalid');
-    const bytes = await bytesOf(await contained(project, `docs/flows/assets/${id}`));
+    const bytes = await bytesOf(await contained(project, `docs/flows/assets/${id}`), APP_UPLOAD_LIMITS.fileBytes);
     if (!bytes) fail('not_found');
     return { src: `assets/${id}`, base64: bytes.toString('base64'), type: assetType(bytes, extension), revision: hashBytes(bytes) };
   }
