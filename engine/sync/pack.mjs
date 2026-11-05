@@ -62,6 +62,14 @@ export function packFileName(sequence) {
 
 export function normalizeTarget(target) {
   if (!target || typeof target !== 'object') throw new CoreError(422, 'invalid_pack', 'The change target is not valid.');
+  if (target.kind === 'opaque') {
+    exactKeys(target, ['kind', 'namespace', 'identity'], 'target');
+    if (typeof target.namespace !== 'string' || target.namespace.length < 1 || target.namespace.length > 256
+      || /[\u0000\r\n]/.test(target.namespace)) throw new CoreError(422, 'invalid_pack', 'The namespace is not valid.');
+    const identity = canonicalJson(target.identity);
+    if (Buffer.byteLength(identity) > 8192) throw new CoreError(422, 'invalid_pack', 'The target identity is too large.');
+    return { kind: 'opaque', namespace: target.namespace, identity: JSON.parse(identity) };
+  }
   if (target.kind === 'mind') {
     const relative = safeMindPath(target.path);
     return { kind: 'mind', path: relative };
@@ -287,7 +295,7 @@ export function validateHead(head, { machine = null, previous = null, packBytes 
 export async function resolveDependencies(packBytes, provider, state = { stack: new Set(), seen: 0, memo: new Map() }) {
   state.memo ??= new Map();
   const buffer = asBuffer(packBytes);
-  const decoded = decodePack(buffer, { keyProvider: provider?.keyProvider });
+  const decoded = await (provider?.decodePack ? provider.decodePack(buffer) : decodePack(buffer, { keyProvider: provider?.keyProvider }));
   const here = `${decoded.header.machine}:${decoded.header.sequence}`;
   if (state.stack.has(here)) throw new CoreError(422, 'invalid_pack', 'Pack dependencies form a cycle.');
   state.seen += 1;
@@ -358,6 +366,7 @@ const NOTICE_KINDS = new Set(['chat-notice', 'approval-notice', 'task-notice', '
 
 export function countLogicalMessages(decoded, knownIds = null) {
   const seen = new Set(knownIds ?? []);
+  const domainBytes = new Map();
   let count = 0;
   const accept = (id) => {
     if (!id || seen.has(id)) return;
@@ -365,6 +374,16 @@ export function countLogicalMessages(decoded, knownIds = null) {
     count += 1;
   };
   for (const change of decoded.changes ?? []) {
+    if (change.target.kind === 'opaque') {
+      if (change.messageId !== null) {
+        const key = `${change.transactionId}:${change.messageId}`;
+        const bytes = (domainBytes.get(key) ?? 0) + change.size;
+        if (bytes > 1000000) throw new CoreError(413, 'message_too_large', 'The message exceeds 1000000 bytes.');
+        domainBytes.set(key, bytes);
+        accept(change.messageId);
+      }
+      continue;
+    }
     if (change.operation !== 'put') continue;
     const raw = decoded.objects?.get(change.hash);
     if (!raw) continue;
@@ -388,6 +407,50 @@ export function isDeterministicNotice(message) {
   const expected = uuidV8(['notice', message.phase ?? '', message.window ?? '', message.subject ?? '']);
   if (message.id === expected) return true;
   return typeof message.resourceId === 'string' && message.resourceId !== '' && typeof message.noticeKey === 'string' && message.noticeKey === `${message.resourceId}:${message.recipient ?? message.toId ?? ''}`;
+}
+
+// Consumers transform the maintained compressed pack; the shared frame binds that codec to its namespace and writer.
+export async function encodeSyncEnvelope(pack, { codec, namespace }) {
+  const decoded = decodePack(pack);
+  const encoded = await codec.encode(pack);
+  if (!(encoded instanceof Uint8Array)) throw new CoreError(422, 'invalid_pack', 'The codec must return bytes.');
+  const payload = asBuffer(encoded);
+  const metadata = {
+    format: 'hivem1nd-sync-envelope-v1', namespace,
+    codec: { format: codec.format, version: codec.version, encryption: codec.encryption },
+    machine: decoded.header.machine, sequence: decoded.header.sequence,
+    payloadBytes: payload.length, payloadHash: hashBytes(payload),
+  };
+  const bytes = framed(metadata, payload);
+  bytes.write('H1S1', 0, 'ascii');
+  if (bytes.length > MAX_PACK_BYTES) throw new CoreError(413, 'pack_too_large', 'The pack exceeds 50 MB.');
+  return bytes;
+}
+
+export async function decodeSyncEnvelope(bytes, { codec, namespace }) {
+  const buffer = asBuffer(bytes);
+  if (buffer.length > MAX_PACK_BYTES || buffer.length < 8 || buffer.subarray(0, 4).toString('ascii') !== 'H1S1') {
+    throw new CoreError(422, 'invalid_pack', 'The sync envelope is not valid.');
+  }
+  const frame = readSpan(buffer, 4);
+  const metadata = parseJson(frame.bytes);
+  exactKeys(metadata, ['format', 'namespace', 'codec', 'machine', 'sequence', 'payloadBytes', 'payloadHash'], 'envelope');
+  if (metadata.format !== 'hivem1nd-sync-envelope-v1' || metadata.namespace !== namespace
+    || canonicalJson(metadata.codec) !== canonicalJson({ format: codec.format, version: codec.version, encryption: codec.encryption })) {
+    throw new CoreError(422, 'invalid_pack', 'The sync codec policy does not match.');
+  }
+  const payload = buffer.subarray(frame.end);
+  if (metadata.payloadBytes !== payload.length || metadata.payloadHash !== hashBytes(payload)) {
+    throw new CoreError(422, 'corrupt_resource', 'The sync envelope digest does not match.');
+  }
+  validateMachineName(metadata.machine);
+  assertSequence(metadata.sequence);
+  const decodedBytes = await codec.decode(payload, { machine: metadata.machine, sequence: metadata.sequence });
+  if (!(decodedBytes instanceof Uint8Array)) throw new CoreError(422, 'invalid_pack', 'The codec must return bytes.');
+  const plain = asBuffer(decodedBytes);
+  const decoded = decodePack(plain, { machine: metadata.machine });
+  if (decoded.header.sequence !== metadata.sequence) throw new CoreError(422, 'invalid_pack', 'The sync sequence does not match.');
+  return { ...decoded, packHash: hashBytes(buffer) };
 }
 
 function framed(header, payload) {

@@ -19,7 +19,7 @@ export function nextDue(now, first, last, limits) {
 }
 
 export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeout, events = sync.store.events,
-  encryption = { algorithm: 'none' }, keyProvider = origin?.keyProvider, ready = () => true } = {}) {
+  encryption = { algorithm: 'none' }, keyProvider = origin?.keyProvider, ready = () => true, retryDelayMs = 2000 } = {}) {
   if (!sync || !origin || !ledger || !now || !setTimeout || !clearTimeout) {
     throw new CoreError(500, 'internal_error', 'A pulse needs a sync store, origin, ledger, and clock.');
   }
@@ -37,6 +37,7 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
   let closed = false;
   let scheduleToken = 0;
   let finishedJournal = null;
+  let activeIds = [];
   const skipped = new Set();
 
   function clearTimer() {
@@ -48,11 +49,36 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
     const token = ++scheduleToken;
     clearTimer();
     if (closed || !ready() || pending.length === 0 || first === null) return;
+    if (await origin.publicationBlocked?.()) return;
     const limits = await currentLimits();
     if (token !== scheduleToken || closed) return;
     const due = backlog && limits.state === 'normal' ? now() : nextDue(now(), first, last, limits);
     if (due === null || !Number.isFinite(due)) return;
-    timer = setTimeout(() => flush(), Math.max(0, due - now()));
+    timer = setTimeout(backgroundFlush, Math.max(0, due - now()));
+  }
+
+  function reportBackgroundFailure(error) {
+    try {
+      if (sync.domain) origin.reportFailure?.(error);
+      else events.push({ type: 'sync.error', code: error?.code ?? 'internal_error' });
+    } catch { /* A notification cannot interrupt recovery. */ }
+  }
+
+  function retryTimer(error) {
+    reportBackgroundFailure(error);
+    if (closed || pending.length === 0) return;
+    // Disk failures can prevent arm() from reading the ledger. The same pulse timer retries that read.
+    try {
+      scheduleToken += 1;
+      clearTimer();
+      holdUntil = now() + retryDelayMs;
+      timer = setTimeout(backgroundFlush, retryDelayMs);
+    }
+    catch (failure) { reportBackgroundFailure(failure); }
+  }
+
+  function backgroundFlush() {
+    return Promise.resolve().then(() => flush()).catch(retryTimer);
   }
 
   function changed(ids = []) {
@@ -66,22 +92,41 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
     return arm().then(() => ({ scheduled: true }));
   }
 
-  function flush() {
+  function flush(recoveryOnly = false) {
     if (flushing) return flushing;
-    flushing = run().finally(() => {
+    if (closed && sync.domain) return Promise.resolve({ published: false, pending: pending.length, closed: true });
+    const queuedIds = [...pending];
+    activeIds = [];
+    const attempt = (recoveryOnly ? finishJournal() : run()).catch(async (error) => {
+      if (!sync.domain) throw error;
+      // Keep the known durable work even if quarantine, listing, or failure-record I/O also fails.
+      pending = [...new Set([...pending, ...queuedIds, ...activeIds])].filter((id) => !skipped.has(id));
+      if (pending.length > 0 && first === null) first = last = now();
+      holdUntil = now() + retryDelayMs;
+      if (nonRetryable(error) && activeIds.length > 0) await quarantine(error, activeIds);
+      pending = (await listStaged(sync)).map((change) => change.id).filter((id) => !skipped.has(id));
+      await failOnce(error);
+      return { published: false, packs: 0, error: error.code, ids: [] };
+    }).finally(() => {
       flushing = null;
       if (!closed && pending.length > 0) return arm();
       return null;
     });
+    flushing = sync.domain ? attempt.catch((error) => {
+      retryTimer(error);
+      return { published: false, packs: 0, error: error?.code, ids: [] };
+    }) : attempt;
     return flushing;
   }
 
   async function run() {
+    activeIds = [];
     scheduleToken += 1;
     clearTimer();
     holdUntil = null;
     backlog = false;
     if (!ready()) return { published: false, packs: 0, ids: [], issues: [], waitingForKey: true };
+    if (await origin.publicationBlocked?.()) return { published: false, packs: 0, ids: [], pending: true, quarantined: true };
     await loadSkipped();
     const recovered = await finishJournal();
     const batch = new Set(pending);
@@ -132,11 +177,12 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
     const chosenHashes = new Set();
     for (let index = 0; index < groups.length; index += 1) {
       const group = groups[index];
+      activeIds = group.map((change) => change.id);
       await load(group);
       const count = logical(group, objects);
       let alone;
       try {
-        alone = packFor([group], sequence, head, objects, committed, compressed);
+        alone = await packFor([group], sequence, head, objects, committed, compressed);
       } catch (error) {
         if (error?.code !== 'pack_too_large') throw error;
         issues.push(group);
@@ -163,7 +209,12 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
       chosenRaw += raw;
       for (const hash of fresh) chosenHashes.add(hash);
     }
-    if (issues.length > 0) await rememberIssues(issues.flat().map((change) => change.id));
+    activeIds = [];
+    if (issues.length > 0) {
+      const ids = issues.flat().map((change) => change.id);
+      if (sync.domain) await quarantine(new CoreError(413, 'pack_too_large', 'A group cannot fit in a publication.'), ids);
+      else await rememberIssues(ids);
+    }
     const deferred = groups.slice(deferredIndex).filter((group) => !issues.includes(group));
     if (chosen.length === 0) {
       pending = [...deferred.flat().map((change) => change.id), ...pending];
@@ -175,8 +226,10 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
       else if (first === null) first = now();
       return { published: recovered.published, packs: recovered.published ? 1 : 0, ids: recovered.ids, issues: issues.flat().map((change) => change.id) };
     }
-    const packed = packFor(chosen, sequence, head, objects, committed, compressed);
+    activeIds = chosen.flat().map((change) => change.id);
+    const packed = await packFor(chosen, sequence, head, objects, committed, compressed);
     try {
+      await origin.preparePublication?.(packed.body, { messages: logical(chosen.flat(), objects), bytes: packed.bytes });
       await reservePublication(ledger, {
         id: `publication:${packed.hash}`,
         messages: logical(chosen.flat(), objects),
@@ -184,13 +237,15 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
       });
       await sendPack(packed.body);
     } catch (error) {
-      pending = [...chosen.flat().map((change) => change.id), ...deferred.flat().map((change) => change.id), ...pending];
+      if (sync.domain && nonRetryable(error)) await quarantine(error, activeIds);
+      pending = [...chosen.flat().map((change) => change.id), ...deferred.flat().map((change) => change.id), ...pending].filter((id) => !skipped.has(id));
       // A full window names the moment it frees room: retrying every 2 seconds until then packed the same objects again.
       const named = typeof error?.retryAt === 'string' ? Date.parse(error.retryAt) : NaN;
-      holdUntil = Number.isFinite(named) && named > now() ? named : now() + 2000;
+      holdUntil = Number.isFinite(named) && named > now() ? named : now() + retryDelayMs;
       await failOnce(error);
       return { published: false, packs: 0, error: error.code, ids: [], issues: issues.flat().map((change) => change.id) };
     }
+    activeIds = [];
     const ids = chosen.flat().map((change) => change.id);
     await ackPublished(sync, ids);
     finishedJournal = packed.hash;
@@ -213,6 +268,7 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
   }
 
   async function resume() {
+    if (origin.recoverOnResume) await flush(true);
     await loadSkipped();
     const staged = await listStaged(sync);
     const result = await changed(staged.map((change) => change.id));
@@ -268,6 +324,7 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
     const machines = [origin.machine, ...(await listMachineNames(origin)).filter((machine) => machine !== origin.machine).sort()];
     const provider = {
       keyProvider,
+      decodePack: origin.decodePack,
       readHead: (machine) => readHead(origin, machine),
       readPack: (machine, sequence) => readOriginPack(origin, machine, sequence),
     };
@@ -277,8 +334,12 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
         const current = machine === origin.machine ? head : await provider.readHead(machine);
         if (!current) continue;
         published = validateHead(current, { machine });
+        await origin.clearQuarantineInput?.({ machine, sequence: null, digest: 'head' });
       } catch (error) {
-        if (error instanceof CoreError) continue;
+        if (sync.domain ? nonRetryable(error) : error instanceof CoreError || error?.retryable === false) {
+          await origin.quarantineInput?.(error, { machine, sequence: null, digest: 'head' });
+          continue;
+        }
         throw error;
       }
       for (const entry of [...published.packs].reverse()) {
@@ -289,7 +350,9 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
           if (!known) {
             bytes = await provider.readPack(machine, entry.sequence);
             if (!bytes || bytes.length !== entry.bytes) continue;
-            const decoded = decodePack(bytes, { expectedHash: entry.hash, machine, keyProvider });
+            if (hashBytes(bytes) !== entry.hash) continue;
+            const decoded = await decode(bytes);
+            if (decoded.header.machine !== machine) continue;
             if (decoded.header.sequence !== entry.sequence) continue;
             known = { hashes: [...decoded.objects.keys()], ready: false };
             packIndex.set(key, known);
@@ -303,10 +366,12 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
             if (resolved.status !== 'ready') continue;
             known.ready = true;
           }
+          await origin.clearQuarantineInput?.({ machine, sequence: entry.sequence, digest: entry.hash });
           for (const hash of hashes) committed.set(hash, { hash, machine, sequence: entry.sequence, packHash: entry.hash });
           if (committed.size === objects.size) return committed;
         } catch (error) {
-          if (!(error instanceof CoreError)) throw error;
+          if (sync.domain ? !nonRetryable(error) : !(error instanceof CoreError) && error?.retryable !== false) throw error;
+          await origin.quarantineInput?.(error, { machine, sequence: entry.sequence, digest: entry.hash });
         }
       }
     }
@@ -330,19 +395,26 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
   }
 
   async function finishJournal() {
+    activeIds = [];
     const journal = await readPublication();
     if (!journal?.sequence || !journal.packHash) return { ids: [], published: false };
+    if (journal.phase === 'quarantined') return { ids: [], published: false };
     // A committed pack whose changes were acknowledged stays the journal until the next publication: reading and decoding
     // it again before every flush cost a 50 MB pack each time.
     if (journal.phase === 'committed' && finishedJournal === journal.packHash) return { ids: [], published: false };
-    const packed = await readOriginPack(origin, origin.machine, journal.sequence);
+    if (journal.phase === 'prepared') activeIds = journal.ids ?? [];
+    const packed = origin.readJournalPack ? await origin.readJournalPack(journal.sequence) : await readOriginPack(origin, origin.machine, journal.sequence);
     if (!packed || hashBytes(packed) !== journal.packHash) return { ids: [], published: false };
+    const decoded = await decode(packed);
+    if (journal.phase === 'prepared') activeIds = decoded.changes.map((change) => change.id);
     let published = false;
     if (journal.phase === 'prepared') {
+      if (journal.charge) await reservePublication(ledger, { id: `publication:${journal.packHash}`, ...journal.charge });
       await sendPack(packed);
       published = true;
     }
-    const decoded = decodePack(packed, { keyProvider });
+    activeIds = [];
+    if (journal.ackScope) sync.ackScope = journal.ackScope;
     const live = new Set((await listStaged(sync)).map((change) => change.id));
     const ids = decoded.changes.map((change) => change.id).filter((id) => live.has(id));
     if (ids.length > 0) await ackPublished(sync, ids);
@@ -359,7 +431,7 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
     const count = logical(group, objects);
     let bytes = 1;
     try {
-      bytes = packFor([group], sequence, head, objects, committed, compressed).bytes;
+      bytes = (await packFor([group], sequence, head, objects, committed, compressed)).bytes;
     } catch {
       bytes = 1;
     }
@@ -393,12 +465,12 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
   }
 
   async function rememberIssues(ids) {
-    for (const id of ids) skipped.add(id);
-    pending = pending.filter((id) => !skipped.has(id));
     const existing = await readBytes(sync.store, issuesPath());
     const prior = existing ? JSON.parse(existing.toString('utf8')).ids ?? [] : [];
     const record = { format: 'hivem1nd-sync-issues-v1', ids: [...new Set([...prior, ...ids])] }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     await writeDurable(sync.store, issuesPath(), Buffer.from(`${canonicalJson(record)}\n`, 'utf8'), [sync.paths.localDirectory, sync.store.confineRoot]);
+    for (const id of ids) skipped.add(id);
+    pending = pending.filter((id) => !skipped.has(id));
   }
 
   function issuesPath() {
@@ -407,21 +479,37 @@ export function createPulse({ sync, origin, ledger, now, setTimeout, clearTimeou
 
   async function failOnce(error) {
     await recordSyncFailure(sync, error);
+    if (sync.domain) { origin.reportFailure?.(error); return; }
     const notice = await claimLimitNotice(ledger, 'publication');
     if (notice.created) events.push({ type: 'sync.error', code: error?.code ?? 'internal_error', noticeId: notice.id });
   }
 
   function packFor(...args) {
-    return preparePack(...args, { encryption: typeof encryption === 'function' ? encryption() : encryption, keyProvider });
+    return preparePack(...args, { encryption: typeof encryption === 'function' ? encryption() : encryption, keyProvider, encode: origin.encodePack });
+  }
+
+  function decode(bytes) {
+    return origin.decodePack ? origin.decodePack(bytes) : decodePack(bytes, { keyProvider });
+  }
+
+  function nonRetryable(error) {
+    if (typeof error?.retryable === 'boolean') return !error.retryable;
+    if (['encryption_key_missing', 'invalid_encryption_key'].includes(error?.code)) return false;
+    return error instanceof CoreError && error.status >= 400 && error.status < 500 && error.status !== 429;
+  }
+
+  async function quarantine(error, ids) {
+    await origin.quarantine?.(error, ids);
+    await rememberIssues(ids);
   }
 
   return { changed, flush, resume, beat, close };
 }
 
-function preparePack(groups, sequence, head, objects, committed, compressed = null, { encryption, keyProvider } = {}) {
+async function preparePack(groups, sequence, head, objects, committed, compressed = null, { encryption, keyProvider, encode } = {}) {
   const changes = groups.flat();
   const blobs = objectsFor(changes, objects);
-  const body = encodePack({
+  const plain = encodePack({
     compressed,
     encryption,
     keyProvider,
@@ -432,6 +520,7 @@ function preparePack(groups, sequence, head, objects, committed, compressed = nu
     dependencies: blobs.filter(({ hash }) => committed.has(hash)).map(({ hash }) => committed.get(hash)),
     transactions: transactionsOf(changes),
   });
+  const body = encode ? await encode(plain) : plain;
   const nextHead = {
     format: 'hivem1nd-head-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     machine: changes[0].machine,

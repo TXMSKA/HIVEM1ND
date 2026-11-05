@@ -2,7 +2,7 @@ import { lstat, readFile, readdir, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { CoreError, canonicalJson, hashBytes, isUuid, recordHeaders, replaceHeader, uuidV8 } from '../service/identity.mjs';
 import { assertNoLinks, resolveTarget } from '../service/paths.mjs';
-import { compressObject, countLogicalMessages, isDeterministicNotice, sessionVerdict, validateChange, validateHead } from './pack.mjs';
+import { MAX_AGGREGATE_BYTES, MAX_INDEX_ITEMS, compressObject, countLogicalMessages, isDeterministicNotice, sessionVerdict, validateChange, validateHead } from './pack.mjs';
 import { reserveReceipt } from './limits.mjs';
 import { openLedger } from './limits.mjs';
 import { projectPathSet, resolveIncoming, targetKey } from './store.mjs';
@@ -78,6 +78,7 @@ export async function applyPack(sync, packBytes, options = {}) {
 
 export async function recoverIncomingGroups(sync) {
   return withLocalChanges(sync.store, async () => {
+    if (sync.domain) return recoverConsumerGroups(sync);
     bindProjects(sync.store, sync.projects ?? []);
     const directory = path.join(sync.paths.localDirectory, 'received', 'groups');
     const names = await readdir(directory).catch(error => {
@@ -129,7 +130,8 @@ function insideRoot(root, file) {
   return relative === '' || relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 }
 
-async function applyPackLocked(sync, packBytes, { provider = { async readHead() { return null; }, async readPack() { return null; } }, bindings = {}, projects = null, ledger = null } = {}) {
+async function applyPackLocked(sync, packBytes, { provider = { async readHead() { return null; }, async readPack() { return null; } }, bindings = {}, projects = null, ledger = null, expectedMachine = null, expectedSequence = null, retryQuarantined = false } = {}) {
+  if (sync.domain) return applyConsumerPack(sync, packBytes, provider, ledger, expectedMachine, expectedSequence, retryQuarantined);
   const resolvedProjects = projects ?? sync.projects ?? [];
   const incoming = await resolveIncoming(sync, packBytes, provider);
   const decoded = incoming.decoded;
@@ -280,6 +282,161 @@ async function applyPackLocked(sync, packBytes, { provider = { async readHead() 
     groups: completed,
     changes: committedChanges(prepared, plans),
   };
+}
+
+async function applyConsumerPack(sync, packBytes, provider, ledger, expectedMachine, expectedSequence, retryQuarantined) {
+  const incoming = await resolveIncoming(sync, packBytes, provider);
+  const decoded = incoming.decoded;
+  const { machine, sequence } = decoded.header;
+  if (expectedMachine !== null && machine !== expectedMachine || expectedSequence !== null && sequence !== expectedSequence) {
+    throw new CoreError(422, 'invalid_record_owner', 'The incoming packet does not match its head.');
+  }
+  const applied = await readJsonAbsolute(path.join(sync.paths.localDirectory, 'received', machine, `${sequence}.applied.json`));
+  if (applied) {
+    if (applied.packHash !== decoded.packHash) throw new CoreError(409, 'revision_conflict', 'An applied pack sequence changed.');
+    return { status: 'applied', replayed: true, machine, sequence };
+  }
+  const verified = await readJsonAbsolute(path.join(sync.paths.localDirectory, 'received', machine, 'head.json'));
+  const interruptedCheckpoint = verified?.sequence === sequence && verified.packs?.some(item => item.sequence === sequence && item.hash === decoded.packHash);
+  if (sequence !== (verified?.sequence ?? 0) + 1 && !interruptedCheckpoint) {
+    await writePending(sync, decoded, decoded.packHash, 'sequence_incomplete');
+    return { status: 'pending', code: 'sequence_incomplete', packHash: decoded.packHash };
+  }
+  const remote = await provider.readHead(machine);
+  if (remote === null) {
+    await writePending(sync, decoded, decoded.packHash, 'head_unavailable');
+    return { status: 'pending', code: 'head_unavailable', packHash: decoded.packHash };
+  }
+  const head = validateHead(remote, { machine, previous: verified ?? undefined });
+  if (!head.packs.some(item => item.sequence === sequence)) {
+    await writePending(sync, decoded, decoded.packHash, 'sequence_incomplete');
+    return { status: 'pending', code: 'sequence_incomplete', packHash: decoded.packHash };
+  }
+  validateHead(head, { machine, packBytes, sequence });
+  if (incoming.status === 'pending') {
+    await chargeReceipt(ledger, decoded, packBytes, incoming.objects);
+    return { status: 'pending', missing: incoming.missing, packHash: incoming.packHash };
+  }
+  const groups = new Map();
+  for (const change of decoded.changes) {
+    if (change.target.kind !== 'opaque' || change.target.namespace !== sync.namespace || !isUuid(change.transactionId)) {
+      throw new CoreError(422, 'invalid_pack', 'The incoming domain transaction is not valid.');
+    }
+    const group = groups.get(change.transactionId) ?? { transactionId: change.transactionId, at: change.at, entries: [] };
+    if (group.at !== change.at) throw new CoreError(422, 'invalid_pack', 'The incoming transaction time changed.');
+    const bytes = change.operation === 'delete' ? null : incoming.objects.get(change.hash);
+    group.entries.push({ id: change.id, target: change.target.identity, operation: change.operation,
+      bytes, baseHash: change.baseHash, messageId: change.messageId });
+    groups.set(change.transactionId, group);
+  }
+  // Validation finishes for the entire pack before any domain transaction can commit.
+  for (const group of groups.values()) await validateConsumerGroup(sync, group);
+  await chargeReceipt(ledger, decoded, packBytes, incoming.objects);
+  const context = { machine, sequence, digest: decoded.packHash, imported: true };
+  let completed = 0;
+  for (const group of groups.values()) {
+    const result = await runConsumerGroup(sync, group, context, null, retryQuarantined);
+    if (result === 'pending') {
+      await writePending(sync, decoded, decoded.packHash, 'domain_pending');
+      return { status: 'pending', code: 'domain_pending', packHash: decoded.packHash };
+    }
+    completed += 1;
+  }
+  await checkpoint(sync, decoded, packBytes, ledger);
+  sync.store.events.push({ type: 'sync.applied', machine, sequence });
+  return { status: 'applied', machine, sequence, groups: completed };
+}
+
+async function validateConsumerGroup(sync, group) {
+  if (!isUuid(group?.transactionId) || typeof group.at !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(group.at)
+    || !Number.isFinite(Date.parse(group.at)) || !Array.isArray(group.entries) || group.entries.length === 0) {
+    throw new CoreError(422, 'corrupt_resource', 'The incoming transaction journal is not valid.');
+  }
+  const ids = new Set();
+  const messages = new Set();
+  const objects = new Map();
+  if (group.entries.length > MAX_INDEX_ITEMS) throw new CoreError(413, 'pack_too_large', 'The transaction lists too many changes.');
+  for (const entry of group.entries) {
+    if (!isUuid(entry?.id) || ids.has(entry.id) || !['put', 'delete'].includes(entry.operation)
+      || entry.operation === 'delete' && entry.bytes !== null || entry.operation === 'put' && !Buffer.isBuffer(entry.bytes)) {
+      throw new CoreError(422, 'corrupt_resource', 'The incoming transaction entry is not valid.');
+    }
+    ids.add(entry.id);
+    if (entry.bytes !== null) objects.set(hashBytes(entry.bytes), entry.bytes);
+    if (entry.messageId !== null) {
+      if ((entry.bytes?.length ?? 0) > 1000000) throw new CoreError(413, 'message_too_large', 'The message exceeds 1000000 bytes.');
+      messages.add(entry.messageId);
+    }
+    if (await sync.domain.validate(entry) === false) throw new CoreError(422, 'invalid_schema', 'The domain rejected an incoming change.');
+  }
+  if (messages.size > 60 || [...objects.values()].reduce((bytes, raw) => bytes + raw.length, 0) > MAX_AGGREGATE_BYTES) {
+    throw new CoreError(413, 'pack_too_large', 'The transaction exceeds the shared limits.');
+  }
+}
+
+function savedConsumerGroup(group) {
+  return { ...group, entries: group.entries.map(entry => ({ ...entry, bytes: entry.bytes === null ? null : entry.bytes.toString('base64') })) };
+}
+
+function restoredConsumerGroup(group) {
+  if (!group || !Array.isArray(group.entries)) throw new CoreError(422, 'corrupt_resource', 'The incoming transaction journal is not valid.');
+  return { ...group, entries: group.entries.map(entry => ({ ...entry, bytes: entry.bytes === null ? null : Buffer.from(entry.bytes, 'base64') })) };
+}
+
+async function runConsumerGroup(sync, group, context, recovered = null, retryQuarantined = false) {
+  const file = path.join(sync.paths.localDirectory, 'received', 'groups', `${group.transactionId}.json`);
+  const body = savedConsumerGroup(group);
+  const fingerprint = hashBytes(Buffer.from(canonicalJson({ group: body, machine: context.machine })));
+  const existing = recovered ?? await readJsonAbsolute(file);
+  if (existing && (existing.format !== 'hivem1nd-domain-group-v1' || existing.id !== group.transactionId || existing.fingerprint !== fingerprint)) {
+    throw new CoreError(409, 'revision_conflict', 'An incoming transaction id is already in use.');
+  }
+  const progress = existing ?? { format: 'hivem1nd-domain-group-v1', id: group.transactionId,
+    fingerprint, group: body, context, phase: 'prepared' };
+  if (progress.phase === 'applied') return 'replayed';
+  // Only an explicit resume, after verifying the complete immutable pack again, can retry this journal.
+  const retry = progress.phase === 'quarantined' && retryQuarantined;
+  if (retry) { progress.phase = 'prepared'; delete progress.error; }
+  if (progress.phase !== 'prepared') throw new CoreError(422, 'corrupt_resource', 'The incoming transaction phase is not valid.');
+  if (!existing || retry) await writeDurable(sync.store, file, Buffer.from(`${canonicalJson(progress)}\n`, 'utf8'), writeRoots(sync, sync.projects));
+  let status;
+  try {
+    const result = await sync.domain.applyAtomic(group, progress.context);
+    status = typeof result === 'string' ? result : result?.status;
+    if (!['applied', 'replayed', 'pending'].includes(status)) throw new CoreError(422, 'invalid_schema', 'The domain apply result is not valid.');
+  } catch (error) {
+    if (error?.retryable === false || error?.retryable !== true && Number.isInteger(error?.status) && error.status >= 400 && error.status < 500 && error.status !== 429) {
+      const code = typeof error?.code === 'string' && /^[a-z][a-z0-9_]{0,40}$/.test(error.code) ? error.code : 'invalid_schema';
+      const failure = { code, retryable: false, operation: 'applyAtomic', machine: context.machine, sequence: context.sequence };
+      await writeDurable(sync.store, file, Buffer.from(`${canonicalJson({ ...progress, phase: 'quarantined', error: failure })}\n`, 'utf8'), writeRoots(sync, sync.projects));
+    }
+    throw error;
+  }
+  if (status === 'pending') return status;
+  await writeDurable(sync.store, file, Buffer.from(`${canonicalJson({ ...progress, phase: 'applied' })}\n`, 'utf8'), writeRoots(sync, sync.projects));
+  return status;
+}
+
+async function recoverConsumerGroups(sync) {
+  const directory = path.join(sync.paths.localDirectory, 'received', 'groups');
+  const names = await readdir(directory).catch(error => { if (error.code === 'ENOENT') return []; throw error; });
+  const recovered = [];
+  for (const name of names.sort()) {
+    if (!name.endsWith('.json') || !isUuid(name.slice(0, -5))) continue;
+    const progress = await readJsonAbsolute(path.join(directory, name));
+    if (progress?.format !== 'hivem1nd-domain-group-v1' || progress.id !== name.slice(0, -5)
+      || progress.context?.imported !== true || typeof progress.context.machine !== 'string'
+      || !Number.isSafeInteger(progress.context.sequence) || progress.context.sequence < 1
+      || !/^[a-f0-9]{64}$/.test(progress.context.digest ?? '')) {
+      throw new CoreError(422, 'corrupt_resource', 'The incoming transaction journal is not valid.');
+    }
+    if (progress.phase === 'applied' || progress.phase === 'quarantined') continue;
+    const group = restoredConsumerGroup(progress.group);
+    await validateConsumerGroup(sync, group);
+    const result = await runConsumerGroup(sync, group, progress.context, progress);
+    if (result !== 'pending') recovered.push(group.transactionId);
+  }
+  return recovered;
 }
 
 function planChange(item, localBytes, localVersion, located, tombstones) {

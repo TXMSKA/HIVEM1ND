@@ -38,6 +38,86 @@ export function openOrigin({ store, paths, now = () => Date.now(), machine, keyP
   };
 }
 
+export function callbackOrigin({ sync, invoke, encode, decode, report }) {
+  const directory = path.join(sync.paths.localDirectory, 'outgoing');
+  const local = (sequence) => path.join(directory, 'packs', packFileName(sequence));
+  const journal = async () => {
+    const bytes = await readFileIfRegular(path.join(directory, 'publication.json'));
+    return bytes ? JSON.parse(bytes) : null;
+  };
+  const save = (value) => writeDurable(sync.store, path.join(directory, 'publication.json'),
+    Buffer.from(`${canonicalJson(value)}\n`), [sync.paths.localDirectory]);
+  return {
+    callbackBased: true,
+    machine: sync.machine,
+    recoverOnResume: true,
+    encodePack: encode,
+    decodePack: decode,
+    readJournalPack: (sequence) => readFileIfRegular(local(sequence)),
+    publicationBlocked: async () => (await journal())?.phase === 'quarantined',
+    async listMachines() {
+      const machines = await invoke('listMachines', []);
+      if (!Array.isArray(machines) || machines.length > 10000) throw new CoreError(422, 'invalid_pack', 'The machine list is not valid.');
+      const valid = new Set();
+      for (const machine of machines) {
+        try { valid.add(validateMachineName(machine)); }
+        catch (error) { report?.(error, 'listMachines', null); }
+      }
+      return [...valid];
+    },
+    async readHead(machine) {
+      const head = await invoke('readHead', [machine], machine);
+      const previous = machine === sync.machine ? await journal() : null;
+      if (head === null) {
+        if (previous?.phase === 'committed') throw new CoreError(503, 'head_pending', 'The published head is not visible.');
+        return null;
+      }
+      const verified = validateHead(head, { machine });
+      if (previous?.phase === 'committed') {
+        const committed = verified.packs.find((pack) => pack.sequence === previous.sequence);
+        if (!committed) throw new CoreError(503, 'head_pending', 'The published head is not visible.');
+        if (committed.hash !== previous.packHash) throw new CoreError(422, 'corrupt_resource', 'The committed digest changed.');
+      }
+      return verified;
+    },
+    readPack: (machine, sequence) => invoke('readPack', [machine, sequence], machine, sequence),
+    async preparePublication(bytes, charge) {
+      const packHash = hashBytes(bytes);
+      const previous = await journal();
+      if (previous?.phase === 'prepared') {
+        if (previous.packHash !== packHash) throw new CoreError(409, 'revision_conflict', 'A prepared publication is immutable.');
+        return;
+      }
+      const decoded = await decode(bytes);
+      const sequence = decoded.header.sequence;
+      if (decoded.header.machine !== sync.machine || previous && sequence !== previous.sequence + 1) {
+        throw new CoreError(409, 'revision_conflict', 'A publication must retain its writer sequence.');
+      }
+      await writeDurable(sync.store, local(sequence), bytes, [sync.paths.localDirectory]);
+      await save({ format: 'hivem1nd-publication-v1', phase: 'prepared', sequence, packHash, bytes: bytes.length,
+        ids: decoded.changes.map((change) => change.id), charge });
+    },
+    async publishPack(bytes) {
+      const current = await journal();
+      const digest = hashBytes(bytes);
+      if (!current || current.packHash !== digest) throw new CoreError(409, 'revision_conflict', 'The durable publication does not match.');
+      if (current.phase === 'committed') {
+        sync.ackScope = current.ackScope;
+        return current;
+      }
+      const packet = { machine: sync.machine, sequence: current.sequence, digest, bytes };
+      const ack = await invoke('publishPack', [packet], sync.machine, current.sequence);
+      if (ack?.machine !== packet.machine || ack?.sequence !== packet.sequence || ack?.digest !== digest
+        || !['filesystem', 'provider-confirmed'].includes(ack?.ackScope)) {
+        throw new CoreError(422, 'invalid_ack', 'The publication acknowledgment does not match.');
+      }
+      await save({ ...current, phase: 'committed', ackScope: ack.ackScope });
+      sync.ackScope = ack.ackScope;
+      return ack;
+    },
+  };
+}
+
 export async function publishPack(origin, packBytes) {
   return withOriginWrite(origin.paths.origin, origin.machine, () => publishPackLocked(origin, packBytes));
 }
@@ -163,6 +243,7 @@ function heartbeatClients(value) {
 }
 
 export async function readHead(origin, machine) {
+  if (origin.callbackBased) return origin.readHead(machine);
   const owner = validateMachineName(machine);
   const bytes = await readFileIfRegular(headPath(origin, owner));
   if (!bytes) return null;
@@ -170,6 +251,7 @@ export async function readHead(origin, machine) {
 }
 
 export async function readOriginPack(origin, machine, sequence) {
+  if (origin.callbackBased) return origin.readPack(machine, sequence);
   const owner = validateMachineName(machine);
   return readFileIfRegular(packPath(origin, owner, sequence));
 }
@@ -333,6 +415,7 @@ function isInside(parent, child) {
 }
 
 export async function listMachineNames(origin) {
+  if (origin.callbackBased) return origin.listMachines();
   const directory = path.join(origin.paths.origin, 'machines');
   let entries;
   try {
