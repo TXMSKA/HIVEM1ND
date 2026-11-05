@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { listInstallableAssets } from '../engine/install.mjs';
 import { createAnchor, findAnchor, place } from '../features/void/comments.mjs';
 import { merge, plain, wordDiff } from '../features/void/text.mjs';
 
@@ -78,4 +81,13 @@ test('two changes to one text are joined where they do not touch', () => {
   assert.equal(merge(base, base.replace('middle', 'center'), base.replace('middle', 'centre')), null, 'both changed the same words');
   assert.equal(merge('One.', 'One. Mine.', 'One. Theirs.'), null, 'both added at the same place');
   assert.equal(merge('<b>Title</b>\nBody text.', '<b>Title</b>\nBody text, mine.', '<b>New title</b>\nBody text.'), '<b>New title</b>\nBody text, mine.');
+});
+
+test('the installed Void skill leaves the modules only the service loads in the kit', async () => {
+  const kitPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const { assets } = await listInstallableAssets(kitPath);
+  const skill = assets.find((asset) => asset.type === 'feature' && path.basename(path.dirname(asset.sourcePath)) === 'void');
+  assert.ok(skill?.mainContent, 'the Void skill is installable');
+  const shipped = skill.supportFiles.map((support) => support.relativePath);
+  assert.ok(!shipped.includes('comments.mjs') && !shipped.includes('text.mjs'), `shipped: ${shipped.join(', ')}`);
 });
