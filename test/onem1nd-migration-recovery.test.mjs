@@ -350,6 +350,14 @@ test('taking the lock removes the candidate files of dead processes and keeps th
   assert.ok((await lstat(live)).isFile());
 });
 
+test('taking the lock leaves a dead process name on anything that is not a candidate file', async t => {
+  const f = await fixture(t);
+  const folder = path.join(f.cosmic, `.onem1nd-upgrade.lock.${await deadPid()}-1-folder`);
+  await mkdir(folder);
+  assert.equal((await migrate(f.options)).migrated, true);
+  assert.ok((await lstat(folder)).isDirectory());
+});
+
 test('real Windows ACLs protect migrated bootstrap folders and a completed upgrade repairs inheritance', { skip: process.platform !== 'win32' }, async t => {
   const f = await fixture(t, { service: true });
   const temporary = path.join(f.root, 'tmp');

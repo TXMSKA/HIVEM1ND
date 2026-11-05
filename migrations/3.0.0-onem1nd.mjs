@@ -423,8 +423,8 @@ async function migrateRegistrations(context) {
 
 // A process killed while it waited for the lock leaves its candidate file; only the candidates of a pid that is gone are removed.
 async function removeDeadCandidates(cosmic, name) {
-  for (const entry of await readdir(cosmic).catch(() => [])) {
-    const match = entry.startsWith(`${name}.`) && /^(\d+)-/.exec(entry.slice(name.length + 1));
+  for (const item of await readdir(cosmic, { withFileTypes: true }).catch(() => [])) {
+    const entry = item.name, match = item.isFile() && entry.startsWith(`${name}.`) && /^(\d+)-/.exec(entry.slice(name.length + 1));
     if (!match) continue;
     try { process.kill(Number(match[1]), 0); continue; }
     catch (error) { if (error.code !== 'ESRCH') continue; }
