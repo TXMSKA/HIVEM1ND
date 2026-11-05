@@ -321,17 +321,16 @@
                           {
                             "id": "setup-welcome-node-20",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 9,
                               "y": 9
                             },
                             "w": 17,
                             "h": 17,
-                            "strokeWidth": 1.7,
-                            "size": 17,
-                            "color": "#bdcd79",
-                            "icon": "h3-graph"
+                            "strokeWidth": 1.42,
+                            "d": "M14.58 25 A10.42 10.42 0 1 0 35.42 25 A10.42 10.42 0 1 0 14.58 25 Z M64.58 33.33 A10.42 10.42 0 1 0 85.42 33.33 A10.42 10.42 0 1 0 64.58 33.33 Z M27.08 75 A10.42 10.42 0 1 0 47.92 75 A10.42 10.42 0 1 0 27.08 75 Z M34.58 29.17 l30.83 3.33 M29.17 35 l5.83 30 M69.17 41.67 l-24.17 26.25",
+                            "stroke": "#bdcd79"
                           }
                         ]
                       },
@@ -382,17 +381,16 @@
                           {
                             "id": "setup-welcome-node-24",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 9,
                               "y": 9
                             },
                             "w": 17,
                             "h": 17,
-                            "strokeWidth": 1.7,
-                            "size": 17,
-                            "color": "#bdcd79",
-                            "icon": "h3-net"
+                            "strokeWidth": 1.42,
+                            "d": "M39.58 20.83 A10.42 10.42 0 1 0 60.42 20.83 A10.42 10.42 0 1 0 39.58 20.83 Z M10.42 79.17 A10.42 10.42 0 1 0 31.25 79.17 A10.42 10.42 0 1 0 10.42 79.17 Z M68.75 79.17 A10.42 10.42 0 1 0 89.58 79.17 A10.42 10.42 0 1 0 68.75 79.17 Z M50 31.25 v16.67 M50 47.92 L25 70.83 M50 47.92 l25 22.92",
+                            "stroke": "#bdcd79"
                           }
                         ]
                       },
@@ -443,17 +441,16 @@
                           {
                             "id": "setup-welcome-node-28",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 9,
                               "y": 9
                             },
                             "w": 17,
                             "h": 17,
-                            "strokeWidth": 1.7,
-                            "size": 17,
-                            "color": "#bdcd79",
-                            "icon": "h3-zap"
+                            "strokeWidth": 1.42,
+                            "d": "M54.17 8.33 L16.67 58.33 h29.17 l-4.17 33.33 l37.5 -50 h-29.17 z",
+                            "stroke": "#bdcd79"
                           }
                         ]
                       },
@@ -844,17 +841,16 @@
                       {
                         "id": "setup-mind-node-19",
                         "name": "icon",
-                        "t": "icon",
+                        "t": "vector",
                         "place": {
                           "x": 14,
                           "y": 18
                         },
                         "w": 16,
                         "h": 16,
-                        "strokeWidth": 1.7,
-                        "size": 16,
-                        "color": "#aa9fb1",
-                        "icon": "h3-folder"
+                        "strokeWidth": 1.33,
+                        "d": "M12.5 25 a8.33 8.33 0 0 1 8.33 -8.33 h16.67 l8.33 8.33 h33.33 a8.33 8.33 0 0 1 8.33 8.33 v41.67 a8.33 8.33 0 0 1 -8.33 8.33 H20.83 a8.33 8.33 0 0 1 -8.33 -8.33 z",
+                        "stroke": "#aa9fb1"
                       },
                       {
                         "id": "setup-mind-node-20",
@@ -978,17 +974,16 @@
                           {
                             "id": "setup-mind-node-26",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 2,
                               "y": 2
                             },
                             "w": 14,
                             "h": 14,
-                            "strokeWidth": 1.7,
-                            "size": 14,
-                            "color": "#1b200b",
-                            "icon": "h3-check"
+                            "strokeWidth": 1.17,
+                            "d": "M20.83 50 l18.75 18.75 L79.17 29.17",
+                            "stroke": "#1b200b"
                           }
                         ]
                       }
@@ -1224,17 +1219,16 @@
                       {
                         "id": "setup-mind-node-40",
                         "name": "icon",
-                        "t": "icon",
+                        "t": "vector",
                         "place": {
                           "x": 12,
                           "y": 9
                         },
                         "w": 14,
                         "h": 14,
-                        "strokeWidth": 1.7,
-                        "size": 14,
-                        "color": "#f5f1f6",
-                        "icon": "h3-back"
+                        "strokeWidth": 1.17,
+                        "d": "M62.5 25 l-25 25 l25 25",
+                        "stroke": "#f5f1f6"
                       },
                       {
                         "id": "setup-mind-node-41",
@@ -1609,17 +1603,16 @@
                       {
                         "id": "setup-join-node-19",
                         "name": "icon",
-                        "t": "icon",
+                        "t": "vector",
                         "place": {
                           "x": 14,
                           "y": 18
                         },
                         "w": 16,
                         "h": 16,
-                        "strokeWidth": 1.7,
-                        "size": 16,
-                        "color": "#aa9fb1",
-                        "icon": "h3-folder"
+                        "strokeWidth": 1.33,
+                        "d": "M12.5 25 a8.33 8.33 0 0 1 8.33 -8.33 h16.67 l8.33 8.33 h33.33 a8.33 8.33 0 0 1 8.33 8.33 v41.67 a8.33 8.33 0 0 1 -8.33 8.33 H20.83 a8.33 8.33 0 0 1 -8.33 -8.33 z",
+                        "stroke": "#aa9fb1"
                       },
                       {
                         "id": "setup-join-node-20",
@@ -1743,17 +1736,16 @@
                           {
                             "id": "setup-join-node-26",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 2,
                               "y": 2
                             },
                             "w": 14,
                             "h": 14,
-                            "strokeWidth": 1.7,
-                            "size": 14,
-                            "color": "#1b200b",
-                            "icon": "h3-check"
+                            "strokeWidth": 1.17,
+                            "d": "M20.83 50 l18.75 18.75 L79.17 29.17",
+                            "stroke": "#1b200b"
                           }
                         ]
                       }
@@ -1989,17 +1981,16 @@
                       {
                         "id": "setup-join-node-40",
                         "name": "icon",
-                        "t": "icon",
+                        "t": "vector",
                         "place": {
                           "x": 12,
                           "y": 9
                         },
                         "w": 14,
                         "h": 14,
-                        "strokeWidth": 1.7,
-                        "size": 14,
-                        "color": "#f5f1f6",
-                        "icon": "h3-back"
+                        "strokeWidth": 1.17,
+                        "d": "M62.5 25 l-25 25 l25 25",
+                        "stroke": "#f5f1f6"
                       },
                       {
                         "id": "setup-join-node-41",
@@ -2387,17 +2378,16 @@
                           {
                             "id": "setup-close-2x-node-20",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 14,
                               "y": 18
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#aa9fb1",
-                            "icon": "h3-folder"
+                            "strokeWidth": 1.33,
+                            "d": "M12.5 25 a8.33 8.33 0 0 1 8.33 -8.33 h16.67 l8.33 8.33 h33.33 a8.33 8.33 0 0 1 8.33 8.33 v41.67 a8.33 8.33 0 0 1 -8.33 8.33 H20.83 a8.33 8.33 0 0 1 -8.33 -8.33 z",
+                            "stroke": "#aa9fb1"
                           },
                           {
                             "id": "setup-close-2x-node-21",
@@ -2521,17 +2511,16 @@
                               {
                                 "id": "setup-close-2x-node-27",
                                 "name": "icon",
-                                "t": "icon",
+                                "t": "vector",
                                 "place": {
                                   "x": 2,
                                   "y": 2
                                 },
                                 "w": 14,
                                 "h": 14,
-                                "strokeWidth": 1.7,
-                                "size": 14,
-                                "color": "#1b200b",
-                                "icon": "h3-check"
+                                "strokeWidth": 1.17,
+                                "d": "M20.83 50 l18.75 18.75 L79.17 29.17",
+                                "stroke": "#1b200b"
                               }
                             ]
                           }
@@ -2767,17 +2756,16 @@
                           {
                             "id": "setup-close-2x-node-41",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 12,
                               "y": 9
                             },
                             "w": 14,
                             "h": 14,
-                            "strokeWidth": 1.7,
-                            "size": 14,
-                            "color": "#f5f1f6",
-                            "icon": "h3-back"
+                            "strokeWidth": 1.17,
+                            "d": "M62.5 25 l-25 25 l25 25",
+                            "stroke": "#f5f1f6"
                           },
                           {
                             "id": "setup-close-2x-node-42",
@@ -2952,17 +2940,16 @@
                       {
                         "id": "setup-close-2x-node-51",
                         "name": "icon",
-                        "t": "icon",
+                        "t": "vector",
                         "place": {
                           "x": 12,
                           "y": 11
                         },
                         "w": 15,
                         "h": 15,
-                        "strokeWidth": 1.7,
-                        "size": 15,
-                        "color": "#d4ccd8",
-                        "icon": "h3-term"
+                        "strokeWidth": 1.25,
+                        "d": "M20.83 16.67 H79.17 A8.33 8.33 0 0 1 87.5 25 V75 A8.33 8.33 0 0 1 79.17 83.33 H20.83 A8.33 8.33 0 0 1 12.5 75 V25 A8.33 8.33 0 0 1 20.83 16.67 Z M29.17 37.5 l12.5 12.5 l-12.5 12.5 M54.17 62.5 h16.67",
+                        "stroke": "#d4ccd8"
                       },
                       {
                         "id": "setup-close-2x-node-52",
@@ -3044,17 +3031,16 @@
                       {
                         "id": "setup-close-2x-node-57",
                         "name": "icon",
-                        "t": "icon",
+                        "t": "vector",
                         "place": {
                           "x": 12,
                           "y": 11
                         },
                         "w": 15,
                         "h": 15,
-                        "strokeWidth": 1.7,
-                        "size": 15,
-                        "color": "#d4ccd8",
-                        "icon": "h3-term"
+                        "strokeWidth": 1.25,
+                        "d": "M20.83 16.67 H79.17 A8.33 8.33 0 0 1 87.5 25 V75 A8.33 8.33 0 0 1 79.17 83.33 H20.83 A8.33 8.33 0 0 1 12.5 75 V25 A8.33 8.33 0 0 1 20.83 16.67 Z M29.17 37.5 l12.5 12.5 l-12.5 12.5 M54.17 62.5 h16.67",
+                        "stroke": "#d4ccd8"
                       },
                       {
                         "id": "setup-close-2x-node-58",
@@ -3136,17 +3122,16 @@
                       {
                         "id": "setup-close-2x-node-63",
                         "name": "icon",
-                        "t": "icon",
+                        "t": "vector",
                         "place": {
                           "x": 12,
                           "y": 11
                         },
                         "w": 15,
                         "h": 15,
-                        "strokeWidth": 1.7,
-                        "size": 15,
-                        "color": "#d4ccd8",
-                        "icon": "h3-term"
+                        "strokeWidth": 1.25,
+                        "d": "M20.83 16.67 H79.17 A8.33 8.33 0 0 1 87.5 25 V75 A8.33 8.33 0 0 1 79.17 83.33 H20.83 A8.33 8.33 0 0 1 12.5 75 V25 A8.33 8.33 0 0 1 20.83 16.67 Z M29.17 37.5 l12.5 12.5 l-12.5 12.5 M54.17 62.5 h16.67",
+                        "stroke": "#d4ccd8"
                       },
                       {
                         "id": "setup-close-2x-node-64",
@@ -3624,17 +3609,16 @@
                           {
                             "id": "setup-service-node-20",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 3,
                               "y": 3
                             },
                             "w": 12,
                             "h": 12,
-                            "strokeWidth": 1.7,
-                            "size": 12,
-                            "color": "#1b200b",
-                            "icon": "h3-check"
+                            "strokeWidth": 1,
+                            "d": "M20.83 50 l18.75 18.75 L79.17 29.17",
+                            "stroke": "#1b200b"
                           }
                         ]
                       },
@@ -3727,17 +3711,16 @@
                           {
                             "id": "setup-service-node-27",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 3,
                               "y": 3
                             },
                             "w": 12,
                             "h": 12,
-                            "strokeWidth": 1.7,
-                            "size": 12,
-                            "color": "#1b200b",
-                            "icon": "h3-check"
+                            "strokeWidth": 1,
+                            "d": "M20.83 50 l18.75 18.75 L79.17 29.17",
+                            "stroke": "#1b200b"
                           }
                         ]
                       },
@@ -3830,17 +3813,16 @@
                           {
                             "id": "setup-service-node-34",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 3,
                               "y": 3
                             },
                             "w": 12,
                             "h": 12,
-                            "strokeWidth": 1.7,
-                            "size": 12,
-                            "color": "#1b200b",
-                            "icon": "h3-check"
+                            "strokeWidth": 1,
+                            "d": "M20.83 50 l18.75 18.75 L79.17 29.17",
+                            "stroke": "#1b200b"
                           }
                         ]
                       },
@@ -4473,17 +4455,16 @@
                           {
                             "id": "setup-failed-node-20",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 3,
                               "y": 3
                             },
                             "w": 12,
                             "h": 12,
-                            "strokeWidth": 1.7,
-                            "size": 12,
-                            "color": "#1b200b",
-                            "icon": "h3-check"
+                            "strokeWidth": 1,
+                            "d": "M20.83 50 l18.75 18.75 L79.17 29.17",
+                            "stroke": "#1b200b"
                           }
                         ]
                       },
@@ -4576,17 +4557,16 @@
                           {
                             "id": "setup-failed-node-27",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 3,
                               "y": 3
                             },
                             "w": 12,
                             "h": 12,
-                            "strokeWidth": 1.7,
-                            "size": 12,
-                            "color": "#1b200b",
-                            "icon": "h3-check"
+                            "strokeWidth": 1,
+                            "d": "M20.83 50 l18.75 18.75 L79.17 29.17",
+                            "stroke": "#1b200b"
                           }
                         ]
                       },
@@ -4679,17 +4659,16 @@
                           {
                             "id": "setup-failed-node-34",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 3,
                               "y": 3
                             },
                             "w": 12,
                             "h": 12,
-                            "strokeWidth": 1.7,
-                            "size": 12,
-                            "color": "#1b200b",
-                            "icon": "h3-check"
+                            "strokeWidth": 1,
+                            "d": "M20.83 50 l18.75 18.75 L79.17 29.17",
+                            "stroke": "#1b200b"
                           }
                         ]
                       },
@@ -4782,17 +4761,16 @@
                           {
                             "id": "setup-failed-node-41",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 4,
                               "y": 4
                             },
                             "w": 11,
                             "h": 11,
-                            "strokeWidth": 1.7,
-                            "size": 11,
-                            "color": "#1d0b08",
-                            "icon": "h3-x"
+                            "strokeWidth": 0.92,
+                            "d": "M25 25 l50 50 M75 25 L25 75",
+                            "stroke": "#1d0b08"
                           }
                         ]
                       },
@@ -5303,17 +5281,16 @@
                       {
                         "id": "setup-done-node-19",
                         "name": "icon",
-                        "t": "icon",
+                        "t": "vector",
                         "place": {
                           "x": 0,
                           "y": 2
                         },
                         "w": 15,
                         "h": 15,
-                        "strokeWidth": 1.7,
-                        "size": 15,
-                        "color": "#aa9fb1",
-                        "icon": "h3-folder"
+                        "strokeWidth": 1.25,
+                        "d": "M12.5 25 a8.33 8.33 0 0 1 8.33 -8.33 h16.67 l8.33 8.33 h33.33 a8.33 8.33 0 0 1 8.33 8.33 v41.67 a8.33 8.33 0 0 1 -8.33 8.33 H20.83 a8.33 8.33 0 0 1 -8.33 -8.33 z",
+                        "stroke": "#aa9fb1"
                       },
                       {
                         "id": "setup-done-node-20",
@@ -5377,17 +5354,16 @@
                       {
                         "id": "setup-done-node-24",
                         "name": "icon",
-                        "t": "icon",
+                        "t": "vector",
                         "place": {
                           "x": 0,
                           "y": 2
                         },
                         "w": 15,
                         "h": 15,
-                        "strokeWidth": 1.7,
-                        "size": 15,
-                        "color": "#aa9fb1",
-                        "icon": "h3-retry"
+                        "strokeWidth": 1.25,
+                        "d": "M83.33 45.83 a33.33 33.33 0 1 0 -9.58 23.75 M83.33 16.67 v29.17 h-29.17",
+                        "stroke": "#aa9fb1"
                       },
                       {
                         "id": "setup-done-node-25",
@@ -5451,17 +5427,16 @@
                       {
                         "id": "setup-done-node-29",
                         "name": "icon",
-                        "t": "icon",
+                        "t": "vector",
                         "place": {
                           "x": 0,
                           "y": 2
                         },
                         "w": 15,
                         "h": 15,
-                        "strokeWidth": 1.7,
-                        "size": 15,
-                        "color": "#aa9fb1",
-                        "icon": "h3-power"
+                        "strokeWidth": 1.25,
+                        "d": "M50 12.5 v33.33 M26.25 31.25 a33.33 33.33 0 1 0 47.5 0",
+                        "stroke": "#aa9fb1"
                       },
                       {
                         "id": "setup-done-node-30",
@@ -5554,17 +5529,16 @@
                       {
                         "id": "setup-done-node-36",
                         "name": "icon",
-                        "t": "icon",
+                        "t": "vector",
                         "place": {
                           "x": 0,
                           "y": 2
                         },
                         "w": 15,
                         "h": 15,
-                        "strokeWidth": 1.7,
-                        "size": 15,
-                        "color": "#aa9fb1",
-                        "icon": "h3-term"
+                        "strokeWidth": 1.25,
+                        "d": "M20.83 16.67 H79.17 A8.33 8.33 0 0 1 87.5 25 V75 A8.33 8.33 0 0 1 79.17 83.33 H20.83 A8.33 8.33 0 0 1 12.5 75 V25 A8.33 8.33 0 0 1 20.83 16.67 Z M29.17 37.5 l12.5 12.5 l-12.5 12.5 M54.17 62.5 h16.67",
+                        "stroke": "#aa9fb1"
                       },
                       {
                         "id": "setup-done-node-37",
@@ -5628,17 +5602,16 @@
                       {
                         "id": "setup-done-node-41",
                         "name": "icon",
-                        "t": "icon",
+                        "t": "vector",
                         "place": {
                           "x": 0,
                           "y": 2
                         },
                         "w": 15,
                         "h": 15,
-                        "strokeWidth": 1.7,
-                        "size": 15,
-                        "color": "#aa9fb1",
-                        "icon": "h3-folder"
+                        "strokeWidth": 1.25,
+                        "d": "M12.5 25 a8.33 8.33 0 0 1 8.33 -8.33 h16.67 l8.33 8.33 h33.33 a8.33 8.33 0 0 1 8.33 8.33 v41.67 a8.33 8.33 0 0 1 -8.33 8.33 H20.83 a8.33 8.33 0 0 1 -8.33 -8.33 z",
+                        "stroke": "#aa9fb1"
                       },
                       {
                         "id": "setup-done-node-42",
@@ -5931,17 +5904,16 @@
                           {
                             "id": "setup-loading-node-9",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 16,
                               "y": 9
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#f5f1f6",
-                            "icon": "h3-map"
+                            "strokeWidth": 1.33,
+                            "d": "M37.5 16.67 L12.5 25 v58.33 l25 -8.33 l25 8.33 l25 -8.33 V16.67 l-25 8.33 z M37.5 16.67 v58.33 M62.5 25 v58.33",
+                            "stroke": "#f5f1f6"
                           },
                           {
                             "id": "setup-loading-node-10",
@@ -5977,17 +5949,16 @@
                           {
                             "id": "setup-loading-node-11",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 14.5,
                               "y": 9
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-grid"
+                            "strokeWidth": 1.33,
+                            "d": "M18.75 12.5 H35.42 A6.25 6.25 0 0 1 41.67 18.75 V35.42 A6.25 6.25 0 0 1 35.42 41.67 H18.75 A6.25 6.25 0 0 1 12.5 35.42 V18.75 A6.25 6.25 0 0 1 18.75 12.5 Z M64.58 12.5 H81.25 A6.25 6.25 0 0 1 87.5 18.75 V35.42 A6.25 6.25 0 0 1 81.25 41.67 H64.58 A6.25 6.25 0 0 1 58.33 35.42 V18.75 A6.25 6.25 0 0 1 64.58 12.5 Z M18.75 58.33 H35.42 A6.25 6.25 0 0 1 41.67 64.58 V81.25 A6.25 6.25 0 0 1 35.42 87.5 H18.75 A6.25 6.25 0 0 1 12.5 81.25 V64.58 A6.25 6.25 0 0 1 18.75 58.33 Z M64.58 58.33 H81.25 A6.25 6.25 0 0 1 87.5 64.58 V81.25 A6.25 6.25 0 0 1 81.25 87.5 H64.58 A6.25 6.25 0 0 1 58.33 81.25 V64.58 A6.25 6.25 0 0 1 64.58 58.33 Z",
+                            "stroke": "#d4ccd8"
                           },
                           {
                             "id": "setup-loading-node-12",
@@ -6023,17 +5994,16 @@
                           {
                             "id": "setup-loading-node-13",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 15,
                               "y": 9
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-pen"
+                            "strokeWidth": 1.33,
+                            "d": "M16.67 83.33 h16.67 L79.17 37.5 l-16.67 -16.67 L16.67 66.67 z M54.17 29.17 l16.67 16.67",
+                            "stroke": "#d4ccd8"
                           },
                           {
                             "id": "setup-loading-node-14",
@@ -6097,17 +6067,16 @@
                           {
                             "id": "setup-loading-node-17",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 13,
                               "y": 9
                             },
                             "w": 15,
                             "h": 15,
-                            "strokeWidth": 1.7,
-                            "size": 15,
-                            "color": "#1b200b",
-                            "icon": "h3-plus"
+                            "strokeWidth": 1.25,
+                            "d": "M50 20.83 v58.33 M20.83 50 h58.33",
+                            "stroke": "#1b200b"
                           },
                           {
                             "id": "setup-loading-node-18",
@@ -6144,17 +6113,16 @@
                           {
                             "id": "setup-loading-node-19",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 12,
                               "y": 8
                             },
                             "w": 15,
                             "h": 15,
-                            "strokeWidth": 1.7,
-                            "size": 15,
-                            "color": "#e6c06f",
-                            "icon": "h3-hand"
+                            "strokeWidth": 1.25,
+                            "d": "M33.33 54.17 V22.92 a6.25 6.25 0 0 1 12.5 0 V50 M45.83 45.83 V16.67 a6.25 6.25 0 0 1 12.5 0 v29.17 M58.33 45.83 V22.92 a6.25 6.25 0 0 1 12.5 0 V58.33 c0 16.67 -12.5 29.17 -27.08 29.17 S20.83 77.08 16.67 66.67 l-6.25 -12.5 a6.25 6.25 0 0 1 10.83 -6.25 L33.33 62.5",
+                            "stroke": "#e6c06f"
                           },
                           {
                             "id": "setup-loading-node-20",
@@ -6191,17 +6159,16 @@
                           {
                             "id": "setup-loading-node-21",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 10,
                               "y": 10
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-phone"
+                            "strokeWidth": 1.33,
+                            "d": "M37.5 10.42 H62.5 A8.33 8.33 0 0 1 70.83 18.75 V81.25 A8.33 8.33 0 0 1 62.5 89.58 H37.5 A8.33 8.33 0 0 1 29.17 81.25 V18.75 A8.33 8.33 0 0 1 37.5 10.42 Z M45.83 75 h8.33",
+                            "stroke": "#d4ccd8"
                           }
                         ]
                       },
@@ -6222,17 +6189,16 @@
                           {
                             "id": "setup-loading-node-22",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 10,
                               "y": 10
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-bell"
+                            "strokeWidth": 1.33,
+                            "d": "M25 66.67 V45.83 a25 25 0 0 1 50 0 v20.83 l8.33 8.33 H16.67 z M41.67 87.5 h16.67",
+                            "stroke": "#d4ccd8"
                           }
                         ]
                       },
@@ -6253,17 +6219,16 @@
                           {
                             "id": "setup-loading-node-23",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 10,
                               "y": 10
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-settings"
+                            "strokeWidth": 1.33,
+                            "d": "M37.5 50 A12.5 12.5 0 1 0 62.5 50 A12.5 12.5 0 1 0 37.5 50 Z M50 8.33 v12.5 M50 79.17 v12.5 M17.5 17.5 l8.75 8.75 M73.75 73.75 l8.75 8.75 M8.33 50 h12.5 M79.17 50 h12.5 M17.5 82.5 l8.75 -8.75 M73.75 26.25 l8.75 -8.75",
+                            "stroke": "#d4ccd8"
                           }
                         ]
                       }
@@ -6754,17 +6719,16 @@
                       {
                         "id": "setup-loading-node-52",
                         "name": "icon",
-                        "t": "icon",
+                        "t": "vector",
                         "place": {
                           "x": 0,
                           "y": 2
                         },
                         "w": 14,
                         "h": 14,
-                        "strokeWidth": 1.7,
-                        "size": 14,
-                        "color": "#aa9fb1",
-                        "icon": "h3-desk"
+                        "strokeWidth": 1.17,
+                        "d": "M18.75 16.67 H81.25 A6.25 6.25 0 0 1 87.5 22.92 V60.42 A6.25 6.25 0 0 1 81.25 66.67 H18.75 A6.25 6.25 0 0 1 12.5 60.42 V22.92 A6.25 6.25 0 0 1 18.75 16.67 Z M33.33 83.33 h33.33 M50 66.67 v16.67",
+                        "stroke": "#aa9fb1"
                       },
                       {
                         "id": "setup-loading-node-53",
@@ -6798,17 +6762,16 @@
                       {
                         "id": "setup-loading-node-55",
                         "name": "icon",
-                        "t": "icon",
+                        "t": "vector",
                         "place": {
                           "x": 129,
                           "y": 2
                         },
                         "w": 14,
                         "h": 14,
-                        "strokeWidth": 1.7,
-                        "size": 14,
-                        "color": "#aa9fb1",
-                        "icon": "h3-lap"
+                        "strokeWidth": 1.17,
+                        "d": "M27.08 20.83 H72.92 A6.25 6.25 0 0 1 79.17 27.08 V56.25 A6.25 6.25 0 0 1 72.92 62.5 H27.08 A6.25 6.25 0 0 1 20.83 56.25 V27.08 A6.25 6.25 0 0 1 27.08 20.83 Z M8.33 79.17 h83.33",
+                        "stroke": "#aa9fb1"
                       },
                       {
                         "id": "setup-loading-node-56",
@@ -6997,17 +6960,16 @@
                           {
                             "id": "setup-load-failed-node-9",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 16,
                               "y": 9
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#f5f1f6",
-                            "icon": "h3-map"
+                            "strokeWidth": 1.33,
+                            "d": "M37.5 16.67 L12.5 25 v58.33 l25 -8.33 l25 8.33 l25 -8.33 V16.67 l-25 8.33 z M37.5 16.67 v58.33 M62.5 25 v58.33",
+                            "stroke": "#f5f1f6"
                           },
                           {
                             "id": "setup-load-failed-node-10",
@@ -7043,17 +7005,16 @@
                           {
                             "id": "setup-load-failed-node-11",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 14.5,
                               "y": 9
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-grid"
+                            "strokeWidth": 1.33,
+                            "d": "M18.75 12.5 H35.42 A6.25 6.25 0 0 1 41.67 18.75 V35.42 A6.25 6.25 0 0 1 35.42 41.67 H18.75 A6.25 6.25 0 0 1 12.5 35.42 V18.75 A6.25 6.25 0 0 1 18.75 12.5 Z M64.58 12.5 H81.25 A6.25 6.25 0 0 1 87.5 18.75 V35.42 A6.25 6.25 0 0 1 81.25 41.67 H64.58 A6.25 6.25 0 0 1 58.33 35.42 V18.75 A6.25 6.25 0 0 1 64.58 12.5 Z M18.75 58.33 H35.42 A6.25 6.25 0 0 1 41.67 64.58 V81.25 A6.25 6.25 0 0 1 35.42 87.5 H18.75 A6.25 6.25 0 0 1 12.5 81.25 V64.58 A6.25 6.25 0 0 1 18.75 58.33 Z M64.58 58.33 H81.25 A6.25 6.25 0 0 1 87.5 64.58 V81.25 A6.25 6.25 0 0 1 81.25 87.5 H64.58 A6.25 6.25 0 0 1 58.33 81.25 V64.58 A6.25 6.25 0 0 1 64.58 58.33 Z",
+                            "stroke": "#d4ccd8"
                           },
                           {
                             "id": "setup-load-failed-node-12",
@@ -7089,17 +7050,16 @@
                           {
                             "id": "setup-load-failed-node-13",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 15,
                               "y": 9
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-pen"
+                            "strokeWidth": 1.33,
+                            "d": "M16.67 83.33 h16.67 L79.17 37.5 l-16.67 -16.67 L16.67 66.67 z M54.17 29.17 l16.67 16.67",
+                            "stroke": "#d4ccd8"
                           },
                           {
                             "id": "setup-load-failed-node-14",
@@ -7163,17 +7123,16 @@
                           {
                             "id": "setup-load-failed-node-17",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 13,
                               "y": 9
                             },
                             "w": 15,
                             "h": 15,
-                            "strokeWidth": 1.7,
-                            "size": 15,
-                            "color": "#1b200b",
-                            "icon": "h3-plus"
+                            "strokeWidth": 1.25,
+                            "d": "M50 20.83 v58.33 M20.83 50 h58.33",
+                            "stroke": "#1b200b"
                           },
                           {
                             "id": "setup-load-failed-node-18",
@@ -7210,17 +7169,16 @@
                           {
                             "id": "setup-load-failed-node-19",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 12,
                               "y": 8
                             },
                             "w": 15,
                             "h": 15,
-                            "strokeWidth": 1.7,
-                            "size": 15,
-                            "color": "#e6c06f",
-                            "icon": "h3-hand"
+                            "strokeWidth": 1.25,
+                            "d": "M33.33 54.17 V22.92 a6.25 6.25 0 0 1 12.5 0 V50 M45.83 45.83 V16.67 a6.25 6.25 0 0 1 12.5 0 v29.17 M58.33 45.83 V22.92 a6.25 6.25 0 0 1 12.5 0 V58.33 c0 16.67 -12.5 29.17 -27.08 29.17 S20.83 77.08 16.67 66.67 l-6.25 -12.5 a6.25 6.25 0 0 1 10.83 -6.25 L33.33 62.5",
+                            "stroke": "#e6c06f"
                           },
                           {
                             "id": "setup-load-failed-node-20",
@@ -7257,17 +7215,16 @@
                           {
                             "id": "setup-load-failed-node-21",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 10,
                               "y": 10
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-phone"
+                            "strokeWidth": 1.33,
+                            "d": "M37.5 10.42 H62.5 A8.33 8.33 0 0 1 70.83 18.75 V81.25 A8.33 8.33 0 0 1 62.5 89.58 H37.5 A8.33 8.33 0 0 1 29.17 81.25 V18.75 A8.33 8.33 0 0 1 37.5 10.42 Z M45.83 75 h8.33",
+                            "stroke": "#d4ccd8"
                           }
                         ]
                       },
@@ -7288,17 +7245,16 @@
                           {
                             "id": "setup-load-failed-node-22",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 10,
                               "y": 10
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-bell"
+                            "strokeWidth": 1.33,
+                            "d": "M25 66.67 V45.83 a25 25 0 0 1 50 0 v20.83 l8.33 8.33 H16.67 z M41.67 87.5 h16.67",
+                            "stroke": "#d4ccd8"
                           }
                         ]
                       },
@@ -7319,17 +7275,16 @@
                           {
                             "id": "setup-load-failed-node-23",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 10,
                               "y": 10
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-settings"
+                            "strokeWidth": 1.33,
+                            "d": "M37.5 50 A12.5 12.5 0 1 0 62.5 50 A12.5 12.5 0 1 0 37.5 50 Z M50 8.33 v12.5 M50 79.17 v12.5 M17.5 17.5 l8.75 8.75 M73.75 73.75 l8.75 8.75 M8.33 50 h12.5 M79.17 50 h12.5 M17.5 82.5 l8.75 -8.75 M73.75 26.25 l8.75 -8.75",
+                            "stroke": "#d4ccd8"
                           }
                         ]
                       }
@@ -7456,17 +7411,16 @@
                               {
                                 "id": "setup-load-failed-node-30",
                                 "name": "icon",
-                                "t": "icon",
+                                "t": "vector",
                                 "place": {
                                   "x": 14,
                                   "y": 14
                                 },
                                 "w": 24,
                                 "h": 24,
-                                "strokeWidth": 1.7,
-                                "size": 24,
-                                "color": "#e58e7c",
-                                "icon": "h3-alert"
+                                "strokeWidth": 2,
+                                "d": "M12.5 50 A37.5 37.5 0 1 0 87.5 50 A37.5 37.5 0 1 0 12.5 50 Z M50 29.17 v25 M50 68.75 v2.08",
+                                "stroke": "#e58e7c"
                               }
                             ]
                           },
@@ -7532,17 +7486,16 @@
                                   {
                                     "id": "setup-load-failed-node-34",
                                     "name": "icon",
-                                    "t": "icon",
+                                    "t": "vector",
                                     "place": {
                                       "x": 12,
                                       "y": 9
                                     },
                                     "w": 14,
                                     "h": 14,
-                                    "strokeWidth": 1.7,
-                                    "size": 14,
-                                    "color": "#1b200b",
-                                    "icon": "h3-retry"
+                                    "strokeWidth": 1.17,
+                                    "d": "M83.33 45.83 a33.33 33.33 0 1 0 -9.58 23.75 M83.33 16.67 v29.17 h-29.17",
+                                    "stroke": "#1b200b"
                                   },
                                   {
                                     "id": "setup-load-failed-node-35",
@@ -7579,17 +7532,16 @@
                                   {
                                     "id": "setup-load-failed-node-36",
                                     "name": "icon",
-                                    "t": "icon",
+                                    "t": "vector",
                                     "place": {
                                       "x": 12,
                                       "y": 9
                                     },
                                     "w": 14,
                                     "h": 14,
-                                    "strokeWidth": 1.7,
-                                    "size": 14,
-                                    "color": "#f5f1f6",
-                                    "icon": "h3-folder"
+                                    "strokeWidth": 1.17,
+                                    "d": "M12.5 25 a8.33 8.33 0 0 1 8.33 -8.33 h16.67 l8.33 8.33 h33.33 a8.33 8.33 0 0 1 8.33 8.33 v41.67 a8.33 8.33 0 0 1 -8.33 8.33 H20.83 a8.33 8.33 0 0 1 -8.33 -8.33 z",
+                                    "stroke": "#f5f1f6"
                                   },
                                   {
                                     "id": "setup-load-failed-node-37",
@@ -7753,17 +7705,16 @@
                       {
                         "id": "setup-load-failed-node-45",
                         "name": "icon",
-                        "t": "icon",
+                        "t": "vector",
                         "place": {
                           "x": 0,
                           "y": 2
                         },
                         "w": 14,
                         "h": 14,
-                        "strokeWidth": 1.7,
-                        "size": 14,
-                        "color": "#aa9fb1",
-                        "icon": "h3-desk"
+                        "strokeWidth": 1.17,
+                        "d": "M18.75 16.67 H81.25 A6.25 6.25 0 0 1 87.5 22.92 V60.42 A6.25 6.25 0 0 1 81.25 66.67 H18.75 A6.25 6.25 0 0 1 12.5 60.42 V22.92 A6.25 6.25 0 0 1 18.75 16.67 Z M33.33 83.33 h33.33 M50 66.67 v16.67",
+                        "stroke": "#aa9fb1"
                       },
                       {
                         "id": "setup-load-failed-node-46",
@@ -7797,17 +7748,16 @@
                       {
                         "id": "setup-load-failed-node-48",
                         "name": "icon",
-                        "t": "icon",
+                        "t": "vector",
                         "place": {
                           "x": 129,
                           "y": 2
                         },
                         "w": 14,
                         "h": 14,
-                        "strokeWidth": 1.7,
-                        "size": 14,
-                        "color": "#aa9fb1",
-                        "icon": "h3-lap"
+                        "strokeWidth": 1.17,
+                        "d": "M27.08 20.83 H72.92 A6.25 6.25 0 0 1 79.17 27.08 V56.25 A6.25 6.25 0 0 1 72.92 62.5 H27.08 A6.25 6.25 0 0 1 20.83 56.25 V27.08 A6.25 6.25 0 0 1 27.08 20.83 Z M8.33 79.17 h83.33",
+                        "stroke": "#aa9fb1"
                       },
                       {
                         "id": "setup-load-failed-node-49",
@@ -7996,17 +7946,16 @@
                           {
                             "id": "setup-empty-node-9",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 16,
                               "y": 9
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#f5f1f6",
-                            "icon": "h3-map"
+                            "strokeWidth": 1.33,
+                            "d": "M37.5 16.67 L12.5 25 v58.33 l25 -8.33 l25 8.33 l25 -8.33 V16.67 l-25 8.33 z M37.5 16.67 v58.33 M62.5 25 v58.33",
+                            "stroke": "#f5f1f6"
                           },
                           {
                             "id": "setup-empty-node-10",
@@ -8042,17 +7991,16 @@
                           {
                             "id": "setup-empty-node-11",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 14.5,
                               "y": 9
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-grid"
+                            "strokeWidth": 1.33,
+                            "d": "M18.75 12.5 H35.42 A6.25 6.25 0 0 1 41.67 18.75 V35.42 A6.25 6.25 0 0 1 35.42 41.67 H18.75 A6.25 6.25 0 0 1 12.5 35.42 V18.75 A6.25 6.25 0 0 1 18.75 12.5 Z M64.58 12.5 H81.25 A6.25 6.25 0 0 1 87.5 18.75 V35.42 A6.25 6.25 0 0 1 81.25 41.67 H64.58 A6.25 6.25 0 0 1 58.33 35.42 V18.75 A6.25 6.25 0 0 1 64.58 12.5 Z M18.75 58.33 H35.42 A6.25 6.25 0 0 1 41.67 64.58 V81.25 A6.25 6.25 0 0 1 35.42 87.5 H18.75 A6.25 6.25 0 0 1 12.5 81.25 V64.58 A6.25 6.25 0 0 1 18.75 58.33 Z M64.58 58.33 H81.25 A6.25 6.25 0 0 1 87.5 64.58 V81.25 A6.25 6.25 0 0 1 81.25 87.5 H64.58 A6.25 6.25 0 0 1 58.33 81.25 V64.58 A6.25 6.25 0 0 1 64.58 58.33 Z",
+                            "stroke": "#d4ccd8"
                           },
                           {
                             "id": "setup-empty-node-12",
@@ -8088,17 +8036,16 @@
                           {
                             "id": "setup-empty-node-13",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 15,
                               "y": 9
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-pen"
+                            "strokeWidth": 1.33,
+                            "d": "M16.67 83.33 h16.67 L79.17 37.5 l-16.67 -16.67 L16.67 66.67 z M54.17 29.17 l16.67 16.67",
+                            "stroke": "#d4ccd8"
                           },
                           {
                             "id": "setup-empty-node-14",
@@ -8162,17 +8109,16 @@
                           {
                             "id": "setup-empty-node-17",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 13,
                               "y": 9
                             },
                             "w": 15,
                             "h": 15,
-                            "strokeWidth": 1.7,
-                            "size": 15,
-                            "color": "#1b200b",
-                            "icon": "h3-plus"
+                            "strokeWidth": 1.25,
+                            "d": "M50 20.83 v58.33 M20.83 50 h58.33",
+                            "stroke": "#1b200b"
                           },
                           {
                             "id": "setup-empty-node-18",
@@ -8209,17 +8155,16 @@
                           {
                             "id": "setup-empty-node-19",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 10,
                               "y": 10
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-phone"
+                            "strokeWidth": 1.33,
+                            "d": "M37.5 10.42 H62.5 A8.33 8.33 0 0 1 70.83 18.75 V81.25 A8.33 8.33 0 0 1 62.5 89.58 H37.5 A8.33 8.33 0 0 1 29.17 81.25 V18.75 A8.33 8.33 0 0 1 37.5 10.42 Z M45.83 75 h8.33",
+                            "stroke": "#d4ccd8"
                           }
                         ]
                       },
@@ -8240,17 +8185,16 @@
                           {
                             "id": "setup-empty-node-20",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 10,
                               "y": 10
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-bell"
+                            "strokeWidth": 1.33,
+                            "d": "M25 66.67 V45.83 a25 25 0 0 1 50 0 v20.83 l8.33 8.33 H16.67 z M41.67 87.5 h16.67",
+                            "stroke": "#d4ccd8"
                           }
                         ]
                       },
@@ -8271,17 +8215,16 @@
                           {
                             "id": "setup-empty-node-21",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 10,
                               "y": 10
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-settings"
+                            "strokeWidth": 1.33,
+                            "d": "M37.5 50 A12.5 12.5 0 1 0 62.5 50 A12.5 12.5 0 1 0 37.5 50 Z M50 8.33 v12.5 M50 79.17 v12.5 M17.5 17.5 l8.75 8.75 M73.75 73.75 l8.75 8.75 M8.33 50 h12.5 M79.17 50 h12.5 M17.5 82.5 l8.75 -8.75 M73.75 26.25 l8.75 -8.75",
+                            "stroke": "#d4ccd8"
                           }
                         ]
                       }
@@ -8360,17 +8303,16 @@
                                   {
                                     "id": "setup-empty-node-25",
                                     "name": "icon",
-                                    "t": "icon",
+                                    "t": "vector",
                                     "place": {
                                       "x": 14.5,
                                       "y": 10
                                     },
                                     "w": 15,
                                     "h": 15,
-                                    "strokeWidth": 1.7,
-                                    "size": 15,
-                                    "color": "#f5f1f6",
-                                    "icon": "h3-net"
+                                    "strokeWidth": 1.25,
+                                    "d": "M39.58 20.83 A10.42 10.42 0 1 0 60.42 20.83 A10.42 10.42 0 1 0 39.58 20.83 Z M10.42 79.17 A10.42 10.42 0 1 0 31.25 79.17 A10.42 10.42 0 1 0 10.42 79.17 Z M68.75 79.17 A10.42 10.42 0 1 0 89.58 79.17 A10.42 10.42 0 1 0 68.75 79.17 Z M50 31.25 v16.67 M50 47.92 L25 70.83 M50 47.92 l25 22.92",
+                                    "stroke": "#f5f1f6"
                                   },
                                   {
                                     "id": "setup-empty-node-26",
@@ -8406,17 +8348,16 @@
                                   {
                                     "id": "setup-empty-node-27",
                                     "name": "icon",
-                                    "t": "icon",
+                                    "t": "vector",
                                     "place": {
                                       "x": 26,
                                       "y": 10
                                     },
                                     "w": 15,
                                     "h": 15,
-                                    "strokeWidth": 1.7,
-                                    "size": 15,
-                                    "color": "#aa9fb1",
-                                    "icon": "h3-users"
+                                    "strokeWidth": 1.25,
+                                    "d": "M22.92 33.33 A14.58 14.58 0 1 0 52.08 33.33 A14.58 14.58 0 1 0 22.92 33.33 Z M10.42 83.33 c0 -15 12.08 -27.08 27.08 -27.08 s27.08 12.08 27.08 27.08 M59.17 37.5 A11.67 11.67 0 1 0 82.5 37.5 A11.67 11.67 0 1 0 59.17 37.5 Z M70.83 58.33 c11.67 0 18.75 10 18.75 20.83",
+                                    "stroke": "#aa9fb1"
                                   },
                                   {
                                     "id": "setup-empty-node-28",
@@ -8469,17 +8410,16 @@
                               {
                                 "id": "setup-empty-node-30",
                                 "name": "icon",
-                                "t": "icon",
+                                "t": "vector",
                                 "place": {
                                   "x": 12,
                                   "y": 12
                                 },
                                 "w": 15,
                                 "h": 15,
-                                "strokeWidth": 1.7,
-                                "size": 15,
-                                "color": "#aa9fb1",
-                                "icon": "h3-search"
+                                "strokeWidth": 1.25,
+                                "d": "M18.75 45.83 A27.08 27.08 0 1 0 72.92 45.83 A27.08 27.08 0 1 0 18.75 45.83 Z M83.33 83.33 l-16.67 -16.67",
+                                "stroke": "#aa9fb1"
                               },
                               {
                                 "id": "setup-empty-node-31",
@@ -8657,17 +8597,16 @@
                           {
                             "id": "setup-empty-node-40",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 23,
                               "y": 23
                             },
                             "w": 18,
                             "h": 18,
-                            "strokeWidth": 1.7,
-                            "size": 18,
-                            "color": "#0f0b13",
-                            "icon": "h3-person"
+                            "strokeWidth": 1.5,
+                            "d": "M33.33 33.33 A16.67 16.67 0 1 0 66.67 33.33 A16.67 16.67 0 1 0 33.33 33.33 Z M16.67 87.5 c0 -18.33 15 -33.33 33.33 -33.33 s33.33 15 33.33 33.33",
+                            "stroke": "#0f0b13"
                           }
                         ]
                       },
@@ -8799,17 +8738,16 @@
                               {
                                 "id": "setup-empty-node-48",
                                 "name": "icon",
-                                "t": "icon",
+                                "t": "vector",
                                 "place": {
                                   "x": 7,
                                   "y": 7
                                 },
                                 "w": 14,
                                 "h": 14,
-                                "strokeWidth": 1.7,
-                                "size": 14,
-                                "color": "#d4ccd8",
-                                "icon": "h3-plus"
+                                "strokeWidth": 1.17,
+                                "d": "M50 20.83 v58.33 M20.83 50 h58.33",
+                                "stroke": "#d4ccd8"
                               }
                             ]
                           },
@@ -8951,17 +8889,16 @@
                               {
                                 "id": "setup-empty-node-57",
                                 "name": "icon",
-                                "t": "icon",
+                                "t": "vector",
                                 "place": {
                                   "x": 12,
                                   "y": 9
                                 },
                                 "w": 14,
                                 "h": 14,
-                                "strokeWidth": 1.7,
-                                "size": 14,
-                                "color": "#d4ccd8",
-                                "icon": "h3-bulb"
+                                "strokeWidth": 1.17,
+                                "d": "M37.5 75 h25 M41.67 87.5 h16.67 M50 12.5 a25 25 0 0 0 -14.58 45.42 V66.67 h29.17 v-8.75 A25 25 0 0 0 50 12.5 z",
+                                "stroke": "#d4ccd8"
                               },
                               {
                                 "id": "setup-empty-node-58",
@@ -9015,17 +8952,16 @@
                               {
                                 "id": "setup-empty-node-61",
                                 "name": "icon",
-                                "t": "icon",
+                                "t": "vector",
                                 "place": {
                                   "x": 12,
                                   "y": 9
                                 },
                                 "w": 14,
                                 "h": 14,
-                                "strokeWidth": 1.7,
-                                "size": 14,
-                                "color": "#d4ccd8",
-                                "icon": "h3-sliders"
+                                "strokeWidth": 1.17,
+                                "d": "M16.67 25 h41.67 M75 25 h8.33 M16.67 50 h16.67 M50 50 h33.33 M16.67 75 h50 M58.33 25 A8.33 8.33 0 1 0 75 25 A8.33 8.33 0 1 0 58.33 25 Z M33.33 50 A8.33 8.33 0 1 0 50 50 A8.33 8.33 0 1 0 33.33 50 Z M66.67 75 A8.33 8.33 0 1 0 83.33 75 A8.33 8.33 0 1 0 66.67 75 Z",
+                                "stroke": "#d4ccd8"
                               },
                               {
                                 "id": "setup-empty-node-62",
@@ -9095,17 +9031,16 @@
                               {
                                 "id": "setup-empty-node-65",
                                 "name": "icon",
-                                "t": "icon",
+                                "t": "vector",
                                 "place": {
                                   "x": 16,
                                   "y": 16
                                 },
                                 "w": 24,
                                 "h": 24,
-                                "strokeWidth": 1.7,
-                                "size": 24,
-                                "color": "#aa9fb1",
-                                "icon": "h3-map"
+                                "strokeWidth": 2,
+                                "d": "M37.5 16.67 L12.5 25 v58.33 l25 -8.33 l25 8.33 l25 -8.33 V16.67 l-25 8.33 z M37.5 16.67 v58.33 M62.5 25 v58.33",
+                                "stroke": "#aa9fb1"
                               }
                             ]
                           },
@@ -9159,17 +9094,16 @@
                               {
                                 "id": "setup-empty-node-68",
                                 "name": "icon",
-                                "t": "icon",
+                                "t": "vector",
                                 "place": {
                                   "x": 12,
                                   "y": 9
                                 },
                                 "w": 14,
                                 "h": 14,
-                                "strokeWidth": 1.7,
-                                "size": 14,
-                                "color": "#1b200b",
-                                "icon": "h3-plus"
+                                "strokeWidth": 1.17,
+                                "d": "M50 20.83 v58.33 M20.83 50 h58.33",
+                                "stroke": "#1b200b"
                               },
                               {
                                 "id": "setup-empty-node-69",
@@ -9283,17 +9217,16 @@
                       {
                         "id": "setup-empty-node-75",
                         "name": "icon",
-                        "t": "icon",
+                        "t": "vector",
                         "place": {
                           "x": 0,
                           "y": 2
                         },
                         "w": 14,
                         "h": 14,
-                        "strokeWidth": 1.7,
-                        "size": 14,
-                        "color": "#aa9fb1",
-                        "icon": "h3-desk"
+                        "strokeWidth": 1.17,
+                        "d": "M18.75 16.67 H81.25 A6.25 6.25 0 0 1 87.5 22.92 V60.42 A6.25 6.25 0 0 1 81.25 66.67 H18.75 A6.25 6.25 0 0 1 12.5 60.42 V22.92 A6.25 6.25 0 0 1 18.75 16.67 Z M33.33 83.33 h33.33 M50 66.67 v16.67",
+                        "stroke": "#aa9fb1"
                       },
                       {
                         "id": "setup-empty-node-76",
@@ -9327,17 +9260,16 @@
                       {
                         "id": "setup-empty-node-78",
                         "name": "icon",
-                        "t": "icon",
+                        "t": "vector",
                         "place": {
                           "x": 129,
                           "y": 2
                         },
                         "w": 14,
                         "h": 14,
-                        "strokeWidth": 1.7,
-                        "size": 14,
-                        "color": "#aa9fb1",
-                        "icon": "h3-lap"
+                        "strokeWidth": 1.17,
+                        "d": "M27.08 20.83 H72.92 A6.25 6.25 0 0 1 79.17 27.08 V56.25 A6.25 6.25 0 0 1 72.92 62.5 H27.08 A6.25 6.25 0 0 1 20.83 56.25 V27.08 A6.25 6.25 0 0 1 27.08 20.83 Z M8.33 79.17 h83.33",
+                        "stroke": "#aa9fb1"
                       },
                       {
                         "id": "setup-empty-node-79",

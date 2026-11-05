@@ -327,17 +327,16 @@
                       {
                         "id": "setup-mind-node-19",
                         "name": "icon",
-                        "t": "icon",
+                        "t": "vector",
                         "place": {
                           "x": 14,
                           "y": 18
                         },
                         "w": 16,
                         "h": 16,
-                        "strokeWidth": 1.7,
-                        "size": 16,
-                        "color": "#aa9fb1",
-                        "icon": "h3-folder"
+                        "strokeWidth": 1.33,
+                        "d": "M12.5 25 a8.33 8.33 0 0 1 8.33 -8.33 h16.67 l8.33 8.33 h33.33 a8.33 8.33 0 0 1 8.33 8.33 v41.67 a8.33 8.33 0 0 1 -8.33 8.33 H20.83 a8.33 8.33 0 0 1 -8.33 -8.33 z",
+                        "stroke": "#aa9fb1"
                       },
                       {
                         "id": "setup-mind-node-20",
@@ -436,17 +435,16 @@
                       {
                         "id": "setup-mind-node-24",
                         "name": "icon",
-                        "t": "icon",
+                        "t": "vector",
                         "place": {
                           "x": 7,
                           "y": 7
                         },
                         "w": 16,
                         "h": 16,
-                        "strokeWidth": 1.7,
-                        "size": 16,
-                        "color": "#bdcd79",
-                        "icon": "h3-wifi"
+                        "strokeWidth": 1.33,
+                        "d": "M8.33 37.5 a62.5 62.5 0 0 1 83.33 0 M20.83 52.08 a41.67 41.67 0 0 1 58.33 0 M35.42 66.67 a20.83 20.83 0 0 1 29.17 0 M46.67 81.25 A3.33 3.33 0 1 0 53.33 81.25 A3.33 3.33 0 1 0 46.67 81.25 Z",
+                        "stroke": "#bdcd79"
                       }
                     ]
                   },
@@ -587,17 +585,16 @@
                           {
                             "id": "setup-mind-node-32",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 2,
                               "y": 2
                             },
                             "w": 14,
                             "h": 14,
-                            "strokeWidth": 1.7,
-                            "size": 14,
-                            "color": "#1b200b",
-                            "icon": "h3-check"
+                            "strokeWidth": 1.17,
+                            "d": "M20.83 50 l18.75 18.75 L79.17 29.17",
+                            "stroke": "#1b200b"
                           }
                         ]
                       }
@@ -697,17 +694,16 @@
                       {
                         "id": "setup-mind-node-38",
                         "name": "icon",
-                        "t": "icon",
+                        "t": "vector",
                         "place": {
                           "x": 7,
                           "y": 7
                         },
                         "w": 16,
                         "h": 16,
-                        "strokeWidth": 1.7,
-                        "size": 16,
-                        "color": "#d4ccd8",
-                        "icon": "h3-cloud"
+                        "strokeWidth": 1.33,
+                        "d": "M29.17 75 h41.67 a16.67 16.67 0 0 0 2.08 -33.33 A25 25 0 0 0 25 39.58 A17.92 17.92 0 0 0 29.17 75 z",
+                        "stroke": "#d4ccd8"
                       }
                     ]
                   },
@@ -847,17 +843,16 @@
                       {
                         "id": "setup-mind-node-46",
                         "name": "icon",
-                        "t": "icon",
+                        "t": "vector",
                         "place": {
                           "x": 12,
                           "y": 9
                         },
                         "w": 14,
                         "h": 14,
-                        "strokeWidth": 1.7,
-                        "size": 14,
-                        "color": "#f5f1f6",
-                        "icon": "h3-back"
+                        "strokeWidth": 1.17,
+                        "d": "M62.5 25 l-25 25 l25 25",
+                        "stroke": "#f5f1f6"
                       },
                       {
                         "id": "setup-mind-node-47",
@@ -1245,17 +1240,16 @@
                           {
                             "id": "setup-join-node-20",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 14,
                               "y": 18
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#aa9fb1",
-                            "icon": "h3-folder"
+                            "strokeWidth": 1.33,
+                            "d": "M12.5 25 a8.33 8.33 0 0 1 8.33 -8.33 h16.67 l8.33 8.33 h33.33 a8.33 8.33 0 0 1 8.33 8.33 v41.67 a8.33 8.33 0 0 1 -8.33 8.33 H20.83 a8.33 8.33 0 0 1 -8.33 -8.33 z",
+                            "stroke": "#aa9fb1"
                           },
                           {
                             "id": "setup-join-node-21",
@@ -1354,17 +1348,16 @@
                           {
                             "id": "setup-join-node-25",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 7,
                               "y": 7
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#bdcd79",
-                            "icon": "h3-wifi"
+                            "strokeWidth": 1.33,
+                            "d": "M8.33 37.5 a62.5 62.5 0 0 1 83.33 0 M20.83 52.08 a41.67 41.67 0 0 1 58.33 0 M35.42 66.67 a20.83 20.83 0 0 1 29.17 0 M46.67 81.25 A3.33 3.33 0 1 0 53.33 81.25 A3.33 3.33 0 1 0 46.67 81.25 Z",
+                            "stroke": "#bdcd79"
                           }
                         ]
                       },
@@ -1505,17 +1498,16 @@
                               {
                                 "id": "setup-join-node-33",
                                 "name": "icon",
-                                "t": "icon",
+                                "t": "vector",
                                 "place": {
                                   "x": 2,
                                   "y": 2
                                 },
                                 "w": 14,
                                 "h": 14,
-                                "strokeWidth": 1.7,
-                                "size": 14,
-                                "color": "#1b200b",
-                                "icon": "h3-check"
+                                "strokeWidth": 1.17,
+                                "d": "M20.83 50 l18.75 18.75 L79.17 29.17",
+                                "stroke": "#1b200b"
                               }
                             ]
                           }
@@ -1615,17 +1607,16 @@
                           {
                             "id": "setup-join-node-39",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 7,
                               "y": 7
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-cloud"
+                            "strokeWidth": 1.33,
+                            "d": "M29.17 75 h41.67 a16.67 16.67 0 0 0 2.08 -33.33 A25 25 0 0 0 25 39.58 A17.92 17.92 0 0 0 29.17 75 z",
+                            "stroke": "#d4ccd8"
                           }
                         ]
                       },
@@ -1765,17 +1756,16 @@
                           {
                             "id": "setup-join-node-47",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 12,
                               "y": 9
                             },
                             "w": 14,
                             "h": 14,
-                            "strokeWidth": 1.7,
-                            "size": 14,
-                            "color": "#f5f1f6",
-                            "icon": "h3-back"
+                            "strokeWidth": 1.17,
+                            "d": "M62.5 25 l-25 25 l25 25",
+                            "stroke": "#f5f1f6"
                           },
                           {
                             "id": "setup-join-node-48",
@@ -1938,17 +1928,16 @@
                   {
                     "id": "setup-join-node-56",
                     "name": "icon",
-                    "t": "icon",
+                    "t": "vector",
                     "place": {
                       "x": 12,
                       "y": 22
                     },
                     "w": 15,
                     "h": 15,
-                    "strokeWidth": 1.7,
-                    "size": 15,
-                    "color": "#bdcd79",
-                    "icon": "h3-lap"
+                    "strokeWidth": 1.25,
+                    "d": "M27.08 20.83 H72.92 A6.25 6.25 0 0 1 79.17 27.08 V56.25 A6.25 6.25 0 0 1 72.92 62.5 H27.08 A6.25 6.25 0 0 1 20.83 56.25 V27.08 A6.25 6.25 0 0 1 27.08 20.83 Z M8.33 79.17 h83.33",
+                    "stroke": "#bdcd79"
                   },
                   {
                     "id": "setup-join-node-57",
@@ -2590,17 +2579,16 @@
                           {
                             "id": "setup-join-error-node-20",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 14,
                               "y": 18
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#aa9fb1",
-                            "icon": "h3-folder"
+                            "strokeWidth": 1.33,
+                            "d": "M12.5 25 a8.33 8.33 0 0 1 8.33 -8.33 h16.67 l8.33 8.33 h33.33 a8.33 8.33 0 0 1 8.33 8.33 v41.67 a8.33 8.33 0 0 1 -8.33 8.33 H20.83 a8.33 8.33 0 0 1 -8.33 -8.33 z",
+                            "stroke": "#aa9fb1"
                           },
                           {
                             "id": "setup-join-error-node-21",
@@ -2699,17 +2687,16 @@
                           {
                             "id": "setup-join-error-node-25",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 7,
                               "y": 7
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#bdcd79",
-                            "icon": "h3-wifi"
+                            "strokeWidth": 1.33,
+                            "d": "M8.33 37.5 a62.5 62.5 0 0 1 83.33 0 M20.83 52.08 a41.67 41.67 0 0 1 58.33 0 M35.42 66.67 a20.83 20.83 0 0 1 29.17 0 M46.67 81.25 A3.33 3.33 0 1 0 53.33 81.25 A3.33 3.33 0 1 0 46.67 81.25 Z",
+                            "stroke": "#bdcd79"
                           }
                         ]
                       },
@@ -2850,17 +2837,16 @@
                               {
                                 "id": "setup-join-error-node-33",
                                 "name": "icon",
-                                "t": "icon",
+                                "t": "vector",
                                 "place": {
                                   "x": 2,
                                   "y": 2
                                 },
                                 "w": 14,
                                 "h": 14,
-                                "strokeWidth": 1.7,
-                                "size": 14,
-                                "color": "#1b200b",
-                                "icon": "h3-check"
+                                "strokeWidth": 1.17,
+                                "d": "M20.83 50 l18.75 18.75 L79.17 29.17",
+                                "stroke": "#1b200b"
                               }
                             ]
                           }
@@ -2960,17 +2946,16 @@
                           {
                             "id": "setup-join-error-node-39",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 7,
                               "y": 7
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-cloud"
+                            "strokeWidth": 1.33,
+                            "d": "M29.17 75 h41.67 a16.67 16.67 0 0 0 2.08 -33.33 A25 25 0 0 0 25 39.58 A17.92 17.92 0 0 0 29.17 75 z",
+                            "stroke": "#d4ccd8"
                           }
                         ]
                       },
@@ -3110,17 +3095,16 @@
                           {
                             "id": "setup-join-error-node-47",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 12,
                               "y": 9
                             },
                             "w": 14,
                             "h": 14,
-                            "strokeWidth": 1.7,
-                            "size": 14,
-                            "color": "#f5f1f6",
-                            "icon": "h3-back"
+                            "strokeWidth": 1.17,
+                            "d": "M62.5 25 l-25 25 l25 25",
+                            "stroke": "#f5f1f6"
                           },
                           {
                             "id": "setup-join-error-node-48",
@@ -3283,17 +3267,16 @@
                   {
                     "id": "setup-join-error-node-56",
                     "name": "icon",
-                    "t": "icon",
+                    "t": "vector",
                     "place": {
                       "x": 12,
                       "y": 22
                     },
                     "w": 15,
                     "h": 15,
-                    "strokeWidth": 1.7,
-                    "size": 15,
-                    "color": "#bdcd79",
-                    "icon": "h3-lap"
+                    "strokeWidth": 1.25,
+                    "d": "M27.08 20.83 H72.92 A6.25 6.25 0 0 1 79.17 27.08 V56.25 A6.25 6.25 0 0 1 72.92 62.5 H27.08 A6.25 6.25 0 0 1 20.83 56.25 V27.08 A6.25 6.25 0 0 1 27.08 20.83 Z M8.33 79.17 h83.33",
+                    "stroke": "#bdcd79"
                   },
                   {
                     "id": "setup-join-error-node-57",
@@ -3540,17 +3523,16 @@
                   {
                     "id": "setup-join-error-node-71",
                     "name": "icon",
-                    "t": "icon",
+                    "t": "vector",
                     "place": {
                       "x": 84,
                       "y": 3
                     },
                     "w": 13,
                     "h": 13,
-                    "strokeWidth": 1.7,
-                    "size": 13,
-                    "color": "#e58e7c",
-                    "icon": "h3-alert"
+                    "strokeWidth": 1.08,
+                    "d": "M12.5 50 A37.5 37.5 0 1 0 87.5 50 A37.5 37.5 0 1 0 12.5 50 Z M50 29.17 v25 M50 68.75 v2.08",
+                    "stroke": "#e58e7c"
                   },
                   {
                     "id": "setup-join-error-node-72",
@@ -4585,17 +4567,16 @@
                           {
                             "id": "setup-sign-in-node-20",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 14,
                               "y": 18
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#aa9fb1",
-                            "icon": "h3-folder"
+                            "strokeWidth": 1.33,
+                            "d": "M12.5 25 a8.33 8.33 0 0 1 8.33 -8.33 h16.67 l8.33 8.33 h33.33 a8.33 8.33 0 0 1 8.33 8.33 v41.67 a8.33 8.33 0 0 1 -8.33 8.33 H20.83 a8.33 8.33 0 0 1 -8.33 -8.33 z",
+                            "stroke": "#aa9fb1"
                           },
                           {
                             "id": "setup-sign-in-node-21",
@@ -4694,17 +4675,16 @@
                           {
                             "id": "setup-sign-in-node-25",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 7,
                               "y": 7
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#bdcd79",
-                            "icon": "h3-wifi"
+                            "strokeWidth": 1.33,
+                            "d": "M8.33 37.5 a62.5 62.5 0 0 1 83.33 0 M20.83 52.08 a41.67 41.67 0 0 1 58.33 0 M35.42 66.67 a20.83 20.83 0 0 1 29.17 0 M46.67 81.25 A3.33 3.33 0 1 0 53.33 81.25 A3.33 3.33 0 1 0 46.67 81.25 Z",
+                            "stroke": "#bdcd79"
                           }
                         ]
                       },
@@ -4845,17 +4825,16 @@
                               {
                                 "id": "setup-sign-in-node-33",
                                 "name": "icon",
-                                "t": "icon",
+                                "t": "vector",
                                 "place": {
                                   "x": 2,
                                   "y": 2
                                 },
                                 "w": 14,
                                 "h": 14,
-                                "strokeWidth": 1.7,
-                                "size": 14,
-                                "color": "#1b200b",
-                                "icon": "h3-check"
+                                "strokeWidth": 1.17,
+                                "d": "M20.83 50 l18.75 18.75 L79.17 29.17",
+                                "stroke": "#1b200b"
                               }
                             ]
                           }
@@ -4955,17 +4934,16 @@
                           {
                             "id": "setup-sign-in-node-39",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 7,
                               "y": 7
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-cloud"
+                            "strokeWidth": 1.33,
+                            "d": "M29.17 75 h41.67 a16.67 16.67 0 0 0 2.08 -33.33 A25 25 0 0 0 25 39.58 A17.92 17.92 0 0 0 29.17 75 z",
+                            "stroke": "#d4ccd8"
                           }
                         ]
                       },
@@ -5105,17 +5083,16 @@
                           {
                             "id": "setup-sign-in-node-47",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 12,
                               "y": 9
                             },
                             "w": 14,
                             "h": 14,
-                            "strokeWidth": 1.7,
-                            "size": 14,
-                            "color": "#f5f1f6",
-                            "icon": "h3-back"
+                            "strokeWidth": 1.17,
+                            "d": "M62.5 25 l-25 25 l25 25",
+                            "stroke": "#f5f1f6"
                           },
                           {
                             "id": "setup-sign-in-node-48",
@@ -5718,17 +5695,16 @@
                       {
                         "id": "setup-signed-in-node-19",
                         "name": "icon",
-                        "t": "icon",
+                        "t": "vector",
                         "place": {
                           "x": 14,
                           "y": 18
                         },
                         "w": 16,
                         "h": 16,
-                        "strokeWidth": 1.7,
-                        "size": 16,
-                        "color": "#aa9fb1",
-                        "icon": "h3-folder"
+                        "strokeWidth": 1.33,
+                        "d": "M12.5 25 a8.33 8.33 0 0 1 8.33 -8.33 h16.67 l8.33 8.33 h33.33 a8.33 8.33 0 0 1 8.33 8.33 v41.67 a8.33 8.33 0 0 1 -8.33 8.33 H20.83 a8.33 8.33 0 0 1 -8.33 -8.33 z",
+                        "stroke": "#aa9fb1"
                       },
                       {
                         "id": "setup-signed-in-node-20",
@@ -5827,17 +5803,16 @@
                       {
                         "id": "setup-signed-in-node-24",
                         "name": "icon",
-                        "t": "icon",
+                        "t": "vector",
                         "place": {
                           "x": 7,
                           "y": 7
                         },
                         "w": 16,
                         "h": 16,
-                        "strokeWidth": 1.7,
-                        "size": 16,
-                        "color": "#bdcd79",
-                        "icon": "h3-wifi"
+                        "strokeWidth": 1.33,
+                        "d": "M8.33 37.5 a62.5 62.5 0 0 1 83.33 0 M20.83 52.08 a41.67 41.67 0 0 1 58.33 0 M35.42 66.67 a20.83 20.83 0 0 1 29.17 0 M46.67 81.25 A3.33 3.33 0 1 0 53.33 81.25 A3.33 3.33 0 1 0 46.67 81.25 Z",
+                        "stroke": "#bdcd79"
                       }
                     ]
                   },
@@ -5978,17 +5953,16 @@
                           {
                             "id": "setup-signed-in-node-32",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 2,
                               "y": 2
                             },
                             "w": 14,
                             "h": 14,
-                            "strokeWidth": 1.7,
-                            "size": 14,
-                            "color": "#1b200b",
-                            "icon": "h3-check"
+                            "strokeWidth": 1.17,
+                            "d": "M20.83 50 l18.75 18.75 L79.17 29.17",
+                            "stroke": "#1b200b"
                           }
                         ]
                       }
@@ -6114,17 +6088,16 @@
                           {
                             "id": "setup-signed-in-node-40",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 2,
                               "y": 2
                             },
                             "w": 14,
                             "h": 14,
-                            "strokeWidth": 1.7,
-                            "size": 14,
-                            "color": "#1b200b",
-                            "icon": "h3-check"
+                            "strokeWidth": 1.17,
+                            "d": "M20.83 50 l18.75 18.75 L79.17 29.17",
+                            "stroke": "#1b200b"
                           }
                         ]
                       }
@@ -6254,17 +6227,16 @@
                       {
                         "id": "setup-signed-in-node-49",
                         "name": "icon",
-                        "t": "icon",
+                        "t": "vector",
                         "place": {
                           "x": 8,
                           "y": 8
                         },
                         "w": 15,
                         "h": 15,
-                        "strokeWidth": 1.7,
-                        "size": 15,
-                        "color": "#d4ccd8",
-                        "icon": "h3-person"
+                        "strokeWidth": 1.25,
+                        "d": "M33.33 33.33 A16.67 16.67 0 1 0 66.67 33.33 A16.67 16.67 0 1 0 33.33 33.33 Z M16.67 87.5 c0 -18.33 15 -33.33 33.33 -33.33 s33.33 15 33.33 33.33",
+                        "stroke": "#d4ccd8"
                       }
                     ]
                   }
@@ -6298,17 +6270,16 @@
                       {
                         "id": "setup-signed-in-node-51",
                         "name": "icon",
-                        "t": "icon",
+                        "t": "vector",
                         "place": {
                           "x": 12,
                           "y": 9
                         },
                         "w": 14,
                         "h": 14,
-                        "strokeWidth": 1.7,
-                        "size": 14,
-                        "color": "#f5f1f6",
-                        "icon": "h3-back"
+                        "strokeWidth": 1.17,
+                        "d": "M62.5 25 l-25 25 l25 25",
+                        "stroke": "#f5f1f6"
                       },
                       {
                         "id": "setup-signed-in-node-52",
@@ -6541,17 +6512,16 @@
                           {
                             "id": "settings-host-node-9",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 16,
                               "y": 9
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-map"
+                            "strokeWidth": 1.33,
+                            "d": "M37.5 16.67 L12.5 25 v58.33 l25 -8.33 l25 8.33 l25 -8.33 V16.67 l-25 8.33 z M37.5 16.67 v58.33 M62.5 25 v58.33",
+                            "stroke": "#d4ccd8"
                           },
                           {
                             "id": "settings-host-node-10",
@@ -6587,17 +6557,16 @@
                           {
                             "id": "settings-host-node-11",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 16,
                               "y": 9
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-grid"
+                            "strokeWidth": 1.33,
+                            "d": "M18.75 12.5 H35.42 A6.25 6.25 0 0 1 41.67 18.75 V35.42 A6.25 6.25 0 0 1 35.42 41.67 H18.75 A6.25 6.25 0 0 1 12.5 35.42 V18.75 A6.25 6.25 0 0 1 18.75 12.5 Z M64.58 12.5 H81.25 A6.25 6.25 0 0 1 87.5 18.75 V35.42 A6.25 6.25 0 0 1 81.25 41.67 H64.58 A6.25 6.25 0 0 1 58.33 35.42 V18.75 A6.25 6.25 0 0 1 64.58 12.5 Z M18.75 58.33 H35.42 A6.25 6.25 0 0 1 41.67 64.58 V81.25 A6.25 6.25 0 0 1 35.42 87.5 H18.75 A6.25 6.25 0 0 1 12.5 81.25 V64.58 A6.25 6.25 0 0 1 18.75 58.33 Z M64.58 58.33 H81.25 A6.25 6.25 0 0 1 87.5 64.58 V81.25 A6.25 6.25 0 0 1 81.25 87.5 H64.58 A6.25 6.25 0 0 1 58.33 81.25 V64.58 A6.25 6.25 0 0 1 64.58 58.33 Z",
+                            "stroke": "#d4ccd8"
                           },
                           {
                             "id": "settings-host-node-12",
@@ -6633,17 +6602,16 @@
                           {
                             "id": "settings-host-node-13",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 16,
                               "y": 9
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-pen"
+                            "strokeWidth": 1.33,
+                            "d": "M16.67 83.33 h16.67 L79.17 37.5 l-16.67 -16.67 L16.67 66.67 z M54.17 29.17 l16.67 16.67",
+                            "stroke": "#d4ccd8"
                           },
                           {
                             "id": "settings-host-node-14",
@@ -6707,17 +6675,16 @@
                           {
                             "id": "settings-host-node-17",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 13,
                               "y": 9
                             },
                             "w": 15,
                             "h": 15,
-                            "strokeWidth": 1.7,
-                            "size": 15,
-                            "color": "#1b200b",
-                            "icon": "h3-plus"
+                            "strokeWidth": 1.25,
+                            "d": "M50 20.83 v58.33 M20.83 50 h58.33",
+                            "stroke": "#1b200b"
                           },
                           {
                             "id": "settings-host-node-18",
@@ -6754,17 +6721,16 @@
                           {
                             "id": "settings-host-node-19",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 10,
                               "y": 10
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-phone"
+                            "strokeWidth": 1.33,
+                            "d": "M37.5 10.42 H62.5 A8.33 8.33 0 0 1 70.83 18.75 V81.25 A8.33 8.33 0 0 1 62.5 89.58 H37.5 A8.33 8.33 0 0 1 29.17 81.25 V18.75 A8.33 8.33 0 0 1 37.5 10.42 Z M45.83 75 h8.33",
+                            "stroke": "#d4ccd8"
                           }
                         ]
                       },
@@ -6785,17 +6751,16 @@
                           {
                             "id": "settings-host-node-20",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 10,
                               "y": 10
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-bell"
+                            "strokeWidth": 1.33,
+                            "d": "M25 66.67 V45.83 a25 25 0 0 1 50 0 v20.83 l8.33 8.33 H16.67 z M41.67 87.5 h16.67",
+                            "stroke": "#d4ccd8"
                           }
                         ]
                       },
@@ -6816,17 +6781,16 @@
                           {
                             "id": "settings-host-node-21",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 10,
                               "y": 10
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-settings"
+                            "strokeWidth": 1.33,
+                            "d": "M37.5 50 A12.5 12.5 0 1 0 62.5 50 A12.5 12.5 0 1 0 37.5 50 Z M50 8.33 v12.5 M50 79.17 v12.5 M17.5 17.5 l8.75 8.75 M73.75 73.75 l8.75 8.75 M8.33 50 h12.5 M79.17 50 h12.5 M17.5 82.5 l8.75 -8.75 M73.75 26.25 l8.75 -8.75",
+                            "stroke": "#d4ccd8"
                           }
                         ]
                       }
@@ -6906,17 +6870,16 @@
                               {
                                 "id": "settings-host-node-25",
                                 "name": "icon",
-                                "t": "icon",
+                                "t": "vector",
                                 "place": {
                                   "x": 14,
                                   "y": 10
                                 },
                                 "w": 15,
                                 "h": 15,
-                                "strokeWidth": 1.7,
-                                "size": 15,
-                                "color": "#f5f1f6",
-                                "icon": "h3-settings"
+                                "strokeWidth": 1.25,
+                                "d": "M37.5 50 A12.5 12.5 0 1 0 62.5 50 A12.5 12.5 0 1 0 37.5 50 Z M50 8.33 v12.5 M50 79.17 v12.5 M17.5 17.5 l8.75 8.75 M73.75 73.75 l8.75 8.75 M8.33 50 h12.5 M79.17 50 h12.5 M17.5 82.5 l8.75 -8.75 M73.75 26.25 l8.75 -8.75",
+                                "stroke": "#f5f1f6"
                               },
                               {
                                 "id": "settings-host-node-26",
@@ -6952,17 +6915,16 @@
                               {
                                 "id": "settings-host-node-27",
                                 "name": "icon",
-                                "t": "icon",
+                                "t": "vector",
                                 "place": {
                                   "x": 14,
                                   "y": 10
                                 },
                                 "w": 15,
                                 "h": 15,
-                                "strokeWidth": 1.7,
-                                "size": 15,
-                                "color": "#aa9fb1",
-                                "icon": "h3-term"
+                                "strokeWidth": 1.25,
+                                "d": "M20.83 16.67 H79.17 A8.33 8.33 0 0 1 87.5 25 V75 A8.33 8.33 0 0 1 79.17 83.33 H20.83 A8.33 8.33 0 0 1 12.5 75 V25 A8.33 8.33 0 0 1 20.83 16.67 Z M29.17 37.5 l12.5 12.5 l-12.5 12.5 M54.17 62.5 h16.67",
+                                "stroke": "#aa9fb1"
                               },
                               {
                                 "id": "settings-host-node-28",
@@ -6998,17 +6960,16 @@
                               {
                                 "id": "settings-host-node-29",
                                 "name": "icon",
-                                "t": "icon",
+                                "t": "vector",
                                 "place": {
                                   "x": 14,
                                   "y": 10
                                 },
                                 "w": 15,
                                 "h": 15,
-                                "strokeWidth": 1.7,
-                                "size": 15,
-                                "color": "#aa9fb1",
-                                "icon": "h3-hand"
+                                "strokeWidth": 1.25,
+                                "d": "M33.33 54.17 V22.92 a6.25 6.25 0 0 1 12.5 0 V50 M45.83 45.83 V16.67 a6.25 6.25 0 0 1 12.5 0 v29.17 M58.33 45.83 V22.92 a6.25 6.25 0 0 1 12.5 0 V58.33 c0 16.67 -12.5 29.17 -27.08 29.17 S20.83 77.08 16.67 66.67 l-6.25 -12.5 a6.25 6.25 0 0 1 10.83 -6.25 L33.33 62.5",
+                                "stroke": "#aa9fb1"
                               },
                               {
                                 "id": "settings-host-node-30",
@@ -7044,17 +7005,16 @@
                               {
                                 "id": "settings-host-node-31",
                                 "name": "icon",
-                                "t": "icon",
+                                "t": "vector",
                                 "place": {
                                   "x": 14,
                                   "y": 10
                                 },
                                 "w": 15,
                                 "h": 15,
-                                "strokeWidth": 1.7,
-                                "size": 15,
-                                "color": "#aa9fb1",
-                                "icon": "h3-folder"
+                                "strokeWidth": 1.25,
+                                "d": "M12.5 25 a8.33 8.33 0 0 1 8.33 -8.33 h16.67 l8.33 8.33 h33.33 a8.33 8.33 0 0 1 8.33 8.33 v41.67 a8.33 8.33 0 0 1 -8.33 8.33 H20.83 a8.33 8.33 0 0 1 -8.33 -8.33 z",
+                                "stroke": "#aa9fb1"
                               },
                               {
                                 "id": "settings-host-node-32",
@@ -7090,17 +7050,16 @@
                               {
                                 "id": "settings-host-node-33",
                                 "name": "icon",
-                                "t": "icon",
+                                "t": "vector",
                                 "place": {
                                   "x": 14,
                                   "y": 10
                                 },
                                 "w": 15,
                                 "h": 15,
-                                "strokeWidth": 1.7,
-                                "size": 15,
-                                "color": "#aa9fb1",
-                                "icon": "h3-grid"
+                                "strokeWidth": 1.25,
+                                "d": "M18.75 12.5 H35.42 A6.25 6.25 0 0 1 41.67 18.75 V35.42 A6.25 6.25 0 0 1 35.42 41.67 H18.75 A6.25 6.25 0 0 1 12.5 35.42 V18.75 A6.25 6.25 0 0 1 18.75 12.5 Z M64.58 12.5 H81.25 A6.25 6.25 0 0 1 87.5 18.75 V35.42 A6.25 6.25 0 0 1 81.25 41.67 H64.58 A6.25 6.25 0 0 1 58.33 35.42 V18.75 A6.25 6.25 0 0 1 64.58 12.5 Z M18.75 58.33 H35.42 A6.25 6.25 0 0 1 41.67 64.58 V81.25 A6.25 6.25 0 0 1 35.42 87.5 H18.75 A6.25 6.25 0 0 1 12.5 81.25 V64.58 A6.25 6.25 0 0 1 18.75 58.33 Z M64.58 58.33 H81.25 A6.25 6.25 0 0 1 87.5 64.58 V81.25 A6.25 6.25 0 0 1 81.25 87.5 H64.58 A6.25 6.25 0 0 1 58.33 81.25 V64.58 A6.25 6.25 0 0 1 64.58 58.33 Z",
+                                "stroke": "#aa9fb1"
                               },
                               {
                                 "id": "settings-host-node-34",
@@ -7153,17 +7112,16 @@
                           {
                             "id": "settings-host-node-36",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 12,
                               "y": 11
                             },
                             "w": 15,
                             "h": 15,
-                            "strokeWidth": 1.7,
-                            "size": 15,
-                            "color": "#f5f1f6",
-                            "icon": "h3-desk"
+                            "strokeWidth": 1.25,
+                            "d": "M18.75 16.67 H81.25 A6.25 6.25 0 0 1 87.5 22.92 V60.42 A6.25 6.25 0 0 1 81.25 66.67 H18.75 A6.25 6.25 0 0 1 12.5 60.42 V22.92 A6.25 6.25 0 0 1 18.75 16.67 Z M33.33 83.33 h33.33 M50 66.67 v16.67",
+                            "stroke": "#f5f1f6"
                           },
                           {
                             "id": "settings-host-node-37",
@@ -7184,17 +7142,16 @@
                           {
                             "id": "settings-host-node-38",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 194,
                               "y": 11
                             },
                             "w": 14,
                             "h": 14,
-                            "strokeWidth": 1.7,
-                            "size": 14,
-                            "color": "#aa9fb1",
-                            "icon": "h3-chevron"
+                            "strokeWidth": 1.17,
+                            "d": "M25 37.5 l25 25 l25 -25",
+                            "stroke": "#aa9fb1"
                           }
                         ]
                       }
@@ -9671,17 +9628,16 @@
                                   {
                                     "id": "settings-host-node-196",
                                     "name": "icon",
-                                    "t": "icon",
+                                    "t": "vector",
                                     "place": {
                                       "x": 12,
                                       "y": 19
                                     },
                                     "w": 15,
                                     "h": 15,
-                                    "strokeWidth": 1.7,
-                                    "size": 15,
-                                    "color": "#bdcd79",
-                                    "icon": "h3-wifi"
+                                    "strokeWidth": 1.25,
+                                    "d": "M8.33 37.5 a62.5 62.5 0 0 1 83.33 0 M20.83 52.08 a41.67 41.67 0 0 1 58.33 0 M35.42 66.67 a20.83 20.83 0 0 1 29.17 0 M46.67 81.25 A3.33 3.33 0 1 0 53.33 81.25 A3.33 3.33 0 1 0 46.67 81.25 Z",
+                                    "stroke": "#bdcd79"
                                   },
                                   {
                                     "id": "settings-host-node-197",
@@ -9774,17 +9730,16 @@
                                       {
                                         "id": "settings-host-node-201",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 12,
                                           "y": 9
                                         },
                                         "w": 14,
                                         "h": 14,
-                                        "strokeWidth": 1.7,
-                                        "size": 14,
-                                        "color": "#1b200b",
-                                        "icon": "h3-qr"
+                                        "strokeWidth": 1.17,
+                                        "d": "M12.5 12.5 H41.67 V41.67 H12.5 Z M58.33 12.5 H87.5 V41.67 H58.33 Z M12.5 58.33 H41.67 V87.5 H12.5 Z M58.33 58.33 h12.5 v12.5 h-12.5 z M75 75 h12.5 v12.5 h-12.5 z",
+                                        "stroke": "#1b200b"
                                       },
                                       {
                                         "id": "settings-host-node-202",
@@ -9895,17 +9850,16 @@
                                       {
                                         "id": "settings-host-node-208",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 12,
                                           "y": 9
                                         },
                                         "w": 14,
                                         "h": 14,
-                                        "strokeWidth": 1.7,
-                                        "size": 14,
-                                        "color": "#f5f1f6",
-                                        "icon": "h3-retry"
+                                        "strokeWidth": 1.17,
+                                        "d": "M83.33 45.83 a33.33 33.33 0 1 0 -9.58 23.75 M83.33 16.67 v29.17 h-29.17",
+                                        "stroke": "#f5f1f6"
                                       },
                                       {
                                         "id": "settings-host-node-209",
@@ -10341,17 +10295,16 @@
                                       {
                                         "id": "settings-host-node-236",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 7,
                                           "y": 7
                                         },
                                         "w": 16,
                                         "h": 16,
-                                        "strokeWidth": 1.7,
-                                        "size": 16,
-                                        "color": "#bdcd79",
-                                        "icon": "h3-crown"
+                                        "strokeWidth": 1.33,
+                                        "d": "M12.5 33.33 l16.67 16.67 l20.83 -29.17 l20.83 29.17 l16.67 -16.67 l-8.33 45.83 H20.83 z",
+                                        "stroke": "#bdcd79"
                                       }
                                     ]
                                   },
@@ -10388,17 +10341,16 @@
                                       {
                                         "id": "settings-host-node-239",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 8,
                                           "y": 5
                                         },
                                         "w": 11,
                                         "h": 11,
-                                        "strokeWidth": 1.7,
-                                        "size": 11,
-                                        "color": "#bdcd79",
-                                        "icon": "h3-crown"
+                                        "strokeWidth": 0.92,
+                                        "d": "M12.5 33.33 l16.67 16.67 l20.83 -29.17 l20.83 29.17 l16.67 -16.67 l-8.33 45.83 H20.83 z",
+                                        "stroke": "#bdcd79"
                                       },
                                       {
                                         "id": "settings-host-node-240",
@@ -10449,17 +10401,16 @@
                                       {
                                         "id": "settings-host-node-241",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 12,
                                           "y": 12
                                         },
                                         "w": 15,
                                         "h": 15,
-                                        "strokeWidth": 1.7,
-                                        "size": 15,
-                                        "color": "#d4ccd8",
-                                        "icon": "h3-desk"
+                                        "strokeWidth": 1.25,
+                                        "d": "M18.75 16.67 H81.25 A6.25 6.25 0 0 1 87.5 22.92 V60.42 A6.25 6.25 0 0 1 81.25 66.67 H18.75 A6.25 6.25 0 0 1 12.5 60.42 V22.92 A6.25 6.25 0 0 1 18.75 16.67 Z M33.33 83.33 h33.33 M50 66.67 v16.67",
+                                        "stroke": "#d4ccd8"
                                       },
                                       {
                                         "id": "settings-host-node-242",
@@ -10540,17 +10491,16 @@
                                       {
                                         "id": "settings-host-node-246",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 12,
                                           "y": 12
                                         },
                                         "w": 15,
                                         "h": 15,
-                                        "strokeWidth": 1.7,
-                                        "size": 15,
-                                        "color": "#d4ccd8",
-                                        "icon": "h3-lap"
+                                        "strokeWidth": 1.25,
+                                        "d": "M27.08 20.83 H72.92 A6.25 6.25 0 0 1 79.17 27.08 V56.25 A6.25 6.25 0 0 1 72.92 62.5 H27.08 A6.25 6.25 0 0 1 20.83 56.25 V27.08 A6.25 6.25 0 0 1 27.08 20.83 Z M8.33 79.17 h83.33",
+                                        "stroke": "#d4ccd8"
                                       },
                                       {
                                         "id": "settings-host-node-247",
@@ -10632,17 +10582,16 @@
                                       {
                                         "id": "settings-host-node-251",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 12,
                                           "y": 12
                                         },
                                         "w": 15,
                                         "h": 15,
-                                        "strokeWidth": 1.7,
-                                        "size": 15,
-                                        "color": "#d4ccd8",
-                                        "icon": "h3-desk"
+                                        "strokeWidth": 1.25,
+                                        "d": "M18.75 16.67 H81.25 A6.25 6.25 0 0 1 87.5 22.92 V60.42 A6.25 6.25 0 0 1 81.25 66.67 H18.75 A6.25 6.25 0 0 1 12.5 60.42 V22.92 A6.25 6.25 0 0 1 18.75 16.67 Z M33.33 83.33 h33.33 M50 66.67 v16.67",
+                                        "stroke": "#d4ccd8"
                                       },
                                       {
                                         "id": "settings-host-node-252",
@@ -10754,17 +10703,16 @@
                                       {
                                         "id": "settings-host-node-258",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 12,
                                           "y": 9
                                         },
                                         "w": 14,
                                         "h": 14,
-                                        "strokeWidth": 1.7,
-                                        "size": 14,
-                                        "color": "#1b200b",
-                                        "icon": "h3-plus"
+                                        "strokeWidth": 1.17,
+                                        "d": "M50 20.83 v58.33 M20.83 50 h58.33",
+                                        "stroke": "#1b200b"
                                       },
                                       {
                                         "id": "settings-host-node-259",
@@ -11060,17 +11008,16 @@
                           {
                             "id": "settings-host-node-274",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 0,
                               "y": 2
                             },
                             "w": 14,
                             "h": 14,
-                            "strokeWidth": 1.7,
-                            "size": 14,
-                            "color": "#aa9fb1",
-                            "icon": "h3-desk"
+                            "strokeWidth": 1.17,
+                            "d": "M18.75 16.67 H81.25 A6.25 6.25 0 0 1 87.5 22.92 V60.42 A6.25 6.25 0 0 1 81.25 66.67 H18.75 A6.25 6.25 0 0 1 12.5 60.42 V22.92 A6.25 6.25 0 0 1 18.75 16.67 Z M33.33 83.33 h33.33 M50 66.67 v16.67",
+                            "stroke": "#aa9fb1"
                           },
                           {
                             "id": "settings-host-node-275",
@@ -11120,17 +11067,16 @@
                           {
                             "id": "settings-host-node-278",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 0,
                               "y": 2
                             },
                             "w": 14,
                             "h": 14,
-                            "strokeWidth": 1.7,
-                            "size": 14,
-                            "color": "#aa9fb1",
-                            "icon": "h3-lap"
+                            "strokeWidth": 1.17,
+                            "d": "M27.08 20.83 H72.92 A6.25 6.25 0 0 1 79.17 27.08 V56.25 A6.25 6.25 0 0 1 72.92 62.5 H27.08 A6.25 6.25 0 0 1 20.83 56.25 V27.08 A6.25 6.25 0 0 1 27.08 20.83 Z M8.33 79.17 h83.33",
+                            "stroke": "#aa9fb1"
                           },
                           {
                             "id": "settings-host-node-279",
@@ -11181,17 +11127,16 @@
                           {
                             "id": "settings-host-node-282",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 0,
                               "y": 2
                             },
                             "w": 14,
                             "h": 14,
-                            "strokeWidth": 1.7,
-                            "size": 14,
-                            "color": "#aa9fb1",
-                            "icon": "h3-desk"
+                            "strokeWidth": 1.17,
+                            "d": "M18.75 16.67 H81.25 A6.25 6.25 0 0 1 87.5 22.92 V60.42 A6.25 6.25 0 0 1 81.25 66.67 H18.75 A6.25 6.25 0 0 1 12.5 60.42 V22.92 A6.25 6.25 0 0 1 18.75 16.67 Z M33.33 83.33 h33.33 M50 66.67 v16.67",
+                            "stroke": "#aa9fb1"
                           },
                           {
                             "id": "settings-host-node-283",
@@ -11397,17 +11342,16 @@
                           {
                             "id": "settings-member-node-9",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 16,
                               "y": 9
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-map"
+                            "strokeWidth": 1.33,
+                            "d": "M37.5 16.67 L12.5 25 v58.33 l25 -8.33 l25 8.33 l25 -8.33 V16.67 l-25 8.33 z M37.5 16.67 v58.33 M62.5 25 v58.33",
+                            "stroke": "#d4ccd8"
                           },
                           {
                             "id": "settings-member-node-10",
@@ -11443,17 +11387,16 @@
                           {
                             "id": "settings-member-node-11",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 16,
                               "y": 9
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-grid"
+                            "strokeWidth": 1.33,
+                            "d": "M18.75 12.5 H35.42 A6.25 6.25 0 0 1 41.67 18.75 V35.42 A6.25 6.25 0 0 1 35.42 41.67 H18.75 A6.25 6.25 0 0 1 12.5 35.42 V18.75 A6.25 6.25 0 0 1 18.75 12.5 Z M64.58 12.5 H81.25 A6.25 6.25 0 0 1 87.5 18.75 V35.42 A6.25 6.25 0 0 1 81.25 41.67 H64.58 A6.25 6.25 0 0 1 58.33 35.42 V18.75 A6.25 6.25 0 0 1 64.58 12.5 Z M18.75 58.33 H35.42 A6.25 6.25 0 0 1 41.67 64.58 V81.25 A6.25 6.25 0 0 1 35.42 87.5 H18.75 A6.25 6.25 0 0 1 12.5 81.25 V64.58 A6.25 6.25 0 0 1 18.75 58.33 Z M64.58 58.33 H81.25 A6.25 6.25 0 0 1 87.5 64.58 V81.25 A6.25 6.25 0 0 1 81.25 87.5 H64.58 A6.25 6.25 0 0 1 58.33 81.25 V64.58 A6.25 6.25 0 0 1 64.58 58.33 Z",
+                            "stroke": "#d4ccd8"
                           },
                           {
                             "id": "settings-member-node-12",
@@ -11489,17 +11432,16 @@
                           {
                             "id": "settings-member-node-13",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 16,
                               "y": 9
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-pen"
+                            "strokeWidth": 1.33,
+                            "d": "M16.67 83.33 h16.67 L79.17 37.5 l-16.67 -16.67 L16.67 66.67 z M54.17 29.17 l16.67 16.67",
+                            "stroke": "#d4ccd8"
                           },
                           {
                             "id": "settings-member-node-14",
@@ -11563,17 +11505,16 @@
                           {
                             "id": "settings-member-node-17",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 13,
                               "y": 9
                             },
                             "w": 15,
                             "h": 15,
-                            "strokeWidth": 1.7,
-                            "size": 15,
-                            "color": "#1b200b",
-                            "icon": "h3-plus"
+                            "strokeWidth": 1.25,
+                            "d": "M50 20.83 v58.33 M20.83 50 h58.33",
+                            "stroke": "#1b200b"
                           },
                           {
                             "id": "settings-member-node-18",
@@ -11610,17 +11551,16 @@
                           {
                             "id": "settings-member-node-19",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 10,
                               "y": 10
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-phone"
+                            "strokeWidth": 1.33,
+                            "d": "M37.5 10.42 H62.5 A8.33 8.33 0 0 1 70.83 18.75 V81.25 A8.33 8.33 0 0 1 62.5 89.58 H37.5 A8.33 8.33 0 0 1 29.17 81.25 V18.75 A8.33 8.33 0 0 1 37.5 10.42 Z M45.83 75 h8.33",
+                            "stroke": "#d4ccd8"
                           }
                         ]
                       },
@@ -11641,17 +11581,16 @@
                           {
                             "id": "settings-member-node-20",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 10,
                               "y": 10
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-bell"
+                            "strokeWidth": 1.33,
+                            "d": "M25 66.67 V45.83 a25 25 0 0 1 50 0 v20.83 l8.33 8.33 H16.67 z M41.67 87.5 h16.67",
+                            "stroke": "#d4ccd8"
                           }
                         ]
                       },
@@ -11672,17 +11611,16 @@
                           {
                             "id": "settings-member-node-21",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 10,
                               "y": 10
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-settings"
+                            "strokeWidth": 1.33,
+                            "d": "M37.5 50 A12.5 12.5 0 1 0 62.5 50 A12.5 12.5 0 1 0 37.5 50 Z M50 8.33 v12.5 M50 79.17 v12.5 M17.5 17.5 l8.75 8.75 M73.75 73.75 l8.75 8.75 M8.33 50 h12.5 M79.17 50 h12.5 M17.5 82.5 l8.75 -8.75 M73.75 26.25 l8.75 -8.75",
+                            "stroke": "#d4ccd8"
                           }
                         ]
                       }
@@ -11762,17 +11700,16 @@
                               {
                                 "id": "settings-member-node-25",
                                 "name": "icon",
-                                "t": "icon",
+                                "t": "vector",
                                 "place": {
                                   "x": 14,
                                   "y": 10
                                 },
                                 "w": 15,
                                 "h": 15,
-                                "strokeWidth": 1.7,
-                                "size": 15,
-                                "color": "#f5f1f6",
-                                "icon": "h3-settings"
+                                "strokeWidth": 1.25,
+                                "d": "M37.5 50 A12.5 12.5 0 1 0 62.5 50 A12.5 12.5 0 1 0 37.5 50 Z M50 8.33 v12.5 M50 79.17 v12.5 M17.5 17.5 l8.75 8.75 M73.75 73.75 l8.75 8.75 M8.33 50 h12.5 M79.17 50 h12.5 M17.5 82.5 l8.75 -8.75 M73.75 26.25 l8.75 -8.75",
+                                "stroke": "#f5f1f6"
                               },
                               {
                                 "id": "settings-member-node-26",
@@ -11808,17 +11745,16 @@
                               {
                                 "id": "settings-member-node-27",
                                 "name": "icon",
-                                "t": "icon",
+                                "t": "vector",
                                 "place": {
                                   "x": 14,
                                   "y": 10
                                 },
                                 "w": 15,
                                 "h": 15,
-                                "strokeWidth": 1.7,
-                                "size": 15,
-                                "color": "#aa9fb1",
-                                "icon": "h3-term"
+                                "strokeWidth": 1.25,
+                                "d": "M20.83 16.67 H79.17 A8.33 8.33 0 0 1 87.5 25 V75 A8.33 8.33 0 0 1 79.17 83.33 H20.83 A8.33 8.33 0 0 1 12.5 75 V25 A8.33 8.33 0 0 1 20.83 16.67 Z M29.17 37.5 l12.5 12.5 l-12.5 12.5 M54.17 62.5 h16.67",
+                                "stroke": "#aa9fb1"
                               },
                               {
                                 "id": "settings-member-node-28",
@@ -11854,17 +11790,16 @@
                               {
                                 "id": "settings-member-node-29",
                                 "name": "icon",
-                                "t": "icon",
+                                "t": "vector",
                                 "place": {
                                   "x": 14,
                                   "y": 10
                                 },
                                 "w": 15,
                                 "h": 15,
-                                "strokeWidth": 1.7,
-                                "size": 15,
-                                "color": "#aa9fb1",
-                                "icon": "h3-hand"
+                                "strokeWidth": 1.25,
+                                "d": "M33.33 54.17 V22.92 a6.25 6.25 0 0 1 12.5 0 V50 M45.83 45.83 V16.67 a6.25 6.25 0 0 1 12.5 0 v29.17 M58.33 45.83 V22.92 a6.25 6.25 0 0 1 12.5 0 V58.33 c0 16.67 -12.5 29.17 -27.08 29.17 S20.83 77.08 16.67 66.67 l-6.25 -12.5 a6.25 6.25 0 0 1 10.83 -6.25 L33.33 62.5",
+                                "stroke": "#aa9fb1"
                               },
                               {
                                 "id": "settings-member-node-30",
@@ -11900,17 +11835,16 @@
                               {
                                 "id": "settings-member-node-31",
                                 "name": "icon",
-                                "t": "icon",
+                                "t": "vector",
                                 "place": {
                                   "x": 14,
                                   "y": 10
                                 },
                                 "w": 15,
                                 "h": 15,
-                                "strokeWidth": 1.7,
-                                "size": 15,
-                                "color": "#aa9fb1",
-                                "icon": "h3-folder"
+                                "strokeWidth": 1.25,
+                                "d": "M12.5 25 a8.33 8.33 0 0 1 8.33 -8.33 h16.67 l8.33 8.33 h33.33 a8.33 8.33 0 0 1 8.33 8.33 v41.67 a8.33 8.33 0 0 1 -8.33 8.33 H20.83 a8.33 8.33 0 0 1 -8.33 -8.33 z",
+                                "stroke": "#aa9fb1"
                               },
                               {
                                 "id": "settings-member-node-32",
@@ -11946,17 +11880,16 @@
                               {
                                 "id": "settings-member-node-33",
                                 "name": "icon",
-                                "t": "icon",
+                                "t": "vector",
                                 "place": {
                                   "x": 14,
                                   "y": 10
                                 },
                                 "w": 15,
                                 "h": 15,
-                                "strokeWidth": 1.7,
-                                "size": 15,
-                                "color": "#aa9fb1",
-                                "icon": "h3-grid"
+                                "strokeWidth": 1.25,
+                                "d": "M18.75 12.5 H35.42 A6.25 6.25 0 0 1 41.67 18.75 V35.42 A6.25 6.25 0 0 1 35.42 41.67 H18.75 A6.25 6.25 0 0 1 12.5 35.42 V18.75 A6.25 6.25 0 0 1 18.75 12.5 Z M64.58 12.5 H81.25 A6.25 6.25 0 0 1 87.5 18.75 V35.42 A6.25 6.25 0 0 1 81.25 41.67 H64.58 A6.25 6.25 0 0 1 58.33 35.42 V18.75 A6.25 6.25 0 0 1 64.58 12.5 Z M18.75 58.33 H35.42 A6.25 6.25 0 0 1 41.67 64.58 V81.25 A6.25 6.25 0 0 1 35.42 87.5 H18.75 A6.25 6.25 0 0 1 12.5 81.25 V64.58 A6.25 6.25 0 0 1 18.75 58.33 Z M64.58 58.33 H81.25 A6.25 6.25 0 0 1 87.5 64.58 V81.25 A6.25 6.25 0 0 1 81.25 87.5 H64.58 A6.25 6.25 0 0 1 58.33 81.25 V64.58 A6.25 6.25 0 0 1 64.58 58.33 Z",
+                                "stroke": "#aa9fb1"
                               },
                               {
                                 "id": "settings-member-node-34",
@@ -12009,17 +11942,16 @@
                           {
                             "id": "settings-member-node-36",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 12,
                               "y": 11
                             },
                             "w": 15,
                             "h": 15,
-                            "strokeWidth": 1.7,
-                            "size": 15,
-                            "color": "#f5f1f6",
-                            "icon": "h3-desk"
+                            "strokeWidth": 1.25,
+                            "d": "M18.75 16.67 H81.25 A6.25 6.25 0 0 1 87.5 22.92 V60.42 A6.25 6.25 0 0 1 81.25 66.67 H18.75 A6.25 6.25 0 0 1 12.5 60.42 V22.92 A6.25 6.25 0 0 1 18.75 16.67 Z M33.33 83.33 h33.33 M50 66.67 v16.67",
+                            "stroke": "#f5f1f6"
                           },
                           {
                             "id": "settings-member-node-37",
@@ -12040,17 +11972,16 @@
                           {
                             "id": "settings-member-node-38",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 194,
                               "y": 11
                             },
                             "w": 14,
                             "h": 14,
-                            "strokeWidth": 1.7,
-                            "size": 14,
-                            "color": "#aa9fb1",
-                            "icon": "h3-chevron"
+                            "strokeWidth": 1.17,
+                            "d": "M25 37.5 l25 25 l25 -25",
+                            "stroke": "#aa9fb1"
                           }
                         ]
                       }
@@ -14527,17 +14458,16 @@
                                   {
                                     "id": "settings-member-node-196",
                                     "name": "icon",
-                                    "t": "icon",
+                                    "t": "vector",
                                     "place": {
                                       "x": 12,
                                       "y": 19
                                     },
                                     "w": 15,
                                     "h": 15,
-                                    "strokeWidth": 1.7,
-                                    "size": 15,
-                                    "color": "#bdcd79",
-                                    "icon": "h3-wifi"
+                                    "strokeWidth": 1.25,
+                                    "d": "M8.33 37.5 a62.5 62.5 0 0 1 83.33 0 M20.83 52.08 a41.67 41.67 0 0 1 58.33 0 M35.42 66.67 a20.83 20.83 0 0 1 29.17 0 M46.67 81.25 A3.33 3.33 0 1 0 53.33 81.25 A3.33 3.33 0 1 0 46.67 81.25 Z",
+                                    "stroke": "#bdcd79"
                                   },
                                   {
                                     "id": "settings-member-node-197",
@@ -14630,17 +14560,16 @@
                                       {
                                         "id": "settings-member-node-201",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 12,
                                           "y": 9
                                         },
                                         "w": 14,
                                         "h": 14,
-                                        "strokeWidth": 1.7,
-                                        "size": 14,
-                                        "color": "#1b200b",
-                                        "icon": "h3-qr"
+                                        "strokeWidth": 1.17,
+                                        "d": "M12.5 12.5 H41.67 V41.67 H12.5 Z M58.33 12.5 H87.5 V41.67 H58.33 Z M12.5 58.33 H41.67 V87.5 H12.5 Z M58.33 58.33 h12.5 v12.5 h-12.5 z M75 75 h12.5 v12.5 h-12.5 z",
+                                        "stroke": "#1b200b"
                                       },
                                       {
                                         "id": "settings-member-node-202",
@@ -14751,17 +14680,16 @@
                                       {
                                         "id": "settings-member-node-208",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 12,
                                           "y": 9
                                         },
                                         "w": 14,
                                         "h": 14,
-                                        "strokeWidth": 1.7,
-                                        "size": 14,
-                                        "color": "#f5f1f6",
-                                        "icon": "h3-retry"
+                                        "strokeWidth": 1.17,
+                                        "d": "M83.33 45.83 a33.33 33.33 0 1 0 -9.58 23.75 M83.33 16.67 v29.17 h-29.17",
+                                        "stroke": "#f5f1f6"
                                       },
                                       {
                                         "id": "settings-member-node-209",
@@ -15197,17 +15125,16 @@
                                       {
                                         "id": "settings-member-node-236",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 7,
                                           "y": 7
                                         },
                                         "w": 16,
                                         "h": 16,
-                                        "strokeWidth": 1.7,
-                                        "size": 16,
-                                        "color": "#d4ccd8",
-                                        "icon": "h3-wifi"
+                                        "strokeWidth": 1.33,
+                                        "d": "M8.33 37.5 a62.5 62.5 0 0 1 83.33 0 M20.83 52.08 a41.67 41.67 0 0 1 58.33 0 M35.42 66.67 a20.83 20.83 0 0 1 29.17 0 M46.67 81.25 A3.33 3.33 0 1 0 53.33 81.25 A3.33 3.33 0 1 0 46.67 81.25 Z",
+                                        "stroke": "#d4ccd8"
                                       }
                                     ]
                                   },
@@ -15290,17 +15217,16 @@
                                       {
                                         "id": "settings-member-node-240",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 12,
                                           "y": 12
                                         },
                                         "w": 15,
                                         "h": 15,
-                                        "strokeWidth": 1.7,
-                                        "size": 15,
-                                        "color": "#d4ccd8",
-                                        "icon": "h3-lap"
+                                        "strokeWidth": 1.25,
+                                        "d": "M27.08 20.83 H72.92 A6.25 6.25 0 0 1 79.17 27.08 V56.25 A6.25 6.25 0 0 1 72.92 62.5 H27.08 A6.25 6.25 0 0 1 20.83 56.25 V27.08 A6.25 6.25 0 0 1 27.08 20.83 Z M8.33 79.17 h83.33",
+                                        "stroke": "#d4ccd8"
                                       },
                                       {
                                         "id": "settings-member-node-241",
@@ -15381,17 +15307,16 @@
                                       {
                                         "id": "settings-member-node-245",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 12,
                                           "y": 12
                                         },
                                         "w": 15,
                                         "h": 15,
-                                        "strokeWidth": 1.7,
-                                        "size": 15,
-                                        "color": "#d4ccd8",
-                                        "icon": "h3-desk"
+                                        "strokeWidth": 1.25,
+                                        "d": "M18.75 16.67 H81.25 A6.25 6.25 0 0 1 87.5 22.92 V60.42 A6.25 6.25 0 0 1 81.25 66.67 H18.75 A6.25 6.25 0 0 1 12.5 60.42 V22.92 A6.25 6.25 0 0 1 18.75 16.67 Z M33.33 83.33 h33.33 M50 66.67 v16.67",
+                                        "stroke": "#d4ccd8"
                                       },
                                       {
                                         "id": "settings-member-node-246",
@@ -15473,17 +15398,16 @@
                                       {
                                         "id": "settings-member-node-250",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 12,
                                           "y": 12
                                         },
                                         "w": 15,
                                         "h": 15,
-                                        "strokeWidth": 1.7,
-                                        "size": 15,
-                                        "color": "#d4ccd8",
-                                        "icon": "h3-desk"
+                                        "strokeWidth": 1.25,
+                                        "d": "M18.75 16.67 H81.25 A6.25 6.25 0 0 1 87.5 22.92 V60.42 A6.25 6.25 0 0 1 81.25 66.67 H18.75 A6.25 6.25 0 0 1 12.5 60.42 V22.92 A6.25 6.25 0 0 1 18.75 16.67 Z M33.33 83.33 h33.33 M50 66.67 v16.67",
+                                        "stroke": "#d4ccd8"
                                       },
                                       {
                                         "id": "settings-member-node-251",
@@ -15595,17 +15519,16 @@
                                       {
                                         "id": "settings-member-node-257",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 12,
                                           "y": 9
                                         },
                                         "w": 14,
                                         "h": 14,
-                                        "strokeWidth": 1.7,
-                                        "size": 14,
-                                        "color": "#1b200b",
-                                        "icon": "h3-plus"
+                                        "strokeWidth": 1.17,
+                                        "d": "M50 20.83 v58.33 M20.83 50 h58.33",
+                                        "stroke": "#1b200b"
                                       },
                                       {
                                         "id": "settings-member-node-258",
@@ -15642,17 +15565,16 @@
                                       {
                                         "id": "settings-member-node-259",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 12,
                                           "y": 9
                                         },
                                         "w": 14,
                                         "h": 14,
-                                        "strokeWidth": 1.7,
-                                        "size": 14,
-                                        "color": "#f5f1f6",
-                                        "icon": "h3-crown"
+                                        "strokeWidth": 1.17,
+                                        "d": "M12.5 33.33 l16.67 16.67 l20.83 -29.17 l20.83 29.17 l16.67 -16.67 l-8.33 45.83 H20.83 z",
+                                        "stroke": "#f5f1f6"
                                       },
                                       {
                                         "id": "settings-member-node-260",
@@ -15937,17 +15859,16 @@
                                               {
                                                 "id": "settings-member-node-276",
                                                 "name": "icon",
-                                                "t": "icon",
+                                                "t": "vector",
                                                 "place": {
                                                   "x": 5,
                                                   "y": 5
                                                 },
                                                 "w": 12,
                                                 "h": 12,
-                                                "strokeWidth": 1.7,
-                                                "size": 12,
-                                                "color": "#d4ccd8",
-                                                "icon": "h3-person"
+                                                "strokeWidth": 1,
+                                                "d": "M33.33 33.33 A16.67 16.67 0 1 0 66.67 33.33 A16.67 16.67 0 1 0 33.33 33.33 Z M16.67 87.5 c0 -18.33 15 -33.33 33.33 -33.33 s33.33 15 33.33 33.33",
+                                                "stroke": "#d4ccd8"
                                               }
                                             ]
                                           },
@@ -16291,17 +16212,16 @@
                           {
                             "id": "settings-member-node-298",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 0,
                               "y": 2
                             },
                             "w": 14,
                             "h": 14,
-                            "strokeWidth": 1.7,
-                            "size": 14,
-                            "color": "#aa9fb1",
-                            "icon": "h3-desk"
+                            "strokeWidth": 1.17,
+                            "d": "M18.75 16.67 H81.25 A6.25 6.25 0 0 1 87.5 22.92 V60.42 A6.25 6.25 0 0 1 81.25 66.67 H18.75 A6.25 6.25 0 0 1 12.5 60.42 V22.92 A6.25 6.25 0 0 1 18.75 16.67 Z M33.33 83.33 h33.33 M50 66.67 v16.67",
+                            "stroke": "#aa9fb1"
                           },
                           {
                             "id": "settings-member-node-299",
@@ -16351,17 +16271,16 @@
                           {
                             "id": "settings-member-node-302",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 0,
                               "y": 2
                             },
                             "w": 14,
                             "h": 14,
-                            "strokeWidth": 1.7,
-                            "size": 14,
-                            "color": "#aa9fb1",
-                            "icon": "h3-lap"
+                            "strokeWidth": 1.17,
+                            "d": "M27.08 20.83 H72.92 A6.25 6.25 0 0 1 79.17 27.08 V56.25 A6.25 6.25 0 0 1 72.92 62.5 H27.08 A6.25 6.25 0 0 1 20.83 56.25 V27.08 A6.25 6.25 0 0 1 27.08 20.83 Z M8.33 79.17 h83.33",
+                            "stroke": "#aa9fb1"
                           },
                           {
                             "id": "settings-member-node-303",
@@ -16412,17 +16331,16 @@
                           {
                             "id": "settings-member-node-306",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 0,
                               "y": 2
                             },
                             "w": 14,
                             "h": 14,
-                            "strokeWidth": 1.7,
-                            "size": 14,
-                            "color": "#aa9fb1",
-                            "icon": "h3-desk"
+                            "strokeWidth": 1.17,
+                            "d": "M18.75 16.67 H81.25 A6.25 6.25 0 0 1 87.5 22.92 V60.42 A6.25 6.25 0 0 1 81.25 66.67 H18.75 A6.25 6.25 0 0 1 12.5 60.42 V22.92 A6.25 6.25 0 0 1 18.75 16.67 Z M33.33 83.33 h33.33 M50 66.67 v16.67",
+                            "stroke": "#aa9fb1"
                           },
                           {
                             "id": "settings-member-node-307",
@@ -16628,17 +16546,16 @@
                           {
                             "id": "settings-add-machine-node-9",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 16,
                               "y": 9
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-map"
+                            "strokeWidth": 1.33,
+                            "d": "M37.5 16.67 L12.5 25 v58.33 l25 -8.33 l25 8.33 l25 -8.33 V16.67 l-25 8.33 z M37.5 16.67 v58.33 M62.5 25 v58.33",
+                            "stroke": "#d4ccd8"
                           },
                           {
                             "id": "settings-add-machine-node-10",
@@ -16674,17 +16591,16 @@
                           {
                             "id": "settings-add-machine-node-11",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 16,
                               "y": 9
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-grid"
+                            "strokeWidth": 1.33,
+                            "d": "M18.75 12.5 H35.42 A6.25 6.25 0 0 1 41.67 18.75 V35.42 A6.25 6.25 0 0 1 35.42 41.67 H18.75 A6.25 6.25 0 0 1 12.5 35.42 V18.75 A6.25 6.25 0 0 1 18.75 12.5 Z M64.58 12.5 H81.25 A6.25 6.25 0 0 1 87.5 18.75 V35.42 A6.25 6.25 0 0 1 81.25 41.67 H64.58 A6.25 6.25 0 0 1 58.33 35.42 V18.75 A6.25 6.25 0 0 1 64.58 12.5 Z M18.75 58.33 H35.42 A6.25 6.25 0 0 1 41.67 64.58 V81.25 A6.25 6.25 0 0 1 35.42 87.5 H18.75 A6.25 6.25 0 0 1 12.5 81.25 V64.58 A6.25 6.25 0 0 1 18.75 58.33 Z M64.58 58.33 H81.25 A6.25 6.25 0 0 1 87.5 64.58 V81.25 A6.25 6.25 0 0 1 81.25 87.5 H64.58 A6.25 6.25 0 0 1 58.33 81.25 V64.58 A6.25 6.25 0 0 1 64.58 58.33 Z",
+                            "stroke": "#d4ccd8"
                           },
                           {
                             "id": "settings-add-machine-node-12",
@@ -16720,17 +16636,16 @@
                           {
                             "id": "settings-add-machine-node-13",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 16,
                               "y": 9
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-pen"
+                            "strokeWidth": 1.33,
+                            "d": "M16.67 83.33 h16.67 L79.17 37.5 l-16.67 -16.67 L16.67 66.67 z M54.17 29.17 l16.67 16.67",
+                            "stroke": "#d4ccd8"
                           },
                           {
                             "id": "settings-add-machine-node-14",
@@ -16794,17 +16709,16 @@
                           {
                             "id": "settings-add-machine-node-17",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 13,
                               "y": 9
                             },
                             "w": 15,
                             "h": 15,
-                            "strokeWidth": 1.7,
-                            "size": 15,
-                            "color": "#1b200b",
-                            "icon": "h3-plus"
+                            "strokeWidth": 1.25,
+                            "d": "M50 20.83 v58.33 M20.83 50 h58.33",
+                            "stroke": "#1b200b"
                           },
                           {
                             "id": "settings-add-machine-node-18",
@@ -16841,17 +16755,16 @@
                           {
                             "id": "settings-add-machine-node-19",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 10,
                               "y": 10
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-phone"
+                            "strokeWidth": 1.33,
+                            "d": "M37.5 10.42 H62.5 A8.33 8.33 0 0 1 70.83 18.75 V81.25 A8.33 8.33 0 0 1 62.5 89.58 H37.5 A8.33 8.33 0 0 1 29.17 81.25 V18.75 A8.33 8.33 0 0 1 37.5 10.42 Z M45.83 75 h8.33",
+                            "stroke": "#d4ccd8"
                           }
                         ]
                       },
@@ -16872,17 +16785,16 @@
                           {
                             "id": "settings-add-machine-node-20",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 10,
                               "y": 10
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-bell"
+                            "strokeWidth": 1.33,
+                            "d": "M25 66.67 V45.83 a25 25 0 0 1 50 0 v20.83 l8.33 8.33 H16.67 z M41.67 87.5 h16.67",
+                            "stroke": "#d4ccd8"
                           }
                         ]
                       },
@@ -16903,17 +16815,16 @@
                           {
                             "id": "settings-add-machine-node-21",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 10,
                               "y": 10
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-settings"
+                            "strokeWidth": 1.33,
+                            "d": "M37.5 50 A12.5 12.5 0 1 0 62.5 50 A12.5 12.5 0 1 0 37.5 50 Z M50 8.33 v12.5 M50 79.17 v12.5 M17.5 17.5 l8.75 8.75 M73.75 73.75 l8.75 8.75 M8.33 50 h12.5 M79.17 50 h12.5 M17.5 82.5 l8.75 -8.75 M73.75 26.25 l8.75 -8.75",
+                            "stroke": "#d4ccd8"
                           }
                         ]
                       }
@@ -16993,17 +16904,16 @@
                               {
                                 "id": "settings-add-machine-node-25",
                                 "name": "icon",
-                                "t": "icon",
+                                "t": "vector",
                                 "place": {
                                   "x": 14,
                                   "y": 10
                                 },
                                 "w": 15,
                                 "h": 15,
-                                "strokeWidth": 1.7,
-                                "size": 15,
-                                "color": "#f5f1f6",
-                                "icon": "h3-settings"
+                                "strokeWidth": 1.25,
+                                "d": "M37.5 50 A12.5 12.5 0 1 0 62.5 50 A12.5 12.5 0 1 0 37.5 50 Z M50 8.33 v12.5 M50 79.17 v12.5 M17.5 17.5 l8.75 8.75 M73.75 73.75 l8.75 8.75 M8.33 50 h12.5 M79.17 50 h12.5 M17.5 82.5 l8.75 -8.75 M73.75 26.25 l8.75 -8.75",
+                                "stroke": "#f5f1f6"
                               },
                               {
                                 "id": "settings-add-machine-node-26",
@@ -17039,17 +16949,16 @@
                               {
                                 "id": "settings-add-machine-node-27",
                                 "name": "icon",
-                                "t": "icon",
+                                "t": "vector",
                                 "place": {
                                   "x": 14,
                                   "y": 10
                                 },
                                 "w": 15,
                                 "h": 15,
-                                "strokeWidth": 1.7,
-                                "size": 15,
-                                "color": "#aa9fb1",
-                                "icon": "h3-term"
+                                "strokeWidth": 1.25,
+                                "d": "M20.83 16.67 H79.17 A8.33 8.33 0 0 1 87.5 25 V75 A8.33 8.33 0 0 1 79.17 83.33 H20.83 A8.33 8.33 0 0 1 12.5 75 V25 A8.33 8.33 0 0 1 20.83 16.67 Z M29.17 37.5 l12.5 12.5 l-12.5 12.5 M54.17 62.5 h16.67",
+                                "stroke": "#aa9fb1"
                               },
                               {
                                 "id": "settings-add-machine-node-28",
@@ -17085,17 +16994,16 @@
                               {
                                 "id": "settings-add-machine-node-29",
                                 "name": "icon",
-                                "t": "icon",
+                                "t": "vector",
                                 "place": {
                                   "x": 14,
                                   "y": 10
                                 },
                                 "w": 15,
                                 "h": 15,
-                                "strokeWidth": 1.7,
-                                "size": 15,
-                                "color": "#aa9fb1",
-                                "icon": "h3-hand"
+                                "strokeWidth": 1.25,
+                                "d": "M33.33 54.17 V22.92 a6.25 6.25 0 0 1 12.5 0 V50 M45.83 45.83 V16.67 a6.25 6.25 0 0 1 12.5 0 v29.17 M58.33 45.83 V22.92 a6.25 6.25 0 0 1 12.5 0 V58.33 c0 16.67 -12.5 29.17 -27.08 29.17 S20.83 77.08 16.67 66.67 l-6.25 -12.5 a6.25 6.25 0 0 1 10.83 -6.25 L33.33 62.5",
+                                "stroke": "#aa9fb1"
                               },
                               {
                                 "id": "settings-add-machine-node-30",
@@ -17131,17 +17039,16 @@
                               {
                                 "id": "settings-add-machine-node-31",
                                 "name": "icon",
-                                "t": "icon",
+                                "t": "vector",
                                 "place": {
                                   "x": 14,
                                   "y": 10
                                 },
                                 "w": 15,
                                 "h": 15,
-                                "strokeWidth": 1.7,
-                                "size": 15,
-                                "color": "#aa9fb1",
-                                "icon": "h3-folder"
+                                "strokeWidth": 1.25,
+                                "d": "M12.5 25 a8.33 8.33 0 0 1 8.33 -8.33 h16.67 l8.33 8.33 h33.33 a8.33 8.33 0 0 1 8.33 8.33 v41.67 a8.33 8.33 0 0 1 -8.33 8.33 H20.83 a8.33 8.33 0 0 1 -8.33 -8.33 z",
+                                "stroke": "#aa9fb1"
                               },
                               {
                                 "id": "settings-add-machine-node-32",
@@ -17177,17 +17084,16 @@
                               {
                                 "id": "settings-add-machine-node-33",
                                 "name": "icon",
-                                "t": "icon",
+                                "t": "vector",
                                 "place": {
                                   "x": 14,
                                   "y": 10
                                 },
                                 "w": 15,
                                 "h": 15,
-                                "strokeWidth": 1.7,
-                                "size": 15,
-                                "color": "#aa9fb1",
-                                "icon": "h3-grid"
+                                "strokeWidth": 1.25,
+                                "d": "M18.75 12.5 H35.42 A6.25 6.25 0 0 1 41.67 18.75 V35.42 A6.25 6.25 0 0 1 35.42 41.67 H18.75 A6.25 6.25 0 0 1 12.5 35.42 V18.75 A6.25 6.25 0 0 1 18.75 12.5 Z M64.58 12.5 H81.25 A6.25 6.25 0 0 1 87.5 18.75 V35.42 A6.25 6.25 0 0 1 81.25 41.67 H64.58 A6.25 6.25 0 0 1 58.33 35.42 V18.75 A6.25 6.25 0 0 1 64.58 12.5 Z M18.75 58.33 H35.42 A6.25 6.25 0 0 1 41.67 64.58 V81.25 A6.25 6.25 0 0 1 35.42 87.5 H18.75 A6.25 6.25 0 0 1 12.5 81.25 V64.58 A6.25 6.25 0 0 1 18.75 58.33 Z M64.58 58.33 H81.25 A6.25 6.25 0 0 1 87.5 64.58 V81.25 A6.25 6.25 0 0 1 81.25 87.5 H64.58 A6.25 6.25 0 0 1 58.33 81.25 V64.58 A6.25 6.25 0 0 1 64.58 58.33 Z",
+                                "stroke": "#aa9fb1"
                               },
                               {
                                 "id": "settings-add-machine-node-34",
@@ -17240,17 +17146,16 @@
                           {
                             "id": "settings-add-machine-node-36",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 12,
                               "y": 11
                             },
                             "w": 15,
                             "h": 15,
-                            "strokeWidth": 1.7,
-                            "size": 15,
-                            "color": "#f5f1f6",
-                            "icon": "h3-desk"
+                            "strokeWidth": 1.25,
+                            "d": "M18.75 16.67 H81.25 A6.25 6.25 0 0 1 87.5 22.92 V60.42 A6.25 6.25 0 0 1 81.25 66.67 H18.75 A6.25 6.25 0 0 1 12.5 60.42 V22.92 A6.25 6.25 0 0 1 18.75 16.67 Z M33.33 83.33 h33.33 M50 66.67 v16.67",
+                            "stroke": "#f5f1f6"
                           },
                           {
                             "id": "settings-add-machine-node-37",
@@ -17271,17 +17176,16 @@
                           {
                             "id": "settings-add-machine-node-38",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 194,
                               "y": 11
                             },
                             "w": 14,
                             "h": 14,
-                            "strokeWidth": 1.7,
-                            "size": 14,
-                            "color": "#aa9fb1",
-                            "icon": "h3-chevron"
+                            "strokeWidth": 1.17,
+                            "d": "M25 37.5 l25 25 l25 -25",
+                            "stroke": "#aa9fb1"
                           }
                         ]
                       }
@@ -19758,17 +19662,16 @@
                                   {
                                     "id": "settings-add-machine-node-196",
                                     "name": "icon",
-                                    "t": "icon",
+                                    "t": "vector",
                                     "place": {
                                       "x": 12,
                                       "y": 19
                                     },
                                     "w": 15,
                                     "h": 15,
-                                    "strokeWidth": 1.7,
-                                    "size": 15,
-                                    "color": "#bdcd79",
-                                    "icon": "h3-wifi"
+                                    "strokeWidth": 1.25,
+                                    "d": "M8.33 37.5 a62.5 62.5 0 0 1 83.33 0 M20.83 52.08 a41.67 41.67 0 0 1 58.33 0 M35.42 66.67 a20.83 20.83 0 0 1 29.17 0 M46.67 81.25 A3.33 3.33 0 1 0 53.33 81.25 A3.33 3.33 0 1 0 46.67 81.25 Z",
+                                    "stroke": "#bdcd79"
                                   },
                                   {
                                     "id": "settings-add-machine-node-197",
@@ -19861,17 +19764,16 @@
                                       {
                                         "id": "settings-add-machine-node-201",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 12,
                                           "y": 9
                                         },
                                         "w": 14,
                                         "h": 14,
-                                        "strokeWidth": 1.7,
-                                        "size": 14,
-                                        "color": "#1b200b",
-                                        "icon": "h3-qr"
+                                        "strokeWidth": 1.17,
+                                        "d": "M12.5 12.5 H41.67 V41.67 H12.5 Z M58.33 12.5 H87.5 V41.67 H58.33 Z M12.5 58.33 H41.67 V87.5 H12.5 Z M58.33 58.33 h12.5 v12.5 h-12.5 z M75 75 h12.5 v12.5 h-12.5 z",
+                                        "stroke": "#1b200b"
                                       },
                                       {
                                         "id": "settings-add-machine-node-202",
@@ -19982,17 +19884,16 @@
                                       {
                                         "id": "settings-add-machine-node-208",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 12,
                                           "y": 9
                                         },
                                         "w": 14,
                                         "h": 14,
-                                        "strokeWidth": 1.7,
-                                        "size": 14,
-                                        "color": "#f5f1f6",
-                                        "icon": "h3-retry"
+                                        "strokeWidth": 1.17,
+                                        "d": "M83.33 45.83 a33.33 33.33 0 1 0 -9.58 23.75 M83.33 16.67 v29.17 h-29.17",
+                                        "stroke": "#f5f1f6"
                                       },
                                       {
                                         "id": "settings-add-machine-node-209",
@@ -20428,17 +20329,16 @@
                                       {
                                         "id": "settings-add-machine-node-236",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 7,
                                           "y": 7
                                         },
                                         "w": 16,
                                         "h": 16,
-                                        "strokeWidth": 1.7,
-                                        "size": 16,
-                                        "color": "#bdcd79",
-                                        "icon": "h3-crown"
+                                        "strokeWidth": 1.33,
+                                        "d": "M12.5 33.33 l16.67 16.67 l20.83 -29.17 l20.83 29.17 l16.67 -16.67 l-8.33 45.83 H20.83 z",
+                                        "stroke": "#bdcd79"
                                       }
                                     ]
                                   },
@@ -20475,17 +20375,16 @@
                                       {
                                         "id": "settings-add-machine-node-239",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 8,
                                           "y": 5
                                         },
                                         "w": 11,
                                         "h": 11,
-                                        "strokeWidth": 1.7,
-                                        "size": 11,
-                                        "color": "#bdcd79",
-                                        "icon": "h3-crown"
+                                        "strokeWidth": 0.92,
+                                        "d": "M12.5 33.33 l16.67 16.67 l20.83 -29.17 l20.83 29.17 l16.67 -16.67 l-8.33 45.83 H20.83 z",
+                                        "stroke": "#bdcd79"
                                       },
                                       {
                                         "id": "settings-add-machine-node-240",
@@ -20536,17 +20435,16 @@
                                       {
                                         "id": "settings-add-machine-node-241",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 12,
                                           "y": 12
                                         },
                                         "w": 15,
                                         "h": 15,
-                                        "strokeWidth": 1.7,
-                                        "size": 15,
-                                        "color": "#d4ccd8",
-                                        "icon": "h3-desk"
+                                        "strokeWidth": 1.25,
+                                        "d": "M18.75 16.67 H81.25 A6.25 6.25 0 0 1 87.5 22.92 V60.42 A6.25 6.25 0 0 1 81.25 66.67 H18.75 A6.25 6.25 0 0 1 12.5 60.42 V22.92 A6.25 6.25 0 0 1 18.75 16.67 Z M33.33 83.33 h33.33 M50 66.67 v16.67",
+                                        "stroke": "#d4ccd8"
                                       },
                                       {
                                         "id": "settings-add-machine-node-242",
@@ -20627,17 +20525,16 @@
                                       {
                                         "id": "settings-add-machine-node-246",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 12,
                                           "y": 12
                                         },
                                         "w": 15,
                                         "h": 15,
-                                        "strokeWidth": 1.7,
-                                        "size": 15,
-                                        "color": "#d4ccd8",
-                                        "icon": "h3-lap"
+                                        "strokeWidth": 1.25,
+                                        "d": "M27.08 20.83 H72.92 A6.25 6.25 0 0 1 79.17 27.08 V56.25 A6.25 6.25 0 0 1 72.92 62.5 H27.08 A6.25 6.25 0 0 1 20.83 56.25 V27.08 A6.25 6.25 0 0 1 27.08 20.83 Z M8.33 79.17 h83.33",
+                                        "stroke": "#d4ccd8"
                                       },
                                       {
                                         "id": "settings-add-machine-node-247",
@@ -20719,17 +20616,16 @@
                                       {
                                         "id": "settings-add-machine-node-251",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 12,
                                           "y": 12
                                         },
                                         "w": 15,
                                         "h": 15,
-                                        "strokeWidth": 1.7,
-                                        "size": 15,
-                                        "color": "#d4ccd8",
-                                        "icon": "h3-desk"
+                                        "strokeWidth": 1.25,
+                                        "d": "M18.75 16.67 H81.25 A6.25 6.25 0 0 1 87.5 22.92 V60.42 A6.25 6.25 0 0 1 81.25 66.67 H18.75 A6.25 6.25 0 0 1 12.5 60.42 V22.92 A6.25 6.25 0 0 1 18.75 16.67 Z M33.33 83.33 h33.33 M50 66.67 v16.67",
+                                        "stroke": "#d4ccd8"
                                       },
                                       {
                                         "id": "settings-add-machine-node-252",
@@ -20841,17 +20737,16 @@
                                       {
                                         "id": "settings-add-machine-node-258",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 12,
                                           "y": 9
                                         },
                                         "w": 14,
                                         "h": 14,
-                                        "strokeWidth": 1.7,
-                                        "size": 14,
-                                        "color": "#1b200b",
-                                        "icon": "h3-plus"
+                                        "strokeWidth": 1.17,
+                                        "d": "M50 20.83 v58.33 M20.83 50 h58.33",
+                                        "stroke": "#1b200b"
                                       },
                                       {
                                         "id": "settings-add-machine-node-259",
@@ -21147,17 +21042,16 @@
                           {
                             "id": "settings-add-machine-node-274",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 0,
                               "y": 2
                             },
                             "w": 14,
                             "h": 14,
-                            "strokeWidth": 1.7,
-                            "size": 14,
-                            "color": "#aa9fb1",
-                            "icon": "h3-desk"
+                            "strokeWidth": 1.17,
+                            "d": "M18.75 16.67 H81.25 A6.25 6.25 0 0 1 87.5 22.92 V60.42 A6.25 6.25 0 0 1 81.25 66.67 H18.75 A6.25 6.25 0 0 1 12.5 60.42 V22.92 A6.25 6.25 0 0 1 18.75 16.67 Z M33.33 83.33 h33.33 M50 66.67 v16.67",
+                            "stroke": "#aa9fb1"
                           },
                           {
                             "id": "settings-add-machine-node-275",
@@ -21207,17 +21101,16 @@
                           {
                             "id": "settings-add-machine-node-278",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 0,
                               "y": 2
                             },
                             "w": 14,
                             "h": 14,
-                            "strokeWidth": 1.7,
-                            "size": 14,
-                            "color": "#aa9fb1",
-                            "icon": "h3-lap"
+                            "strokeWidth": 1.17,
+                            "d": "M27.08 20.83 H72.92 A6.25 6.25 0 0 1 79.17 27.08 V56.25 A6.25 6.25 0 0 1 72.92 62.5 H27.08 A6.25 6.25 0 0 1 20.83 56.25 V27.08 A6.25 6.25 0 0 1 27.08 20.83 Z M8.33 79.17 h83.33",
+                            "stroke": "#aa9fb1"
                           },
                           {
                             "id": "settings-add-machine-node-279",
@@ -21268,17 +21161,16 @@
                           {
                             "id": "settings-add-machine-node-282",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 0,
                               "y": 2
                             },
                             "w": 14,
                             "h": 14,
-                            "strokeWidth": 1.7,
-                            "size": 14,
-                            "color": "#aa9fb1",
-                            "icon": "h3-desk"
+                            "strokeWidth": 1.17,
+                            "d": "M18.75 16.67 H81.25 A6.25 6.25 0 0 1 87.5 22.92 V60.42 A6.25 6.25 0 0 1 81.25 66.67 H18.75 A6.25 6.25 0 0 1 12.5 60.42 V22.92 A6.25 6.25 0 0 1 18.75 16.67 Z M33.33 83.33 h33.33 M50 66.67 v16.67",
+                            "stroke": "#aa9fb1"
                           },
                           {
                             "id": "settings-add-machine-node-283",
@@ -21732,17 +21624,16 @@
                           {
                             "id": "settings-host-here-node-9",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 16,
                               "y": 9
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-map"
+                            "strokeWidth": 1.33,
+                            "d": "M37.5 16.67 L12.5 25 v58.33 l25 -8.33 l25 8.33 l25 -8.33 V16.67 l-25 8.33 z M37.5 16.67 v58.33 M62.5 25 v58.33",
+                            "stroke": "#d4ccd8"
                           },
                           {
                             "id": "settings-host-here-node-10",
@@ -21778,17 +21669,16 @@
                           {
                             "id": "settings-host-here-node-11",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 16,
                               "y": 9
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-grid"
+                            "strokeWidth": 1.33,
+                            "d": "M18.75 12.5 H35.42 A6.25 6.25 0 0 1 41.67 18.75 V35.42 A6.25 6.25 0 0 1 35.42 41.67 H18.75 A6.25 6.25 0 0 1 12.5 35.42 V18.75 A6.25 6.25 0 0 1 18.75 12.5 Z M64.58 12.5 H81.25 A6.25 6.25 0 0 1 87.5 18.75 V35.42 A6.25 6.25 0 0 1 81.25 41.67 H64.58 A6.25 6.25 0 0 1 58.33 35.42 V18.75 A6.25 6.25 0 0 1 64.58 12.5 Z M18.75 58.33 H35.42 A6.25 6.25 0 0 1 41.67 64.58 V81.25 A6.25 6.25 0 0 1 35.42 87.5 H18.75 A6.25 6.25 0 0 1 12.5 81.25 V64.58 A6.25 6.25 0 0 1 18.75 58.33 Z M64.58 58.33 H81.25 A6.25 6.25 0 0 1 87.5 64.58 V81.25 A6.25 6.25 0 0 1 81.25 87.5 H64.58 A6.25 6.25 0 0 1 58.33 81.25 V64.58 A6.25 6.25 0 0 1 64.58 58.33 Z",
+                            "stroke": "#d4ccd8"
                           },
                           {
                             "id": "settings-host-here-node-12",
@@ -21824,17 +21714,16 @@
                           {
                             "id": "settings-host-here-node-13",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 16,
                               "y": 9
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-pen"
+                            "strokeWidth": 1.33,
+                            "d": "M16.67 83.33 h16.67 L79.17 37.5 l-16.67 -16.67 L16.67 66.67 z M54.17 29.17 l16.67 16.67",
+                            "stroke": "#d4ccd8"
                           },
                           {
                             "id": "settings-host-here-node-14",
@@ -21898,17 +21787,16 @@
                           {
                             "id": "settings-host-here-node-17",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 13,
                               "y": 9
                             },
                             "w": 15,
                             "h": 15,
-                            "strokeWidth": 1.7,
-                            "size": 15,
-                            "color": "#1b200b",
-                            "icon": "h3-plus"
+                            "strokeWidth": 1.25,
+                            "d": "M50 20.83 v58.33 M20.83 50 h58.33",
+                            "stroke": "#1b200b"
                           },
                           {
                             "id": "settings-host-here-node-18",
@@ -21945,17 +21833,16 @@
                           {
                             "id": "settings-host-here-node-19",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 10,
                               "y": 10
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-phone"
+                            "strokeWidth": 1.33,
+                            "d": "M37.5 10.42 H62.5 A8.33 8.33 0 0 1 70.83 18.75 V81.25 A8.33 8.33 0 0 1 62.5 89.58 H37.5 A8.33 8.33 0 0 1 29.17 81.25 V18.75 A8.33 8.33 0 0 1 37.5 10.42 Z M45.83 75 h8.33",
+                            "stroke": "#d4ccd8"
                           }
                         ]
                       },
@@ -21976,17 +21863,16 @@
                           {
                             "id": "settings-host-here-node-20",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 10,
                               "y": 10
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-bell"
+                            "strokeWidth": 1.33,
+                            "d": "M25 66.67 V45.83 a25 25 0 0 1 50 0 v20.83 l8.33 8.33 H16.67 z M41.67 87.5 h16.67",
+                            "stroke": "#d4ccd8"
                           }
                         ]
                       },
@@ -22007,17 +21893,16 @@
                           {
                             "id": "settings-host-here-node-21",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 10,
                               "y": 10
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-settings"
+                            "strokeWidth": 1.33,
+                            "d": "M37.5 50 A12.5 12.5 0 1 0 62.5 50 A12.5 12.5 0 1 0 37.5 50 Z M50 8.33 v12.5 M50 79.17 v12.5 M17.5 17.5 l8.75 8.75 M73.75 73.75 l8.75 8.75 M8.33 50 h12.5 M79.17 50 h12.5 M17.5 82.5 l8.75 -8.75 M73.75 26.25 l8.75 -8.75",
+                            "stroke": "#d4ccd8"
                           }
                         ]
                       }
@@ -22097,17 +21982,16 @@
                               {
                                 "id": "settings-host-here-node-25",
                                 "name": "icon",
-                                "t": "icon",
+                                "t": "vector",
                                 "place": {
                                   "x": 14,
                                   "y": 10
                                 },
                                 "w": 15,
                                 "h": 15,
-                                "strokeWidth": 1.7,
-                                "size": 15,
-                                "color": "#f5f1f6",
-                                "icon": "h3-settings"
+                                "strokeWidth": 1.25,
+                                "d": "M37.5 50 A12.5 12.5 0 1 0 62.5 50 A12.5 12.5 0 1 0 37.5 50 Z M50 8.33 v12.5 M50 79.17 v12.5 M17.5 17.5 l8.75 8.75 M73.75 73.75 l8.75 8.75 M8.33 50 h12.5 M79.17 50 h12.5 M17.5 82.5 l8.75 -8.75 M73.75 26.25 l8.75 -8.75",
+                                "stroke": "#f5f1f6"
                               },
                               {
                                 "id": "settings-host-here-node-26",
@@ -22143,17 +22027,16 @@
                               {
                                 "id": "settings-host-here-node-27",
                                 "name": "icon",
-                                "t": "icon",
+                                "t": "vector",
                                 "place": {
                                   "x": 14,
                                   "y": 10
                                 },
                                 "w": 15,
                                 "h": 15,
-                                "strokeWidth": 1.7,
-                                "size": 15,
-                                "color": "#aa9fb1",
-                                "icon": "h3-term"
+                                "strokeWidth": 1.25,
+                                "d": "M20.83 16.67 H79.17 A8.33 8.33 0 0 1 87.5 25 V75 A8.33 8.33 0 0 1 79.17 83.33 H20.83 A8.33 8.33 0 0 1 12.5 75 V25 A8.33 8.33 0 0 1 20.83 16.67 Z M29.17 37.5 l12.5 12.5 l-12.5 12.5 M54.17 62.5 h16.67",
+                                "stroke": "#aa9fb1"
                               },
                               {
                                 "id": "settings-host-here-node-28",
@@ -22189,17 +22072,16 @@
                               {
                                 "id": "settings-host-here-node-29",
                                 "name": "icon",
-                                "t": "icon",
+                                "t": "vector",
                                 "place": {
                                   "x": 14,
                                   "y": 10
                                 },
                                 "w": 15,
                                 "h": 15,
-                                "strokeWidth": 1.7,
-                                "size": 15,
-                                "color": "#aa9fb1",
-                                "icon": "h3-hand"
+                                "strokeWidth": 1.25,
+                                "d": "M33.33 54.17 V22.92 a6.25 6.25 0 0 1 12.5 0 V50 M45.83 45.83 V16.67 a6.25 6.25 0 0 1 12.5 0 v29.17 M58.33 45.83 V22.92 a6.25 6.25 0 0 1 12.5 0 V58.33 c0 16.67 -12.5 29.17 -27.08 29.17 S20.83 77.08 16.67 66.67 l-6.25 -12.5 a6.25 6.25 0 0 1 10.83 -6.25 L33.33 62.5",
+                                "stroke": "#aa9fb1"
                               },
                               {
                                 "id": "settings-host-here-node-30",
@@ -22235,17 +22117,16 @@
                               {
                                 "id": "settings-host-here-node-31",
                                 "name": "icon",
-                                "t": "icon",
+                                "t": "vector",
                                 "place": {
                                   "x": 14,
                                   "y": 10
                                 },
                                 "w": 15,
                                 "h": 15,
-                                "strokeWidth": 1.7,
-                                "size": 15,
-                                "color": "#aa9fb1",
-                                "icon": "h3-folder"
+                                "strokeWidth": 1.25,
+                                "d": "M12.5 25 a8.33 8.33 0 0 1 8.33 -8.33 h16.67 l8.33 8.33 h33.33 a8.33 8.33 0 0 1 8.33 8.33 v41.67 a8.33 8.33 0 0 1 -8.33 8.33 H20.83 a8.33 8.33 0 0 1 -8.33 -8.33 z",
+                                "stroke": "#aa9fb1"
                               },
                               {
                                 "id": "settings-host-here-node-32",
@@ -22281,17 +22162,16 @@
                               {
                                 "id": "settings-host-here-node-33",
                                 "name": "icon",
-                                "t": "icon",
+                                "t": "vector",
                                 "place": {
                                   "x": 14,
                                   "y": 10
                                 },
                                 "w": 15,
                                 "h": 15,
-                                "strokeWidth": 1.7,
-                                "size": 15,
-                                "color": "#aa9fb1",
-                                "icon": "h3-grid"
+                                "strokeWidth": 1.25,
+                                "d": "M18.75 12.5 H35.42 A6.25 6.25 0 0 1 41.67 18.75 V35.42 A6.25 6.25 0 0 1 35.42 41.67 H18.75 A6.25 6.25 0 0 1 12.5 35.42 V18.75 A6.25 6.25 0 0 1 18.75 12.5 Z M64.58 12.5 H81.25 A6.25 6.25 0 0 1 87.5 18.75 V35.42 A6.25 6.25 0 0 1 81.25 41.67 H64.58 A6.25 6.25 0 0 1 58.33 35.42 V18.75 A6.25 6.25 0 0 1 64.58 12.5 Z M18.75 58.33 H35.42 A6.25 6.25 0 0 1 41.67 64.58 V81.25 A6.25 6.25 0 0 1 35.42 87.5 H18.75 A6.25 6.25 0 0 1 12.5 81.25 V64.58 A6.25 6.25 0 0 1 18.75 58.33 Z M64.58 58.33 H81.25 A6.25 6.25 0 0 1 87.5 64.58 V81.25 A6.25 6.25 0 0 1 81.25 87.5 H64.58 A6.25 6.25 0 0 1 58.33 81.25 V64.58 A6.25 6.25 0 0 1 64.58 58.33 Z",
+                                "stroke": "#aa9fb1"
                               },
                               {
                                 "id": "settings-host-here-node-34",
@@ -22344,17 +22224,16 @@
                           {
                             "id": "settings-host-here-node-36",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 12,
                               "y": 11
                             },
                             "w": 15,
                             "h": 15,
-                            "strokeWidth": 1.7,
-                            "size": 15,
-                            "color": "#f5f1f6",
-                            "icon": "h3-desk"
+                            "strokeWidth": 1.25,
+                            "d": "M18.75 16.67 H81.25 A6.25 6.25 0 0 1 87.5 22.92 V60.42 A6.25 6.25 0 0 1 81.25 66.67 H18.75 A6.25 6.25 0 0 1 12.5 60.42 V22.92 A6.25 6.25 0 0 1 18.75 16.67 Z M33.33 83.33 h33.33 M50 66.67 v16.67",
+                            "stroke": "#f5f1f6"
                           },
                           {
                             "id": "settings-host-here-node-37",
@@ -22375,17 +22254,16 @@
                           {
                             "id": "settings-host-here-node-38",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 194,
                               "y": 11
                             },
                             "w": 14,
                             "h": 14,
-                            "strokeWidth": 1.7,
-                            "size": 14,
-                            "color": "#aa9fb1",
-                            "icon": "h3-chevron"
+                            "strokeWidth": 1.17,
+                            "d": "M25 37.5 l25 25 l25 -25",
+                            "stroke": "#aa9fb1"
                           }
                         ]
                       }
@@ -24862,17 +24740,16 @@
                                   {
                                     "id": "settings-host-here-node-196",
                                     "name": "icon",
-                                    "t": "icon",
+                                    "t": "vector",
                                     "place": {
                                       "x": 12,
                                       "y": 19
                                     },
                                     "w": 15,
                                     "h": 15,
-                                    "strokeWidth": 1.7,
-                                    "size": 15,
-                                    "color": "#bdcd79",
-                                    "icon": "h3-wifi"
+                                    "strokeWidth": 1.25,
+                                    "d": "M8.33 37.5 a62.5 62.5 0 0 1 83.33 0 M20.83 52.08 a41.67 41.67 0 0 1 58.33 0 M35.42 66.67 a20.83 20.83 0 0 1 29.17 0 M46.67 81.25 A3.33 3.33 0 1 0 53.33 81.25 A3.33 3.33 0 1 0 46.67 81.25 Z",
+                                    "stroke": "#bdcd79"
                                   },
                                   {
                                     "id": "settings-host-here-node-197",
@@ -24965,17 +24842,16 @@
                                       {
                                         "id": "settings-host-here-node-201",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 12,
                                           "y": 9
                                         },
                                         "w": 14,
                                         "h": 14,
-                                        "strokeWidth": 1.7,
-                                        "size": 14,
-                                        "color": "#1b200b",
-                                        "icon": "h3-qr"
+                                        "strokeWidth": 1.17,
+                                        "d": "M12.5 12.5 H41.67 V41.67 H12.5 Z M58.33 12.5 H87.5 V41.67 H58.33 Z M12.5 58.33 H41.67 V87.5 H12.5 Z M58.33 58.33 h12.5 v12.5 h-12.5 z M75 75 h12.5 v12.5 h-12.5 z",
+                                        "stroke": "#1b200b"
                                       },
                                       {
                                         "id": "settings-host-here-node-202",
@@ -25086,17 +24962,16 @@
                                       {
                                         "id": "settings-host-here-node-208",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 12,
                                           "y": 9
                                         },
                                         "w": 14,
                                         "h": 14,
-                                        "strokeWidth": 1.7,
-                                        "size": 14,
-                                        "color": "#f5f1f6",
-                                        "icon": "h3-retry"
+                                        "strokeWidth": 1.17,
+                                        "d": "M83.33 45.83 a33.33 33.33 0 1 0 -9.58 23.75 M83.33 16.67 v29.17 h-29.17",
+                                        "stroke": "#f5f1f6"
                                       },
                                       {
                                         "id": "settings-host-here-node-209",
@@ -25532,17 +25407,16 @@
                                       {
                                         "id": "settings-host-here-node-236",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 7,
                                           "y": 7
                                         },
                                         "w": 16,
                                         "h": 16,
-                                        "strokeWidth": 1.7,
-                                        "size": 16,
-                                        "color": "#d4ccd8",
-                                        "icon": "h3-wifi"
+                                        "strokeWidth": 1.33,
+                                        "d": "M8.33 37.5 a62.5 62.5 0 0 1 83.33 0 M20.83 52.08 a41.67 41.67 0 0 1 58.33 0 M35.42 66.67 a20.83 20.83 0 0 1 29.17 0 M46.67 81.25 A3.33 3.33 0 1 0 53.33 81.25 A3.33 3.33 0 1 0 46.67 81.25 Z",
+                                        "stroke": "#d4ccd8"
                                       }
                                     ]
                                   },
@@ -25625,17 +25499,16 @@
                                       {
                                         "id": "settings-host-here-node-240",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 12,
                                           "y": 12
                                         },
                                         "w": 15,
                                         "h": 15,
-                                        "strokeWidth": 1.7,
-                                        "size": 15,
-                                        "color": "#d4ccd8",
-                                        "icon": "h3-lap"
+                                        "strokeWidth": 1.25,
+                                        "d": "M27.08 20.83 H72.92 A6.25 6.25 0 0 1 79.17 27.08 V56.25 A6.25 6.25 0 0 1 72.92 62.5 H27.08 A6.25 6.25 0 0 1 20.83 56.25 V27.08 A6.25 6.25 0 0 1 27.08 20.83 Z M8.33 79.17 h83.33",
+                                        "stroke": "#d4ccd8"
                                       },
                                       {
                                         "id": "settings-host-here-node-241",
@@ -25716,17 +25589,16 @@
                                       {
                                         "id": "settings-host-here-node-245",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 12,
                                           "y": 12
                                         },
                                         "w": 15,
                                         "h": 15,
-                                        "strokeWidth": 1.7,
-                                        "size": 15,
-                                        "color": "#d4ccd8",
-                                        "icon": "h3-desk"
+                                        "strokeWidth": 1.25,
+                                        "d": "M18.75 16.67 H81.25 A6.25 6.25 0 0 1 87.5 22.92 V60.42 A6.25 6.25 0 0 1 81.25 66.67 H18.75 A6.25 6.25 0 0 1 12.5 60.42 V22.92 A6.25 6.25 0 0 1 18.75 16.67 Z M33.33 83.33 h33.33 M50 66.67 v16.67",
+                                        "stroke": "#d4ccd8"
                                       },
                                       {
                                         "id": "settings-host-here-node-246",
@@ -25808,17 +25680,16 @@
                                       {
                                         "id": "settings-host-here-node-250",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 12,
                                           "y": 12
                                         },
                                         "w": 15,
                                         "h": 15,
-                                        "strokeWidth": 1.7,
-                                        "size": 15,
-                                        "color": "#d4ccd8",
-                                        "icon": "h3-desk"
+                                        "strokeWidth": 1.25,
+                                        "d": "M18.75 16.67 H81.25 A6.25 6.25 0 0 1 87.5 22.92 V60.42 A6.25 6.25 0 0 1 81.25 66.67 H18.75 A6.25 6.25 0 0 1 12.5 60.42 V22.92 A6.25 6.25 0 0 1 18.75 16.67 Z M33.33 83.33 h33.33 M50 66.67 v16.67",
+                                        "stroke": "#d4ccd8"
                                       },
                                       {
                                         "id": "settings-host-here-node-251",
@@ -25930,17 +25801,16 @@
                                       {
                                         "id": "settings-host-here-node-257",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 12,
                                           "y": 9
                                         },
                                         "w": 14,
                                         "h": 14,
-                                        "strokeWidth": 1.7,
-                                        "size": 14,
-                                        "color": "#1b200b",
-                                        "icon": "h3-plus"
+                                        "strokeWidth": 1.17,
+                                        "d": "M50 20.83 v58.33 M20.83 50 h58.33",
+                                        "stroke": "#1b200b"
                                       },
                                       {
                                         "id": "settings-host-here-node-258",
@@ -25977,17 +25847,16 @@
                                       {
                                         "id": "settings-host-here-node-259",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 12,
                                           "y": 9
                                         },
                                         "w": 14,
                                         "h": 14,
-                                        "strokeWidth": 1.7,
-                                        "size": 14,
-                                        "color": "#f5f1f6",
-                                        "icon": "h3-crown"
+                                        "strokeWidth": 1.17,
+                                        "d": "M12.5 33.33 l16.67 16.67 l20.83 -29.17 l20.83 29.17 l16.67 -16.67 l-8.33 45.83 H20.83 z",
+                                        "stroke": "#f5f1f6"
                                       },
                                       {
                                         "id": "settings-host-here-node-260",
@@ -26272,17 +26141,16 @@
                                               {
                                                 "id": "settings-host-here-node-276",
                                                 "name": "icon",
-                                                "t": "icon",
+                                                "t": "vector",
                                                 "place": {
                                                   "x": 5,
                                                   "y": 5
                                                 },
                                                 "w": 12,
                                                 "h": 12,
-                                                "strokeWidth": 1.7,
-                                                "size": 12,
-                                                "color": "#d4ccd8",
-                                                "icon": "h3-person"
+                                                "strokeWidth": 1,
+                                                "d": "M33.33 33.33 A16.67 16.67 0 1 0 66.67 33.33 A16.67 16.67 0 1 0 33.33 33.33 Z M16.67 87.5 c0 -18.33 15 -33.33 33.33 -33.33 s33.33 15 33.33 33.33",
+                                                "stroke": "#d4ccd8"
                                               }
                                             ]
                                           },
@@ -26626,17 +26494,16 @@
                           {
                             "id": "settings-host-here-node-298",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 0,
                               "y": 2
                             },
                             "w": 14,
                             "h": 14,
-                            "strokeWidth": 1.7,
-                            "size": 14,
-                            "color": "#aa9fb1",
-                            "icon": "h3-desk"
+                            "strokeWidth": 1.17,
+                            "d": "M18.75 16.67 H81.25 A6.25 6.25 0 0 1 87.5 22.92 V60.42 A6.25 6.25 0 0 1 81.25 66.67 H18.75 A6.25 6.25 0 0 1 12.5 60.42 V22.92 A6.25 6.25 0 0 1 18.75 16.67 Z M33.33 83.33 h33.33 M50 66.67 v16.67",
+                            "stroke": "#aa9fb1"
                           },
                           {
                             "id": "settings-host-here-node-299",
@@ -26686,17 +26553,16 @@
                           {
                             "id": "settings-host-here-node-302",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 0,
                               "y": 2
                             },
                             "w": 14,
                             "h": 14,
-                            "strokeWidth": 1.7,
-                            "size": 14,
-                            "color": "#aa9fb1",
-                            "icon": "h3-lap"
+                            "strokeWidth": 1.17,
+                            "d": "M27.08 20.83 H72.92 A6.25 6.25 0 0 1 79.17 27.08 V56.25 A6.25 6.25 0 0 1 72.92 62.5 H27.08 A6.25 6.25 0 0 1 20.83 56.25 V27.08 A6.25 6.25 0 0 1 27.08 20.83 Z M8.33 79.17 h83.33",
+                            "stroke": "#aa9fb1"
                           },
                           {
                             "id": "settings-host-here-node-303",
@@ -26747,17 +26613,16 @@
                           {
                             "id": "settings-host-here-node-306",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 0,
                               "y": 2
                             },
                             "w": 14,
                             "h": 14,
-                            "strokeWidth": 1.7,
-                            "size": 14,
-                            "color": "#aa9fb1",
-                            "icon": "h3-desk"
+                            "strokeWidth": 1.17,
+                            "d": "M18.75 16.67 H81.25 A6.25 6.25 0 0 1 87.5 22.92 V60.42 A6.25 6.25 0 0 1 81.25 66.67 H18.75 A6.25 6.25 0 0 1 12.5 60.42 V22.92 A6.25 6.25 0 0 1 18.75 16.67 Z M33.33 83.33 h33.33 M50 66.67 v16.67",
+                            "stroke": "#aa9fb1"
                           },
                           {
                             "id": "settings-host-here-node-307",
@@ -26934,17 +26799,16 @@
                       {
                         "id": "settings-host-here-node-315",
                         "name": "icon",
-                        "t": "icon",
+                        "t": "vector",
                         "place": {
                           "x": 12,
                           "y": 9
                         },
                         "w": 14,
                         "h": 14,
-                        "strokeWidth": 1.7,
-                        "size": 14,
-                        "color": "#1b200b",
-                        "icon": "h3-crown"
+                        "strokeWidth": 1.17,
+                        "d": "M12.5 33.33 l16.67 16.67 l20.83 -29.17 l20.83 29.17 l16.67 -16.67 l-8.33 45.83 H20.83 z",
+                        "stroke": "#1b200b"
                       },
                       {
                         "id": "settings-host-here-node-316",
@@ -27132,17 +26996,16 @@
                           {
                             "id": "settings-host-moved-node-9",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 16,
                               "y": 9
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-map"
+                            "strokeWidth": 1.33,
+                            "d": "M37.5 16.67 L12.5 25 v58.33 l25 -8.33 l25 8.33 l25 -8.33 V16.67 l-25 8.33 z M37.5 16.67 v58.33 M62.5 25 v58.33",
+                            "stroke": "#d4ccd8"
                           },
                           {
                             "id": "settings-host-moved-node-10",
@@ -27178,17 +27041,16 @@
                           {
                             "id": "settings-host-moved-node-11",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 16,
                               "y": 9
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-grid"
+                            "strokeWidth": 1.33,
+                            "d": "M18.75 12.5 H35.42 A6.25 6.25 0 0 1 41.67 18.75 V35.42 A6.25 6.25 0 0 1 35.42 41.67 H18.75 A6.25 6.25 0 0 1 12.5 35.42 V18.75 A6.25 6.25 0 0 1 18.75 12.5 Z M64.58 12.5 H81.25 A6.25 6.25 0 0 1 87.5 18.75 V35.42 A6.25 6.25 0 0 1 81.25 41.67 H64.58 A6.25 6.25 0 0 1 58.33 35.42 V18.75 A6.25 6.25 0 0 1 64.58 12.5 Z M18.75 58.33 H35.42 A6.25 6.25 0 0 1 41.67 64.58 V81.25 A6.25 6.25 0 0 1 35.42 87.5 H18.75 A6.25 6.25 0 0 1 12.5 81.25 V64.58 A6.25 6.25 0 0 1 18.75 58.33 Z M64.58 58.33 H81.25 A6.25 6.25 0 0 1 87.5 64.58 V81.25 A6.25 6.25 0 0 1 81.25 87.5 H64.58 A6.25 6.25 0 0 1 58.33 81.25 V64.58 A6.25 6.25 0 0 1 64.58 58.33 Z",
+                            "stroke": "#d4ccd8"
                           },
                           {
                             "id": "settings-host-moved-node-12",
@@ -27224,17 +27086,16 @@
                           {
                             "id": "settings-host-moved-node-13",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 16,
                               "y": 9
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-pen"
+                            "strokeWidth": 1.33,
+                            "d": "M16.67 83.33 h16.67 L79.17 37.5 l-16.67 -16.67 L16.67 66.67 z M54.17 29.17 l16.67 16.67",
+                            "stroke": "#d4ccd8"
                           },
                           {
                             "id": "settings-host-moved-node-14",
@@ -27298,17 +27159,16 @@
                           {
                             "id": "settings-host-moved-node-17",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 13,
                               "y": 9
                             },
                             "w": 15,
                             "h": 15,
-                            "strokeWidth": 1.7,
-                            "size": 15,
-                            "color": "#1b200b",
-                            "icon": "h3-plus"
+                            "strokeWidth": 1.25,
+                            "d": "M50 20.83 v58.33 M20.83 50 h58.33",
+                            "stroke": "#1b200b"
                           },
                           {
                             "id": "settings-host-moved-node-18",
@@ -27345,17 +27205,16 @@
                           {
                             "id": "settings-host-moved-node-19",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 10,
                               "y": 10
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-phone"
+                            "strokeWidth": 1.33,
+                            "d": "M37.5 10.42 H62.5 A8.33 8.33 0 0 1 70.83 18.75 V81.25 A8.33 8.33 0 0 1 62.5 89.58 H37.5 A8.33 8.33 0 0 1 29.17 81.25 V18.75 A8.33 8.33 0 0 1 37.5 10.42 Z M45.83 75 h8.33",
+                            "stroke": "#d4ccd8"
                           }
                         ]
                       },
@@ -27376,17 +27235,16 @@
                           {
                             "id": "settings-host-moved-node-20",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 10,
                               "y": 10
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-bell"
+                            "strokeWidth": 1.33,
+                            "d": "M25 66.67 V45.83 a25 25 0 0 1 50 0 v20.83 l8.33 8.33 H16.67 z M41.67 87.5 h16.67",
+                            "stroke": "#d4ccd8"
                           }
                         ]
                       },
@@ -27407,17 +27265,16 @@
                           {
                             "id": "settings-host-moved-node-21",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 10,
                               "y": 10
                             },
                             "w": 16,
                             "h": 16,
-                            "strokeWidth": 1.7,
-                            "size": 16,
-                            "color": "#d4ccd8",
-                            "icon": "h3-settings"
+                            "strokeWidth": 1.33,
+                            "d": "M37.5 50 A12.5 12.5 0 1 0 62.5 50 A12.5 12.5 0 1 0 37.5 50 Z M50 8.33 v12.5 M50 79.17 v12.5 M17.5 17.5 l8.75 8.75 M73.75 73.75 l8.75 8.75 M8.33 50 h12.5 M79.17 50 h12.5 M17.5 82.5 l8.75 -8.75 M73.75 26.25 l8.75 -8.75",
+                            "stroke": "#d4ccd8"
                           }
                         ]
                       }
@@ -27497,17 +27354,16 @@
                               {
                                 "id": "settings-host-moved-node-25",
                                 "name": "icon",
-                                "t": "icon",
+                                "t": "vector",
                                 "place": {
                                   "x": 14,
                                   "y": 10
                                 },
                                 "w": 15,
                                 "h": 15,
-                                "strokeWidth": 1.7,
-                                "size": 15,
-                                "color": "#f5f1f6",
-                                "icon": "h3-settings"
+                                "strokeWidth": 1.25,
+                                "d": "M37.5 50 A12.5 12.5 0 1 0 62.5 50 A12.5 12.5 0 1 0 37.5 50 Z M50 8.33 v12.5 M50 79.17 v12.5 M17.5 17.5 l8.75 8.75 M73.75 73.75 l8.75 8.75 M8.33 50 h12.5 M79.17 50 h12.5 M17.5 82.5 l8.75 -8.75 M73.75 26.25 l8.75 -8.75",
+                                "stroke": "#f5f1f6"
                               },
                               {
                                 "id": "settings-host-moved-node-26",
@@ -27543,17 +27399,16 @@
                               {
                                 "id": "settings-host-moved-node-27",
                                 "name": "icon",
-                                "t": "icon",
+                                "t": "vector",
                                 "place": {
                                   "x": 14,
                                   "y": 10
                                 },
                                 "w": 15,
                                 "h": 15,
-                                "strokeWidth": 1.7,
-                                "size": 15,
-                                "color": "#aa9fb1",
-                                "icon": "h3-term"
+                                "strokeWidth": 1.25,
+                                "d": "M20.83 16.67 H79.17 A8.33 8.33 0 0 1 87.5 25 V75 A8.33 8.33 0 0 1 79.17 83.33 H20.83 A8.33 8.33 0 0 1 12.5 75 V25 A8.33 8.33 0 0 1 20.83 16.67 Z M29.17 37.5 l12.5 12.5 l-12.5 12.5 M54.17 62.5 h16.67",
+                                "stroke": "#aa9fb1"
                               },
                               {
                                 "id": "settings-host-moved-node-28",
@@ -27589,17 +27444,16 @@
                               {
                                 "id": "settings-host-moved-node-29",
                                 "name": "icon",
-                                "t": "icon",
+                                "t": "vector",
                                 "place": {
                                   "x": 14,
                                   "y": 10
                                 },
                                 "w": 15,
                                 "h": 15,
-                                "strokeWidth": 1.7,
-                                "size": 15,
-                                "color": "#aa9fb1",
-                                "icon": "h3-hand"
+                                "strokeWidth": 1.25,
+                                "d": "M33.33 54.17 V22.92 a6.25 6.25 0 0 1 12.5 0 V50 M45.83 45.83 V16.67 a6.25 6.25 0 0 1 12.5 0 v29.17 M58.33 45.83 V22.92 a6.25 6.25 0 0 1 12.5 0 V58.33 c0 16.67 -12.5 29.17 -27.08 29.17 S20.83 77.08 16.67 66.67 l-6.25 -12.5 a6.25 6.25 0 0 1 10.83 -6.25 L33.33 62.5",
+                                "stroke": "#aa9fb1"
                               },
                               {
                                 "id": "settings-host-moved-node-30",
@@ -27635,17 +27489,16 @@
                               {
                                 "id": "settings-host-moved-node-31",
                                 "name": "icon",
-                                "t": "icon",
+                                "t": "vector",
                                 "place": {
                                   "x": 14,
                                   "y": 10
                                 },
                                 "w": 15,
                                 "h": 15,
-                                "strokeWidth": 1.7,
-                                "size": 15,
-                                "color": "#aa9fb1",
-                                "icon": "h3-folder"
+                                "strokeWidth": 1.25,
+                                "d": "M12.5 25 a8.33 8.33 0 0 1 8.33 -8.33 h16.67 l8.33 8.33 h33.33 a8.33 8.33 0 0 1 8.33 8.33 v41.67 a8.33 8.33 0 0 1 -8.33 8.33 H20.83 a8.33 8.33 0 0 1 -8.33 -8.33 z",
+                                "stroke": "#aa9fb1"
                               },
                               {
                                 "id": "settings-host-moved-node-32",
@@ -27681,17 +27534,16 @@
                               {
                                 "id": "settings-host-moved-node-33",
                                 "name": "icon",
-                                "t": "icon",
+                                "t": "vector",
                                 "place": {
                                   "x": 14,
                                   "y": 10
                                 },
                                 "w": 15,
                                 "h": 15,
-                                "strokeWidth": 1.7,
-                                "size": 15,
-                                "color": "#aa9fb1",
-                                "icon": "h3-grid"
+                                "strokeWidth": 1.25,
+                                "d": "M18.75 12.5 H35.42 A6.25 6.25 0 0 1 41.67 18.75 V35.42 A6.25 6.25 0 0 1 35.42 41.67 H18.75 A6.25 6.25 0 0 1 12.5 35.42 V18.75 A6.25 6.25 0 0 1 18.75 12.5 Z M64.58 12.5 H81.25 A6.25 6.25 0 0 1 87.5 18.75 V35.42 A6.25 6.25 0 0 1 81.25 41.67 H64.58 A6.25 6.25 0 0 1 58.33 35.42 V18.75 A6.25 6.25 0 0 1 64.58 12.5 Z M18.75 58.33 H35.42 A6.25 6.25 0 0 1 41.67 64.58 V81.25 A6.25 6.25 0 0 1 35.42 87.5 H18.75 A6.25 6.25 0 0 1 12.5 81.25 V64.58 A6.25 6.25 0 0 1 18.75 58.33 Z M64.58 58.33 H81.25 A6.25 6.25 0 0 1 87.5 64.58 V81.25 A6.25 6.25 0 0 1 81.25 87.5 H64.58 A6.25 6.25 0 0 1 58.33 81.25 V64.58 A6.25 6.25 0 0 1 64.58 58.33 Z",
+                                "stroke": "#aa9fb1"
                               },
                               {
                                 "id": "settings-host-moved-node-34",
@@ -27744,17 +27596,16 @@
                           {
                             "id": "settings-host-moved-node-36",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 12,
                               "y": 11
                             },
                             "w": 15,
                             "h": 15,
-                            "strokeWidth": 1.7,
-                            "size": 15,
-                            "color": "#f5f1f6",
-                            "icon": "h3-desk"
+                            "strokeWidth": 1.25,
+                            "d": "M18.75 16.67 H81.25 A6.25 6.25 0 0 1 87.5 22.92 V60.42 A6.25 6.25 0 0 1 81.25 66.67 H18.75 A6.25 6.25 0 0 1 12.5 60.42 V22.92 A6.25 6.25 0 0 1 18.75 16.67 Z M33.33 83.33 h33.33 M50 66.67 v16.67",
+                            "stroke": "#f5f1f6"
                           },
                           {
                             "id": "settings-host-moved-node-37",
@@ -27775,17 +27626,16 @@
                           {
                             "id": "settings-host-moved-node-38",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 194,
                               "y": 11
                             },
                             "w": 14,
                             "h": 14,
-                            "strokeWidth": 1.7,
-                            "size": 14,
-                            "color": "#aa9fb1",
-                            "icon": "h3-chevron"
+                            "strokeWidth": 1.17,
+                            "d": "M25 37.5 l25 25 l25 -25",
+                            "stroke": "#aa9fb1"
                           }
                         ]
                       }
@@ -30262,17 +30112,16 @@
                                   {
                                     "id": "settings-host-moved-node-196",
                                     "name": "icon",
-                                    "t": "icon",
+                                    "t": "vector",
                                     "place": {
                                       "x": 12,
                                       "y": 19
                                     },
                                     "w": 15,
                                     "h": 15,
-                                    "strokeWidth": 1.7,
-                                    "size": 15,
-                                    "color": "#bdcd79",
-                                    "icon": "h3-wifi"
+                                    "strokeWidth": 1.25,
+                                    "d": "M8.33 37.5 a62.5 62.5 0 0 1 83.33 0 M20.83 52.08 a41.67 41.67 0 0 1 58.33 0 M35.42 66.67 a20.83 20.83 0 0 1 29.17 0 M46.67 81.25 A3.33 3.33 0 1 0 53.33 81.25 A3.33 3.33 0 1 0 46.67 81.25 Z",
+                                    "stroke": "#bdcd79"
                                   },
                                   {
                                     "id": "settings-host-moved-node-197",
@@ -30365,17 +30214,16 @@
                                       {
                                         "id": "settings-host-moved-node-201",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 12,
                                           "y": 9
                                         },
                                         "w": 14,
                                         "h": 14,
-                                        "strokeWidth": 1.7,
-                                        "size": 14,
-                                        "color": "#1b200b",
-                                        "icon": "h3-qr"
+                                        "strokeWidth": 1.17,
+                                        "d": "M12.5 12.5 H41.67 V41.67 H12.5 Z M58.33 12.5 H87.5 V41.67 H58.33 Z M12.5 58.33 H41.67 V87.5 H12.5 Z M58.33 58.33 h12.5 v12.5 h-12.5 z M75 75 h12.5 v12.5 h-12.5 z",
+                                        "stroke": "#1b200b"
                                       },
                                       {
                                         "id": "settings-host-moved-node-202",
@@ -30486,17 +30334,16 @@
                                       {
                                         "id": "settings-host-moved-node-208",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 12,
                                           "y": 9
                                         },
                                         "w": 14,
                                         "h": 14,
-                                        "strokeWidth": 1.7,
-                                        "size": 14,
-                                        "color": "#f5f1f6",
-                                        "icon": "h3-retry"
+                                        "strokeWidth": 1.17,
+                                        "d": "M83.33 45.83 a33.33 33.33 0 1 0 -9.58 23.75 M83.33 16.67 v29.17 h-29.17",
+                                        "stroke": "#f5f1f6"
                                       },
                                       {
                                         "id": "settings-host-moved-node-209",
@@ -30932,17 +30779,16 @@
                                       {
                                         "id": "settings-host-moved-node-236",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 7,
                                           "y": 7
                                         },
                                         "w": 16,
                                         "h": 16,
-                                        "strokeWidth": 1.7,
-                                        "size": 16,
-                                        "color": "#bdcd79",
-                                        "icon": "h3-crown"
+                                        "strokeWidth": 1.33,
+                                        "d": "M12.5 33.33 l16.67 16.67 l20.83 -29.17 l20.83 29.17 l16.67 -16.67 l-8.33 45.83 H20.83 z",
+                                        "stroke": "#bdcd79"
                                       }
                                     ]
                                   },
@@ -30979,17 +30825,16 @@
                                       {
                                         "id": "settings-host-moved-node-239",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 8,
                                           "y": 5
                                         },
                                         "w": 11,
                                         "h": 11,
-                                        "strokeWidth": 1.7,
-                                        "size": 11,
-                                        "color": "#bdcd79",
-                                        "icon": "h3-crown"
+                                        "strokeWidth": 0.92,
+                                        "d": "M12.5 33.33 l16.67 16.67 l20.83 -29.17 l20.83 29.17 l16.67 -16.67 l-8.33 45.83 H20.83 z",
+                                        "stroke": "#bdcd79"
                                       },
                                       {
                                         "id": "settings-host-moved-node-240",
@@ -31040,17 +30885,16 @@
                                       {
                                         "id": "settings-host-moved-node-241",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 12,
                                           "y": 12
                                         },
                                         "w": 15,
                                         "h": 15,
-                                        "strokeWidth": 1.7,
-                                        "size": 15,
-                                        "color": "#d4ccd8",
-                                        "icon": "h3-desk"
+                                        "strokeWidth": 1.25,
+                                        "d": "M18.75 16.67 H81.25 A6.25 6.25 0 0 1 87.5 22.92 V60.42 A6.25 6.25 0 0 1 81.25 66.67 H18.75 A6.25 6.25 0 0 1 12.5 60.42 V22.92 A6.25 6.25 0 0 1 18.75 16.67 Z M33.33 83.33 h33.33 M50 66.67 v16.67",
+                                        "stroke": "#d4ccd8"
                                       },
                                       {
                                         "id": "settings-host-moved-node-242",
@@ -31132,17 +30976,16 @@
                                       {
                                         "id": "settings-host-moved-node-246",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 12,
                                           "y": 12
                                         },
                                         "w": 15,
                                         "h": 15,
-                                        "strokeWidth": 1.7,
-                                        "size": 15,
-                                        "color": "#d4ccd8",
-                                        "icon": "h3-lap"
+                                        "strokeWidth": 1.25,
+                                        "d": "M27.08 20.83 H72.92 A6.25 6.25 0 0 1 79.17 27.08 V56.25 A6.25 6.25 0 0 1 72.92 62.5 H27.08 A6.25 6.25 0 0 1 20.83 56.25 V27.08 A6.25 6.25 0 0 1 27.08 20.83 Z M8.33 79.17 h83.33",
+                                        "stroke": "#d4ccd8"
                                       },
                                       {
                                         "id": "settings-host-moved-node-247",
@@ -31225,17 +31068,16 @@
                                       {
                                         "id": "settings-host-moved-node-251",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 12,
                                           "y": 12
                                         },
                                         "w": 15,
                                         "h": 15,
-                                        "strokeWidth": 1.7,
-                                        "size": 15,
-                                        "color": "#d4ccd8",
-                                        "icon": "h3-desk"
+                                        "strokeWidth": 1.25,
+                                        "d": "M18.75 16.67 H81.25 A6.25 6.25 0 0 1 87.5 22.92 V60.42 A6.25 6.25 0 0 1 81.25 66.67 H18.75 A6.25 6.25 0 0 1 12.5 60.42 V22.92 A6.25 6.25 0 0 1 18.75 16.67 Z M33.33 83.33 h33.33 M50 66.67 v16.67",
+                                        "stroke": "#d4ccd8"
                                       },
                                       {
                                         "id": "settings-host-moved-node-252",
@@ -31331,17 +31173,16 @@
                                       {
                                         "id": "settings-host-moved-node-257",
                                         "name": "icon",
-                                        "t": "icon",
+                                        "t": "vector",
                                         "place": {
                                           "x": 12,
                                           "y": 9
                                         },
                                         "w": 14,
                                         "h": 14,
-                                        "strokeWidth": 1.7,
-                                        "size": 14,
-                                        "color": "#1b200b",
-                                        "icon": "h3-plus"
+                                        "strokeWidth": 1.17,
+                                        "d": "M50 20.83 v58.33 M20.83 50 h58.33",
+                                        "stroke": "#1b200b"
                                       },
                                       {
                                         "id": "settings-host-moved-node-258",
@@ -31626,17 +31467,16 @@
                                               {
                                                 "id": "settings-host-moved-node-274",
                                                 "name": "icon",
-                                                "t": "icon",
+                                                "t": "vector",
                                                 "place": {
                                                   "x": 5,
                                                   "y": 5
                                                 },
                                                 "w": 12,
                                                 "h": 12,
-                                                "strokeWidth": 1.7,
-                                                "size": 12,
-                                                "color": "#d4ccd8",
-                                                "icon": "h3-person"
+                                                "strokeWidth": 1,
+                                                "d": "M33.33 33.33 A16.67 16.67 0 1 0 66.67 33.33 A16.67 16.67 0 1 0 33.33 33.33 Z M16.67 87.5 c0 -18.33 15 -33.33 33.33 -33.33 s33.33 15 33.33 33.33",
+                                                "stroke": "#d4ccd8"
                                               }
                                             ]
                                           },
@@ -31980,17 +31820,16 @@
                           {
                             "id": "settings-host-moved-node-296",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 0,
                               "y": 2
                             },
                             "w": 14,
                             "h": 14,
-                            "strokeWidth": 1.7,
-                            "size": 14,
-                            "color": "#aa9fb1",
-                            "icon": "h3-desk"
+                            "strokeWidth": 1.17,
+                            "d": "M18.75 16.67 H81.25 A6.25 6.25 0 0 1 87.5 22.92 V60.42 A6.25 6.25 0 0 1 81.25 66.67 H18.75 A6.25 6.25 0 0 1 12.5 60.42 V22.92 A6.25 6.25 0 0 1 18.75 16.67 Z M33.33 83.33 h33.33 M50 66.67 v16.67",
+                            "stroke": "#aa9fb1"
                           },
                           {
                             "id": "settings-host-moved-node-297",
@@ -32041,17 +31880,16 @@
                           {
                             "id": "settings-host-moved-node-300",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 0,
                               "y": 2
                             },
                             "w": 14,
                             "h": 14,
-                            "strokeWidth": 1.7,
-                            "size": 14,
-                            "color": "#aa9fb1",
-                            "icon": "h3-lap"
+                            "strokeWidth": 1.17,
+                            "d": "M27.08 20.83 H72.92 A6.25 6.25 0 0 1 79.17 27.08 V56.25 A6.25 6.25 0 0 1 72.92 62.5 H27.08 A6.25 6.25 0 0 1 20.83 56.25 V27.08 A6.25 6.25 0 0 1 27.08 20.83 Z M8.33 79.17 h83.33",
+                            "stroke": "#aa9fb1"
                           },
                           {
                             "id": "settings-host-moved-node-301",
@@ -32103,17 +31941,16 @@
                           {
                             "id": "settings-host-moved-node-304",
                             "name": "icon",
-                            "t": "icon",
+                            "t": "vector",
                             "place": {
                               "x": 0,
                               "y": 2
                             },
                             "w": 14,
                             "h": 14,
-                            "strokeWidth": 1.7,
-                            "size": 14,
-                            "color": "#aa9fb1",
-                            "icon": "h3-desk"
+                            "strokeWidth": 1.17,
+                            "d": "M18.75 16.67 H81.25 A6.25 6.25 0 0 1 87.5 22.92 V60.42 A6.25 6.25 0 0 1 81.25 66.67 H18.75 A6.25 6.25 0 0 1 12.5 60.42 V22.92 A6.25 6.25 0 0 1 18.75 16.67 Z M33.33 83.33 h33.33 M50 66.67 v16.67",
+                            "stroke": "#aa9fb1"
                           },
                           {
                             "id": "settings-host-moved-node-305",
@@ -32172,17 +32009,16 @@
               {
                 "id": "settings-host-moved-node-307",
                 "name": "icon",
-                "t": "icon",
+                "t": "vector",
                 "place": {
                   "x": 16,
                   "y": 13
                 },
                 "w": 15,
                 "h": 15,
-                "strokeWidth": 1.7,
-                "size": 15,
-                "color": "#0f0b13",
-                "icon": "h3-crown"
+                "strokeWidth": 1.25,
+                "d": "M12.5 33.33 l16.67 16.67 l20.83 -29.17 l20.83 29.17 l16.67 -16.67 l-8.33 45.83 H20.83 z",
+                "stroke": "#0f0b13"
               },
               {
                 "id": "settings-host-moved-node-308",
