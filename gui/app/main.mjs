@@ -51,7 +51,7 @@ import { acceptStreamEvent, createStore, loadSnapshot } from "./state.mjs";
 import { close as closeStream, resetCredentials, synchronize } from "./stream.mjs";
 import * as startApi from './start-api.mjs';
 import { roleLabel, startText } from './start-copy.mjs';
-import { acceptedRepositoryCluster, catalogLabel, clientLabel, clusterLead, customRoleProblems, initialRunsIn, repositorySelection, renderAgentForm, renderClusterForm, renderRepositoryOffer, renderRunsInPicker, runsInLabel, startDialog, supervisedClient } from './clusters.mjs';
+import { acceptedRepositoryCluster, catalogLabel, clientLabel, clusterLead, customRoleProblems, initialRunsIn, repositorySelection, renderAccountOffer, renderAgentForm, renderClusterForm, renderRepositoryOffer, renderRunsInPicker, runsInLabel, startDialog, supervisedClient } from './clusters.mjs';
 import { renderAgentHeader, renderCluster, renderClusterChanges, renderClusterDetails } from './inspector.mjs';
 import { fitMap, flyToCluster, isCollapsed, toggleCollapsed } from './map.mjs';
 import { changeContext, createSessionView, loadSessionView, loadTranscriptPage, renderContext, renderSessionTabs, renderSessionWork, renderStartedWith } from './session-work.mjs';
@@ -378,7 +378,8 @@ async function runBoot(app) {
     const reports = app.layout === 'desktop' ? loadStartReports(app) : Promise.resolve();
     await Promise.all([presentation, lists, reports]);
     if (app.disposed || app.bootFailed) return app;
-    if (app.layout === 'desktop') maybeStartDiscovery(app);
+    // The accounts are asked about first, so the first agent can already be given one; the repository offer follows.
+    if (app.layout === 'desktop' && !await maybeOfferAccounts(app)) maybeStartDiscovery(app);
     startOwnEmbed(app);
   } catch (error) {
     if (!app.disposed) {
@@ -2102,6 +2103,34 @@ function mindHasClusters(app) {
   return [...(app.store.indexes?.groups?.values?.() ?? [])].some(group => group && group.deleted !== true);
 }
 
+// The first start asks about each extra account home found on this machine, one at a time. Nothing is added without the person's answer.
+export async function maybeOfferAccounts(app) {
+  if (app.disposed || app.startDialog || app.layout !== 'desktop' || app.accountOfferBusy || !app.store.capabilities.includes('settings.write')) return false;
+  app.accountOfferBusy = true;
+  try {
+    let data;
+    try { data = (await request(app.api, 'GET', '/settings/accounts')).data; } catch { return false; }
+    if (app.disposed || app.startDialog || !data?.pending?.length) return false;
+    const offer = data.pending[0];
+    const model = { language: app.language, offer, folder: String(offer.home).split(/[\\/]/).pop(), label: offer.label };
+    let flow;
+    const answer = (action, body) => flow.run(`${action}-account`, async () => {
+      const path = `/settings/accounts/${action}`;
+      await request(app.api, 'POST', path, { operation: createOperation({ method: 'POST', path, body }) });
+      flow.dialog.close(); if (app.startDialog === flow) app.startDialog = null;
+      await loadStartReports(app);
+      app.accountOfferBusy = false; if (!await maybeOfferAccounts(app)) maybeStartDiscovery(app);
+    });
+    flow = startDialog(app.root.ownerDocument, { view: 'account-offer', language: app.language, onCancel: () => { if (!flow.busy) flow.dialog.close(); },
+      onClose: () => { if (app.startDialog === flow) app.startDialog = null; }, render: () => renderAccountOffer(app.root.ownerDocument, model, {
+        onLabel: value => { model.label = value; }, onSkip: () => answer('skip', { client: offer.client, home: offer.home }),
+        onConfirm: () => answer('confirm', { client: offer.client, home: offer.home, label: model.label.trim() || offer.label }),
+      }) });
+    flow.model = model; app.startDialog = flow;
+    return true;
+  } finally { app.accountOfferBusy = false; }
+}
+
 export function maybeStartDiscovery(app) {
   if (app.disposed || app.startDialog || app.layout !== 'desktop' || !app.store.capabilities.includes('unit.create') || app.startError) return;
   const offer = app.startProjects?.discoveryOffer;
@@ -3505,6 +3534,7 @@ function settingsSurface(app, document, t) {
     error: state.error ? actionText(app.language, state.error.code) : null,
     locations: info.locations,
     agents: state.agents,
+    accounts: state.accounts,
     permissions: state.permissions,
     pendingGrants: state.pendingGrants,
     projects: state.projects,
@@ -3559,6 +3589,9 @@ function settingsSurface(app, document, t) {
     onReview: (agent, mode, target) => reviewSettingsAgent(app, agent, mode, target),
     onReviewAll: (agents) => reviewAllSettingsAgents(app, agents),
     onDisconnect: (agent) => disconnectSettingsAgent(app, agent),
+    onAddAccount: (client, name) => addSettingsAccount(app, client, name),
+    onRemoveAccount: (client, account) => removeSettingsAccount(app, client, account),
+    onReviewAccount: (client, account) => reviewSettingsAgent(app, state.agents.items.find(item => item.id === client), state.agents.items.find(item => item.id === client).mode, 'cli', account),
     onRevokeGrant: (item) => revokeSettingsGrant(app, item),
     onRevokePermission: (item) => settingsMutation(app, "DELETE", `/settings/permissions/${encodeURIComponent(item.id)}`, { machine: state.machine, expectedRevision: state.permissions.revision }),
     onLinkFolder: () => openClusterLink(app, null, state.machine),
@@ -3636,11 +3669,14 @@ async function readSettingsSections(app, state, machine, ticket) {
       ...["/settings", "/settings/agents", "/settings/permissions", "/settings/projects", "/settings/content"]
         .map(path => request(app.api, "GET", path + (path === "/settings/content" ? "" : query))),
       collectPages(app.api, "/machines", { limit: 50 }).then(page => ({ data: page.items })),
+      // The accounts belong to this machine; a service without them leaves the section out.
+      request(app.api, "GET", "/settings/accounts").catch(() => ({ data: null })),
     ]);
     if (app.disposed) return;
     if (ticket !== state.ticket) return state.pending;
     [state.info, state.agents, state.permissions, state.projects, state.content] = results.map(result => result.data);
     state.machines = results[5].data;
+    state.accounts = results[6].data;
     for (const id of state.pendingGrants ?? []) if (!state.permissions.unitGrants.some(item => item.grant.id === id)) state.pendingGrants.delete(id);
     state.loaded = true;
     if (!state.contentDirty) state.contentDraft = null;
@@ -3780,15 +3816,17 @@ function mountSettingsDialog(app, dialog, opener) {
   return dialog;
 }
 
-function reviewSettingsAgent(app, agent, mode, target) {
+function reviewSettingsAgent(app, agent, mode, target, account = null) {
   const state = settingsState(app);
   const machine = state.machine;
-  const opener = target === "app" ? `settings-app-${agent.id}` : agent.cli.state === "connected" ? `settings-mode-${agent.id}-${mode}` : `settings-review-${agent.id}`;
-  return settle(app, `settings-preview:${agent.id}`, text(app.language, "settingsReview"), async record => {
+  // An extra account is reviewed on its own: its home gets the same entry, hooks, rule line and skills as the default one.
+  const extra = account && !account.default ? account : null;
+  const opener = extra ? `settings-account-review-${agent.id}-${extra.id}` : target === "app" ? `settings-app-${agent.id}` : agent.cli.state === "connected" ? `settings-mode-${agent.id}-${mode}` : `settings-review-${agent.id}`;
+  return settle(app, `settings-preview:${agent.id}${extra ? `:${extra.id}` : ""}`, text(app.language, "settingsReview"), async record => {
     const path = `/settings/agents/${encodeURIComponent(agent.id)}/preview`;
-    const result = await commitSettingsMutation(app, record, "POST", path, { machine, mode, target, allowGit: false });
+    const result = await commitSettingsMutation(app, record, "POST", path, { machine, mode, target, allowGit: false, ...(extra ? { account: extra.id } : {}) });
     if (app.disposed || state.machine !== machine || app.mode !== "settings") return;
-    const review = { agent, machine, target, opener, preview: result.data, selected: new Set(result.data.changes.filter(change => !change.optional && change.selected).map(change => change.id)) };
+    const review = { agent: extra ? { ...agent, name: `${agent.name} (${extra.label})` } : agent, machine, target, opener, preview: result.data, selected: new Set(result.data.changes.filter(change => !change.optional && change.selected).map(change => change.id)) };
     const t = (key, variables) => text(app.language, key, variables);
     const dialog = renderClientReview(app.root.ownerDocument, review, t, {
       onCopy: async ids => {
@@ -3932,6 +3970,37 @@ function disconnectSettingsAgent(app, agent) {
   dialog.className += " settings-review";
   dialog.setAttribute("data-settings-disconnect", agent.id);
   dialog.addEventListener("close", () => restoreInvoker(app, `settings-disconnect-${agent.id}`));
+}
+
+// A new account: the person names it, ONEM1ND opens a terminal for that account's own sign-in and lists it.
+function addSettingsAccount(app, client, name) {
+  openChoiceForm(app, "settings-account", text(app.language, "accountAddTitle", { client: name }), form => {
+    form.append(labeledField(form.ownerDocument, text(app.language, "accountName"), text(app.language, "accountAddHint"),
+      element(form.ownerDocument, "input", { name: "label", maxlength: 40, autocomplete: "off", "aria-label": text(app.language, "accountName") })));
+    form.problems = () => form.querySelector("[name='label']").value.trim() ? [] : [{ name: "label", message: text(app.language, "accountName") }];
+  }, async form => {
+    const label = form.querySelector("[name='label']").value.trim();
+    await track(app, `settings-account-add:${client}`, text(app.language, "working"), async record => {
+      await commitSettingsMutation(app, record, "POST", "/settings/accounts", { client, label });
+      await loadSettingsSections(app); await loadStartReports(app);
+    });
+    return true;
+  }, `settings-account-add-${client}`);
+}
+
+// Removing an account takes out ONEM1ND's entry only: the folder, the sign-in and the setup written there stay.
+function removeSettingsAccount(app, client, account) {
+  const dialog = showDialog(app.root.ownerDocument, {
+    title: text(app.language, "accountRemoveTitle", { name: account.label }), body: text(app.language, "accountRemoveBody"),
+    confirm: text(app.language, "accountRemove"), cancel: text(app.language, "cancel"), retry: text(app.language, "retry"),
+    onConfirm: () => track(app, `settings-account-remove:${client}:${account.id}`, text(app.language, "working"), async record => {
+      await commitSettingsMutation(app, record, "POST", "/settings/accounts/remove", { client, accountId: account.id, confirmed: true });
+      await loadSettingsSections(app); await loadStartReports(app);
+    }),
+  });
+  dialog.className += " settings-review";
+  dialog.setAttribute("data-settings-account-remove", `${client}:${account.id}`);
+  dialog.addEventListener("close", () => restoreInvoker(app, `settings-account-remove-${client}-${account.id}`));
 }
 
 function findSettingsAgent(app, agent) {
@@ -4845,6 +4914,7 @@ const ACTION_COPY = {
   invalid_lead: "invalidLead",
   machine_unavailable: "machineDown",
   note_required: "noteRequired",
+  account_label_taken: "accountLabelTaken",
   revision_conflict: "revisionConflict",
   configuration_changed: "settingsConfigurationChanged",
   phone_read_only: "phoneReadOnly",
@@ -5605,7 +5675,7 @@ function openChoiceForm(app, kind, title, build, onConfirm, opener = null) {
   const inputs = [...form.querySelectorAll("input, select, textarea")];
   const enabled = inputs.filter((control) => !control.disabled);
   const setFieldsBusy = (busy) => {
-    if (!["selection-lead", "library-create", "library-folder", "library-move", "settings-find"].includes(kind)) return;
+    if (!["selection-lead", "library-create", "library-folder", "library-move", "settings-find", "settings-account"].includes(kind)) return;
     for (const control of enabled) control.disabled = busy;
   };
   cancel.addEventListener("click", () => dialog.close());

@@ -945,6 +945,7 @@ function readSession(bytes, relative, now, issues) {
       runMode: record.runMode ?? 'chat',
       taskId: record.taskId ?? null,
       launchKind: record.launchKind ?? 'manual-app',
+      account: typeof record.account === 'string' ? record.account : null,
       registeredAt: record.registeredAt ?? null,
       activity,
       quota,

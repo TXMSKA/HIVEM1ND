@@ -620,3 +620,116 @@ test('a running service answers a read of its own report from the last report an
   const answer = await readMachineSettings({ ...restarted, settingsOwner: restarted });
   assert.equal(answer.reportedAt, later.reportedAt);
 });
+
+test('setup is written into the home of each confirmed account, tracked per account, and removing an account leaves it in place', async t => {
+  const world = await setup(t);
+  const { fixture, domain } = world;
+  await publishMachineSettings(world.owner);
+  const { confirmDetected, removeAccount } = await import('../engine/service/accounts.mjs');
+  const { accountSetupStates } = await import('../engine/service/settings.mjs');
+  const alt = path.join(fixture.home, '.claude-alt'), codexAlt = path.join(fixture.home, '.codex-alt');
+  await mkdir(alt, { recursive: true }); await writeFile(path.join(alt, '.credentials.json'), '{"claudeAiOauth":"never-read"}');
+  await mkdir(codexAlt, { recursive: true }); await writeFile(path.join(codexAlt, 'auth.json'), '{"tokens":"never-read"}');
+  await confirmDetected(domain, { client: 'claude', home: alt, label: 'Alt' });
+  await confirmDetected(domain, { client: 'codex', home: codexAlt, label: 'Alt' });
+  const states = await accountSetupStates(domain);
+  assert.equal(states.claude.alt.state, 'changes-needed');
+  assert.equal(states.codex.alt.state, 'changes-needed');
+
+  const preview = (await mutateMachineSettings(domain, 'preview', { machine: fixture.machine, mode: 'auto', target: 'cli', account: 'alt' }, 'claude')).body;
+  const paths = preview.changes.map(item => item.path);
+  assert.ok(paths.includes(path.join(alt, '.claude.json')) && paths.includes(path.join(alt, 'settings.json')), 'MCP entry and hooks go to the account home');
+  assert.ok(paths.some(item => item === path.join(alt, 'CLAUDE.md')), 'the rule line goes to the account home');
+  assert.ok(paths.some(item => item.startsWith(path.join(alt, 'skills'))), 'the skills go to the account home');
+  assert.ok(paths.every(item => item.startsWith(alt)), 'nothing outside the account home');
+  assert.equal(preview.changes.some(item => item.id === 'git'), false);
+  const applied = (await mutateMachineSettings(domain, 'apply', { machine: fixture.machine, previewId: preview.previewId, changeIds: preview.changes.filter(item => item.selected).map(item => item.id), expectedRevision: preview.revision }, 'claude')).body;
+  assert.equal(applied.state, 'connected');
+  assert.match(await readFile(path.join(alt, '.claude.json'), 'utf8'), /onem1nd-relay/);
+  assert.match(await readFile(path.join(alt, 'settings.json'), 'utf8'), /hooks/);
+  await assert.rejects(readFile(path.join(fixture.home, '.claude', 'settings.json')), { code: 'ENOENT' });
+  const after = await accountSetupStates(domain);
+  assert.equal(after.claude.alt.state, 'connected');
+  assert.equal(after.claude.default.state, 'changes-needed');
+  assert.equal(after.codex.alt.state, 'changes-needed');
+
+  // Codex writes into its own account home, and the unrelated accounts are untouched.
+  const codexPreview = (await mutateMachineSettings(domain, 'preview', { machine: fixture.machine, mode: 'on-demand', target: 'cli', account: 'alt' }, 'codex')).body;
+  assert.deepEqual(codexPreview.changes.filter(item => !item.optional && !item.path.startsWith(codexAlt)).map(item => item.path), []);
+  assert.ok(codexPreview.changes.some(item => item.path === path.join(codexAlt, 'config.toml')));
+
+  // Removing the account removes only ONEM1ND's entry; the written setup stays.
+  await removeAccount(domain, { client: 'claude', accountId: 'alt' });
+  assert.match(await readFile(path.join(alt, '.claude.json'), 'utf8'), /onem1nd-relay/);
+  await assert.rejects(mutateMachineSettings(domain, 'preview', { machine: fixture.machine, mode: 'auto', target: 'cli', account: 'alt' }, 'claude'), { code: 'unsupported_launch_choice' });
+});
+
+test('the Accounts card and the Agents row come from one computation, so they agree after the client rewrites its own file', async t => {
+  const world = await setup(t);
+  const { fixture, owner, domain } = world;
+  owner.probeAgents = async () => ({ claude: { installed: true, version: '2.0.0' }, codex: { installed: true, version: '1.2.3' } });
+  const { accountSetupStates } = await import('../engine/service/settings.mjs');
+  await publishMachineSettings(owner);
+  const input = { machine: fixture.machine, mode: 'on-demand', target: 'cli' };
+  const preview = (await mutateMachineSettings(domain, 'preview', input, 'claude')).body;
+  await mutateMachineSettings(domain, 'apply', { machine: fixture.machine, previewId: preview.previewId, changeIds: preview.changes.filter(item => item.selected).map(item => item.id), expectedRevision: preview.revision }, 'claude');
+  const agree = async () => {
+    const card = (await accountSetupStates(domain)).claude.default;
+    const row = (await readMachineSettings(domain, fixture.machine, 'agents')).items.find(item => item.id === 'claude').cli;
+    assert.deepEqual({ state: row.state, changes: row.changes }, card);
+    return card;
+  };
+  assert.equal((await agree()).state, 'connected');
+  // The client rewrites its file after the report was built: the report cache cannot see a file outside the M1ND.
+  await writeFile(path.join(fixture.home, '.claude.json'), '{}');
+  const drifted = await agree();
+  assert.equal(drifted.state, 'changes-needed');
+  assert.ok(drifted.changes > 0);
+});
+
+test('the accounts routes list, confirm, skip, add and remove through the desktop, with no credential content and a terminal only for Add', async t => {
+  const world = await setup(t);
+  const { fixture, owner } = world;
+  const opened = [];
+  owner.openTerminal = input => { opened.push(input); };
+  const alt = path.join(fixture.home, '.claude-alt'), spare = path.join(fixture.home, '.codex-spare');
+  await mkdir(alt, { recursive: true }); await writeFile(path.join(alt, '.credentials.json'), 'SECRET-TOKEN');
+  await mkdir(spare, { recursive: true }); await writeFile(path.join(spare, 'auth.json'), 'SECRET-TOKEN');
+  const credentials = createCredentialStore({ now: owner.now });
+  const desktop = credentials.issue({ audience: 'desktop', unitId: 'root:master', viewerId: randomUUID() }).token;
+  const agent = credentials.issue({ audience: 'agent', unitId: 'root:worker', viewerId: randomUUID() }).token;
+  const http = await createHttpServer({ ...owner, settingsOwner: owner, credentials });
+  t.after(() => http.close());
+  const origin = `http://127.0.0.1:${http.port}`;
+  const call = async (method, target, body, token = desktop) => {
+    const response = await fetch(`${origin}/api/v1${target}`, { method, signal: AbortSignal.timeout(20000), headers: { origin,
+      authorization: `Bearer ${token}`, 'content-type': 'application/json', 'idempotency-key': randomUUID() }, body: body === undefined ? undefined : JSON.stringify(body) });
+    return { status: response.status, json: await response.json() };
+  };
+  const first = await call('GET', '/settings/accounts');
+  assert.equal(first.status, 200);
+  assert.equal(first.json.data.confirmed, false);
+  assert.deepEqual(first.json.data.pending.map(item => [item.client, item.label]), [['claude', 'alt'], ['codex', 'spare']]);
+  assert.deepEqual(first.json.data.clients.claude.map(item => item.id), ['default']);
+  assert.equal((await call('GET', '/settings/accounts', undefined, agent)).status, 403);
+  assert.equal((await call('POST', '/settings/accounts/confirm', { client: 'claude', home: alt, label: 'Personal', token: 'x' })).status, 400);
+  const confirmed = await call('POST', '/settings/accounts/confirm', { client: 'claude', home: alt, label: 'Personal' });
+  assert.equal(confirmed.status, 200);
+  assert.deepEqual(confirmed.json.data.clients.claude.map(item => item.label), ['Default', 'Personal']);
+  assert.equal(confirmed.json.data.setup.claude.personal.state, 'changes-needed');
+  const skipped = await call('POST', '/settings/accounts/skip', { client: 'codex', home: spare });
+  assert.equal(skipped.json.data.confirmed, true);
+  assert.equal(opened.length, 0);
+  const added = await call('POST', '/settings/accounts', { client: 'codex', label: 'Team' });
+  assert.equal(added.status, 200);
+  assert.equal(opened.length, 1);
+  assert.equal(added.json.data.clients.codex.length, 2);
+  assert.equal((await call('POST', '/settings/accounts', { client: 'cursor', label: 'x' })).status, 422);
+  assert.equal((await call('POST', '/settings/accounts/remove', { client: 'claude', accountId: 'default', confirmed: true })).status, 409);
+  assert.equal((await call('POST', '/settings/accounts/remove', { client: 'claude', accountId: 'personal' })).status, 422);
+  const removed = await call('POST', '/settings/accounts/remove', { client: 'claude', accountId: 'personal', confirmed: true });
+  assert.equal(removed.status, 200);
+  assert.deepEqual(removed.json.data.clients.claude.map(item => item.id), ['default']);
+  assert.equal(await readFile(path.join(alt, '.credentials.json'), 'utf8'), 'SECRET-TOKEN');
+  assert.equal(JSON.stringify([first, confirmed, added, removed]).includes('SECRET-TOKEN'), false);
+});

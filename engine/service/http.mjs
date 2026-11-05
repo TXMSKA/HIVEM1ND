@@ -29,7 +29,7 @@ import { createFolder, duplicateEditor, importBoard, listFolders, moveEditor, pa
 import { listHistory, restoreHistory, resolveConflict } from './editors.mjs';
 import { chatContains, createWatch, dispose as disposeWatch, disposeViewer, recordActivity, start as startWatch, stop as stopWatch } from './watch.mjs';
 import { dispatch as dispatchMcp } from './mcp.mjs';
-import { mutateMachineSettings, readContent, readMachineSettings, validateSettingsBody, writeContent } from './settings.mjs';
+import { changeAccounts, mutateMachineSettings, readAccountsPanel, readContent, readMachineSettings, validateSettingsBody, writeContent } from './settings.mjs';
 import { applyAdditions, assertAdditionRequest, cancelAdditionPreview, cancelAdditionUpload, closeAdditionJobs, inspectAddition, openAdditionUpload, readAdditions, readAdditionPreview, removeAddition, retryAdditionPreview, writeAdditionChunk } from './additions.mjs';
 
 const MARK_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="-44 -44 88 88"><path fill="none" stroke="#e0103a" stroke-width="4.5" stroke-linecap="round" d="M9.3 -16.0L11.5 -19.9M18.5 0.0L23.0 0.0M9.3 16.0L11.5 19.9M-9.2 16.0L-11.5 19.9M-18.5 0.0L-23.0 0.0M-9.3 -16.0L-11.5 -19.9"/><path fill="#a30c2c" d="M16.5 -20.1 9.1 -24.3 9.1 -32.8 16.5 -37.1 23.9 -32.8 23.9 -24.3ZM33.0 8.5 25.6 4.2 25.6 -4.3 33.0 -8.5 40.4 -4.3 40.4 4.2ZM16.5 37.1 9.1 32.8 9.1 24.3 16.5 20.1 23.9 24.3 23.9 32.8ZM-16.5 37.1 -23.9 32.8 -23.9 24.3 -16.5 20.1 -9.1 24.3 -9.1 32.8ZM-33.0 8.5 -40.4 4.3 -40.4 -4.2 -33.0 -8.5 -25.6 -4.2 -25.6 4.3ZM-16.5 -20.1 -23.9 -24.3 -23.9 -32.8 -16.5 -37.1 -9.1 -32.8 -9.1 -24.3Z"/><path fill="#ff2d55" d="M0.0 17.0 -14.7 8.5 -14.7 -8.5 0.0 -17.0 14.7 -8.5 14.7 8.5Z"/></svg>\n';
@@ -141,6 +141,11 @@ const ROUTES = [
   ['GET', '/settings/agents', 'read', 'D', 'machineSettings', 'agents'],
   ['GET', '/settings/permissions', 'read', 'D', 'machineSettings', 'permissions'],
   ['GET', '/settings/projects', 'read', 'D', 'machineSettings', 'projects'],
+  ['GET', '/settings/accounts', 'read', 'D', 'accounts', 'read'],
+  ['POST', '/settings/accounts', 'settings.write', 'D', 'accounts', 'add'],
+  ['POST', '/settings/accounts/confirm', 'settings.write', 'D', 'accounts', 'confirm'],
+  ['POST', '/settings/accounts/skip', 'settings.write', 'D', 'accounts', 'skip'],
+  ['POST', '/settings/accounts/remove', 'settings.write', 'D', 'accounts', 'remove'],
   ['GET', '/settings/content', 'read', 'D', 'contentSettings'],
   ['PATCH', '/settings/content', 'settings.write', 'D', 'writeContent'],
   ['POST', '/additions/uploads', 'settings.write', 'D', 'addition', 'upload'],
@@ -965,6 +970,7 @@ function allowedQuery(route) {
     '/waiting': [...list, 'unitId', 'kind'],
     '/settings': ['machine'],
     '/settings/agents': ['machine'],
+    '/settings/accounts': [],
     '/settings/permissions': ['machine'],
     '/settings/projects': ['machine'],
     '/blueprint/boards': [...list, 'project', 'folderId', 'openComments', 'attachedAgents', 'changedThisWeek'],
@@ -1228,9 +1234,13 @@ function allowedBody(route) {
     'PATCH /settings/content': ['includedFeatures', 'includedKnowledge', 'preferences', 'expectedRevision'],
     'POST /settings/agents/scan': ['machine'],
     'POST /settings/agents/find': ['machine', 'client', 'path'],
-    'POST /settings/agents/:client/preview': ['machine', 'mode', 'target', 'allowGit'],
+    'POST /settings/accounts': ['client', 'label'],
+    'POST /settings/accounts/confirm': ['client', 'home', 'label'],
+    'POST /settings/accounts/skip': ['client', 'home'],
+    'POST /settings/accounts/remove': ['client', 'accountId', 'confirmed'],
+    'POST /settings/agents/:client/preview': ['machine', 'mode', 'target', 'allowGit', 'account'],
     'POST /settings/agents/:client/apply': ['machine', 'previewId', 'changeIds', 'expectedRevision'],
-    'DELETE /settings/agents/:client': ['machine', 'confirmed', 'expectedRevision'],
+    'DELETE /settings/agents/:client': ['machine', 'confirmed', 'expectedRevision', 'account'],
     'POST /settings/permissions': ['machine', 'unitId', 'client', 'action', 'expectedRevision'],
     'DELETE /settings/permissions/:permissionId': ['machine', 'expectedRevision'],
     'POST /settings/projects/folders': ['machine', 'path', 'environment', 'expectedRevision'],
@@ -1494,6 +1504,7 @@ async function invoke(route, scope) {
   }
   if (route.handler === 'layout') return { status: 200, body: await readDetail(domain, 'layout') };
   if (route.handler === 'machineSettings') return { status: 200, body: await readMachineSettings(domain, query.machine ?? domain.paths.machine, route.collection) };
+  if (route.handler === 'accounts') return { status: 200, body: route.collection === 'read' ? await readAccountsPanel(domain) : await changeAccounts(domain, route.collection, body) };
   if (route.handler === 'contentSettings') return { status: 200, body: await readContent(domain) };
   if (route.handler === 'writeContent') return { status: 200, body: await writeContent(domain, body) };
   if (route.handler === 'settingsMutation') return mutateMachineSettings(domain, route.collection, body, params.client ?? params.permissionId ?? params.projectId ?? null);

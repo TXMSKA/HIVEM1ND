@@ -16,6 +16,7 @@ import { directoryIdentity, pathKey, readRepositoryIdentity } from './cluster-gi
 import { EVENT_NAMES, publishDomainEvents } from './events.mjs';
 import { protectLocalFile } from './security.mjs';
 import { probeClients, reloadReviewedClient } from './adapters.mjs';
+import { ACCOUNT_CLIENTS, accountEnv, accountHome, accountList, accountsView, addAccount, confirmDetected, readAccounts, removeAccount, skipDetected } from './accounts.mjs';
 import { launchBoundary, validateRunsIn } from './runs-in.mjs';
 import { readUnitState, stateHeader, stateRunsIn } from './state.mjs';
 import { configureOwnedService } from './install.mjs';
@@ -36,23 +37,37 @@ function bytes(value) { return Buffer.from(`${canonicalJson(value)}\n`); }
 function revision(value) { return hashBytes(bytes(value)); }
 function stamp(context) { return new Date(context.now()).toISOString(); }
 
+// One client's report in the shape Settings keeps and the pickers read; null when the client is not connected with a model.
+function clientReport(id, report) {
+  if (!report || report.id !== id || report.connected !== true) return null;
+  if (!['claude', 'codex', 'cursor', 'lyra'].includes(id) || !Array.isArray(report.models)) return null;
+  const models = report.models.filter(model => text(model.id, 256) && model.id && text(model.title, 256)
+    && Array.isArray(model.efforts) && model.efforts.every(value => text(value, 64))
+    && Array.isArray(model.modes) && model.modes.every(value => ['fast', 'normal', 'thinking'].includes(value)))
+    .slice(0, 256).map(model => ({ id: model.id, title: model.title, efforts: [...model.efforts], modes: [...model.modes] }));
+  if (!models.length) return null;
+  const known = id !== 'lyra' && report.quota?.known === true && Number.isFinite(report.quota.remainingPercent)
+    && report.quota.remainingPercent >= 0 && report.quota.remainingPercent <= 100;
+  const boundary = launchBoundary({ ...report, id, connected: true });
+  return { id, title: text(report.title, 128) ? report.title : id, connected: true, models,
+    quota: { remainingPercent: known ? report.quota.remainingPercent : null, period: known && text(report.quota.period, 128) ? report.quota.period : null, known },
+    scopeEnforced: boundary === 'confined', boundary, context: { known: report.context?.known === true, compact: report.context?.compact === true } };
+}
+
 export async function connectedClients(context) {
   const reports = [];
-  for (const [id, adapter] of Object.entries(context.adapters ?? context.settingsOwner?.adapters ?? {})) {
-    const report = await Promise.resolve().then(() => adapter.describe?.({ localDirectory: context.paths?.localDirectory, store: context.store })).catch(() => null);
-    if (!report || report.id !== id || report.connected !== true) continue;
-    if (!['claude', 'codex', 'cursor', 'lyra'].includes(id) || !Array.isArray(report.models)) continue;
-    const models = report.models.filter(model => text(model.id, 256) && model.id && text(model.title, 256)
-      && Array.isArray(model.efforts) && model.efforts.every(value => text(value, 64))
-      && Array.isArray(model.modes) && model.modes.every(value => ['fast', 'normal', 'thinking'].includes(value)))
-      .slice(0, 256).map(model => ({ id: model.id, title: model.title, efforts: [...model.efforts], modes: [...model.modes] }));
-    if (!models.length) continue;
-    const known = id !== 'lyra' && report.quota?.known === true && Number.isFinite(report.quota.remainingPercent)
-      && report.quota.remainingPercent >= 0 && report.quota.remainingPercent <= 100;
-    const boundary = launchBoundary({ ...report, id, connected: true });
-    reports.push({ id, title: text(report.title, 128) ? report.title : id, connected: true, models,
-      quota: { remainingPercent: known ? report.quota.remainingPercent : null, period: known && text(report.quota.period, 128) ? report.quota.period : null, known },
-      scopeEnforced: boundary === 'confined', boundary, context: { known: report.context?.known === true, compact: report.context?.compact === true } });
+  const adapters = context.adapters ?? context.settingsOwner?.adapters ?? {};
+  const describe = (adapter, accountHome) => Promise.resolve().then(() => adapter.describe?.({ localDirectory: context.paths?.localDirectory, store: context.store, ...(accountHome === undefined ? {} : { accountHome }) })).catch(() => null);
+  for (const [id, adapter] of Object.entries(adapters)) {
+    const report = clientReport(id, await describe(adapter, ACCOUNT_CLIENTS.includes(id) ? null : undefined));
+    if (!report) continue;
+    // The accounts of a client beyond the default one, each with its own models and quota. The client's own fields stay the default account's.
+    const extras = ACCOUNT_CLIENTS.includes(id) && context.paths?.localDirectory ? (await readAccounts(context)).accounts[id] : [];
+    const accounts = (await Promise.all(extras.map(async extra => {
+      const one = clientReport(id, await describe(adapter, extra.home));
+      return one ? { id: extra.id, label: extra.label, connected: true, models: one.models, quota: one.quota } : null;
+    }))).filter(Boolean);
+    reports.push(accounts.length ? { ...report, accounts } : report);
   }
   return reports;
 }
@@ -197,7 +212,7 @@ function reportShape(record, machine) {
   if (record.discoveryOffer != null) validatePublicOffer(record.discoveryOffer);
   if (record.connectedClients !== undefined && (!Array.isArray(record.connectedClients) || record.connectedClients.length > 4)) fail(422, 'corrupt_resource', 'The client capabilities are invalid.');
   for (const client of record.connectedClients ?? []) {
-    exact(client, ['id', 'title', 'connected', 'models', 'quota', 'scopeEnforced', 'boundary', 'context']);
+    exact(client, ['id', 'title', 'connected', 'models', 'quota', 'scopeEnforced', 'boundary', 'context', 'accounts']);
     exact(client.quota, ['remainingPercent', 'period', 'known']); exact(client.context, ['known', 'compact']);
     if (!['claude', 'codex', 'cursor', 'lyra'].includes(client.id) || !text(client.title, 128) || client.connected !== true
       || typeof client.scopeEnforced !== 'boolean' || client.boundary !== undefined && ![null, 'confined', 'supervised'].includes(client.boundary)
@@ -209,6 +224,20 @@ function reportShape(record, machine) {
       exact(model, ['id', 'title', 'efforts', 'modes']);
       if (!text(model.id, 256) || !text(model.title, 256) || !Array.isArray(model.efforts) || !model.efforts.every(value => text(value, 64))
         || !Array.isArray(model.modes) || !model.modes.every(value => ['fast', 'normal', 'thinking'].includes(value))) fail(422, 'corrupt_resource', 'The model capability is invalid.');
+    }
+    if (client.accounts !== undefined) {
+      if (!ACCOUNT_CLIENTS.includes(client.id) || !Array.isArray(client.accounts) || client.accounts.length > 32) fail(422, 'corrupt_resource', 'The account capabilities are invalid.');
+      for (const account of client.accounts) {
+        exact(account, ['id', 'label', 'connected', 'models', 'quota']); exact(account.quota, ['remainingPercent', 'period', 'known']);
+        if (!text(account.id, 64) || !account.id || !text(account.label, 64) || account.connected !== true || !Array.isArray(account.models) || account.models.length > 256 || typeof account.quota.known !== 'boolean'
+          || account.quota.remainingPercent !== null && (!Number.isFinite(account.quota.remainingPercent) || account.quota.remainingPercent < 0 || account.quota.remainingPercent > 100)
+          || account.quota.period !== null && !text(account.quota.period, 128)) fail(422, 'corrupt_resource', 'The account capabilities are invalid.');
+        for (const model of account.models) {
+          exact(model, ['id', 'title', 'efforts', 'modes']);
+          if (!text(model.id, 256) || !text(model.title, 256) || !Array.isArray(model.efforts) || !model.efforts.every(value => text(value, 64))
+            || !Array.isArray(model.modes) || !model.modes.every(value => ['fast', 'normal', 'thinking'].includes(value))) fail(422, 'corrupt_resource', 'The model capability is invalid.');
+        }
+      }
     }
   }
   return record;
@@ -374,6 +403,61 @@ async function publishOwnedSettings(context, section) {
   return report;
 }
 
+// How many files of one client home still differ from what the setup writes. `home` is the folder of an extra account; null is the default account.
+async function pendingChanges(context, adapter, id, mode, legacy, content, connections, home) {
+  const env = home ? accountEnv(context.env ?? process.env, id, home) : context.env;
+  const plan = await clientAssetPlan(context, adapter, mode, legacy, content, connections, env, home);
+  let changes = plan.items.filter(item => item.action !== 'unchanged').length + (plan.removals ?? []).length;
+  const configPaths = clientConfigPaths({ client: id, homeDir: context.homeDir, env: context.env, accountHome: home ?? undefined });
+  const existing = {};
+  for (const kind of ['mcp', 'hooks']) {
+    if (!configPaths[kind]) continue;
+    await assertNoLinks(configPaths[kind]);
+    const state = await lstat(configPaths[kind]).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+    if (state && (!state.isFile() || state.size > 1_000_000)) fail(422, 'invalid_path', 'The installed client configuration is unavailable.');
+    existing[kind] = state ? await readFile(configPaths[kind], 'utf8') : '';
+  }
+  try {
+    const proposed = buildClientConfig({ client: id, existing, kitPath: context.kitPath, mindPath: context.paths.mind, platform: context.paths.platform });
+    changes += Object.keys(proposed).filter(kind => proposed[kind] !== existing[kind]).length;
+  } catch { changes += Object.keys(existing).length || 1; }
+  return changes;
+}
+
+// The setup state of every account of Claude Code and Codex, so Settings shows each one: connected, changes-needed, or missing
+// (the home has no folder yet, for example before the first sign-in).
+export async function accountSetupStates(context) {
+  const adapters = await loadAdapters({ kitPath: context.kitPath });
+  const { record: legacy } = await readMachineRecord(context.paths.mind, context.paths.machine);
+  const content = await readContent(context), connections = await clientOwnership(context), record = await readAccounts(context);
+  const states = {};
+  for (const client of ACCOUNT_CLIENTS) {
+    const adapter = adapters.find(item => (CLIENT_IDS[item.id] ?? item.id) === client);
+    states[client] = {};
+    for (const account of accountList(context, record, client)) {
+      const home = account.default ? null : account.home;
+      const key = ownershipKey(client, account.default ? null : account.id);
+      if (!adapter || home && !await lstat(home).then(() => true, () => false)) { states[client][account.id] = { state: 'missing', changes: 0 }; continue; }
+      // The default account takes its mode the way its Agents row does, so both read the same setup.
+      const mode = connections.clients[key]?.cli?.mode ?? (home ? 'on-demand' : legacyMode(legacy, adapter.id, client));
+      const changes = await pendingChanges(context, adapter, client, mode, home ? null : legacy, content, connections, home);
+      states[client][account.id] = { state: changes ? 'changes-needed' : 'connected', changes };
+    }
+  }
+  return states;
+}
+
+function legacyMode(legacy, adapterId, client) {
+  return legacy?.agents.find(item => item.name === adapterId || item.name === client)?.mode === 'auto' ? 'auto' : 'on-demand';
+}
+
+// The published report is cached and cannot see a client rewriting its own files, so the setup of the default account of a found
+// client is taken from the same computation the Accounts card uses; the two can then never disagree.
+async function withLiveSetup(context, items) {
+  const states = await accountSetupStates(ownerOf(context));
+  return items.map(item => item.found && states[item.id]?.default && states[item.id].default.state !== 'missing' ? { ...item, cli: { ...item.cli, ...states[item.id].default } } : item);
+}
+
 async function agentItems(context, legacy) {
   const adapters = await loadAdapters({ kitPath: context.kitPath });
   const detected = await discoverAgents({ homeDir: context.homeDir, env: context.env, adapters });
@@ -386,25 +470,8 @@ async function agentItems(context, legacy) {
     const id = CLIENT_IDS[adapter.id] ?? adapter.id;
     const foundState = foundPaths[adapter.id] ? await lstat(foundPaths[adapter.id]).catch(() => null) : null;
     const found = detected.some(item => item.id === adapter.id) || probes[id]?.installed === true || foundState?.isFile() === true;
-    const mode = connections.clients[id]?.cli?.mode ?? (legacy?.agents.find(item => item.name === adapter.id || item.name === id)?.mode === 'auto' ? 'auto' : 'on-demand');
-    let changes = 0;
-    if (found) {
-      const plan = await clientAssetPlan(context, adapter, mode, legacy, content, connections);
-      changes = plan.items.filter(item => item.action !== 'unchanged').length + (plan.removals ?? []).length;
-      const configPaths = clientConfigPaths({ client: id, homeDir: context.homeDir, env: context.env });
-      const existing = {};
-      for (const kind of ['mcp', 'hooks']) {
-        if (!configPaths[kind]) continue;
-        await assertNoLinks(configPaths[kind]);
-        const state = await lstat(configPaths[kind]).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
-        if (state && (!state.isFile() || state.size > 1_000_000)) fail(422, 'invalid_path', 'The installed client configuration is unavailable.');
-        existing[kind] = state ? await readFile(configPaths[kind], 'utf8') : '';
-      }
-      try {
-        const proposed = buildClientConfig({ client: id, existing, kitPath: context.kitPath, mindPath: context.paths.mind, platform: context.paths.platform });
-        changes += Object.keys(proposed).filter(kind => proposed[kind] !== existing[kind]).length;
-      } catch { changes += Object.keys(existing).length || 1; }
-    }
+    const mode = connections.clients[id]?.cli?.mode ?? legacyMode(legacy, adapter.id, id);
+    const changes = found ? await pendingChanges(context, adapter, id, mode, legacy, content, connections, null) : 0;
     const app = context.probeApps ? (await context.probeApps(id)) : null;
     return { id, name: id === 'copilot' ? 'GitHub Copilot' : adapter.displayName, version: probes[id]?.version ?? null, found, mode,
       cli: { state: !found ? 'missing' : changes ? 'changes-needed' : 'connected', changes },
@@ -424,7 +491,8 @@ export async function readMachineSettings(context, machine = context.paths.machi
   const report = machine === context.paths.machine ? await currentReport(context) : await readPublishedSettings(context, machine);
   const shared = await json(context, 'user/gui/settings.json') ?? { format: 'hivem1nd-settings-v1', look: 'modern', language: 'en' }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   const common = { machine, readOnly, reportedAt: report?.reportedAt ?? null };
-  if (section === 'agents') return { ...common, revision: report?.agents.revision ?? null, items: report?.agents.items ?? [],
+  if (section === 'agents') return { ...common, revision: report?.agents.revision ?? null,
+    items: machine === context.paths.machine ? await withLiveSetup(context, report?.agents.items ?? []) : report?.agents.items ?? [],
     connectedClients: report?.connectedClients ?? [], defaultRunsIn: machine === context.paths.machine ? await defaultRunsIn(context) : null };
   if (section === 'permissions') return { ...common, revision: report?.permissions.revision ?? null, unitGrants: report?.permissions.unitGrants ?? [], agentPermissions: report?.permissions.agentPermissions ?? [] };
   if (section === 'projects') return { ...common, revision: report?.projects.revision ?? null, folders: report?.projects.folders ?? [],
@@ -446,9 +514,10 @@ export async function findAgent(context, input) {
 }
 
 export function validateSettingsBody(operation, input) {
-  const fields = { scan: ['machine'], find: ['machine', 'client', 'path'], preview: ['machine', 'mode', 'target', 'allowGit'], apply: ['machine', 'previewId', 'changeIds', 'expectedRevision'], disconnect: ['machine', 'confirmed', 'expectedRevision'], revoke: ['machine', 'expectedRevision'], grant: ['machine', 'unitId', 'client', 'action', 'expectedRevision'], folder: ['machine', 'path', 'environment', 'expectedRevision'], removeProject: ['machine', 'confirmed', 'expectedRevision'], service: ['machine', 'startWithWindows', 'expectedRevision'], restart: ['machine'] }[operation];
+  const fields = { scan: ['machine'], find: ['machine', 'client', 'path'], preview: ['machine', 'mode', 'target', 'allowGit', 'account'], apply: ['machine', 'previewId', 'changeIds', 'expectedRevision'], disconnect: ['machine', 'confirmed', 'expectedRevision', 'account'], revoke: ['machine', 'expectedRevision'], grant: ['machine', 'unitId', 'client', 'action', 'expectedRevision'], folder: ['machine', 'path', 'environment', 'expectedRevision'], removeProject: ['machine', 'confirmed', 'expectedRevision'], service: ['machine', 'startWithWindows', 'expectedRevision'], restart: ['machine'] }[operation];
   if (!fields) fail(422, 'invalid_body', 'The Settings operation is not valid.');
-  exact(input, fields); required(input, fields.filter(key => key !== 'allowGit'));
+  exact(input, fields); required(input, fields.filter(key => key !== 'allowGit' && key !== 'account'));
+  if (Object.hasOwn(input, 'account') && (typeof input.account !== 'string' || !/^[a-z0-9][a-z0-9-]{0,31}$/.test(input.account))) fail(422, 'invalid_body', 'The account is not valid.');
   validateMachineName(input.machine);
   if (Object.hasOwn(input, 'expectedRevision') && !byteRevision(input.expectedRevision)) fail(422, 'invalid_body', 'A byte revision is required.');
   if (['disconnect', 'revoke', 'grant', 'removeProject'].includes(operation) && input.expectedRevision === null) fail(422, 'invalid_body', 'An existing byte revision is required.');
@@ -523,6 +592,9 @@ async function executeOwned(context, operation, input, id = null) {
   return result?.body ? result : { status: operation === 'restart' ? 202 : 200, body: result };
 }
 
+// Setup records of an extra account are kept under client:account; the default account keeps the plain client id.
+function ownershipKey(client, account) { return account && account !== 'default' ? `${client}:${account}` : client; }
+
 function ownershipPath(context) { return path.join(context.paths.localDirectory, 'client-configuration.json'); }
 
 async function clientOwnership(context) {
@@ -532,12 +604,17 @@ async function clientOwnership(context) {
   return record;
 }
 
-async function clientAssetPlan(context, adapter, mode, legacy, content, ownership) {
+// `home` is an extra account's folder. Only what lives inside it belongs to that account: Codex reads skills from the user home, shared by
+// all its accounts, so those stay with the default account.
+async function clientAssetPlan(context, adapter, mode, legacy, content, ownership, env = context.env, home = null) {
   const managedFiles = { ...legacy?.managedFiles };
   for (const client of Object.values(ownership.clients)) Object.assign(managedFiles, client.assetHashes);
-  return prepareContentAgentAssets({ kitPath: context.kitPath, mindPath: context.paths.mind, homeDir: context.homeDir,
-    env: context.env, adapters: [adapter], agents: [{ name: adapter.id, mode }], excluded: contentExclusions(content), managedFiles,
+  const plan = await prepareContentAgentAssets({ kitPath: context.kitPath, mindPath: context.paths.mind, homeDir: context.homeDir,
+    env, adapters: [adapter], agents: [{ name: adapter.id, mode }], excluded: contentExclusions(content), managedFiles,
     keepExistingPreferences: content.preferences.keepExistingPreferencesFirst });
+  if (!home) return plan;
+  const inside = item => { const relative = path.relative(path.resolve(home), path.resolve(item.path)); return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative); };
+  return { ...plan, items: plan.items.filter(inside), removals: (plan.removals ?? []).filter(inside), conflicts: (plan.conflicts ?? []).filter(inside) };
 }
 
 function assertConfigurationOwner(context, operation, input) {
@@ -550,12 +627,17 @@ export async function previewClientConfiguration(context, client, input) {
   assertConfigurationOwner(context, 'preview', input);
   const adapter = (await loadAdapters({ kitPath: context.kitPath })).find(item => (CLIENT_IDS[item.id] ?? item.id) === client);
   if (!adapter) fail(422, 'invalid_body', 'The client is not a known adapter.');
+  const account = input.account && input.account !== 'default' ? input.account : null;
+  if (account && !ACCOUNT_CLIENTS.includes(client)) fail(422, 'invalid_body', 'Only Claude Code and Codex have several accounts.');
+  const home = account ? await accountHome(context, client, account) : null;
+  const env = home ? accountEnv(context.env ?? process.env, client, home) : context.env;
+  const key = ownershipKey(client, account);
   const ownership = await clientOwnership(context);
-  if (ownership.clients[client]) await restoredClientEntries(context, client, ownership.clients[client]);
+  if (ownership.clients[key]) await restoredClientEntries(context, client, ownership.clients[key]);
   const ownerBytes = await readConfigBytes(ownershipPath(context));
   const { record: legacy } = await readMachineRecord(context.paths.mind, context.paths.machine);
   const content = await readContent(context);
-  const paths = clientConfigPaths({ client, homeDir: context.homeDir, env: context.env });
+  const paths = clientConfigPaths({ client, homeDir: context.homeDir, env: context.env, accountHome: home ?? undefined });
   const existing = {}, snapshots = {};
   for (const kind of ['mcp', 'hooks']) if (paths[kind]) {
     snapshots[kind] = await readConfigBytes(paths[kind]);
@@ -576,7 +658,7 @@ export async function previewClientConfiguration(context, client, input) {
       afterText: owned[kind], optional: false, selected: true });
   }
   if (input.target === 'cli') {
-    const assets = await clientAssetPlan(context, adapter, input.mode, legacy, content, ownership);
+    const assets = await clientAssetPlan(context, adapter, input.mode, legacy, content, ownership, env, home);
     for (const item of [...assets.items.filter(item => item.action !== 'unchanged'), ...(assets.removals ?? []).map(item => ({ ...item, action: 'delete' }))]) {
       if (assets.conflicts.some(conflict => conflict.path === item.path) || item.linkComponent) fail(409, 'configuration_changed', 'An installed Content file has foreign changes; preserve it before reviewing again.');
       const before = await readConfigBytes(item.path);
@@ -590,7 +672,7 @@ export async function previewClientConfiguration(context, client, input) {
   const permissionPath = path.join(context.paths.localDirectory, 'client-permissions.json');
   const permissionBytes = await readConfigBytes(permissionPath);
   const permissions = await readAgentPermissions(context);
-  if (!permissions.some(item => item.client === client && item.machine === input.machine)) {
+  if (!account && !permissions.some(item => item.client === client && item.machine === input.machine)) {
     const permission = { id: randomUUID(), machine: input.machine, client, actions: ['git.commit', 'git.push'], scope: 'hivem1nd-started-sessions', grantedAt: stamp(context), grantedBy: 'root:master' }; // Compatibility: stored permission scope preserves existing grants.
     changes.push({ id: 'git', path: permissionPath, root: context.paths.localDirectory, kind: 'permission', before: permissionBytes,
       after: bytes({ permissions: [...permissions, permission] }), afterText: canonicalJson(permission), description: 'Allow git commit and git push only in ONEM1ND-started sessions on this machine', optional: true, selected: false });
@@ -602,7 +684,7 @@ export async function previewClientConfiguration(context, client, input) {
   for (const [key, preview] of context.clientPreviews) if (Date.parse(preview.expiresAt) <= context.now()) context.clientPreviews.delete(key);
   if (context.clientPreviews.size >= 64) context.clientPreviews.delete(context.clientPreviews.keys().next().value);
   const restartRequired = changes.some(change => !change.optional);
-  context.clientPreviews.set(previewId, { machine: input.machine, client, mode: input.mode, target: input.target, changes, revision, expiresAt,
+  context.clientPreviews.set(previewId, { machine: input.machine, client, account, mode: input.mode, target: input.target, changes, revision, expiresAt,
     ownerHash: revisionOf(ownerBytes), contentRevision: content.revision, restartRequired });
   return { previewId, revision, expiresAt, changes: changes.map(({ id, path, description, before, afterText, optional, selected }) => ({ id, path, description, beforeHash: revisionOf(before), afterText, optional, selected })), restartRequired };
 }
@@ -633,7 +715,8 @@ export async function applyClientConfiguration(context, client, input) {
   if (hashBytes(bytes(await agentItems(context, legacy))) !== preview.revision) fail(409, 'revision_conflict', 'The selected machine Settings changed.');
   if (selected.some(change => !change.optional)) await reloadReviewedClient(context, { client, target: preview.target, previewId: input.previewId, checkOnly: true });
   const original = await readConfigBytes(ownershipPath(context));
-  const connection = ownership.clients[client] ?? { entries: [], assetHashes: {} };
+  const key = ownershipKey(client, preview.account);
+  const connection = ownership.clients[key] ?? { entries: [], assetHashes: {} };
   for (const change of selected) {
     connection.entries.push({ path: change.path, root: change.root, kind: change.kind, before: change.before?.toString('base64') ?? null, after: change.after?.toString('base64') ?? null });
     if (!['mcp', 'hooks', 'permission'].includes(change.kind)) {
@@ -641,7 +724,7 @@ export async function applyClientConfiguration(context, client, input) {
     }
   }
   if (!preview.changes.some(change => !change.optional) || selected.some(change => !change.optional)) connection[preview.target] = { mode: preview.mode, reloadRequired: preview.restartRequired };
-  ownership.clients[client] = connection;
+  ownership.clients[key] = connection;
   ownership.applied[input.previewId] = { binding, target: preview.target, reloadRequired: selected.some(change => !change.optional), result: null, keptCopies: selected.length };
   await configurationWrite(context, [...selected, { path: ownershipPath(context), root: context.paths.localDirectory, before: original, after: bytes(ownership), internal: true }]);
   return finishClientApplication(context, client, input.previewId, ownership);
@@ -690,16 +773,45 @@ export async function disconnectClientConfiguration(context, client, input) {
   const ownership = await clientOwnership(context);
   const report = await readPublishedSettings(context, input.machine);
   if (report?.agents.revision !== input.expectedRevision) fail(409, 'revision_conflict', 'The selected machine Settings changed.');
-  const connection = ownership.clients[client];
+  const key = ownershipKey(client, input.account);
+  const connection = ownership.clients[key];
   if (!connection) fail(409, 'configuration_changed', 'The client has no reviewed owned changes to restore.');
   const changes = await restoredClientEntries(context, client, connection);
   await reloadReviewedClient(context, { client, target: connection.app ? 'app' : 'cli', previewId: 'disconnect', checkOnly: true });
   const original = await readConfigBytes(ownershipPath(context));
-  delete ownership.clients[client];
+  delete ownership.clients[key];
   await configurationWrite(context, [...changes.values(), { path: ownershipPath(context), root: context.paths.localDirectory, before: original, after: bytes(ownership), internal: true }]);
   await reloadReviewedClient(context, { client, target: connection.app ? 'app' : 'cli', previewId: 'disconnect', checkOnly: false });
   const updated = await publishMachineSettings(context, 'agents');
   return { machine: context.paths.machine, client, state: 'disconnected', revision: updated.agents.revision };
+}
+
+// Accounts of Claude Code and Codex on this machine: the list, the homes waiting for the person's answer and each account's setup state.
+export async function readAccountsPanel(context) {
+  if (context.principal?.audience !== 'desktop') fail(403, 'forbidden', 'Only the desktop may read the accounts.');
+  const owner = ownerOf(context);
+  return { ...await accountsView(owner), setup: await accountSetupStates(owner) };
+}
+
+const ACCOUNT_BODIES = { add: ['client', 'label'], confirm: ['client', 'home', 'label'], skip: ['client', 'home'], remove: ['client', 'accountId', 'confirmed'] };
+
+export async function changeAccounts(context, operation, input) {
+  if (context.principal?.audience !== 'desktop') fail(403, 'forbidden', 'Only the desktop may change the accounts.');
+  const fields = ACCOUNT_BODIES[operation];
+  if (!fields) fail(422, 'invalid_body', 'The accounts operation is not valid.');
+  exact(input, fields); required(input, fields.filter(key => key !== 'label'));
+  if (operation === 'remove' && input.confirmed !== true) fail(422, 'invalid_body', 'Confirmation is required.');
+  const owner = ownerOf(context);
+  if (context.active === false) fail(409, 'machine_unavailable', 'The machine is unavailable.');
+  await withLocks(owner.store, [`settings-operation:${owner.paths.machine}`], async () => {
+    if (operation === 'add') await addAccount(owner, input);
+    else if (operation === 'confirm') await confirmDetected(owner, input);
+    else if (operation === 'skip') await skipDetected(owner, input);
+    else await removeAccount(owner, input);
+    // The pickers read each account's models and quota from the machine report.
+    await publishMachineSettings(owner, 'agents');
+  });
+  return readAccountsPanel(context);
 }
 
 export async function mutateMachineSettings(context, operation, input, id = null) {

@@ -13,7 +13,8 @@ import { commitTransaction, readBytes, revisionOf } from './store.mjs';
 import { withLocalChanges, withLocks } from './store.mjs';
 import { readAgentPermissions } from './settings.mjs';
 import { additionsForUnit, readScopedAdditions } from './additions.mjs';
-import { launchBoundary, launchChoice } from './runs-in.mjs';
+import { accountEnv, accountHome } from './accounts.mjs';
+import { choiceAccount, launchBoundary, launchChoice, launchChoiceOn } from './runs-in.mjs';
 import { bindLaunchScope, prepareLaunchScope, readScopedFile, requestNativeOperation, writeScopedFile } from './file-access.mjs';
 import { assertNoLinks } from './paths.mjs';
 import { ownedSpawnOptions } from './process-handle.mjs';
@@ -123,6 +124,8 @@ export function createNativeAdapter(client, options = {}) {
   const models = Array.isArray(options.models) ? options.models : [];
   const fixture = options.fixture === true;
   const live = options.live === true || Boolean(options.command) || Boolean(options.spawn);
+  // An account's home variable is set for that process only; a request without an account is the default, so no home variable is inherited.
+  const envFor = home => accountEnv(options.env ?? process.env, client, home ?? null);
   const children = new Map();
   const sessions = new Map();
   const activityWrites = new Set();
@@ -159,8 +162,8 @@ export function createNativeAdapter(client, options = {}) {
       if (fixture) return { id: client, title: client, connected: true, scopeEnforced: true, boundary: 'confined',
         models: models.map(id => ({ id, title: id, efforts: options.efforts ?? ['high'], modes: [] })),
         quota: { remainingPercent: null, period: null, known: false }, context: { known: false, compact: false } };
-      if (client === 'codex' && live) return probeCodexChoices(options);
-      if (live && ['claude', 'cursor'].includes(client)) return probeNativeChoices(client, options, context);
+      if (client === 'codex' && live) return probeCodexChoices({ ...options, env: envFor(context.accountHome) });
+      if (live && ['claude', 'cursor'].includes(client)) return probeNativeChoices(client, { ...options, env: envFor(context.accountHome) }, context);
       return { id: client, title: client, connected: false, models: [], scopeEnforced: false, boundary: null,
         quota: { remainingPercent: null, period: null, known: false }, context: { known: false, compact: false } };
     },
@@ -183,8 +186,8 @@ export function createNativeAdapter(client, options = {}) {
       }
       let boundaryKind = null;
       if (request.runsIn) {
-        const capability = await this.describe({ localDirectory: request.probeDirectory });
-        launchChoice({ runsIn: request.runsIn }, [capability]);
+        const capability = await this.describe({ localDirectory: request.probeDirectory, accountHome: request.accountHome });
+        launchChoiceOn(request.runsIn, capability);
         boundaryKind = launchBoundary(capability);
         if (!boundaryKind) throw new CoreError(409, 'scope_unavailable', 'This client has no verified boundary.');
       }
@@ -223,7 +226,7 @@ export function createNativeAdapter(client, options = {}) {
       try {
         const resolved = options.command
           ? { command: options.command, args: options.args ?? launchArgs(client, request) }
-          : await resolveLaunch(client, options.env ?? process.env, platform, request);
+          : await resolveLaunch(client, envFor(request.accountHome), platform, request);
         if (closed) throw unavailable();
         if (!resolved?.command) throw new CoreError(503, 'client_unavailable', 'The native client is not available.');
         assertNoBypass(resolved.args);
@@ -231,7 +234,7 @@ export function createNativeAdapter(client, options = {}) {
           shell: false,
           windowsHide: true,
           cwd: request.cwd || undefined,
-          env: nativeLaunch ? { ...(options.env ?? process.env), ...nativeLaunch.env } : options.env ?? process.env,
+          env: nativeLaunch ? { ...envFor(request.accountHome), ...nativeLaunch.env } : envFor(request.accountHome),
           stdio: ['pipe', 'pipe', 'pipe'],
           ...(ownsTree ? ownedSpawnOptions(platform) : {}),
         };
@@ -698,6 +701,8 @@ export async function registerNative(context, input) {
     runMode: input.runMode ?? 'chat',
     taskId: input.taskId ?? null,
     launchKind: input.launchKind ?? 'manual-app',
+    // The account the session runs on; the unit is the same unit on any account. Null is the client's default account.
+    account: input.account ?? null,
   };
   assertNoSecret(canonicalJson(registration));
   await writeJson(context, `user/relay/sessions/${registration.registrationId}.json`, registration);
@@ -1019,9 +1024,11 @@ async function launch(context, request) {
     throw new CoreError(409, 'unit_in_use', 'The unit already has a launch in progress.');
   }
   const adapter = adapterFor(context, request.client);
+  // The home of the chosen account reaches the client only through this launch; it is not kept in the request records.
+  const home = await accountHome(context, request.client, choiceAccount(request.runsIn));
   if (request.runsIn) {
-    const report = await adapter.describe?.({ localDirectory: scope.directory, store: context.store });
-    request = { ...request, runsIn: launchChoice({ runsIn: request.runsIn }, report ? [report] : []) };
+    const report = await adapter.describe?.({ localDirectory: scope.directory, store: context.store, accountHome: home });
+    request = { ...request, runsIn: launchChoiceOn(request.runsIn, report) };
     if (!launchBoundary(report)) throw new CoreError(409, 'scope_unavailable', 'The native boundary changed before launch.');
   }
   try {
@@ -1060,7 +1067,7 @@ async function launch(context, request) {
       return { ...context, principal: { audience: 'agent', unitId: request.unitId,
         sessionId: uuidV8(['session', context.paths.machine, request.client, created.nativeSessionId, request.unitId]) } };
     };
-    created = await adapter.create({ ...request, nativeMode, bootstrap: await contextBootstrap(context, request.unitId, { client: request.client }), retainedContext: await previousContext(context, request), cwd, probeDirectory: scope.directory, launchScope: scope.scope, contentReader: adapter.capabilities?.scopedContent ? contentReader : null,
+    created = await adapter.create({ ...request, accountHome: home, nativeMode, bootstrap: await contextBootstrap(context, request.unitId, { client: request.client }), retainedContext: await previousContext(context, request), cwd, probeDirectory: scope.directory, launchScope: scope.scope, contentReader: adapter.capabilities?.scopedContent ? contentReader : null,
       nativePermission: (operation, boundary) => requestNativeOperation(actorContext(), operation, boundary),
       scopedRead: input => readScopedFile(actorContext(), input),
       scopedWrite: input => writeScopedFile(actorContext(), input),
@@ -1087,7 +1094,7 @@ async function launch(context, request) {
   const ownership = created.executionId ? { executionId: created.executionId } : {};
   await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'spawned', pid, ...ownership, sessionId: null, createAttempted: true, nativeSessionId: created.nativeSessionId, at: stamp(context) });
   if (context.launchFault === 'spawned') throw new CoreError(500, 'injected_crash', 'Injected crash after spawn.');
-  const registration = await registerNative(context, { client: request.client, nativeSessionId: created.nativeSessionId, unitId: request.unitId, runMode: request.runMode, taskId: request.taskId, launchKind: 'cli' });
+  const registration = await registerNative(context, { client: request.client, nativeSessionId: created.nativeSessionId, unitId: request.unitId, runMode: request.runMode, taskId: request.taskId, launchKind: 'cli', account: choiceAccount(request.runsIn) });
   if (scope) await bindLaunchScope(context, scope.scope, registration, pid, created.executionId);
   await writeJournal(context, { requestId: request.id, unitId: request.unitId, client: request.client, phase: 'registered', pid, ...ownership, nativeSessionId: created.nativeSessionId, sessionId: registration.sessionId,
     contextSequence: Math.max(0, ...journals.map(item => item.contextSequence ?? 0)) + 1, createAttempted: true, ...permissionBinding, at: stamp(context) });
@@ -1718,7 +1725,7 @@ export async function launchPlanSession(context, host) {
     nativePermission: (operation, boundary) => import('./runs.mjs').then(module => module.requestPlanNativeOperation(actor, operation, boundary)),
     scopedRead: input => fileTool('file_read', input), scopedWrite: input => fileTool('file_write', input) };
   if (Buffer.byteLength(request.bootstrap) > PROMPT_MAX || choice.client === 'lyra' && request.bootstrap.length > 12000) throw new CoreError(409, 'context_unavailable', 'The approved plan exceeds this client input budget.');
-  const created = await adapter.create(request);
+  const created = await adapter.create({ ...request, accountHome: await accountHome(context, choice.client, choiceAccount(choice)) });
   if (!created.processHandle) throw new CoreError(409, 'cleanup_unavailable', 'The selected client did not provide verified execution ownership.');
   if (host.reviewConversation && await adapter.resumePlanReview?.({ ...created, conversation: host.reviewConversation, role: 'reviewer' }) !== true) {
     await created.processHandle.stop(); throw new CoreError(409, 'context_unavailable', 'The planner conversation cannot be reopened with review authority.');

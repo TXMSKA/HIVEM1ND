@@ -35,6 +35,7 @@ import { resolveActivity } from './watch.mjs';
 import { bytesAt, importedSidecarEvents } from './import-events.mjs';
 import { watchLocalChanges } from './local-watch.mjs';
 import { migrateClusters } from './clusters.mjs';
+import { systemTerminal } from './accounts.mjs';
 import { createSettingsOwner, processSettingsRequests, publishMachineSettings, refreshClusterProjects } from './settings.mjs';
 import { drainRunLaunches, recoverRuns } from './runs.mjs';
 import { closeRunProcesses } from './run-processes.mjs';
@@ -266,6 +267,8 @@ export async function runConfiguredService(options = {}) {
     userKey: options.userKey,
     guardPort: options.guardPort,
     retainHosts: true,
+    // A new account opens a terminal for its own sign-in.
+    openTerminal: options.openTerminal ?? systemTerminal,
     // The running service answers before it starts its first pass over the files, its publishing and its report.
     deferSync: options.deferSync ?? true,
   });
