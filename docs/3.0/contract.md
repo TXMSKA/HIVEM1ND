@@ -57,11 +57,11 @@ The local setup checkpoint is L/setup.json: {format:"hivem1nd-setup-v1",mode:"cr
 
 startWithWindows is a machine-local boolean, absent meaning false. Setup never installs a logon registration by default. The same optional setting enables or removes the existing ownership-checked Windows task, Linux user service or supported macOS registration. Enabling is effective only after OS registration succeeds; disabling removes only the verified owned registration. Runtime service ownership and startup do not require registration.json. The service runs while an authorized host/session needs it; shared singleton and bootstrap protection remain unchanged. Idle origin behavior retains sections 2.9 and 2.10.
 
-The default mind is `%LOCALAPPDATA%/Cosmic/hivem1nd` on Windows, `~/Library/Application Support/Cosmic/hivem1nd` on macOS, and `${XDG_DATA_HOME}/Cosmic/hivem1nd` on Linux, falling back to `~/.local/share/Cosmic/hivem1nd` when unset or relative. A custom location retains a `Cosmic/` parent folder. Staging always remains in the local Cosmic directory.
+The default mind is `%LOCALAPPDATA%/Cosmic/onem1nd` on Windows, `~/Library/Application Support/Cosmic/onem1nd` on macOS, and `${XDG_DATA_HOME}/Cosmic/onem1nd` on Linux, falling back to `~/.local/share/Cosmic/onem1nd` when unset or relative. A custom location retains a `Cosmic/` parent folder. Staging always remains in the local Cosmic directory.
 
-`L` is `<local Cosmic>/hivem1nd-service/<mindKey>/<machine>`, where `mindKey` is the first 16 hex digits of SHA-256 of the resolved `M` path, lowercased on Windows. A resolved staging path in OneDrive, under `O`, or under another configured synced root is rejected. A user-selected mind inside OneDrive is supported; origin publication is still machine-owned.
+`L` is `<local Cosmic>/onem1nd-service/<mindKey>/<machine>`, where `mindKey` is the first 16 hex digits of SHA-256 of the resolved `M` path, lowercased on Windows. A resolved staging path in OneDrive, under `O`, or under another configured synced root is rejected. A user-selected mind inside OneDrive is supported; origin publication is still machine-owned.
 
-There is one process per machine and OS user, not one per mind or host. `<local Cosmic>/hivem1nd-service/service.lock` and `active.json` are the global singleton lock/descriptor, with `{pid,mindPath,machine,localDirectory,startedAt}`. A different configured mind returns `409 service_mind_conflict`; it does not start a second process. Stale locks are reclaimed only after verifying the PID is no longer the same owned service. Starting/attaching waits up to ten seconds for atomic bootstrap publication, then returns `503 service_start_timeout` if unavailable.
+There is one process per machine and OS user, not one per mind or host. `<local Cosmic>/onem1nd-service/service.lock` and `active.json` are the global singleton lock/descriptor, with `{pid,mindPath,machine,localDirectory,startedAt}`. A different configured mind returns `409 service_mind_conflict`; it does not start a second process. Stale locks are reclaimed only after verifying the PID is no longer the same owned service. Starting/attaching waits up to ten seconds for atomic bootstrap publication, then returns `503 service_start_timeout` if unavailable.
 
 `L/config.json` is local, owner-readable configuration, never synced:
 
@@ -71,7 +71,7 @@ There is one process per machine and OS user, not one per mind or host. `<local 
   "mindPath": "C:/Users/example/AppData/Local/Cosmic/hivem1nd",
   "machine": "DESKTOP",
   "origin": {"kind": "folder", "path": "D:/Cosmic/origin"},
-  "stagingPath": "C:/Users/example/AppData/Local/Cosmic/hivem1nd-service/0123456789abcdef/DESKTOP/staging",
+  "stagingPath": "C:/Users/example/AppData/Local/Cosmic/onem1nd-service/0123456789abcdef/DESKTOP/staging",
   "port": 0
 }
 ```
@@ -366,7 +366,7 @@ Allowed transitions are `open->review`, `review->done`, `review->open`, `done->c
 
 For master, `reviewable` is true exactly when status is review, task.from resolves to master or a registry person alias, and either the executor has no current lead or its Report contains the current scope-resolved lead's approval line. The lead's own review is allowed when it is that executor's current lead. Task requester may archive done or reopen closed; master may do so for its own requested tasks. Assigned agent may reopen its returned open task's work but cannot accept its own delivery. Unauthorized transitions return 403 forbidden; undo requires the original actor or task requester and passes the same ownership checks.
 
-The new CLI `hivem1nd task status <project> <id> <status> [--note <text>]` and `hivem1nd task undo <project> <id>` call these same operations using the current revision. A verified native binding uses its agent credential/actor; otherwise the same-user desktop invocation uses a local master viewer credential. Their JSON output is the API's data value. Exit codes are 0 success, 2 usage/validation, 3 conflict, and 1 other failure; stderr prints the error code and message. These commands do not accept a delivery on another person's behalf without the caller's normal authority.
+The new CLI `onem1nd task status <project> <id> <status> [--note <text>]` and `onem1nd task undo <project> <id>` call these same operations using the current revision. A verified native binding uses its agent credential/actor; otherwise the same-user desktop invocation uses a local master viewer credential. Their JSON output is the API's data value. Exit codes are 0 success, 2 usage/validation, 3 conflict, and 1 other failure; stderr prints the error code and message. These commands do not accept a delivery on another person's behalf without the caller's normal authority.
 
 ### 2.7. Layout and settings
 
@@ -879,7 +879,7 @@ startGui({ mindPath, embedded = false, hostOrigin = null, look = null, language 
 // Promise<{ origin, url, token, viewerId, embedded, capabilities, setTheme, setLanguage, isDirty, stop }>
 ```
 
-`mindPath` is a required resolved directory; the host already knows its mind. The entry attaches to the same user's existing service for that mind/machine or starts `hivem1nd service run` once under the global per-user lock. It reads L/bootstrap.json and calls `/auth/local` with the exact Origin, bootstrap-secret bearer, and supplied embed/presentation values. It starts the GUI, API, events, origin watcher, pulse, wake policies, and local MCP in that shared service; it does not start a second per-host worker or Electron. A missing/unconfigured mind returns `mind_not_configured` with no automatic installation or discovery; a different active mind returns service_mind_conflict. The installer/setup wizard remains a separate flow and eventually opens this GUI URL.
+`mindPath` is a required resolved directory; the host already knows its mind. The entry attaches to the same user's existing service for that mind/machine or starts `onem1nd service run` once under the global per-user lock. It reads L/bootstrap.json and calls `/auth/local` with the exact Origin, bootstrap-secret bearer, and supplied embed/presentation values. It starts the GUI, API, events, origin watcher, pulse, wake policies, and local MCP in that shared service; it does not start a second per-host worker or Electron. A missing/unconfigured mind returns `mind_not_configured` with no automatic installation or discovery; a different active mind returns service_mind_conflict. The installer/setup wizard remains a separate flow and eventually opens this GUI URL.
 
 `origin`, `url`, `token`, and `viewerId` describe the exact loopback endpoint and isolated desktop viewer credential; `embedded` echoes the argument. `look` is null or `modern|high-contrast`, and `language` null or `en|es`. `setTheme(look)` and `setLanguage(language)` return Promise<void> and call that viewer's transient PATCH below; persistent settings use `/settings`. `isDirty()` returns the last observed boolean for this viewer's uncommitted editor form/draft state, false before mount, maintained by its event stream. `stop()` is idempotent, returns Promise<void>, logs out that viewer, closes its streams, and releases its handle; the login service continues for other hosts and agents.
 
