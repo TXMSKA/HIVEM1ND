@@ -83,14 +83,15 @@ export async function accountHome(context, client, accountId) {
   return found.home;
 }
 
-// The environment for one client process of one account. The default account leaves the variable unset, so the client uses its
-// own home; any other account sets its folder for that process only.
+// The environment for one client process of one account. Both home variables are dropped first, so a variable inherited from the
+// parent (or meant for the other client) never reaches the child. The default account then leaves its variable unset and the client
+// uses its own home; any other account sets its folder for that process only.
 export function accountEnv(env, client, home) {
-  const variable = ACCOUNT_VARIABLES[client];
-  if (!variable) return env;
+  const names = Object.values(ACCOUNT_VARIABLES);
   const next = { ...env };
-  for (const key of Object.keys(next)) if (key.toUpperCase() === variable) delete next[key];
-  if (home) next[variable] = home;
+  for (const key of Object.keys(next)) if (names.includes(key.toUpperCase())) delete next[key];
+  const variable = ACCOUNT_VARIABLES[client];
+  if (variable && home) next[variable] = home;
   return next;
 }
 

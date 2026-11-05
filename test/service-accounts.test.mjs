@@ -46,11 +46,19 @@ test('the spawn environment sets the account variable only for a non-default acc
   const base = { PATH: 'x', CLAUDE_CONFIG_DIR: 'C:\\inherited', CODEX_HOME: 'C:\\inheritedcodex' };
   assert.equal(Object.hasOwn(accountEnv(base, 'claude', null), 'CLAUDE_CONFIG_DIR'), false);
   assert.equal(accountEnv(base, 'claude', 'C:\\h').CLAUDE_CONFIG_DIR, 'C:\\h');
-  assert.equal(accountEnv(base, 'claude', 'C:\\h').CODEX_HOME, 'C:\\inheritedcodex');
-  assert.equal(accountEnv(base, 'codex', 'C:\\k').CODEX_HOME, 'C:\\k');
-  assert.equal(accountEnv(base, 'cursor', 'C:\\k'), base);
   assert.equal(base.CLAUDE_CONFIG_DIR, 'C:\\inherited');
   assert.equal(ACCOUNT_VARIABLES.codex, 'CODEX_HOME');
+});
+
+test('a launch carries exactly the variable of its own named account, never one inherited from the parent', () => {
+  const parent = { PATH: 'x', CLAUDE_CONFIG_DIR: 'C:\\parentclaude', codex_home: 'C:\\parentcodex' };
+  const homes = env => Object.fromEntries(Object.entries(env).filter(([key]) => ['CLAUDE_CONFIG_DIR', 'CODEX_HOME'].includes(key.toUpperCase())));
+  assert.deepEqual(homes(accountEnv(parent, 'claude', null)), {});
+  assert.deepEqual(homes(accountEnv(parent, 'codex', null)), {});
+  assert.deepEqual(homes(accountEnv(parent, 'claude', 'C:\\h')), { CLAUDE_CONFIG_DIR: 'C:\\h' });
+  assert.deepEqual(homes(accountEnv(parent, 'codex', 'C:\\k')), { CODEX_HOME: 'C:\\k' });
+  assert.equal(accountEnv(parent, 'claude', null).PATH, 'x');
+  assert.deepEqual(homes(parent), { CLAUDE_CONFIG_DIR: 'C:\\parentclaude', codex_home: 'C:\\parentcodex' });
 });
 
 test('detection offers extra homes with a login file, one by one, and never reads credentials', async t => {

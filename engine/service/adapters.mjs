@@ -124,8 +124,8 @@ export function createNativeAdapter(client, options = {}) {
   const models = Array.isArray(options.models) ? options.models : [];
   const fixture = options.fixture === true;
   const live = options.live === true || Boolean(options.command) || Boolean(options.spawn);
-  // An account's home variable is set for that process only; a request without an account (null for the default) leaves the environment as it is.
-  const envFor = home => home === undefined ? options.env ?? process.env : accountEnv(options.env ?? process.env, client, home);
+  // An account's home variable is set for that process only; a request without an account is the default, so no home variable is inherited.
+  const envFor = home => accountEnv(options.env ?? process.env, client, home ?? null);
   const children = new Map();
   const sessions = new Map();
   const activityWrites = new Set();

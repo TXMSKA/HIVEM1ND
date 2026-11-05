@@ -93,6 +93,6 @@ test('a live adapter sets the account home for that process only; the default le
   await create({});
   assert.equal(launches[0].CLAUDE_CONFIG_DIR, 'C:\\homes\\alt');
   assert.equal(Object.hasOwn(launches[1], 'CLAUDE_CONFIG_DIR'), false);
-  assert.equal(launches[2].CLAUDE_CONFIG_DIR, 'C:\\inherited');
+  assert.equal(Object.hasOwn(launches[2], 'CLAUDE_CONFIG_DIR'), false);
   assert.equal(env.CLAUDE_CONFIG_DIR, 'C:\\inherited');
 });
