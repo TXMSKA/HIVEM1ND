@@ -317,10 +317,11 @@ async function voidCall(context, method, params, clientId) {
   }
   if (method.startsWith('void.storage.')) return storageCall(context, method, params, clientId);
   if (method.startsWith('void.open.')) {
-    const found = params.path ? await voidFile(context, params, clientId, false) : null;
+    const found = params.path ? await voidFile(context, params, clientId) : null;
     const project = found?.project ?? projectFor(context, params.location ?? params.project);
     stateFor(context).selections.set(clientId, project.name);
-    if (found) return voidCall(context, 'void.files.read', { path: found.file }, clientId);    return identity(project);
+    if (found) return voidCall(context, 'void.files.read', { path: found.file }, clientId);
+    return identity(project);
   }
   if (method === 'void.files.list') {
     const project = params.location ? projectFor(context, params.location) : currentProject(context, clientId);
