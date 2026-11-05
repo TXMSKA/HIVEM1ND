@@ -1,6 +1,6 @@
 # Shared sync API window
 
-Opened 2026-10-28 for the `hivem1nd/sync` v1 export and its internal adapter boundary.
+Opened 2026-10-28 for the `onem1nd/sync` v1 export and its internal adapter boundary.
 The consumers are Relay and Nebula. This checkout is the sole source owner;
 all edits and fixture checks stay in this repository.
 
