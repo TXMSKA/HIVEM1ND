@@ -88,7 +88,7 @@ function currentProject(context, clientId) {
   return attached(context).find(project => project.name === selected) ?? (attached(context).length === 1 ? attached(context)[0] : null);
 }
 
-async function voidFile(context, params, clientId) {
+async function voidFile(context, params, clientId, dotVoid = false) {
   let value = params.path;
   let project = params.location ? projectFor(context, params.location) : null;
   if (typeof value !== 'string' || !value) fail('invalid');
@@ -99,7 +99,7 @@ async function voidFile(context, params, clientId) {
   }
   project ??= currentProject(context, clientId);
   if (!project) fail('denied');
-  const file = await contained(project, value, true);
+  const file = await contained(project, value, dotVoid);
   return { project, relative: value, file };
 }
 
@@ -317,11 +317,10 @@ async function voidCall(context, method, params, clientId) {
   }
   if (method.startsWith('void.storage.')) return storageCall(context, method, params, clientId);
   if (method.startsWith('void.open.')) {
-    const found = params.path ? await voidFile(context, params, clientId) : null;
+    const found = params.path ? await voidFile(context, params, clientId, false) : null;
     const project = found?.project ?? projectFor(context, params.location ?? params.project);
     stateFor(context).selections.set(clientId, project.name);
-    if (found) return voidCall(context, 'void.files.read', { path: found.file }, clientId);
-    return identity(project);
+    if (found) return voidCall(context, 'void.files.read', { path: found.file }, clientId);    return identity(project);
   }
   if (method === 'void.files.list') {
     const project = params.location ? projectFor(context, params.location) : currentProject(context, clientId);
@@ -329,7 +328,7 @@ async function voidCall(context, method, params, clientId) {
     if (typeof params.path !== 'string') fail('invalid');
     return listDirectory(context, project, params.path.split('/').filter(part => part && part !== '.').join('/'));
   }
-  const { project, relative, file } = await voidFile(context, params, clientId);
+  const { project, relative, file } = await voidFile(context, params, clientId, true);
   if (method === 'void.files.write') {
     if (relative !== '.void' && !relative.startsWith('.void/') && !TEXT_EXTENSIONS.has(path.extname(relative).toLowerCase())) fail('denied');
     const revision = await putFile(context, project, relative, fileBytes(params), params.expected === '' ? null : params.expected, clientId, true);

@@ -254,6 +254,10 @@ test('Void state in .void/ opens for void.files only; every other dot path and t
   await assert.rejects(voidCall('files.write', { path: '.void/project.json', remove: true, expected: '1'.repeat(64) }), { code: 'conflict' });
   assert.equal(await readFile(path.join(project, '.git/config'), 'utf8'), 'secret');
   assert.equal(await readFile(path.join(project, '.env'), 'utf8'), 'secret');
+  for (const method of ['open.pick', 'open.switchTo']) {
+    await assert.rejects(voidCall(method, { path: '.void/project.json' }), { code: 'denied' });
+    await assert.rejects(voidCall(method, { path: path.join(project, '.void/project.json') }), { code: 'denied' });
+  }
   await assert.rejects(blueprint('read', { id: '.void/project' }), { code: 'invalid' });
   await assert.rejects(call('blueprint', 'blueprint.asset', { location: project, src: 'assets/../../.void/project.json' }), { code: 'invalid' });
   await mkdir(path.join(project, 'docs/flows/.void'), { recursive: true });
