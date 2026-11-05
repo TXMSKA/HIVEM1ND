@@ -87,6 +87,17 @@ test('a project name two projects share is denied, and a position is stored unde
   assert.equal(await load(project), null);
 });
 
+test('app_open refuses a file inside a dependency folder the directory browser hides', async t => {
+  const { context, events, project } = await setup(t);
+  await mkdir(path.join(project, 'node_modules'));
+  await writeFile(path.join(project, 'node_modules/a.md'), 'A');
+  for (const app of ['void', 'blueprint']) {
+    await assert.rejects(openInApp(context, { app, path: 'node_modules/a.md', project: 'shop' }), { code: 'denied' });
+    await assert.rejects(openInApp(context, { app, path: path.join(project, 'node_modules', 'a.md') }), { code: 'denied' });
+  }
+  assert.deepEqual(events, []);
+});
+
 test('app_open refuses paths outside an attached project, hidden or reserved names and unrelated files', async t => {
   const { context, events, elsewhere, project } = await setup(t);
   for (const input of [

@@ -636,6 +636,8 @@ export async function openInApp(context, input, authorize = null) {
   }
   project ??= attached(context).length === 1 ? attached(context)[0] : null;
   if (!project) fail('invalid');
+  // The directory browser hides these folders, so a file inside one must not be reachable by path either.
+  if (value.split('/').some(part => SKIP_DIRECTORIES.has(process.platform === 'win32' ? part.toLowerCase() : part))) fail('denied');
   const file = await contained(project, value);
   await authorize?.(file);
   const found = identity(project);
