@@ -1,5 +1,5 @@
 import os from "node:os";
-import { lstat } from "node:fs/promises";
+import { lstat, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createWizardServer } from "./server.mjs";
 import { defaultMind } from '../engine/service/paths.mjs';
@@ -23,6 +23,7 @@ export function parseElectronOptions(argv, homeDir, env = process.env) {
     ["--hostname", "hostname"],
     ["--language", "language"],
     ["--user-data-dir", "userDataDir"],
+    ["--capture-dir", "captureDir"],
   ]);
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -32,14 +33,16 @@ export function parseElectronOptions(argv, homeDir, env = process.env) {
       options.userDataDir = path.resolve(equals);
       continue;
     }
+    if (token === "--hidden") { options.hidden = true; continue; }
     const key = valueFlags.get(token);
     if (!key) continue;
     const value = argv[index + 1];
     if (!value || value.startsWith("-")) throw new Error(`${argv[index]} requires a value.`);
-    options[key] = ["kitPath", "mindPath", "homeDir", "userDataDir"].includes(key) ? path.resolve(value) : value;
+    options[key] = ["kitPath", "mindPath", "homeDir", "userDataDir", "captureDir"].includes(key) ? path.resolve(value) : value;
     if (key === "mindPath") hasMindPath = true;
     index += 1;
   }
+  if (options.captureDir && !options.hidden) throw new Error("--capture-dir requires --hidden.");
   if (options.language && !["en", "es"].includes(options.language)) throw new Error("--language must be en or es.");
   if (!hasMindPath) options.mindPath = defaultMind({ platform: process.platform, env, home: options.homeDir });
   return options;
@@ -55,7 +58,7 @@ export function electronCliArgs(argv, { isPackaged = false, kitPath, platform = 
   return args.slice(1);
 }
 
-export function createWindowOptions(icon, preload) {
+export function createWindowOptions(icon, preload, hidden = false) {
   return {
     width: 1440,
     height: 900,
@@ -67,6 +70,7 @@ export function createWindowOptions(icon, preload) {
     fullscreenable: false,
     backgroundColor: "#07040a",
     show: false,
+    ...(hidden ? { focusable: false } : {}),
     title: "ONEM1ND setup",
     ...(icon ? { icon } : {}),
     autoHideMenuBar: true,
@@ -89,6 +93,7 @@ export function externalLink(value) {
 export async function startElectronApp(electron, argv = process.argv.slice(2), dependencies = {}) {
   const { app, BrowserWindow, WebContentsView, dialog, ipcMain, session, shell } = electron;
   const launchOptions = parseElectronOptions(argv, app.getPath("home"));
+  const hidden = launchOptions.hidden === true; // Test mode: no window or native view is ever shown or focused.
   launchOptions.kitPath ??= app.getAppPath();
   if (launchOptions.userDataDir) app.setPath("userData", launchOptions.userDataDir);
   else if (app.setPath) {
@@ -145,7 +150,7 @@ export async function startElectronApp(electron, argv = process.argv.slice(2), d
 
   const createWindow = async () => {
     if (window && !window.isDestroyed()) {
-      window.focus();
+      if (!hidden) window.focus();
       return window;
     }
     if (!wizard) {
@@ -181,12 +186,14 @@ export async function startElectronApp(electron, argv = process.argv.slice(2), d
     const createdWindow = new BrowserWindow(createWindowOptions(
       path.join(launchOptions.kitPath, "assets", "installer.ico"),
       path.join(launchOptions.kitPath, "gui", "preload.cjs"),
+      hidden,
     ));
     window = createdWindow;
     if (WebContentsView) embeddedApps = createEmbeddedApps({
       window: createdWindow, WebContentsView, session, shell, dialog, secureWebPreferences,
       preload: path.join(launchOptions.kitPath, 'gui', 'app-preload.cjs'),
-      serviceOrigin: () => viewerTarget?.origin, hostVersion: app.getVersion(),
+      serviceOrigin: () => viewerTarget?.origin, hostVersion: app.getVersion(), hidden,
+      ...(dependencies.fetchImpl ? { fetchImpl: dependencies.fetchImpl } : {}),
     });
     const allowedOrigin = wizard.origin;
     // A link the verified Map follows, such as one in a Void text, opens in the system browser; the window itself never leaves.
@@ -228,7 +235,7 @@ export async function startElectronApp(electron, argv = process.argv.slice(2), d
       event.preventDefault();
       openOutside(targetUrl);
     });
-    createdWindow.once("ready-to-show", () => createdWindow.show());
+    if (!hidden) createdWindow.once("ready-to-show", () => createdWindow.show());
     let closeReady = false;
     createdWindow.on('close', event => {
       if (!embeddedApps || closeReady) return;
@@ -244,7 +251,7 @@ export async function startElectronApp(electron, argv = process.argv.slice(2), d
       if (window === createdWindow) window = undefined;
     });
     await createdWindow.loadURL(wizard.url);
-    if (!createdWindow.isDestroyed() && !createdWindow.isVisible()) createdWindow.show();
+    if (!hidden && !createdWindow.isDestroyed() && !createdWindow.isVisible()) createdWindow.show();
     return createdWindow;
   };
 
@@ -279,14 +286,33 @@ export async function startElectronApp(electron, argv = process.argv.slice(2), d
   await createWindow();
 
   app.on("second-instance", () => {
+    if (hidden) return;
     if (window?.isMinimized()) window.restore();
     window?.focus();
   });
   app.on("activate", () => void createWindow());
   app.on("window-all-closed", () => app.quit());
+  // Hidden mode: a PNG of the window and one of each embedded app view, saved as <name>-window.png and <name>-<app>.png.
+  const capture = async (directory, name) => {
+    if (!hidden || !window || window.isDestroyed()) throw new Error("Captures need the hidden mode and an open window.");
+    const target = path.resolve(directory);
+    await mkdir(target, { recursive: true });
+    const files = [];
+    const save = async (label, contents) => {
+      const file = path.join(target, `${name}-${label}.png`);
+      // A window that was never shown paints only while a capture keeps it awake and hidden.
+      await writeFile(file, (await contents.capturePage(undefined, { stayHidden: true, stayAwake: true })).toPNG());
+      files.push(file);
+    };
+    await save("window", window.webContents);
+    for (const [label, contents] of embeddedApps?.contents() ?? []) await save(label, contents);
+    return files;
+  };
+  if (launchOptions.captureDir) await capture(launchOptions.captureDir, "load").catch(error => console.error(`The load capture failed: ${error.message}`));
   app.on("before-quit", (event) => {
     if (!wizard || closing) return;
     event.preventDefault();
     void Promise.resolve(embeddedApps?.saveBeforeClose()).then(closeWizard).then(() => app.quit());
   });
+  return { capture, embeddedApps: () => embeddedApps, window: () => window };
 }

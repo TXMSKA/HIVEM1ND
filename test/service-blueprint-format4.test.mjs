@@ -151,3 +151,17 @@ test('format 4 replies use board threads, preserve resolved and other replies, a
   const staleDesign = await tool('blueprint_update_node', mutation(editor, { nodeId: screen.root.id, changes: { name: 'Stale design' } }));
   assert.equal(staleDesign.error.code, 'conflict');
 });
+
+test('format 4 accepts four faces of one font family with weight and style and rejects a repeated face', async t => {
+  const { success } = await setup(t);
+  const created = await success('blueprint_create', { title: 'Font faces', requestId: randomUUID() });
+  const faces = [[400, 'normal'], [400, 'italic'], [700, 'normal'], [700, 'italic']];
+  const fonts = faces.map(([weight, style]) => ({ id: randomUUID(), family: 'Atkinson Hyperlegible', src: `assets/${randomUUID()}.woff2`, weight, style }));
+  const board = { ...structuredClone(created.document), fonts };
+  assert.deepEqual(validateBoard(board).fonts, fonts);
+  const legacy = { ...board, fonts: [{ id: randomUUID(), family: 'Atkinson Hyperlegible', src: fonts[0].src }, { id: randomUUID(), family: 'Atkinson Hyperlegible', src: fonts[1].src }] };
+  assert.equal(validateBoard(legacy).fonts.length, 2);
+  assert.throws(() => validateBoard({ ...board, fonts: [fonts[0], { ...fonts[0], id: randomUUID() }] }));
+  assert.throws(() => validateBoard({ ...board, fonts: [{ ...fonts[0], weight: 1000 }] }));
+  assert.throws(() => validateBoard({ ...board, fonts: [{ ...fonts[0], style: 'oblique' }] }));
+});

@@ -1,5 +1,6 @@
 // Schema and semantic validation from Blueprint 026b172, packages/blueprint/src/core/model.ts
-// and migrations.ts. Keep aligned with that upstream format; geometry-only traversal is omitted.
+// and migrations.ts, with the font face fields (weight, style) from af453c7. Keep aligned with that
+// upstream format; geometry-only traversal is omitted.
 import { z } from "zod";
 z.config({ jitless: true });
 const SUPPORTED_FORMAT = 4;
@@ -114,7 +115,7 @@ const boardSchema = z.object({
     duration: z.number().int().min(0).max(2000).optional(), easing: z.enum(["ease-out", "ease-in-out", "linear"]).optional(),
   }).strict()).max(2000),
   components: z.array(z.object({ id, nodeId: id, title: z.string().min(1).max(200) }).strict()).max(500),
-  fonts: z.array(z.object({ id, family: z.string().regex(/^[\p{L}\p{N} _-]{1,100}$/u), src: asset }).strict()).max(100),
+  fonts: z.array(z.object({ id, family: z.string().regex(/^[\p{L}\p{N} _-]{1,100}$/u), src: asset, weight: z.number().int().min(100).max(900).optional(), style: z.enum(["normal", "italic"]).optional() }).strict()).max(100),
   tokens: z.object({ source: z.string().max(300), syncedAt: z.string().datetime(), values: z.array(z.object({ name: z.string().min(1).max(200), css: z.string().regex(/^--[A-Za-z0-9_-]{1,200}$/), type: z.enum(["color", "dimension", "fontFamily", "fontWeight", "other"]), value: z.string().max(500) }).strict()).max(2000) }).strict().optional(),
   threads: z.array(z.object({ id, screen: id.optional(), page: id.optional(), path: z.array(id).max(30), marker: z.object({ x: z.number().min(-100000).max(100000), y: z.number().min(-100000).max(100000) }).strict().optional(), resolved: z.boolean(), resolvedBy: z.string().min(1).max(100).optional(), resolvedAt: z.string().datetime().optional(), replies: z.array(z.object({ id, author: z.string().max(100), text: z.string().max(20000), createdAt: z.string().datetime() }).strict()).max(1000) }).strict()).max(2000),
 }).strict();
@@ -152,7 +153,12 @@ function validateKnownBoard(value) {
     const from = board.screens.find(s => s.id === link.from), to = board.screens.find(s => s.id === link.to);
     if (!from || !to || from.pageId !== to.pageId || (link.element && !nodesIn(from.root).some(n => n.id === link.element))) throw new Error("invalid");
   }
-  for (const font of board.fonts) { take(font.id); if (!/\.(woff2|ttf|otf)$/.test(font.src)) throw new Error("invalid"); }
+  const faced = new Set();
+  for (const font of board.fonts) {
+    take(font.id); if (!/\.(woff2|ttf|otf)$/.test(font.src)) throw new Error("invalid");
+    // An entry without weight and style is the old form and is left as it was; the others are one per family, weight and style.
+    if (font.weight !== undefined || font.style !== undefined) { const face = JSON.stringify([font.family, font.weight, font.style ?? "normal"]); if (faced.has(face)) throw new Error("invalid"); faced.add(face); }
+  }
   for (const { node } of all) {
     if (node.t === "box" && (!node.kids || node.dir !== "stack")) throw new Error("invalid");
     if (node.t === "image" && (!node.src || !/\.(png|jpg|webp)$/.test(node.src))) throw new Error("invalid");

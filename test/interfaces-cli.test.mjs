@@ -234,7 +234,7 @@ test("Electron renderer has no Node access and uses a sandbox", () => {
 
 test("Electron shows the window after the local wizard finishes loading", async () => {
   const source = await readFile(new URL("../gui/electron.mjs", import.meta.url), "utf8");
-  assert.match(source, /await createdWindow\.loadURL\(wizard\.url\);\s+if \(!createdWindow\.isDestroyed\(\) && !createdWindow\.isVisible\(\)\) createdWindow\.show\(\);/);
+  assert.match(source, /await createdWindow\.loadURL\(wizard\.url\);\s+if \(!hidden && !createdWindow\.isDestroyed\(\) && !createdWindow\.isVisible\(\)\) createdWindow\.show\(\);/);
 });
 
 test("terminal setup renders descriptors and installs only after preview", async () => {
@@ -563,4 +563,43 @@ test("terminal setup retries a failed service phase and opens the completed view
   assert.equal(stops.length, 2);
   assert.notEqual(stops[0], stops[1]);
   assert.deepEqual(opened, ["http://127.0.0.1:1234/gui/viewer"]);
+});
+
+test('the hidden mode never shows or focuses a window and saves PNG captures of the window and its app views', async () => {
+  const testHome = path.join(os.tmpdir(), 'onem1nd-electron-home');
+  assert.equal(parseElectronOptions([], testHome, {}).hidden, undefined);
+  const captureDir = path.join(os.tmpdir(), `hidden-capture-${process.pid}`);
+  const parsed = parseElectronOptions(['--hidden', '--capture-dir', captureDir], testHome, {});
+  assert.equal(parsed.hidden, true);
+  assert.equal(parsed.captureDir, path.resolve(captureDir));
+  assert.throws(() => parseElectronOptions(['--capture-dir', captureDir], testHome, {}), /requires --hidden/);
+  assert.equal(createWindowOptions('icon.ico', undefined, true).focusable, false);
+  assert.equal(createWindowOptions('icon.ico').focusable, undefined);
+  const calls = [];
+  const png = Buffer.from('89504e470d0a1a0a', 'hex');
+  const contents = () => Object.assign(new EventEmitter(), { mainFrame: { url: '' }, setWindowOpenHandler() {}, async capturePage(rect, opts) { calls.push(['capture', rect, opts]); return { toPNG: () => png }; } });
+  class Window extends EventEmitter {
+    constructor(options) { super(); this.options = options; this.webContents = contents(); }
+    isDestroyed() { return false; }
+    isVisible() { return false; }
+    show() { calls.push('show'); }
+    focus() { calls.push('focus'); }
+    async loadURL() { this.emit('ready-to-show'); }
+  }
+  const windows = [];
+  const app = Object.assign(new EventEmitter(), { getPath: () => os.tmpdir(), getAppPath: () => KIT_PATH,
+    requestSingleInstanceLock: () => true, whenReady: async () => {}, quit() {} });
+  const handle = await startElectronApp({ app, BrowserWindow: class extends Window { constructor(options) { super(options); windows.push(this); } }, dialog: {},
+    ipcMain: { handle() {} }, session: { defaultSession: { setPermissionCheckHandler() {}, setPermissionRequestHandler() {} } } },
+  ['--hidden', '--capture-dir', captureDir], {
+    async createWizardServer() { return { url: 'http://127.0.0.1:12345/', origin: 'http://127.0.0.1:12345', async close() {} }; },
+  });
+  assert.equal(windows[0].options.show, false);
+  assert.equal(windows[0].options.focusable, false);
+  app.emit('second-instance');
+  app.emit('activate');
+  assert.deepEqual(calls, [['capture', undefined, { stayHidden: true, stayAwake: true }]]);
+  assert.deepEqual((await handle.capture(captureDir, 'second')).map(file => path.basename(file)), ['second-window.png']);
+  for (const name of ['load-window.png', 'second-window.png']) assert.deepEqual(await readFile(path.join(captureDir, name)), png);
+  await rm(captureDir, { recursive: true, force: true });
 });
