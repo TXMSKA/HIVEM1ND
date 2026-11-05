@@ -92,9 +92,9 @@ test('format 4 MCP tools create, open, add, update and remove with exact-byte re
   const opened = await success('blueprint_open', { resourceId: editor.id });
   assert.deepEqual(opened.document, editor.document);
   const bridge = await blueprint('read', { id: editor.document.id });
-  assert.deepEqual(bridge.document, editor.document);
+  assert.deepEqual(bridge.board, editor.document);
   assert.equal(bridge.revision, editor.revision);
-  assert.ok((await blueprint('list')).some(board => board.id === editor.document.id));
+  assert.ok((await blueprint('list')).boards.some(board => board.id === editor.document.id));
   const screen = editor.document.screens[0];
   const node = { id: randomUUID(), name: 'Continue', t: 'text', value: 'Continue', place: { x: 20, y: 20 }, w: 160, h: 40 };
   const added = await success('blueprint_add_node', mutation(editor, { screenId: screen.id, parentId: screen.root.id, node }));
@@ -110,7 +110,7 @@ test('format 4 MCP tools create, open, add, update and remove with exact-byte re
   assert.equal(editor.document.screens[0].root.kids[0].value, 'Pay now');
   const appDocument = structuredClone(editor.document);
   appDocument.note = 'Saved by the embedded app';
-  const appSaved = await blueprint('save', { id: appDocument.id, document: appDocument, expectedRevision: editor.revision });
+  const appSaved = await blueprint('save', { board: appDocument, revision: editor.revision });
   editor = await success('blueprint_open', { resourceId: editor.id });
   assert.equal(editor.revision, appSaved.revision);
   assert.deepEqual(editor.document, appDocument);
@@ -145,8 +145,8 @@ test('format 4 replies use board threads, preserve resolved and other replies, a
   const replay = await success('blueprint_reply_comment', args);
   assert.deepEqual(replay, replied);
   const app = await blueprint('read', { id: editor.document.id });
-  assert.equal(app.document.threads[0].replies.length, 2);
-  assert.equal(app.document.threads[0].resolved, true);
+  assert.equal(app.board.threads[0].replies.length, 2);
+  assert.equal(app.board.threads[0].resolved, true);
   assert.equal(app.revision, replied.commentsRevision);
   const staleDesign = await tool('blueprint_update_node', mutation(editor, { nodeId: screen.root.id, changes: { name: 'Stale design' } }));
   assert.equal(staleDesign.error.code, 'conflict');
