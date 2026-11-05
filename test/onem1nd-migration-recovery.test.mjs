@@ -325,6 +325,31 @@ test('moved transaction journals name the moved records, and a completed upgrade
   assert.deepEqual(JSON.parse(await readFile(moved, 'utf8')).entries.map(entry => entry.recordPath), expected);
 });
 
+test('a completed upgrade with no legacy roots returns at once without taking the lock', async t => {
+  const f = await fixture(t);
+  await migrate(f.options);
+  const lock = path.join(f.cosmic, '.onem1nd-upgrade.lock'), holder = `${JSON.stringify({ pid: process.pid, nonce: 'live-holder' })}`;
+  await writeFile(lock, holder);
+  const result = await Promise.race([migrate(f.options), new Promise(resolve => setTimeout(() => resolve('waited'), 5000))]);
+  assert.equal(result.migrated, false);
+  assert.equal(await readFile(lock, 'utf8'), holder);
+});
+
+async function deadPid() {
+  const child = spawnSync(process.execPath, ['-e', '0']);
+  return child.pid;
+}
+
+test('taking the lock removes the candidate files of dead processes and keeps those of live ones', async t => {
+  const f = await fixture(t);
+  const dead = path.join(f.cosmic, `.onem1nd-upgrade.lock.${await deadPid()}-1-abc`), live = path.join(f.cosmic, `.onem1nd-upgrade.lock.${process.pid}-1-abc`);
+  await put(dead, '{}');
+  await put(live, '{}');
+  assert.equal((await migrate(f.options)).migrated, true);
+  await assert.rejects(lstat(dead), { code: 'ENOENT' });
+  assert.ok((await lstat(live)).isFile());
+});
+
 test('real Windows ACLs protect migrated bootstrap folders and a completed upgrade repairs inheritance', { skip: process.platform !== 'win32' }, async t => {
   const f = await fixture(t, { service: true });
   const temporary = path.join(f.root, 'tmp');

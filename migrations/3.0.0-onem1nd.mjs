@@ -421,6 +421,17 @@ async function migrateRegistrations(context) {
   }
 }
 
+// A process killed while it waited for the lock leaves its candidate file; only the candidates of a pid that is gone are removed.
+async function removeDeadCandidates(cosmic, name) {
+  for (const entry of await readdir(cosmic).catch(() => [])) {
+    const match = entry.startsWith(`${name}.`) && /^(\d+)-/.exec(entry.slice(name.length + 1));
+    if (!match) continue;
+    try { process.kill(Number(match[1]), 0); continue; }
+    catch (error) { if (error.code !== 'ESRCH') continue; }
+    await unlink(path.join(cosmic, entry)).catch(error => { if (error.code !== 'ENOENT') throw error; });
+  }
+}
+
 /** Same-version upgrade of 3.0.0; explicit context also makes fault tests hermetic. */
 export async function migrate(input = {}) {
   const env = input.env ?? process.env, home = input.homeDir ?? os.homedir(), platform = input.platform ?? process.platform;
@@ -441,8 +452,11 @@ export async function migrate(input = {}) {
       }
     }
     if (!relevant && !checkpoint) return { migrated: false, version };
+    // A completed upgrade with nothing legacy left only repairs permissions and journals, both idempotent, so it takes no lock.
+    if (checkpoint?.complete && !relevant) return runMigration(input);
     const lock = path.join(cosmic, '.onem1nd-upgrade.lock'), nonce = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const deadline = Date.now() + 60000;
+    await removeDeadCandidates(cosmic, path.basename(lock));
     for (;;) {
       await assertNoLinks(lock);
       const candidate = `${lock}.${nonce}`;
