@@ -51,10 +51,13 @@ function identity(project) {
 
 function projectFor(context, location) {
   if (typeof location !== 'string' || !location) fail('denied');
-  const project = attached(context).find(item => item.name === location || item.id === location
-    || sameAppPath(item.localPath, location) || sameAppPath(path.resolve(item.localPath, 'docs/flows'), location));
-  if (!project) fail('denied');
-  return project;
+  const items = attached(context);
+  const project = items.find(item => item.id === location || sameAppPath(item.localPath, location) || sameAppPath(path.resolve(item.localPath, 'docs/flows'), location));
+  if (project) return project;
+  // A name that two projects share cannot say which one is meant.
+  const named = items.filter(item => item.name === location);
+  if (named.length !== 1) fail('denied');
+  return named[0];
 }
 
 // `.void/` is Void's own project state: only the void.files calls open it, every other dot path stays refused.
@@ -275,8 +278,8 @@ async function blueprintCall(context, method, params, clientId) {
   fail('invalid');
 }
 
-async function storageCall(context, method, params, clientId) {
-  const project = params.location ? projectFor(context, params.location) : currentProject(context, clientId);
+async function storageCall(context, method, params, clientId, resolved = null) {
+  const project = resolved ?? (params.location ? projectFor(context, params.location) : currentProject(context, clientId));
   if (!project) fail('not_found');
   if (typeof params.key !== 'string' || !params.key || params.key.length > 200) fail('invalid');
   const file = path.join(context.paths.localDirectory, 'app-bridge', hashBytes(Buffer.from(appPathKey(project.localPath))), `${hashBytes(Buffer.from(params.key))}.json`);
@@ -649,7 +652,7 @@ export async function openInApp(context, input, authorize = null) {
   if (!context.bus?.listening?.('desktop')) return { opened: false, status: 'not_running' };
   if (input.app === 'void') {
     // Void restores its page from this position when the host sends the project again.
-    await storageCall(context, 'void.storage.save', { location: found.id, key: `position:${found.id}`, value: { path: value, scroll: 0, section: 0 } }, null);
+    await storageCall(context, 'void.storage.save', { location: found.id, key: `position:${found.id}`, value: { path: value, scroll: 0, section: 0 } }, null, project);
   }
   appEvent(context, input.app, 'app.open', params);
   return { opened: true, app: input.app, project: project.name, path: value };

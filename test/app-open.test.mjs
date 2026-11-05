@@ -74,6 +74,19 @@ test('a text stores its position and sends the project, by relative or absolute 
   assert.equal(again.path, 'notes.md');
 });
 
+test('a project name two projects share is denied, and a position is stored under the project that was resolved', async t => {
+  const { context, events, project, elsewhere } = await setup(t);
+  await writeFile(path.join(elsewhere, 'a.md'), 'A');
+  const twins = { ...context, projects: [{ name: 'shop', localPath: project }, { name: 'shop', localPath: elsewhere }] };
+  await assert.rejects(openInApp(twins, { app: 'void', project: 'shop', path: 'notes.md' }), { code: 'denied' });
+  assert.deepEqual(events, []);
+  await openInApp(twins, { app: 'void', path: path.join(elsewhere, 'a.md') });
+  const desktop = { ...twins, principal: { audience: 'desktop', unitId: 'root:master' } };
+  const load = location => callAppBridge(desktop, { app: 'void', method: 'void.storage.load', params: { location, key: 'position:shop' }, clientId: 'check' });
+  assert.deepEqual(await load(elsewhere), { path: 'a.md', scroll: 0, section: 0 });
+  assert.equal(await load(project), null);
+});
+
 test('app_open refuses paths outside an attached project, hidden or reserved names and unrelated files', async t => {
   const { context, events, elsewhere, project } = await setup(t);
   for (const input of [
