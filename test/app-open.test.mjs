@@ -68,7 +68,7 @@ test('a text stores its position and sends the project, by relative or absolute 
   assert.deepEqual(events.at(-1).data, { app: 'void', name: 'app.open', params: { project: { id: 'shop', name: 'shop', path: project }, path: 'docs/guide.json' } });
   const desktop = { ...context, principal: { audience: 'desktop', unitId: 'root:master' } };
   const stored = await callAppBridge(desktop, { app: 'void', method: 'void.storage.load', params: { location: 'shop', key: 'position:shop' }, clientId: 'check' });
-  assert.deepEqual(stored,{ path: 'docs/guide.json', scroll: 0, section: 0 });
+  assert.deepEqual(stored, { path: 'docs/guide.json', scroll: 0, section: 0 });
   await openInApp(context, { app: 'void', path: 'notes.md', project: 'shop' });
   const again = await callAppBridge(desktop, { app: 'void', method: 'void.storage.load', params: { location: 'shop', key: 'position:shop' }, clientId: 'check' });
   assert.equal(again.path, 'notes.md');
