@@ -9,7 +9,7 @@ import { readEditor, locateEditor, addNode, updateNode, removeNode, replaceRange
 import { publishDomainEvents } from './events.mjs';
 import { readApproval, requestApproval } from './approvals.mjs';
 import { completeSessionTask, ownsSessionExecution } from './adapters.mjs';
-import { assertGitCapability, readScopedFile, requestScopedGit, runScopedGit, verifiedSessionScope, writeScopedFile } from './file-access.mjs';
+import { assertGitCapability, assertReadableInScope, readScopedFile, requestScopedGit, runScopedGit, verifiedSessionScope, writeScopedFile } from './file-access.mjs';
 import { carryHostConversation } from '../relay/carry-over.mjs';
 import { recordActivity } from './watch.mjs';
 import { atomicWrite, commitTransaction, readBytes, revisionOf, withLocalChanges, withReceipt } from './store.mjs';
@@ -388,7 +388,8 @@ async function runTool(context, name, args) {
 
 async function openApp(context, args) {
   if ((args.resourceId === undefined) === (args.path === undefined)) throw new CoreError(422, 'invalid_body', 'Give either resourceId or path.');
-  if (args.resourceId === undefined) return openInApp(context, args);
+  // An agent opens by path only what its session scope lets it read without a person's approval.
+  if (args.resourceId === undefined) return openInApp(context, args, (context.principal?.audience ?? context.credential?.audience) === 'agent' ? file => assertReadableInScope(context, file) : null);
   await requireAttachment(context, args.resourceId);
   const found = await locateEditor(context, args.resourceId);
   if ((found.kind === 'void') !== (args.app === 'void') || args.project !== undefined && args.project !== found.project) throw new CoreError(422, 'invalid_body', 'The resource does not belong to that app.');

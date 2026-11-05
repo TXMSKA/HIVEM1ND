@@ -622,7 +622,7 @@ export function appAgentsChanged(context, projectName = null) {
 const BOARD_FILE = /^docs\/flows\/boards\/([A-Za-z0-9][A-Za-z0-9_-]{0,127})\.json$/;
 
 // Shows one file of an attached project to the person in the embedded app; only a running desktop app can show it.
-export async function openInApp(context, input) {
+export async function openInApp(context, input, authorize = null) {
   if (!input || !Object.hasOwn(METHODS, input.app) || typeof input.path !== 'string' || !input.path || input.project !== undefined && typeof input.project !== 'string') fail('invalid');
   let value = input.path;
   let project = input.project ? projectFor(context, input.project) : null;
@@ -634,6 +634,7 @@ export async function openInApp(context, input) {
   project ??= attached(context).length === 1 ? attached(context)[0] : null;
   if (!project) fail('invalid');
   const file = await contained(project, value);
+  await authorize?.(file);
   const found = identity(project);
   let params;
   if (input.app === 'blueprint') {

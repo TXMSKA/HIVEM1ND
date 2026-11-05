@@ -8,6 +8,8 @@ import { createCluster } from '../engine/service/clusters.mjs';
 import { directoryIdentity } from '../engine/service/cluster-git.mjs';
 import { hashBytes } from '../engine/service/identity.mjs';
 import { answerApproval, readApproval } from '../engine/service/approvals.mjs';
+import { callAppBridge } from '../engine/service/app-bridge.mjs';
+import { callTool } from '../engine/service/mcp.mjs';
 import { dispose, makeCoreFixture } from './core-fixture.mjs';
 
 async function world(t, linked = true) {
@@ -98,4 +100,24 @@ test('a renamed or regrouped cluster keeps the write scope of a running session;
   const renamed = await readCluster(context, current.id, { machine: 'DESKTOP' });
   await patchCluster(context, current.id, { link: { kind: 'none' }, machine: 'DESKTOP', expectedRevision: renamed.revision });
   await assert.rejects(writeScopedFile(actor, { path: path.join(root, 'after-unlink.txt'), text: 'not allowed', expectedRevision: null }), { code: 'scope_unavailable' });
+});
+
+test('app_open by path gives an agent only the files its session scope reads without approval', async t => {
+  const { actor, root, other } = await world(t);
+  await writeFile(path.join(root, 'notes.md'), 'Notes');
+  await writeFile(path.join(other, 'secret.md'), 'No');
+  const events = [];
+  const as = principal => ({ ...actor, principal, bus: { emit: event => events.push(event), listening: () => true },
+    projects: [{ name: 'repository', localPath: root }, { name: 'other', localPath: other }] });
+  const agent = as(actor.principal), desktop = as({ audience: 'desktop', unitId: 'root:master' });
+  const position = project => callAppBridge(desktop, { app: 'void', method: 'void.storage.load', params: { location: project, key: `position:${project}` }, clientId: 'check' });
+  assert.deepEqual(await callTool(agent, 'app_open', { app: 'void', project: 'repository', path: 'notes.md' }), { opened: true, app: 'void', project: 'repository', path: 'notes.md' });
+  assert.equal(events.length, 1);
+  for (const input of [{ project: 'other', path: 'secret.md' }, { path: path.join(other, 'secret.md') }]) {
+    await assert.rejects(callTool(agent, 'app_open', { app: 'void', ...input }), { code: 'forbidden', status: 403 });
+  }
+  assert.equal(events.length, 1);
+  assert.equal(await position('other'), null);
+  assert.equal((await callTool(desktop, 'app_open', { app: 'void', project: 'other', path: 'secret.md' })).opened, true);
+  assert.equal((await position('other')).path, 'secret.md');
 });
