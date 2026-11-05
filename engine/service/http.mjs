@@ -234,7 +234,7 @@ const JSON_LIMIT = 2_000_000;
 const REPLACEMENT_LIMIT = 16_000_000;
 const APP_WRITE_RESPONSE_FIELDS = new Map([
   ['blueprint.save', ['id', 'location', 'revision']],
-  ['blueprint.upload', ['id', 'path', 'mime', 'size', 'revision']],
+  ['blueprint.upload', ['src', 'id', 'path', 'mime', 'size', 'revision']],
   ['void.files.write', ['path', 'revision']],
   ['void.storage.save', ['revision']],
   ['agents.send', ['sent', 'unit', 'id']],

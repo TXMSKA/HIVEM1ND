@@ -55,29 +55,33 @@ visibility and viewer credential.
 
 ## File method parameters
 
-The agreed contract names methods but does not prescribe their parameter or
-result schemas. This implementation uses the following forms. Revisions are
-SHA-256 hashes of the exact file bytes. Creating a file requires
-`expectedRevision: null`; replacing it requires its last revision. Stale
-revisions return `conflict`. Paths must belong to an eligible attached project;
-traversal, links, hidden paths and Windows device or stream aliases are refused.
+The host follows the shapes the live Blueprint (`site/src/app/bridge-files.ts`)
+and Void (`packages/void/src/hosts/bridge.ts`) send and read. Revisions are
+SHA-256 hashes of the exact file bytes. Blueprint creates a board with
+`revision: null` and replaces it with its last revision. Void sends
+`expected: ""` to create, the last revision to replace, and no `expected` to
+write without a check. Stale revisions return `conflict`. Paths must belong to
+an eligible attached project; traversal, links, hidden paths and Windows device
+or stream aliases are refused. The one exception is `.void/`, Void's own
+project state, which only the `void.files.*` calls open; `.git`, `.env` and
+every other dot path stay refused.
 
 | Method | Parameters | Result |
 | --- | --- | --- |
-| `blueprint.locations` | `{}` | `[{id,name,path}]`, path is `docs/flows` |
-| `blueprint.list` | `{location}` | `[{id,title,location,revision}]` |
-| `blueprint.read` | `{location,id}` | `{id,location,document,text,revision}` |
-| `blueprint.save` | `{location,id,text \| document,expectedRevision}` | `{id,location,revision}` |
-| `blueprint.upload` | `{location,bytes \| base64,mime?}` | `{id,path,mime,size,revision}` |
-| `blueprint.asset` | `{location,id}` | `{id,bytes,base64,mime,revision}` |
-| `void.files.list` | `{location?}` | `[{path,name,project,size}]`; when bounded, `{entries,truncated:true,limit}` |
-| `void.files.read` | `{path,location?}` | `{path,text,revision}` |
-| `void.files.write` | `{path,location?,text \| document,expectedRevision}` | `{path,revision}` |
+| `blueprint.locations` | `{}` | `{locations:[{id,name,path}]}`, path is `docs/flows` |
+| `blueprint.list` | `{location}` | `{boards:[{id,title,updatedAt,location,revision}]}` |
+| `blueprint.read` | `{location,id}` | `{id,location,board,revision}` |
+| `blueprint.save` | `{location,board,revision}`, `board.id` names the file | `{id,location,revision}` |
+| `blueprint.upload` | `{location,name,type,bytes}` | `{src,id,path,mime,size,revision}`, `src` is `assets/<uuid>.<ext>` |
+| `blueprint.asset` | `{location,src}` | `{src,type,bytes,revision}` |
+| `void.files.list` | `{path,location?}`, `""` is the project root | `[{name,kind,size,mtime}]` of that one directory; past 10,000 entries `{entries,truncated:true,limit}` |
+| `void.files.read` | `{path,location?}` | `{path,data,revision}` |
+| `void.files.write` | `{path,location?,data,expected?}`, `data` null removes the file | `{path,revision}`, `revision` is `""` after a removal |
 | `void.files.url` | `{path,location?}` | `{path,url,mime,revision}`, a data URL |
-| `void.files.asset` | `{path,location?}` | `{path,bytes,base64,mime,revision}` |
-| `void.files.attribution` | `{path,location?}` | `{path,by?}` |
-| `void.storage.load` | `{key,location?}` | `{value,revision}` |
-| `void.storage.save` | `{key,value,expectedRevision,location?}` | `{revision}` |
+| `void.files.asset` | `{path,location?}` | `{path,bytes,mime,revision}` |
+| `void.files.attribution` | `{path,location?}` | the writer's unit, or `null` |
+| `void.storage.load` | `{key,location?}` | the stored value, or `null` |
+| `void.storage.save` | `{key,value,location?}` | `{revision}`, the last write wins |
 | `void.open.pick` | `{}` | Native file picker, then read result or `null` |
 | `void.open.switchTo` | `{path}` or `{location}` | Read result or project identity |
 | `void.project` | `{}` | `{id,name,path}` or `null` |
@@ -85,35 +89,37 @@ traversal, links, hidden paths and Windows device or stream aliases are refused.
 | `void.export.pdf` | `{name?,bytes? \| base64?}` | `{saved,name?}`, prints the current view when bytes are absent |
 
 `location` accepts an attached project's name, ID, root path or `docs/flows`
-path. Void also accepts absolute files within those projects. Otherwise its
-paths are relative to the selected project. A single attached project is
-selected automatically; with several projects and no selection,
+path; Blueprint's event payloads name a project by its ID. Void's paths are
+relative to the selected project and use forward slashes. A single attached
+project is selected automatically; with several projects and no selection,
 `void.project` returns `null`. Selecting an attached repository in the Map
 switches the current Void project. Void storage is local service state,
 separated by project and key. Binary data travels through the authenticated
-HTTP service as base64 and through native IPC as an `ArrayBuffer` in `bytes`.
+HTTP service as base64 and through native IPC as an `ArrayBuffer` or typed
+array in `bytes` (`data` for `void.files.write`).
 
-Blueprint boards are ordinary `boards/<id>.json` files; reads preserve their
-stored text. Saves validate format 4 with Blueprint's schema at `026b172`;
-the document ID must match the filename. The agent editor tools write these
-same files, including comments in `threads`, with SHA-256 byte revisions and
-`conflict` on a stale revision. `expectedCommentsRevision` is the board's
+Blueprint boards are ordinary `boards/<id>.json` files written as indented
+JSON with a final newline. Saves validate format 4 with Blueprint's schema at
+`026b172`; the board ID must match the filename. The agent editor tools write
+these same files, including comments in `threads`, with SHA-256 byte revisions
+and `conflict` on a stale revision. `expectedCommentsRevision` is the board's
 revision too. Module boards remain read-only imports and are never converted
-automatically. Assets are `assets/<uuid>.<ext>`.
+automatically. Assets are `assets/<uuid>.<ext>`, where the extension is an image
+(`png`, `jpg`, `webp`) or a board font (`woff2`, `woff`, `ttf`, `otf`); a font is
+accepted only when its file signature matches.
+
 
 The contract's section 5 contains no numeric upload limits. The bridge adopts
-the existing editor limits: 10,000,000 bytes per image, 200 assets and
+the existing editor limits: 10,000,000 bytes per asset, 200 assets and
 50,000,000 total bytes per project assets directory. The existing editor image
 validator verifies complete PNG, JPEG and WebP images and their dimensions;
 SVG and GIF uploads are refused. Document and storage values are limited to
-16,000,000 bytes; native exports to 32 MiB. File discovery omits hidden and
-dependency/build directories, lists JSON, Markdown, text, HTML and `.void`
-files, and is bounded to 2,000 files and 20,000 directory entries per listing.
-The returned `limit` identifies the file or entry bound that stopped a listing.
-Native input is checked before serialization; buffers become base64 directly
-without expansion into number arrays. Windows path matching, observation and
-file locks share one case-insensitive key. The board ID `index` is reserved for
-the existing legacy catalog.
+16,000,000 bytes; native exports to 32 MiB. A directory listing omits hidden
+and dependency/build directories and links. Native input is checked before
+serialization; buffers become base64 directly without expansion into number
+arrays. Windows path matching, observation and file locks share one
+case-insensitive key. The board ID `index` is reserved for the existing legacy
+catalog.
 
 ## Agents and change events
 
@@ -135,7 +141,7 @@ snapshot buffering. The app receives
 `blueprint.changed`, `blueprint.locations`, `void.files.changed`, `void.project`
 and `agents.changed`. File changes are batched once per observer pass and agent
 changes coalesce for 50 milliseconds into one event per project for both apps.
-Known writer units are included as `by`. Saves update the watch baseline, and
+Known writer units are included as `by`, and a changed file is named by its path relative to the project. Saves update the watch baseline, and
 the originating app instance filters its own save events. App project selection
 produces no broadcast; host project switches are delivered locally after
 selection succeeds. Event payloads contain no document bodies.

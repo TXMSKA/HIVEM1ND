@@ -19,6 +19,10 @@ const CLIENT = '062-bridge-tests';
 function boardDocument(id, title = 'Board') {
   return { formatVersion: 4, id, title, note: '', pages: [{ id: 'page', title: 'Page', objects: [], order: [] }], screens: [], links: [], components: [], fonts: [], threads: [] };
 }
+const b64 = text => Buffer.from(text).toString('base64');
+const boardText = board => `${JSON.stringify(board, null, 2)}\n`;
+const FONT_SIGNATURES = { woff2: 'wOF2', woff: 'wOFF', ttf: '\u0000\u0001\u0000\u0000', otf: 'OTTO' };
+const fontBytes = extension => Buffer.concat([Buffer.from(FONT_SIGNATURES[extension], 'latin1'), Buffer.alloc(64, 7)]);
 async function observePass(context, options = {}) {
   let result;
   do { result = await observeAppFiles(context, options); } while (result.pending);
@@ -77,89 +81,210 @@ test('bridge method capabilities are exact per app, hello checks app and protoco
   await assert.rejects(blueprint('locations'), { code: 'denied' });
 });
 
-test('Blueprint read preserves exact stored bytes and optional fields; SHA revisions reject stale and concurrent saves', async t => {
+test('Blueprint answers in the shape the live app reads: locations, boards, board and revision', async t => {
   const { blueprint, project } = await setup(t);
-  const document = { ...boardDocument('checkout'), texts: [{ id: 'shared', name: 'Label', values: { en: { value: 'Kept' } } }] };
-  const text = `${JSON.stringify(document, null, 2)}\r\n`;
-  const saved = await blueprint('save', { id: 'checkout', text, expectedRevision: null });
-  assert.equal(saved.revision, hashBytes(Buffer.from(text)));
+  const { locations } = await blueprint('locations');
+  assert.deepEqual(locations.map(item => [item.id, item.name, item.path]), [['shop', 'shop', path.join(project, 'docs/flows')]]);
+  assert.deepEqual((await blueprint('list')).boards, []);
+  const board = boardDocument('checkout');
+  const saved = await blueprint('save', { board, revision: null });
+  assert.equal(saved.revision, hashBytes(Buffer.from(boardText(board))));
+  assert.equal(saved.id, 'checkout');
   const read = await blueprint('read', { id: 'checkout' });
-  assert.equal(read.text, text);
-  assert.deepEqual(read.document.texts, document.texts);
-  await assert.rejects(blueprint('save', { id: 'checkout', text, expectedRevision: null }), { code: 'conflict' });
-  await assert.rejects(blueprint('save', { id: 'checkout', text, expectedRevision: '0'.repeat(64) }), { code: 'conflict' });
-  for (const invalid of [{}, { ...document, future: true }, { ...document, formatVersion: 5 }, { ...document, id: 'other' }]) {
-    await assert.rejects(blueprint('save', { id: 'checkout', document: invalid, expectedRevision: read.revision }), { code: 'invalid' });
-  }
-  assert.equal((await blueprint('read', { id: 'checkout' })).text, text);
-  const outcomes = await Promise.allSettled(['One', 'Two'].map(title => blueprint('save', { id: 'checkout', document: { ...document, title }, expectedRevision: read.revision })));
+  assert.deepEqual(read.board, board);
+  assert.equal(read.revision, saved.revision);
+  assert.equal(Object.hasOwn(read, 'text') || Object.hasOwn(read, 'document'), false);
+  const listed = (await blueprint('list')).boards;
+  assert.deepEqual(listed.map(item => [item.id, item.title, typeof item.updatedAt]), [['checkout', 'Board', 'number']]);
+  assert.equal(listed[0].revision, saved.revision);
+  await assert.rejects(blueprint('save', { board, revision: null }), { code: 'conflict' });
+  await assert.rejects(blueprint('save', { board, revision: '0'.repeat(64) }), { code: 'conflict' });
+  for (const revision of [undefined, 7, 'abc']) await assert.rejects(blueprint('save', { board, revision }), { code: 'invalid' });
+  for (const invalid of [undefined, [], 'text', { id: 'index' }, {}]) await assert.rejects(blueprint('save', { board: invalid, revision: null }), { code: 'invalid' });
+  const outcomes = await Promise.allSettled(['One', 'Two'].map(title => blueprint('save', { board: { ...board, title }, revision: read.revision })));
   assert.equal(outcomes.filter(item => item.status === 'fulfilled').length, 1);
   assert.equal(outcomes.find(item => item.status === 'rejected').reason.code, 'conflict');
-  assert.equal((await blueprint('list')).length, 1);
+  assert.equal((await blueprint('list')).boards.length, 1);
   assert.equal(JSON.parse(await readFile(path.join(project, 'docs/flows/boards/checkout.json'), 'utf8')).title, ['One', 'Two'][outcomes.findIndex(item => item.status === 'fulfilled')]);
+});
+
+test('a board saved back as it was read restores the original file byte for byte', async t => {
+  const { blueprint, project } = await setup(t);
+  const board = boardDocument('undo', 'Undo');
+  const first = await blueprint('save', { board, revision: null });
+  const file = path.join(project, 'docs/flows/boards/undo.json');
+  const original = await readFile(file);
+  const moved = await blueprint('save', { board: { ...board, title: 'Moved' }, revision: first.revision });
+  assert.notDeepEqual(await readFile(file), original);
+  await blueprint('save', { board: (await blueprint('read', { id: 'undo' })).board, revision: moved.revision });
+  const restored = await blueprint('save', { board, revision: (await blueprint('read', { id: 'undo' })).revision });
+  assert.deepEqual(await readFile(file), original);
+  assert.equal(restored.revision, first.revision);
 });
 
 test('both stores reject unattached projects, path traversal, Windows aliases and symlinks', async t => {
   const { blueprint, voidCall, excluded, project, fixture } = await setup(t);
   for (const location of [excluded, fixture.root, path.join(project, '..'), 'missing']) await assert.rejects(blueprint('list', { location }), { code: 'denied' });
-  for (const id of ['../escape', 'sub/board', 'a\\b', '.hidden', 'index', '']) await assert.rejects(blueprint('save', { id, text: '{}', expectedRevision: null }), { code: 'invalid' });
-  for (const file of ['../escape.md', 'docs/../../escape.md', 'docs\\escape.md', '.git/config', 'docs/file.md:secret', 'docs/CON.md', 'docs/file.md.', path.join(excluded, 'secret.md')]) {
-    await assert.rejects(voidCall('files.write', { path: file, text: 'secret', expectedRevision: null }), { code: 'denied' });
+  for (const id of ['../escape', 'sub/board', 'a\\b', '.hidden', 'index', '']) await assert.rejects(blueprint('save', { board: { id }, revision: null }), { code: 'invalid' });
+  for (const file of ['../escape.md', 'docs/../../escape.md', 'docs\\escape.md', '.git/config', '.env', 'docs/.env', 'docs/file.md:secret', 'docs/CON.md', 'docs/file.md.', path.join(excluded, 'secret.md')]) {
+    await assert.rejects(voidCall('files.write', { path: file, base64: b64('secret'), expected: '' }), { code: 'denied' });
   }
   await writeFile(path.join(excluded, 'secret.md'), 'outside');
   await symlink(excluded, path.join(project, 'docs/link'), 'junction');
   await assert.rejects(voidCall('files.read', { path: 'docs/link/secret.md' }), { code: 'denied' });
-  await assert.rejects(voidCall('files.write', { path: 'docs/link/secret.md', text: 'overwrite', expectedRevision: null }), { code: 'denied' });
+  await assert.rejects(voidCall('files.write', { path: 'docs/link/secret.md', base64: b64('overwrite'), expected: '' }), { code: 'denied' });
   assert.equal(await readFile(path.join(excluded, 'secret.md'), 'utf8'), 'outside');
 });
 
-test('uploads enforce MIME and signatures, byte, count and cumulative limits; assets remain scoped', async t => {
+test('uploads enforce type and signatures, byte, count and cumulative limits; assets remain scoped', async t => {
   const { blueprint, project } = await setup(t);
-  const uploaded = await blueprint('upload', { mime: 'image/png', base64: PNG.toString('base64') });
-  assert.match(uploaded.path, /^assets\/[a-f0-9-]{36}\.png$/);
-  const asset = await blueprint('asset', { id: uploaded.id });
+  const uploaded = await blueprint('upload', { name: 'pixel.png', type: 'image/png', base64: PNG.toString('base64') });
+  assert.match(uploaded.src, /^assets\/[a-f0-9-]{36}\.png$/);
+  assert.equal(uploaded.path, uploaded.src);
+  const asset = await blueprint('asset', { src: uploaded.src });
   assert.deepEqual(Buffer.from(asset.base64, 'base64'), PNG);
-  for (const params of [{ base64: '<script>' }, { base64: Buffer.from('<svg/>').toString('base64'), mime: 'image/svg+xml' },
-    { base64: Buffer.from([255, 216, 255, 0]).toString('base64'), mime: 'image/jpeg' },
-    { base64: Buffer.concat([Buffer.from('RIFF'), Buffer.from([4, 0, 0, 0]), Buffer.from('WEBP')]).toString('base64'), mime: 'image/webp' },
-    { base64: PNG.toString('base64'), mime: 'image/jpeg' }, { base64: Buffer.alloc(APP_UPLOAD_LIMITS.fileBytes + 1).toString('base64') }]) {
+  assert.equal(asset.type, 'image/png');
+  assert.equal((await blueprint('upload', { name: 'bytes.png', type: 'image/png', bytes: [...PNG] })).src.endsWith('.png'), true);
+  for (const params of [{ base64: '<script>' }, { base64: Buffer.from('<svg/>').toString('base64'), type: 'image/svg+xml' },
+    { base64: Buffer.from([255, 216, 255, 0]).toString('base64'), type: 'image/jpeg' },
+    { base64: Buffer.concat([Buffer.from('RIFF'), Buffer.from([4, 0, 0, 0]), Buffer.from('WEBP')]).toString('base64'), type: 'image/webp' },
+    { base64: PNG.toString('base64'), type: 'image/jpeg' }, { base64: Buffer.alloc(APP_UPLOAD_LIMITS.fileBytes + 1).toString('base64') }]) {
     await assert.rejects(blueprint('upload', params), { code: 'invalid' });
   }
-  await assert.rejects(blueprint('asset', { id: '../escape.png' }), { code: 'invalid' });
+  for (const src of ['../escape.png', 'assets/../../escape.png', 'assets/x.png', 'assets/00000000-0000-0000-0000-000000000000.svg']) await assert.rejects(blueprint('asset', { src }), { code: 'invalid' });
   const directory = path.join(project, 'docs/flows/assets');
   await writeFile(path.join(directory, 'budget.bin'), Buffer.alloc(APP_UPLOAD_LIMITS.totalBytes));
   await assert.rejects(blueprint('upload', { base64: PNG.toString('base64') }), { code: 'invalid' });
   await writeFile(path.join(directory, 'budget.bin'), Buffer.alloc(0));
-  await Promise.all(Array.from({ length: APP_UPLOAD_LIMITS.count - 2 }, (_, index) => writeFile(path.join(directory, `${index}.png`), Buffer.alloc(0))));
+  await Promise.all(Array.from({ length: APP_UPLOAD_LIMITS.count - 3 }, (_, index) => writeFile(path.join(directory, `${index}.png`), Buffer.alloc(0))));
   await assert.rejects(blueprint('upload', { base64: PNG.toString('base64') }), { code: 'invalid' });
 });
 
-test('Void files, storage, project selection, URL assets and attribution share confined SHA revisions', async t => {
+test('board fonts travel as assets by signature with the same containment and size limits as images', async t => {
+  const { blueprint, project } = await setup(t);
+  const directory = path.join(project, 'docs/flows/assets');
+  for (const [extension, type] of [['woff2', 'font/woff2'], ['woff', 'font/woff'], ['ttf', 'font/ttf'], ['otf', 'font/otf']]) {
+    const uploaded = await blueprint('upload', { name: `face.${extension}`, type, base64: fontBytes(extension).toString('base64') });
+    assert.match(uploaded.src, new RegExp(`^assets/[a-f0-9-]{36}\\.${extension}$`));
+    const asset = await blueprint('asset', { src: uploaded.src });
+    assert.equal(asset.type, type);
+    assert.deepEqual(Buffer.from(asset.base64, 'base64'), fontBytes(extension));
+    assert.equal(await readFile(path.join(directory, uploaded.src.slice('assets/'.length))).then(bytes => bytes.length), fontBytes(extension).length);
+  }
+  const named = '4539d6c5-2b3a-4dc2-a491-ce1c040c5630';
+  await writeFile(path.join(directory, `${named}.woff2`), fontBytes('woff2'));
+  assert.equal((await blueprint('asset', { src: `assets/${named}.woff2` })).type, 'font/woff2');
+  await writeFile(path.join(directory, `${named}.woff`), PNG);
+  await assert.rejects(blueprint('asset', { src: `assets/${named}.woff` }), { code: 'invalid' });
+  await writeFile(path.join(directory, `${named}.png`), fontBytes('woff2'));
+  await assert.rejects(blueprint('asset', { src: `assets/${named}.png` }), { code: 'invalid' });
+  await assert.rejects(blueprint('asset', { src: 'assets/11111111-1111-1111-1111-111111111111.woff2' }), { code: 'not_found' });
+  await assert.rejects(blueprint('upload', { type: 'image/png', base64: fontBytes('woff2').toString('base64') }), { code: 'invalid' });
+  await assert.rejects(blueprint('upload', { type: 'text/html', base64: fontBytes('woff2').toString('base64') }), { code: 'invalid' });
+  await assert.rejects(blueprint('upload', { type: 'font/woff2', base64: Buffer.alloc(APP_UPLOAD_LIMITS.fileBytes + 1, 1).toString('base64') }), { code: 'invalid' });
+  await assert.rejects(blueprint('upload', { type: 'font/woff2', base64: Buffer.concat([fontBytes('woff2'), Buffer.alloc(APP_UPLOAD_LIMITS.fileBytes)]).toString('base64') }), { code: 'invalid' });
+  await assert.rejects(blueprint('asset', { location: path.join(project, '..'), src: `assets/${named}.woff2` }), { code: 'denied' });
+  await writeFile(path.join(directory, `${named}.ttf`), Buffer.concat([fontBytes('ttf'), Buffer.alloc(APP_UPLOAD_LIMITS.fileBytes)]));
+  await assert.rejects(blueprint('asset', { src: `assets/${named}.ttf` }), { code: 'invalid' });
+});
+
+test('Void files follow the app: one directory per list, bytes in and out, expected revisions, removal, and the project state folder', async t => {
   const { voidCall, project } = await setup(t);
-  const saved = await voidCall('files.write', { path: 'docs/article.md', text: 'First\r\n', expectedRevision: null });
-  assert.equal(saved.revision, hashBytes(Buffer.from('First\r\n')));
-  const read = await voidCall('files.read', { path: saved.path });
-  assert.equal(read.text, 'First\r\n');
-  await assert.rejects(voidCall('files.write', { path: 'docs/article.md', text: 'Stale', expectedRevision: null }), { code: 'conflict' });
-  assert.equal((await voidCall('files.list')).some(file => file.path === saved.path), true);
-  assert.equal((await voidCall('files.url', { path: saved.path })).url, 'data:text/plain;charset=utf-8;base64,Rmlyc3QNCg==');
-  assert.deepEqual(await voidCall('files.attribution', { path: saved.path }), { path: saved.path, by: 'root:master' });
+  const text = 'First\r\n';
+  const saved = await voidCall('files.write', { path: 'docs/article.md', base64: b64(text), expected: '' });
+  assert.equal(saved.revision, hashBytes(Buffer.from(text)));
+  assert.equal(saved.path, 'docs/article.md');
+  const read = await voidCall('files.read', { path: 'docs/article.md' });
+  assert.deepEqual(Buffer.from(read.base64, 'base64'), Buffer.from(text));
+  assert.equal(read.revision, saved.revision);
+  assert.equal(Object.hasOwn(read, 'text'), false);
+  await assert.rejects(voidCall('files.write', { path: 'docs/article.md', base64: b64('Stale'), expected: '' }), { code: 'conflict' });
+  await assert.rejects(voidCall('files.write', { path: 'docs/article.md', base64: b64('Stale'), expected: '1'.repeat(64) }), { code: 'conflict' });
+  const next = await voidCall('files.write', { path: 'docs/article.md', base64: b64('Second'), expected: saved.revision });
+  assert.equal((await voidCall('files.write', { path: 'docs/article.md', base64: b64('Unchecked') })).revision, hashBytes(Buffer.from('Unchecked')));
+  assert.notEqual(next.revision, saved.revision);
+  await assert.rejects(voidCall('files.read', { path: 'docs/missing.md' }), { code: 'not_found' });
+  await assert.rejects(voidCall('files.write', { path: 'docs/article.md', expected: '' }), { code: 'invalid' });
+  await assert.rejects(voidCall('files.write', { path: 'docs/image.exe', base64: b64('x'), expected: '' }), { code: 'denied' });
+  const root = await voidCall('files.list', { path: '' });
+  assert.deepEqual(root.map(entry => [entry.name, entry.kind]).sort(), [['docs', 'dir']]);
+  assert.deepEqual((await voidCall('files.list', { path: 'docs' })).map(entry => [entry.name, entry.kind, entry.size, typeof entry.mtime]), [['article.md', 'file', 'Unchecked'.length, 'number'], ['flows', 'dir', 0, 'number']]);
+  await assert.rejects(voidCall('files.list', { path: 'missing' }), { code: 'not_found' });
+  await assert.rejects(voidCall('files.list', { path: 'docs/article.md' }), { code: 'not_found' });
+  await assert.rejects(voidCall('files.list', {}), { code: 'invalid' });
+  assert.equal((await voidCall('files.url', { path: 'docs/article.md' })).url, `data:text/plain;charset=utf-8;base64,${b64('Unchecked')}`);
+  assert.deepEqual(await voidCall('files.attribution', { path: 'docs/article.md' }), { path: 'docs/article.md', by: 'root:master' });
+  const removed = await voidCall('files.write', { path: 'docs/article.md', remove: true, expected: hashBytes(Buffer.from('Unchecked')) });
+  assert.equal(removed.revision, '');
+  await assert.rejects(voidCall('files.read', { path: 'docs/article.md' }), { code: 'not_found' });
+  assert.equal((await voidCall('files.write', { path: 'docs/article.md', remove: true })).revision, '');
   assert.equal((await voidCall('project')).path, project);
-  assert.equal((await voidCall('open.pick', { path: saved.path })).text, 'First\r\n');
+  await voidCall('files.write', { path: 'docs/article.md', base64: b64('First\r\n'), expected: '' });
+  assert.equal(Buffer.from((await voidCall('open.pick', { path: 'docs/article.md' })).base64, 'base64').toString(), 'First\r\n');
   assert.equal((await voidCall('open.switchTo')).path, project);
-  assert.deepEqual(await voidCall('storage.load', { key: 'workspace' }), { value: null, revision: null });
-  const stored = await voidCall('storage.save', { key: 'workspace', value: { tab: 'first' }, expectedRevision: null });
-  assert.deepEqual(await voidCall('storage.load', { key: 'workspace' }), { value: { tab: 'first' }, revision: stored.revision });
-  await assert.rejects(voidCall('storage.save', { key: 'workspace', value: {}, expectedRevision: null }), { code: 'conflict' });
+  assert.equal(await voidCall('storage.load', { key: 'workspace' }), null);
+  await voidCall('storage.save', { key: 'workspace', value: { tab: 'first' } });
+  assert.deepEqual(await voidCall('storage.load', { key: 'workspace' }), { tab: 'first' });
+  await voidCall('storage.save', { key: 'workspace', value: { tab: 'second' } });
+  assert.deepEqual(await voidCall('storage.load', { key: 'workspace' }), { tab: 'second' });
+});
+
+test('Void state in .void/ opens for void.files only; every other dot path and the Blueprint side stay refused', async t => {
+  const { voidCall, blueprint, project, call } = await setup(t);
+  await mkdir(path.join(project, '.void'));
+  await mkdir(path.join(project, '.git'));
+  await writeFile(path.join(project, '.git/config'), 'secret');
+  await writeFile(path.join(project, '.env'), 'secret');
+  for (const state of ['project.json', 'settings.json', 'status.json', 'baseline.json', 'trash.json']) {
+    const file = `.void/${state}`;
+    await assert.rejects(voidCall('files.read', { path: file }), { code: 'not_found' });
+    const saved = await voidCall('files.write', { path: file, base64: b64(`{"state":"${state}"}\n`), expected: '' });
+    assert.equal(Buffer.from((await voidCall('files.read', { path: file })).base64, 'base64').toString(), `{"state":"${state}"}\n`);
+    assert.equal(await readFile(path.join(project, file), 'utf8'), `{"state":"${state}"}\n`);
+    await voidCall('files.write', { path: file, base64: b64('{}\n'), expected: saved.revision });
+  }
+  const blob = '0123abcd';
+  await voidCall('files.write', { path: `.void/blobs/${blob}`, base64: b64('blob'), expected: '' });
+  await voidCall('files.write', { path: '.void/versions/notes.md.jsonl', base64: b64('{}\n'), expected: '' });
+  await voidCall('files.write', { path: '.void/comments/notes.md.json', base64: b64('{}\n'), expected: '' });
+  assert.deepEqual((await voidCall('files.list', { path: '.void' })).map(entry => entry.name).sort(), ['baseline.json', 'blobs', 'comments', 'project.json', 'settings.json', 'status.json', 'trash.json', 'versions']);
+  assert.deepEqual((await voidCall('files.list', { path: '.void/blobs' })).map(entry => entry.name), [blob]);
+  assert.equal((await voidCall('files.write', { path: `.void/blobs/${blob}`, remove: true, expected: hashBytes(Buffer.from('blob')) })).revision, '');
+  assert.equal((await voidCall('files.list', { path: '' })).some(entry => entry.name.startsWith('.')), false);
+  for (const refused of ['.git/config', '.env', '.git', '.voidx/a.json', '.void2', '.void/../.git/config', '.void/.hidden', 'docs/.void/project.json', '.void/..', '..']) {
+    await assert.rejects(voidCall('files.read', { path: refused }), { code: 'denied' });
+    await assert.rejects(voidCall('files.write', { path: refused, base64: b64('x'), expected: '' }), { code: 'denied' });
+  }
+  for (const refused of ['.git', '.voidx', '..', '../..', 'docs/../..']) await assert.rejects(voidCall('files.list', { path: refused }), { code: 'denied' });
+  await assert.rejects(voidCall('files.write', { path: '.void/project.json', remove: true, expected: '1'.repeat(64) }), { code: 'conflict' });
+  assert.equal(await readFile(path.join(project, '.git/config'), 'utf8'), 'secret');
+  assert.equal(await readFile(path.join(project, '.env'), 'utf8'), 'secret');
+  for (const method of ['open.pick', 'open.switchTo']) {
+    await assert.rejects(voidCall(method, { path: '.void/project.json' }), { code: 'denied' });
+    await assert.rejects(voidCall(method, { path: path.join(project, '.void/project.json') }), { code: 'denied' });
+  }
+  await assert.rejects(blueprint('read', { id: '.void/project' }), { code: 'invalid' });
+  await assert.rejects(call('blueprint', 'blueprint.asset', { location: project, src: 'assets/../../.void/project.json' }), { code: 'invalid' });
+  await mkdir(path.join(project, 'docs/flows/.void'), { recursive: true });
+  await assert.rejects(call('blueprint', 'blueprint.save', { location: project, board: { id: '.void' }, revision: null }), { code: 'invalid' });
+});
+
+test('a project state folder reached through a link stays outside the project', async t => {
+  const { voidCall, excluded, project } = await setup(t);
+  await mkdir(path.join(excluded, 'state'));
+  await symlink(path.join(excluded, 'state'), path.join(project, '.void'), 'junction');
+  await assert.rejects(voidCall('files.write', { path: '.void/project.json', base64: b64('{}'), expected: '' }), { code: 'denied' });
+  await assert.rejects(voidCall('files.list', { path: '.void' }), { code: 'denied' });
 });
 
 test('events carry only metadata, suppress own watcher echoes, retain changes from another app and known authors', async t => {
   const { context, blueprint, project, events, call } = await setup(t);
   await call('void', 'hello', { app: 'void', appVersion: '1', protocol: 1 });
   await observePass(context, { baseline: true });
-  await blueprint('save', { id: 'board', document: boardDocument('board'), expectedRevision: null });
+  await blueprint('save', { board: boardDocument('board'), revision: null });
   const own = events.find(event => event.data.name === 'blueprint.changed');
   assert.equal(own.data.clientId, CLIENT);
+  assert.deepEqual([own.data.params.location, own.data.params.id], ['shop', 'board']);
   assert.equal(events.find(event => event.data.name === 'void.files.changed').data.clientId, undefined);
   const length = events.length;
   await observePass(context);
@@ -210,7 +335,7 @@ test('a scanner read overlapping a bridge save never emits the previous bytes as
   try {
     observing = observePass(context);
     await entered.promise;
-    saving = blueprint('save', { id: 'overlap', document: boardDocument('overlap', 'Own'), expectedRevision: hashBytes(bytes) });
+    saving = blueprint('save', { board: boardDocument('overlap', 'Own'), revision: hashBytes(bytes) });
     // A correctly serialized writer waits until the scanner releases its read.
     const wroteBeforeReadCompleted = await Promise.race([saving.then(() => true), delay(500).then(() => false)]);
     assert.equal(wroteBeforeReadCompleted, false, 'The bridge write must wait for the overlapping scanner read.');
@@ -228,7 +353,7 @@ test('a scanner read overlapping a bridge save never emits the previous bytes as
   }
 });
 
-test('a project with more than 2000 text files remains observable while file listings stay bounded', async t => {
+test('a project with more than 2000 text files remains observable and one directory lists whole', async t => {
   const { context, project, events, voidCall, call } = await setup(t);
   await call('void', 'hello', { app: 'void', appVersion: '1', protocol: 1 });
   const directory = path.join(project, 'texts');
@@ -247,8 +372,8 @@ test('a project with more than 2000 text files remains observable while file lis
   try { while ((await observeAppFiles(context)).pending) { /* Finish bounded slices. */ } }
   finally { fsPromises.readFile = original; syncBuiltinESMExports(); }
   assert.equal(textReads, 1, 'The rescan must reread only the text whose bytes changed.');
-  assert.equal(events.some(event => event.data.name === 'void.files.changed' && event.data.params.some(item => item.path === file && item.kind === 'changed')), true);
-  assert.equal((await voidCall('files.list')).truncated, true);
+  assert.equal(events.some(event => event.data.name === 'void.files.changed' && event.data.params.some(item => item.path === 'texts/2000.md' && item.kind === 'changed')), true);
+  assert.deepEqual((await voidCall('files.list', { path: 'texts' })).length, 2001);
 });
 
 test('filesystem watch reports real board and text edits and deletions without manual observation', async t => {
@@ -277,9 +402,9 @@ test('filesystem watch reports real board and text edits and deletions without m
   await writeFile(board, '{"format":4,"title":"Outside"}');
   await writeFile(text, 'Outside.');
   await until(() => events.some(event => event.name === 'blueprint.changed' && event.params.id === 'watched')
-    && events.some(event => event.name === 'void.files.changed' && event.params.some(item => item.path === text && item.kind === 'changed')));
+    && events.some(event => event.name === 'void.files.changed' && event.params.some(item => item.path === 'docs/watched.md' && item.kind === 'changed')));
   await unlink(text);
-  await until(() => events.some(event => event.name === 'void.files.changed' && event.params.some(item => item.path === text && item.kind === 'deleted')));
+  await until(() => events.some(event => event.name === 'void.files.changed' && event.params.some(item => item.path === 'docs/watched.md' && item.kind === 'deleted')));
   assert.equal(events.some(event => event.clientId), false);
 });
 
@@ -297,7 +422,7 @@ test('bridge HTTP routes reuse desktop bearer, Origin, Host and idempotency guar
   assert.equal(agentEvents[0].name, 'unit.changed', 'derived app events follow their source cursor');
   const origin = `http://127.0.0.1:${http.port}`;
   const desktop = credentials.issue({ audience: 'desktop', unitId: 'root:master', viewerId: randomUUID(), expiresAt: null });
-  const payload = { app: 'blueprint', method: 'blueprint.save', params: { location: project, id: 'http', document: boardDocument('http'), expectedRevision: null }, clientId: CLIENT };
+  const payload = { app: 'blueprint', method: 'blueprint.save', params: { location: project, board: boardDocument('http'), revision: null }, clientId: CLIENT };
   function request(token, extra = {}, key = randomUUID(), body = payload) {
     return new Promise((resolve, reject) => {
       const outgoing = httpRequest(`${origin}/api/v1/app-bridge/call`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, Origin: origin, 'Content-Type': 'application/json', 'Idempotency-Key': key, ...extra } }, response => {
@@ -319,6 +444,7 @@ test('bridge HTTP routes reuse desktop bearer, Origin, Host and idempotency guar
   const attribution = await request(desktop.token, {}, randomUUID(), { app: 'void', method: 'void.files.attribution', params: { location: project, path: 'docs/flows/boards/http.json' }, clientId: CLIENT });
   assert.equal(attribution.status, 200);
   assert.equal(attribution.json.data.by, 'project:shop:executor');
+  assert.equal(attribution.json.data.path, 'docs/flows/boards/http.json');
   assert.equal((await request('invalid')).status, 401);
   assert.equal((await request(desktop.token, { Origin: 'https://blueprint.txmska.com' })).status, 403);
   assert.ok([400, 403].includes((await request(desktop.token, { Host: 'attacker.example' })).status));
@@ -399,32 +525,28 @@ test('each observation slice batches file changes and coalesces agent notificati
 
 test('Windows case variants select the same project and serialize the same file lock', { skip: process.platform !== 'win32' }, async t => {
   const { blueprint, voidCall, project } = await setup(t);
-  const text = JSON.stringify(boardDocument('case'));
-  const saved = await blueprint('save', { location: project.toUpperCase(), id: 'case', text, expectedRevision: null });
-  assert.equal((await voidCall('open.pick', { location: undefined, path: path.join(project, 'docs/flows/boards/case.json').toUpperCase() })).text, text);
-  const outcomes = await Promise.allSettled([project, project.toUpperCase()].map(location => blueprint('save', { location, id: 'case', document: boardDocument('case', 'Next'), expectedRevision: saved.revision })));
+  const saved = await blueprint('save', { location: project.toUpperCase(), board: boardDocument('case'), revision: null });
+  assert.equal(Buffer.from((await voidCall('open.pick', { location: undefined, path: path.join(project, 'docs/flows/boards/case.json').toUpperCase() })).base64, 'base64').toString(), boardText(boardDocument('case')));
+  const outcomes = await Promise.allSettled([project, project.toUpperCase()].map(location => blueprint('save', { location, board: boardDocument('case', 'Next'), revision: saved.revision })));
   assert.equal(outcomes.filter(item => item.status === 'fulfilled').length, 1);
   assert.equal(outcomes.find(item => item.status === 'rejected').reason.code, 'conflict');
 });
 
-test('Void project switches return their selection without an echo and oversized listings return partial metadata', async t => {
+test('Void project switches return their selection without an echo', async t => {
   const { voidCall, project, events } = await setup(t);
   assert.equal((await voidCall('open.switchTo')).path, project);
   assert.equal(events.some(event => event.data.name === 'void.project'), false);
-  await Promise.all(Array.from({ length: 2001 }, (_, index) => writeFile(path.join(project, `listing-${index}.md`), 'First.')));
-  const result = await voidCall('files.list');
-  assert.equal(result.truncated, true);
-  assert.equal(result.limit, 2000);
-  assert.equal(result.entries.length, 2000);
 });
 
-test('listing beyond 2000 files returns partial entries instead of invalid', async t => {
+test('a directory lists whole up to its limit, then returns partial entries and the limit', async t => {
   const { voidCall, project } = await setup(t);
-  await Promise.all(Array.from({ length: 2001 }, (_, index) => writeFile(path.join(project, `listing-${index}.md`), 'First.')));
-  const result = await voidCall('files.list');
+  await mkdir(path.join(project, 'many'));
+  for (let start = 0; start < 10_001; start += 250) await Promise.all(Array.from({ length: Math.min(250, 10_001 - start) }, (_, index) => writeFile(path.join(project, 'many', `listing-${start + index}.md`), 'First.')));
+  const result = await voidCall('files.list', { path: 'many' });
   assert.equal(result.truncated, true);
-  assert.equal(result.limit, 2000);
-  assert.equal(result.entries.length, 2000);
+  assert.equal(result.limit, 10_000);
+  assert.equal(result.entries.length, 10_000);
+  assert.equal(result.entries[0].kind, 'file');
 });
 
 test('agent notifications coalesce across repeated source changes', async t => {
@@ -432,18 +554,6 @@ test('agent notifications coalesce across repeated source changes', async t => {
   for (let index = 0; index < 50; index++) appAgentsChanged(context);
   await delay(80);
   assert.equal(events.filter(event => event.data.name === 'agents.changed').length, 1);
-});
-
-test('listing beyond 20000 directory entries returns an explicit entry limit', async t => {
-  const { project, voidCall } = await setup(t);
-  const original = fsPromises.readdir;
-  fsPromises.readdir = async function(target, ...args) {
-    if (String(target) === project) return Array.from({ length: 20001 }, (_, index) => ({ name: `entry-${index}.bin`, isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false }));
-    return original.call(this, target, ...args);
-  };
-  syncBuiltinESMExports();
-  try { assert.deepEqual(await voidCall('files.list'), { entries: [], truncated: true, limit: 20000 }); }
-  finally { fsPromises.readdir = original; syncBuiltinESMExports(); }
 });
 
 test('open Blueprint observes only flow files and open Void only its selected project until its lease ends', async t => {
@@ -491,7 +601,7 @@ test('app observer access failures never prevent service startup or a later ordi
   while ((await observeAppFiles(context, { baseline: true })).pending) { /* Finish bounded slices. */ }
   await writeFile(readable, 'Changed.');
   while ((await observeAppFiles(context)).pending) { /* Finish bounded slices. */ }
-  assert.equal(events.some(event => event.data.name === 'void.files.changed' && event.data.params.some(item => item.path === readable)), true);
+  assert.equal(events.some(event => event.data.name === 'void.files.changed' && event.data.params.some(item => item.path === 'readable.md')), true);
 });
 
 test('watcher completes app slices after one notification without another filesystem event', async t => {

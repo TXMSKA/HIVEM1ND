@@ -65,8 +65,8 @@ test('review 2: bridge reads and open calls never persist bodies in receipts; wr
   const { call, receiptFiles, project, assetId } = await setup(t);
   for (const [method, params] of [
     ['blueprint.locations', {}], ['blueprint.list', {}], ['blueprint.read', { id: 'board' }],
-    ['blueprint.asset', { id: assetId }],
-    ['void.files.list', {}], ['void.files.read', { path: 'article.md' }], ['void.files.url', { path: 'article.md' }],
+    ['blueprint.asset', { src: `assets/${assetId}` }],
+    ['void.files.list', { path: '' }], ['void.files.read', { path: 'article.md' }], ['void.files.url', { path: 'article.md' }],
     ['void.files.asset', { path: 'article.md' }], ['void.files.attribution', { path: 'article.md' }],
     ['void.storage.load', { key: 'tabs' }], ['void.project', {}], ['agents.list', {}],
     ['void.open.pick', { path: 'article.md' }], ['void.open.switchTo', { path: 'article.md' }],
@@ -75,16 +75,18 @@ test('review 2: bridge reads and open calls never persist bodies in receipts; wr
     assert.deepEqual(await receiptFiles(), [], `${method} must not create a receipt`);
   }
   const options = { key: randomUUID() };
-  const params = { path: 'created.md', text: 'Document body excluded from receipts', expectedRevision: null };
+  const text = 'Document body excluded from receipts';
+  const params = { path: 'created.md', base64: Buffer.from(text).toString('base64'), expected: '' };
   const first = await call('void.files.write', params, options);
   const retry = await call('void.files.write', params, options);
   assert.equal(first.status, 200);
   assert.equal(retry.json.meta.replayed, true);
   assert.deepEqual(retry.json.data, first.json.data);
-  assert.equal(first.json.data.path, path.join(project, 'created.md'));
+  assert.equal(first.json.data.path, 'created.md');
   const files = await receiptFiles();
   assert.equal(files.length, 1);
-  assert.equal((await readFile(files[0], 'utf8')).includes(params.text), false);
+  assert.equal((await readFile(files[0], 'utf8')).includes(params.base64), false);
+  assert.equal((await readFile(files[0], 'utf8')).includes(text), false);
   assert.deepEqual(Object.keys(JSON.parse(await readFile(files[0], 'utf8')).response).sort(), ['path', 'revision']);
 });
 
@@ -174,7 +176,7 @@ test('receipt cleanup waits for the same-key writer and never removes its renewe
 test('the service periodically removes expired receipts without another mutation', async t => {
   t.mock.timers.enable({ apis: ['setInterval'] });
   const { fixture, call, receiptFiles } = await setup(t);
-  assert.equal((await call('void.files.write', { path: 'timer.md', text: 'written once', expectedRevision: null })).status, 200);
+  assert.equal((await call('void.files.write', { path: 'timer.md', base64: Buffer.from('written once').toString('base64'), expected: '' })).status, 200);
   assert.equal((await receiptFiles()).length, 1);
   fixture.clock.now += RECEIPT_TTL_MS + 1;
   t.mock.timers.tick(60_000);

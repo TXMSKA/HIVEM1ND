@@ -35,12 +35,12 @@ const parameterKeys = {
   hello: ['app', 'appVersion', 'protocol', 'project', 'location'], 'app.saved': ['state'], 'agents.list': ['location'],
   'agents.send': ['location', 'kind', 'to', 'document', 'threadId', 'subject', 'body', 'attachment'],
   'blueprint.locations': [], 'blueprint.list': ['location'], 'blueprint.read': ['location', 'id'],
-  'blueprint.save': ['location', 'id', 'text', 'content', 'document', 'expectedRevision'],
-  'blueprint.asset': ['location', 'id', 'path'], 'blueprint.upload': ['location', 'bytes', 'base64', 'mime', 'contentType', 'expectedRevision'],
-  'void.files.list': ['location'], 'void.files.read': ['path', 'location'],
-  'void.files.write': ['path', 'location', 'text', 'content', 'document', 'expectedRevision'],
+  'blueprint.save': ['location', 'board', 'revision'],
+  'blueprint.asset': ['location', 'src'], 'blueprint.upload': ['location', 'name', 'type', 'bytes'],
+  'void.files.list': ['path', 'location'], 'void.files.read': ['path', 'location'],
+  'void.files.write': ['path', 'location', 'data', 'expected'],
   'void.files.url': ['path', 'location'], 'void.files.asset': ['path', 'location'], 'void.files.attribution': ['path', 'location'],
-  'void.storage.load': ['key', 'location'], 'void.storage.save': ['key', 'location', 'value', 'expectedRevision'],
+  'void.storage.load': ['key', 'location'], 'void.storage.save': ['key', 'location', 'value'],
   'void.open.pick': ['path', 'location', 'project'], 'void.open.switchTo': ['path', 'location', 'project'],
   'void.export.save': ['name', 'text', 'bytes', 'base64'], 'void.export.pdf': ['name', 'text', 'bytes', 'base64'], 'void.project': [],
 };
@@ -98,25 +98,29 @@ function binaryBuffer(value, limit) {
 function validateParams(method, params) {
   if (!params || typeof params !== 'object' || Array.isArray(params) || Object.getPrototypeOf(params) !== Object.prototype && Object.getPrototypeOf(params) !== null) fail('invalid');
   const exporting = method.startsWith('void.export.');
-  const binaryLimit = method === 'blueprint.upload' ? 10_000_000 : exporting ? 32 * 1024 * 1024 : 0;
-  if (params.bytes !== undefined) {
+  const writing = method === 'void.files.write';
+  if (writing && !Object.hasOwn(params, 'data')) fail('invalid');
+  const binaryKey = writing ? 'data' : 'bytes';
+  const binaryLimit = method === 'blueprint.upload' ? 10_000_000 : exporting ? 32 * 1024 * 1024 : writing ? 16_000_000 : 0;
+  // A null `data` removes the file.
+  if (params[binaryKey] !== undefined && !(writing && params.data === null)) {
     if (!binaryLimit) fail('invalid');
     // Check the IPC allocation before inspecting or converting any other input.
-    const length = params.bytes instanceof ArrayBuffer || ArrayBuffer.isView(params.bytes) ? params.bytes.byteLength : params.bytes?.length;
+    const length = params[binaryKey] instanceof ArrayBuffer || ArrayBuffer.isView(params[binaryKey]) ? params[binaryKey].byteLength : params[binaryKey]?.length;
     if (!Number.isInteger(length) || length > binaryLimit) fail('invalid');
   }
-  const document = ['blueprint.save', 'void.files.write', 'void.storage.save'].includes(method);
+  const document = ['blueprint.save', 'void.storage.save'].includes(method);
   const smallLimit = method === 'agents.send' ? 32 * 1024 : 64 * 1024;
   let smallSize = 2;
   for (const key in params) {
     if (!Object.hasOwn(params, key)) continue;
     if (!parameterKeys[method].includes(key)) fail('invalid');
-    if (key === 'bytes') { validateBinary(params.bytes, binaryLimit); continue; }
+    if (key === binaryKey) { if (!(writing && params.data === null)) validateBinary(params[binaryKey], binaryLimit); continue; }
     if (key === 'base64' && binaryLimit) {
       if (typeof params.base64 !== 'string' || params.base64.length > Math.ceil(binaryLimit / 3) * 4) fail('invalid');
       continue;
     }
-    if ((document && ['text', 'content', 'document', 'value'].includes(key)) || exporting && key === 'text') {
+    if ((document && ['board', 'value'].includes(key)) || exporting && key === 'text') {
       const limit = exporting ? 32 * 1024 * 1024 : 16_000_000;
       if (['text', 'content'].includes(key)) {
         if (typeof params[key] !== 'string' || Buffer.byteLength(params[key]) > limit) fail('invalid');
@@ -129,7 +133,11 @@ function validateParams(method, params) {
   }
 }
 
-function serviceParams(params) {
+function serviceParams(method, params) {
+  if (method === 'void.files.write') {
+    const { data, ...rest } = params;
+    return data === null ? { ...rest, remove: true } : { ...rest, base64: binaryBuffer(data, 16_000_000).toString('base64') };
+  }
   if (params.bytes === undefined) return params;
   const { bytes, ...rest } = params;
   return { ...rest, base64: binaryBuffer(bytes, 10_000_000).toString('base64') };
@@ -268,15 +276,18 @@ export function createEmbeddedApps({ window, WebContentsView, session, shell, di
     const response = await fetchImpl(`${origin}/api/v1/app-bridge/call`, {
       method: 'POST', redirect: 'error', signal: AbortSignal.timeout(method === 'hello' ? 2500 : 30_000),
       headers: { 'content-type': 'application/json', Origin: origin, Authorization: `Bearer ${token}`, 'Idempotency-Key': randomUUID() },
-      body: JSON.stringify({ app, method, params: serviceParams(params), clientId }),
+      body: JSON.stringify({ app, method, params: serviceParams(method, params), clientId }),
     });
     const envelope = await response.json();
     if (!response.ok || envelope.error) fail(errors.has(envelope.error?.code) ? envelope.error.code : 'unavailable');
     const result = envelope.data;
-    if (['blueprint.asset', 'void.files.asset'].includes(method) && typeof result?.base64 === 'string') {
-      const bytes = Buffer.from(result.base64, 'base64');
-      return { ...result, bytes: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) };
+    if (['blueprint.asset', 'void.files.asset', 'void.files.read'].includes(method) && typeof result?.base64 === 'string') {
+      const { base64, ...rest } = result;
+      const bytes = Buffer.from(base64, 'base64');
+      const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+      return method === 'void.files.read' ? { ...rest, data: buffer } : { ...rest, bytes: buffer };
     }
+    if (method === 'void.files.attribution') return result?.by ?? null;
     return result;
   };
   const exportFile = async (record, method, params) => {
