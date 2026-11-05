@@ -1,5 +1,16 @@
 # Changelog
 
+## ONEM1ND 1.0.0-beta.1 - 2026-11-05
+
+First Beta of ONEM1ND. The product is renamed from HIVEM1ND and numbers its own line from this version; the HIVEM1ND releases up to 3.0.0 stay as history below, and any version a mind recorded under HIVEM1ND counts as older than every ONEM1ND version.
+
+- Rebrand. The package, the command and the app are `onem1nd`. Evolve moves a HIVEM1ND mind to the new name once through the `3.0.0-onem1nd` migration, and records the version as `onem1nd <version>` from now on. Existing records, wire formats and installed identities keep their old identifiers so current peers and sessions stay readable.
+- Blueprint and Void run inside the app. Boards and texts open in the desktop window, and an embedded app reads and saves them through the app bridge in the shape of the live apps. An agent can open a board or a text in the app for the person.
+- Blueprint boards use format 4, and the agent tools that read and change boards and texts check that format before saving.
+- The Lite edition is removed. There is one ONEM1ND.
+- Relay+ and its setup and Settings board are part of the line, together with the sync API for other tools to publish and read records.
+- Multi-account: an agent client can run with more than one signed-in account, each with its own environment.
+
 ## Unreleased
 
 - `/link` joins sessions into one message thread through a short code. `/link` with no code gives 5 characters that work for 10 minutes, and `/link <code>` from another session, in the app or in a terminal, joins both parties into the thread; more parties using the code before it expires make it a group thread. The Relay tool `link` and `hivem1nd relay link [code]` do the same, and `send_message` to `link:<linkId>` (or `relay send --to link:<linkId>`) writes one message per other member into the thread, sharing a `fanout-id` header, which `history` and `threads` show once to their sender with every recipient in `to`. A unit that tries 5 wrong codes in 10 minutes is locked until the oldest attempt is 10 minutes old, and when the code expires the link and its thread stay. A link only carries messages: it changes no role, hierarchy, cluster or permission, and a message in it is context, never authorization.
