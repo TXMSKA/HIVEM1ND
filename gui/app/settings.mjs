@@ -245,7 +245,7 @@ function renderMachinePicker(document, model, t, actions) {
   const host = element(document, "div", { class: "settings-machine-picker" });
   const current = model.machine === model.localMachine ? t("finalThisMachine", { machine: model.machine }) : model.machine;
   const toggle = settingsButton(document, "settings-machine", current || t("machine"), actions.onMachineMenu);
-  toggle.replaceChildren(machineIcon(document, model.machine === model.localMachine), current || t("machine"), element(document, "span", { "aria-hidden": "true", text: "⌄" }));
+  toggle.replaceChildren(machineIcon(document, model.machine === model.localMachine), element(document, "span", { class: "settings-machine-current", text: current || t("machine") }), pathIcon(document, "M6 9l6 6 6-6", "icon settings-machine-chevron"));
   toggle.setAttribute("aria-label", `${t("machine")}: ${current ?? ""}`);
   toggle.setAttribute("aria-expanded", String(Boolean(model.machineMenu)));
   toggle.setAttribute("aria-haspopup", "menu");
