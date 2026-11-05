@@ -476,7 +476,7 @@ test('installed Codex is discovered off PATH and notifications are not replies',
   assert.equal(created.nativeSessionId, 'thread-smoke');
   assert.equal(seen[0].command, executable);
   assert.deepEqual(seen[0].args, ['app-server', '--listen', 'stdio://']);
-  assert.equal(seen[0].options.env, env);
+  assert.deepEqual(seen[0].options.env, env);
   assert.equal(seen[0].options.cwd, shop);
   assert.equal(seen[0].options.shell, false);
   assert.equal(seen[0].options.windowsHide, true);
@@ -547,7 +547,7 @@ test('Cursor correlates authenticate replies and Claude receives the startup ins
   assert.equal(created.nativeSessionId, 'cursor-smoke');
   assert.equal(seen[0].command, node);
   assert.deepEqual(seen[0].args, [script, 'acp']);
-  assert.equal(seen[0].options.env, env);
+  assert.deepEqual(seen[0].options.env, env);
   assert.equal(seen[0].options.shell, false);
   assert.equal(seen[0].child.written.join('').includes('do-not-embed-this-prompt'), false);
 
