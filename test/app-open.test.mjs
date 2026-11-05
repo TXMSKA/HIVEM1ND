@@ -59,7 +59,7 @@ test('without a running desktop app the result is not_running and nothing is wri
   assert.deepEqual(await openInApp(context, { app: 'void', path: 'docs/guide.json', project: 'shop' }), { opened: false, status: 'not_running' });
   assert.deepEqual(events, []);
   const desktop = { ...context, principal: { audience: 'desktop', unitId: 'root:master' } };
-  assert.deepEqual((await callAppBridge(desktop, { app: 'void', method: 'void.storage.load', params: { location: project, key: 'position:shop' }, clientId: 'check' })).value, null);
+  assert.equal(await callAppBridge(desktop, { app: 'void', method: 'void.storage.load', params: { location: project, key: 'position:shop' }, clientId: 'check' }), null);
 });
 
 test('a text stores its position and sends the project, by relative or absolute path', async t => {
@@ -68,10 +68,10 @@ test('a text stores its position and sends the project, by relative or absolute 
   assert.deepEqual(events.at(-1).data, { app: 'void', name: 'app.open', params: { project: { id: 'shop', name: 'shop', path: project }, path: 'docs/guide.json' } });
   const desktop = { ...context, principal: { audience: 'desktop', unitId: 'root:master' } };
   const stored = await callAppBridge(desktop, { app: 'void', method: 'void.storage.load', params: { location: 'shop', key: 'position:shop' }, clientId: 'check' });
-  assert.deepEqual(stored.value, { path: 'docs/guide.json', scroll: 0, section: 0 });
+  assert.deepEqual(stored,{ path: 'docs/guide.json', scroll: 0, section: 0 });
   await openInApp(context, { app: 'void', path: 'notes.md', project: 'shop' });
   const again = await callAppBridge(desktop, { app: 'void', method: 'void.storage.load', params: { location: 'shop', key: 'position:shop' }, clientId: 'check' });
-  assert.equal(again.value.path, 'notes.md');
+  assert.equal(again.path, 'notes.md');
 });
 
 test('app_open refuses paths outside an attached project, hidden or reserved names and unrelated files', async t => {

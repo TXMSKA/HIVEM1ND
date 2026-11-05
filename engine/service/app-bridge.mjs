@@ -648,8 +648,7 @@ export async function openInApp(context, input) {
   if (!context.bus?.listening?.('desktop')) return { opened: false, status: 'not_running' };
   if (input.app === 'void') {
     // Void restores its page from this position when the host sends the project again.
-    const key = `position:${found.id}`, saved = await storageCall(context, 'void.storage.load', { location: found.id, key }, null);
-    await storageCall(context, 'void.storage.save', { location: found.id, key, value: { path: value, scroll: 0, section: 0 }, expectedRevision: saved.revision }, null);
+    await storageCall(context, 'void.storage.save', { location: found.id, key: `position:${found.id}`, value: { path: value, scroll: 0, section: 0 } }, null);
   }
   appEvent(context, input.app, 'app.open', params);
   return { opened: true, app: input.app, project: project.name, path: value };
