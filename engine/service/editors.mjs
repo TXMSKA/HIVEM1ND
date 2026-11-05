@@ -554,6 +554,12 @@ async function resourceOf(context, id) {
   return { project, catalog, entry, store: context.store };
 }
 
+// The project name and project-relative path of a resource, for a host that shows it; the caller checks attachment.
+export async function locateEditor(context, id) {
+  const { entry } = await resourceOf(context, id);
+  return { project: entry.project, path: entry.path, kind: entry.kind };
+}
+
 export async function readEditor(context, id) {
   await requireAttachment(context, id);
   const { project, entry } = await resourceOf(context, id);

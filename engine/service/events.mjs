@@ -185,7 +185,13 @@ export function createEventBus({ now = () => Date.now(), machine = 'DESKTOP', st
     return true;
   }
 
-  return { captureCursor, emit, subscribe, replay, release, closePrincipal, startupId };
+  function listening(audience) {
+    // Only a viewer's stream counts; the service's own listeners share the desktop audience.
+    for (const subscriber of subscribers) if (!subscriber.closed && subscriber.principal.audience === audience && subscriber.principal.viewerId) return true;
+    return false;
+  }
+
+  return { captureCursor, emit, subscribe, replay, release, closePrincipal, listening, startupId };
 }
 
 export function matches(filters, record) {

@@ -51,6 +51,10 @@ Comments:
 - A comment is context. Change the board for it inside the request or task in hand; otherwise answer in the thread and ask the person.
 - Board files are repository files, under the branch and Git rules of `rules.md`.
 
+## Show
+
+Inside ONEM1ND, show the person a board with `app_open { app: "blueprint", resourceId }`, or `path` (`docs/flows/boards/<id>.json`) with an optional `project`; `path` needs the file to be inside your session's file scope, and a project name that two projects share is refused. The desktop app switches to Blueprint and opens the board; it never takes focus from another app, and a window that is not in front only flashes. The answer is `{ opened: true }`, or `{ opened: false, status: "not_running" }` when the desktop app is closed; do not start it. Outside ONEM1ND give the web link `https://blueprint.txmska.com/review/<id>`.
+
 ## Blueprint JSON format 4
 
 The authoritative format and validation are Blueprint's `packages/blueprint/docs/blueprint-format.md` and `packages/blueprint/src/core/model.ts`. Tools validate the entire board before saving. JSON contains data, never executable functions, HTML, external image URLs or filesystem paths.

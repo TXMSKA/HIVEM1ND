@@ -200,15 +200,24 @@ export async function verifiedFilePath(candidate) {
   }
 }
 
-async function access(context, input, write) {
-  const candidate = input?.path;
+async function scopedTarget(context, candidate) {
   const scope = await verifiedSessionScope(context), target = await verifiedFilePath(candidate);
   const roots = scope.writeRoots.filter(root => withinClusterRoot(root.realPath, target.path, process.platform));
   if (target.path.split(path.sep).some(part => ['.git', '.m1nd'].includes(part.toLowerCase()))
     || scope.writeRoots.some(root => root.gitCommonDir && withinClusterRoot(root.gitCommonDir, target.path, process.platform))) fail('scope_unavailable', 'Internal Git and M1ND files require their scoped service operation.');
   if (withinClusterRoot(context.paths.mind, target.path, process.platform) || withinClusterRoot(context.paths.localDirectory, target.path, process.platform)) fail('scope_unavailable', 'M1ND records use actor-bound service tools.');
-  if (!roots.length) await outsideApproval(context, scope, target, input, write);
+  return { scope, target, inside: roots.length > 0 };
+}
+
+async function access(context, input, write) {
+  const { scope, target, inside } = await scopedTarget(context, input?.path);
+  if (!inside) await outsideApproval(context, scope, target, input, write);
   return { scope, target };
+}
+
+// For callers that cannot ask a person: a file that would need an approval is refused instead.
+export async function assertReadableInScope(context, candidate) {
+  if (!(await scopedTarget(context, candidate)).inside) throw new CoreError(403, 'forbidden', 'The file is outside the session scope.');
 }
 
 async function outsideApproval(context, scope, target, input, write) {

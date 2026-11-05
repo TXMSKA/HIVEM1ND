@@ -52,10 +52,13 @@ function identity(project) {
 
 function projectFor(context, location) {
   if (typeof location !== 'string' || !location) fail('denied');
-  const project = attached(context).find(item => item.name === location || item.id === location
-    || sameAppPath(item.localPath, location) || sameAppPath(path.resolve(item.localPath, 'docs/flows'), location));
-  if (!project) fail('denied');
-  return project;
+  const items = attached(context);
+  const project = items.find(item => item.id === location || sameAppPath(item.localPath, location) || sameAppPath(path.resolve(item.localPath, 'docs/flows'), location));
+  if (project) return project;
+  // A name that two projects share cannot say which one is meant.
+  const named = items.filter(item => item.name === location);
+  if (named.length !== 1) fail('denied');
+  return named[0];
 }
 
 // `.void/` is Void's own project state: only the void.files calls open it, every other dot path stays refused.
@@ -237,8 +240,7 @@ async function blueprintCall(context, method, params, clientId) {
     // The wire shape is the live app's; the content must still be a valid format 4 board named by its file.
     try { validateBoard(board); } catch { fail('invalid'); }
     if (board.formatVersion !== 4 || board.id !== id) fail('invalid');
-    const bytes = Buffer.from(`${JSON.stringify(board, null, 2)}
-`);
+    const bytes = Buffer.from(`${JSON.stringify(board, null, 2)}\n`);
     if (bytes.length > 5_000_000) fail('invalid');
     const revision = await putFile(context, project, `docs/flows/boards/${id}.json`, bytes, params.revision, clientId);
 
@@ -283,8 +285,8 @@ async function blueprintCall(context, method, params, clientId) {
   fail('invalid');
 }
 
-async function storageCall(context, method, params, clientId) {
-  const project = params.location ? projectFor(context, params.location) : currentProject(context, clientId);
+async function storageCall(context, method, params, clientId, resolved = null) {
+  const project = resolved ?? (params.location ? projectFor(context, params.location) : currentProject(context, clientId));
   if (!project) fail('not_found');
   if (typeof params.key !== 'string' || !params.key || params.key.length > 200) fail('invalid');
   const file = path.join(context.paths.localDirectory, 'app-bridge', hashBytes(Buffer.from(appPathKey(project.localPath))), `${hashBytes(Buffer.from(params.key))}.json`);
@@ -625,4 +627,42 @@ export function appAgentsChanged(context, projectName = null) {
     state.agentProjects.clear();
   }, 50);
   state.agentTimer.unref?.();
+}
+
+const BOARD_FILE = /^docs\/flows\/boards\/([A-Za-z0-9][A-Za-z0-9_-]{0,127})\.json$/;
+
+// Shows one file of an attached project to the person in the embedded app; only a running desktop app can show it.
+export async function openInApp(context, input, authorize = null) {
+  if (!input || !Object.hasOwn(METHODS, input.app) || typeof input.path !== 'string' || !input.path || input.project !== undefined && typeof input.project !== 'string') fail('invalid');
+  let value = input.path;
+  let project = input.project ? projectFor(context, input.project) : null;
+  if (path.isAbsolute(value)) {
+    project ??= attached(context).filter(item => insideAppPath(item.localPath, value)).sort((a, b) => b.localPath.length - a.localPath.length)[0];
+    if (!project) fail('denied');
+    value = path.relative(project.localPath, value).split(path.sep).join('/');
+  }
+  project ??= attached(context).length === 1 ? attached(context)[0] : null;
+  if (!project) fail('invalid');
+  // The directory browser hides these folders, so a file inside one must not be reachable by path either.
+  if (value.split('/').some(part => SKIP_DIRECTORIES.has(process.platform === 'win32' ? part.toLowerCase() : part))) fail('denied');
+  const file = await contained(project, value);
+  await authorize?.(file);
+  const found = identity(project);
+  let params;
+  if (input.app === 'blueprint') {
+    const board = BOARD_FILE.exec(value);
+    if (!board || board[1] === 'index') fail('invalid');
+    params = { location: found.id, id: board[1] };
+  } else {
+    if (!TEXT_EXTENSIONS.has(path.extname(value).toLowerCase()) || /\.(?:orig|comments)\.json$|\.versions\.jsonl$/.test(value)) fail('invalid');
+    params = { project: found, path: value };
+  }
+  if (!await bytesOf(file)) fail('not_found');
+  if (!context.bus?.listening?.('desktop')) return { opened: false, status: 'not_running' };
+  if (input.app === 'void') {
+    // Void restores its page from this position when the host sends the project again.
+    await storageCall(context, 'void.storage.save', { location: found.id, key: `position:${found.id}`, value: { path: value, scroll: 0, section: 0 } }, null, project);
+  }
+  appEvent(context, input.app, 'app.open', params);
+  return { opened: true, app: input.app, project: project.name, path: value };
 }
