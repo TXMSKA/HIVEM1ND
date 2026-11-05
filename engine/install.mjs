@@ -1121,6 +1121,9 @@ function matchesRecord(snapshot, recordedHashes) {
     && (snapshot.hash === recorded || snapshot.forms?.lf === recorded || snapshot.forms?.crlf === recorded));
 }
 
+// Modules the service imports from the kit; they import files outside their folder, so a skill copy cannot load them.
+const KIT_ONLY_FEATURE_FILES = { void: new Set(['comments.mjs', 'text.mjs']) };
+
 async function readFeatureDirectory(directory, fallbackName) {
   const entries = await readdir(directory, { withFileTypes: true });
   const candidates = [
@@ -1134,6 +1137,8 @@ async function readFeatureDirectory(directory, fallbackName) {
   const mainContent = await readFile(mainPath, 'utf8');
   const supportFiles = [];
   await collectSupport(directory, '', mainPath, supportFiles);
+  const kitOnly = KIT_ONLY_FEATURE_FILES[fallbackName];
+  if (kitOnly) supportFiles.splice(0, supportFiles.length, ...supportFiles.filter((support) => !kitOnly.has(support.relativePath)));
   return {
     name: skillName(mainContent, fallbackName),
     type: 'feature',
