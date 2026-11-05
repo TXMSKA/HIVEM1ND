@@ -438,12 +438,24 @@ export async function accountSetupStates(context) {
       const home = account.default ? null : account.home;
       const key = ownershipKey(client, account.default ? null : account.id);
       if (!adapter || home && !await lstat(home).then(() => true, () => false)) { states[client][account.id] = { state: 'missing', changes: 0 }; continue; }
-      const mode = connections.clients[key]?.cli?.mode ?? 'on-demand';
+      // The default account takes its mode the way its Agents row does, so both read the same setup.
+      const mode = connections.clients[key]?.cli?.mode ?? (home ? 'on-demand' : legacyMode(legacy, adapter.id, client));
       const changes = await pendingChanges(context, adapter, client, mode, home ? null : legacy, content, connections, home);
       states[client][account.id] = { state: changes ? 'changes-needed' : 'connected', changes };
     }
   }
   return states;
+}
+
+function legacyMode(legacy, adapterId, client) {
+  return legacy?.agents.find(item => item.name === adapterId || item.name === client)?.mode === 'auto' ? 'auto' : 'on-demand';
+}
+
+// The published report is cached and cannot see a client rewriting its own files, so the setup of the default account of a found
+// client is taken from the same computation the Accounts card uses; the two can then never disagree.
+async function withLiveSetup(context, items) {
+  const states = await accountSetupStates(ownerOf(context));
+  return items.map(item => item.found && states[item.id]?.default && states[item.id].default.state !== 'missing' ? { ...item, cli: { ...item.cli, ...states[item.id].default } } : item);
 }
 
 async function agentItems(context, legacy) {
@@ -458,7 +470,7 @@ async function agentItems(context, legacy) {
     const id = CLIENT_IDS[adapter.id] ?? adapter.id;
     const foundState = foundPaths[adapter.id] ? await lstat(foundPaths[adapter.id]).catch(() => null) : null;
     const found = detected.some(item => item.id === adapter.id) || probes[id]?.installed === true || foundState?.isFile() === true;
-    const mode = connections.clients[id]?.cli?.mode ?? (legacy?.agents.find(item => item.name === adapter.id || item.name === id)?.mode === 'auto' ? 'auto' : 'on-demand');
+    const mode = connections.clients[id]?.cli?.mode ?? legacyMode(legacy, adapter.id, id);
     const changes = found ? await pendingChanges(context, adapter, id, mode, legacy, content, connections, null) : 0;
     const app = context.probeApps ? (await context.probeApps(id)) : null;
     return { id, name: id === 'copilot' ? 'GitHub Copilot' : adapter.displayName, version: probes[id]?.version ?? null, found, mode,
@@ -479,7 +491,8 @@ export async function readMachineSettings(context, machine = context.paths.machi
   const report = machine === context.paths.machine ? await currentReport(context) : await readPublishedSettings(context, machine);
   const shared = await json(context, 'user/gui/settings.json') ?? { format: 'hivem1nd-settings-v1', look: 'modern', language: 'en' }; // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
   const common = { machine, readOnly, reportedAt: report?.reportedAt ?? null };
-  if (section === 'agents') return { ...common, revision: report?.agents.revision ?? null, items: report?.agents.items ?? [],
+  if (section === 'agents') return { ...common, revision: report?.agents.revision ?? null,
+    items: machine === context.paths.machine ? await withLiveSetup(context, report?.agents.items ?? []) : report?.agents.items ?? [],
     connectedClients: report?.connectedClients ?? [], defaultRunsIn: machine === context.paths.machine ? await defaultRunsIn(context) : null };
   if (section === 'permissions') return { ...common, revision: report?.permissions.revision ?? null, unitGrants: report?.permissions.unitGrants ?? [], agentPermissions: report?.permissions.agentPermissions ?? [] };
   if (section === 'projects') return { ...common, revision: report?.projects.revision ?? null, folders: report?.projects.folders ?? [],

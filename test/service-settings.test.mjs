@@ -664,6 +664,29 @@ test('setup is written into the home of each confirmed account, tracked per acco
   await assert.rejects(mutateMachineSettings(domain, 'preview', { machine: fixture.machine, mode: 'auto', target: 'cli', account: 'alt' }, 'claude'), { code: 'unsupported_launch_choice' });
 });
 
+test('the Accounts card and the Agents row come from one computation, so they agree after the client rewrites its own file', async t => {
+  const world = await setup(t);
+  const { fixture, owner, domain } = world;
+  owner.probeAgents = async () => ({ claude: { installed: true, version: '2.0.0' }, codex: { installed: true, version: '1.2.3' } });
+  const { accountSetupStates } = await import('../engine/service/settings.mjs');
+  await publishMachineSettings(owner);
+  const input = { machine: fixture.machine, mode: 'on-demand', target: 'cli' };
+  const preview = (await mutateMachineSettings(domain, 'preview', input, 'claude')).body;
+  await mutateMachineSettings(domain, 'apply', { machine: fixture.machine, previewId: preview.previewId, changeIds: preview.changes.filter(item => item.selected).map(item => item.id), expectedRevision: preview.revision }, 'claude');
+  const agree = async () => {
+    const card = (await accountSetupStates(domain)).claude.default;
+    const row = (await readMachineSettings(domain, fixture.machine, 'agents')).items.find(item => item.id === 'claude').cli;
+    assert.deepEqual({ state: row.state, changes: row.changes }, card);
+    return card;
+  };
+  assert.equal((await agree()).state, 'connected');
+  // The client rewrites its file after the report was built: the report cache cannot see a file outside the M1ND.
+  await writeFile(path.join(fixture.home, '.claude.json'), '{}');
+  const drifted = await agree();
+  assert.equal(drifted.state, 'changes-needed');
+  assert.ok(drifted.changes > 0);
+});
+
 test('the accounts routes list, confirm, skip, add and remove through the desktop, with no credential content and a terminal only for Add', async t => {
   const world = await setup(t);
   const { fixture, owner } = world;
