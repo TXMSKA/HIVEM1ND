@@ -1,3 +1,4 @@
+import { PRODUCT_VERSION } from '../version.mjs';
 import { randomUUID } from 'node:crypto';
 import { open, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -424,7 +425,7 @@ export async function dispatch(context, message) {
   if (method.startsWith('notifications/')) return { notification: true };
   if (method === 'initialize') {
     if (params.protocolVersion !== PROTOCOL) return schemaError(rpcId, 'Unsupported protocol version');
-    return { jsonrpc: '2.0', id: rpcId, result: { protocolVersion: PROTOCOL, capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'onem1nd-relay', version: '3.0.0' } } };
+    return { jsonrpc: '2.0', id: rpcId, result: { protocolVersion: PROTOCOL, capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'onem1nd-relay', version: PRODUCT_VERSION } } };
   }
   if (method === 'ping') return { jsonrpc: '2.0', id: rpcId, result: {} };
   if (method === 'tools/list') return { jsonrpc: '2.0', id: rpcId, result: { tools: await listedTools() } };

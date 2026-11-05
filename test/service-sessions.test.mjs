@@ -874,7 +874,9 @@ test('an active codex turn steers once and the next message starts after complet
   assert.equal(turnWrites().at(-1).params.threadId, 'thread-1');
   assert.deepEqual(turnWrites().at(-1).params.input, [{ type: 'text', text: 'epsilon' }]);
   const joined = child.written.join('\n');
-  for (const text of ['alpha', 'beta', 'gamma', 'delta', 'epsilon']) assert.equal(joined.split(text).length - 1, 1);
+  // The initialize request carries the release version, which contains "beta".
+  const sent = joined.split(JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version).join('');
+  for (const text of ['alpha', 'beta', 'gamma', 'delta', 'epsilon']) assert.equal(sent.split(text).length - 1, 1);
 });
 
 test('a timed-out codex response does not consume the next rpc', async (t) => {
@@ -932,7 +934,7 @@ test('a rejected or malformed codex ack is ambiguous and is not replayed', async
     assert.equal(result.ambiguous, true);
     assert.equal(child.written.length, before + 1);
     assert.equal(child.written.join('').includes('beta'), true);
-    assert.equal(child.written.join('').split('beta').length - 1, 1);
+    assert.equal(child.written.join('').split(JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version).join('').split('beta').length - 1, 1);
   }
 });
 

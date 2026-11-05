@@ -20,7 +20,7 @@ Worker leases and locks hold a process id, which means something only on the mac
 {
   "contract": "hivem1nd-view-v1", // Compatibility: stored schemas and wire contracts retain their existing identifiers.
   "readAt": "2026-10-08T12:05:00.000Z",
-  "mind": { "version": "3.0.0", "machine": "LAPTOP", "machines": ["DESKTOP", "LAPTOP"], "project": null },
+  "mind": { "version": "1.0.0-beta.1", "machine": "LAPTOP", "machines": ["DESKTOP", "LAPTOP"], "project": null },
   "chats": [], "squads": [], "waiting": [], "tasks": [], "inbox": [], "products": [],
   "counts": { "chats": 0, "waiting": 0, "open": 0, "review": 0, "done": 0, "closed": 0, "unread": 0, "issues": 0 },
   "issues": []

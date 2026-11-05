@@ -1,3 +1,4 @@
+import { PRODUCT_VERSION } from '../version.mjs';
 import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 import { connectNativeService } from '../service/client.mjs';
@@ -203,7 +204,7 @@ export async function serveRelayMcp({ mindPath, sessionId, nativeSessionId, clie
           stdout.write(`${JSON.stringify(rpcError(id ?? null, -32602, 'Unsupported protocol version'))}\n`);
           continue;
         }
-        response = { protocolVersion: params.protocolVersion, capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'onem1nd-relay', version: '3.0.0' } };
+        response = { protocolVersion: params.protocolVersion, capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'onem1nd-relay', version: PRODUCT_VERSION } };
       } else if (method === 'ping') response = {};
       else if (method === 'tools/list') {
         await loadServiceToolSchemas();

@@ -1,3 +1,4 @@
+import { PRODUCT_VERSION } from '../version.mjs';
 import { generateKeyPairSync, randomUUID, sign, verify } from 'node:crypto';
 import { lstat, readdir, readFile, realpath } from 'node:fs/promises';
 import os from 'node:os';
@@ -377,7 +378,7 @@ async function publishOwnedSettings(context, section) {
   const body = {
     format: 'hivem1nd-machine-settings-v1', machine, reportedAt: stamp(context), // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     locations: { mind: context.paths.mind, staging: context.paths.staging },
-    service: { machine, state: context.active === false ? 'stopped' : 'running', version: '3.0.0', startedAt: context.startedAt ?? stamp(context), startWithWindows: config.startWithWindows === true, revision: revisionOf(configSource) },
+    service: { machine, state: context.active === false ? 'stopped' : 'running', version: PRODUCT_VERSION, startedAt: context.startedAt ?? stamp(context), startWithWindows: config.startWithWindows === true, revision: revisionOf(configSource) },
     agents: refreshAgents ? { revision: null, items: await agentItems(context, legacy) } : existing.agents,
     permissions: { ...permissions, revision: revision(permissions) }, projects: { ...projects, revision: revision(projects) },
     clusterLinks: links.map(link => ({ ...link, localPath: null })), discoveryOffer: publicOffer(offer),
@@ -1059,7 +1060,7 @@ export async function prepareAdditionProjects(context, additions, { checkOnly = 
   const projects = { folders }, projectRevision = revision(projects);
   const base = report ? (({ publicKey, signature, ...body }) => body)(report) : {
     format: 'hivem1nd-machine-settings-v1', machine, locations: { mind: context.paths.mind, staging: context.paths.staging }, // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
-    service: { machine, state: 'running', version: '3.0.0', startedAt: stamp(context), startWithWindows: false, revision: null },
+    service: { machine, state: 'running', version: PRODUCT_VERSION, startedAt: stamp(context), startWithWindows: false, revision: null },
     agents: { revision: revision([]), items: [] }, permissions: { revision: revision({ unitGrants: [], agentPermissions: [] }), unitGrants: [], agentPermissions: [] } };
   const afterReport = await signed(service, { ...base, reportedAt: stamp(context), projects: { ...projects, revision: projectRevision }, clusterLinks: [...projected.values()] });
   reportShape(afterReport, machine);

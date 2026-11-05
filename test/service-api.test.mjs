@@ -1056,7 +1056,7 @@ test('every contract route has a success result and an authority or boundary fai
     }
     if (template === '/settings') {
       assert.equal(response.json.data.service.machine, fixture.machine);
-      assert.equal(response.json.data.service.version, '3.0.0');
+      assert.equal(response.json.data.service.version, '1.0.0-beta.1');
       assert.equal(response.json.data.service.state, 'running');
       assert.equal(response.json.data.service.startWithWindows, false);
     }
@@ -2277,7 +2277,7 @@ function fakeStream() {
 
 test('the package exports the GUI host from the root and from ./gui', async () => {
   const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
-  assert.equal(pkg.version, '3.0.0');
+  assert.equal(pkg.version, '1.0.0-beta.1');
   assert.equal(pkg.main, 'gui/index.mjs');
   assert.equal(pkg.exports['.'], './gui/index.mjs');
   assert.equal(pkg.exports['./gui'], './gui/index.mjs');

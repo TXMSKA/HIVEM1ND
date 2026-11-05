@@ -1,3 +1,4 @@
+import { PRODUCT_VERSION } from '../version.mjs';
 import { lstat, mkdir, readFile, readdir, rm } from 'node:fs/promises';
 import { EventEmitter } from 'node:events';
 import { spawn } from 'node:child_process';
@@ -1933,7 +1934,7 @@ function openRpc(child, incoming, session, timeoutMs, request = {}) {
 
 async function codexHandshake(rpc, request) {
   if (!request.cwd) throw unavailable();
-  const init = await rpc.call('initialize', { clientInfo: { name: 'onem1nd', title: 'ONEM1ND', version: '3.0.0' } });
+  const init = await rpc.call('initialize', { clientInfo: { name: 'onem1nd', title: 'ONEM1ND', version: PRODUCT_VERSION } });
   if (init?.error) throw unavailable();
   rpc.notify('initialized');
   const account = await rpc.call('account/read', {});
@@ -2075,7 +2076,7 @@ async function probeCodexChoices(options) {
     incoming = readLines(child, options.timeoutMs ?? 3000);
     deadline = setTimeout(() => { incoming.close(); child.kill(); }, Math.min(options.timeoutMs ?? 5000, 10000));
     const rpc = openRpc(child, incoming, {}, options.timeoutMs ?? 3000);
-    await rpc.call('initialize', { clientInfo: { name: 'onem1nd', title: 'ONEM1ND', version: '3.0.0' } });
+    await rpc.call('initialize', { clientInfo: { name: 'onem1nd', title: 'ONEM1ND', version: PRODUCT_VERSION } });
     rpc.notify('initialized');
     if (!accountReady(await rpc.call('account/read', {}))) return unavailableReport;
     const models = [], cursors = new Set(); let cursor = null;

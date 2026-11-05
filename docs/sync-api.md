@@ -291,7 +291,7 @@ build passed with 437 packaged files, and the extracted package fixture passed.
 Evidence for this correction is in `.work/sync-no-shell-qa/`:
 `no-powershell.log`, `sync.log`, `lint.log`, `build.log` and `artifact.log`.
 
-Artifact: `dist/hivem1nd-3.0.0.tgz`, API version 1, package version 3.0.0.
+Artifact: `dist/onem1nd-1.0.0-beta.1.tgz`, API version 1, package version 1.0.0-beta.1.
 SHA-256: `abec0fac097ed06e85840f27aa130e222fb30478d39361acb60f4bd9cdaaf356`.
 This is a local provisional build, not a published or owner-accepted consumer pin.
 

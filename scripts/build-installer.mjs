@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { deflateRawSync, inflateRawSync } from 'node:zlib';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { PRODUCT_VERSION } from '../engine/version.mjs';
 import { BROWSER_STATIC_FILES, EMBEDDED_BROWSER_FILES } from '../engine/service/http.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -402,7 +403,7 @@ export function installerEntry() {
     '',
     'const here = path.dirname(fileURLToPath(import.meta.url));',
     "const manifest = JSON.parse(await readFile(path.join(here, 'manifest.json'), 'utf8'));",
-    "if (manifest.format !== 'hivem1nd-installer-v1' || manifest.version !== '3.0.0') {", // Compatibility: retain installer and service record formats for existing payloads.
+    `if (manifest.format !== 'hivem1nd-installer-v1' || manifest.version !== '${PRODUCT_VERSION}') {`, // Compatibility: retain installer and service record formats for existing payloads.
     "  throw new Error('The installer manifest is not valid.');",
     '}',
     'for (const file of manifest.files) {',
@@ -495,7 +496,7 @@ export function installerEntry() {
     '}',
     "if (!manifest.files.some((file) => file.name === 'cli/index.mjs')) throw new Error('The payload has no setup command.');",
     'const nonce = randomBytes(4).toString(\'hex\');',
-    "const stage = path.join(cosmic, 'onem1nd-kit.3.0.0.' + nonce + '.stage');",
+    "const stage = path.join(cosmic, 'onem1nd-kit." + PRODUCT_VERSION + ".' + nonce + '.stage');",
     'let backup = null;',
     'let moved = false;',
     'let created = false;',
@@ -578,7 +579,7 @@ export function installerEntry() {
 export function manifestDocument(files, runtime = 'unverified', label = 'release') {
   return {
     format: 'hivem1nd-installer-v1', // Compatibility: retain installer and service record formats for existing payloads.
-    version: '3.0.0',
+    version: PRODUCT_VERSION,
     runtime,
     label,
     files: files.map((file) => ({
@@ -892,7 +893,7 @@ export async function installPayload(options) {
   if (options.manifest) hashesMatch(options.files, options.manifest);
   assertActiveIdentity(options.active, options.identity);
   const nonce = randomBytes(4).toString('hex');
-  const stage = path.join(rootDir, `${path.basename(destination)}.${options.version ?? '3.0.0'}.${nonce}.stage`);
+  const stage = path.join(rootDir, `${path.basename(destination)}.${options.version ?? PRODUCT_VERSION}.${nonce}.stage`);
   insideRoot(rootDir, stage);
   await assertRealChain(stage, rootDir);
   let created = false;

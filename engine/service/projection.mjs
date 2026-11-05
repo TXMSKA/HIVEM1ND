@@ -1,3 +1,4 @@
+import { PRODUCT_VERSION } from '../version.mjs';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { lstat, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -649,7 +650,7 @@ function assemble(loaded, query, aliases = [], machine = null, editors = []) {
   const visibleUnits = project ? units.filter((unit) => inProjectChain(unit, project, units)) : units;
   visibleUnits.sort(unitOrder);
   const view = {
-    mind: { version: '3.0.0', machine, project },
+    mind: { version: PRODUCT_VERSION, machine, project },
     units: visibleUnits,
     leads,
     squads,
@@ -737,7 +738,7 @@ export async function serviceRecord(context) {
   const sync = await readSync(context);
   return {
     machine: context?.paths?.machine ?? null,
-    version: '3.0.0',
+    version: PRODUCT_VERSION,
     originKind: context?.paths?.origin ? 'folder' : null,
     syncState: sync.state,
   };

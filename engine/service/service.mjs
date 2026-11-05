@@ -1,3 +1,4 @@
+import { PRODUCT_VERSION } from '../version.mjs';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { repositoryCheckoutPath } from './addition-parts.mjs';
 import { appendFile, lstat, mkdir, open, readdir, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises';
@@ -657,7 +658,7 @@ export async function writeBeat(options, state) {
     format: 'hivem1nd-service-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     machine: options.paths.machine,
     state,
-    version: '3.0.0',
+    version: PRODUCT_VERSION,
     heartbeatAt: new Date(options.now()).toISOString(),
     startedAt: new Date(options.startedAt ?? options.now()).toISOString(),
     clients: Array.isArray(options.clients) ? options.clients.map((item) => ({ id: item.id, enabled: item.enabled === true, installed: item.installed === true })) : [],
@@ -1035,7 +1036,7 @@ async function publishServiceBeat(runtime, state, { settings = true } = {}) {
     format: 'hivem1nd-service-v1', // Compatibility: persisted format and contract identifiers keep existing records and peers readable.
     machine: runtime.paths.machine,
     state,
-    version: '3.0.0',
+    version: PRODUCT_VERSION,
     heartbeatAt: new Date(runtime.now()).toISOString(),
     startedAt: runtime.startedAt,
     clients: runtime.clientRecords,
