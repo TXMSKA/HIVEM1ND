@@ -3,7 +3,7 @@ name: Windows release
 on:
   push:
     tags:
-      - 'v*'
+      - 'onem1nd-v*'
   workflow_dispatch:
 
 permissions:
@@ -19,10 +19,10 @@ jobs:
           node-version: 24
           cache: npm
       - name: Verify release version
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/onem1nd-v')
         env:
           RELEASE_TAG: ${{ github.ref_name }}
-        run: node --input-type=module -e "import fs from 'node:fs'; const version = JSON.parse(fs.readFileSync('package.json')).version; if (process.env.RELEASE_TAG !== 'v' + version) throw new Error('Tag and package version differ');"
+        run: node --input-type=module -e "import fs from 'node:fs'; const version = JSON.parse(fs.readFileSync('package.json')).version; if (process.env.RELEASE_TAG !== 'onem1nd-v' + version) throw new Error('Tag and package version differ');"
       - run: npm ci --ignore-scripts
       - run: npm run lint
       - run: npm test
@@ -40,7 +40,7 @@ jobs:
             dist/*.zip
             dist/*.tgz
   publish:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/onem1nd-v')
     needs: windows
     runs-on: ubuntu-latest
     permissions:
@@ -57,9 +57,9 @@ jobs:
         run: |
           python3 - <<'PY'
           import os, pathlib, re
-          version = os.environ['RELEASE_TAG'].removeprefix('v')
+          version = os.environ['RELEASE_TAG'].removeprefix('onem1nd-v')
           text = pathlib.Path('CHANGELOG.md').read_text()
-          match = re.search(r'^## ' + re.escape(version) + r'[^\n]*\n(.*?)(?=^## |\Z)', text, re.M | re.S)
+          match = re.search(r'^## (?:ONEM1ND )?' + re.escape(version) + r'[^\n]*\n(.*?)(?=^## |\Z)', text, re.M | re.S)
           if match is None:
               raise SystemExit('Missing changelog entry for release tag')
           pathlib.Path('release-notes.md').write_text(match.group(1).strip() + '\n')
@@ -68,4 +68,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: gh release create "$RELEASE_TAG" dist/* --verify-tag --title "${RELEASE_TAG#v}" --notes-file release-notes.md
+        run: |
+          version="${RELEASE_TAG#onem1nd-v}"
+          flags=""
+          case "$version" in *-*) flags="--prerelease" ;; esac
+          gh release create "$RELEASE_TAG" dist/* --verify-tag --title "ONEM1ND $version" --notes-file release-notes.md $flags

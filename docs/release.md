@@ -22,11 +22,22 @@ Before release, verify the terminal setup and browser wizard against isolated de
 
 ## Publish
 
-After the reviewed branch is merged, tag that merge commit as `v<version>`. Pushing the tag runs the Windows release workflow: checks, package creation, Windows zip creation and a GitHub release with the matching changelog entry. A manual workflow run builds downloadable artifacts without publishing a release.
+After the reviewed branch is merged, tag that merge commit as `onem1nd-v<version>`, for example `onem1nd-v1.0.0-beta.1`. Pushing the tag runs the Windows release workflow: checks, package creation, Windows zip creation and a GitHub release with the matching changelog entry, marked as a prerelease when the version has a suffix such as `-beta.1`. The workflow stops when the tag does not equal `onem1nd-v` plus the version in `package.json`. A manual workflow run builds downloadable artifacts without publishing a release.
 
 The npm archive is published separately with `npm publish dist/onem1nd-<version>.tgz --access public`, using the package owner's authenticated account. The `npx onem1nd` entry point is available only after this step.
 
 Repository visibility, Git pushes, tags and publication are deliberate release actions. Local development does not perform them.
+
+## ONEM1ND launch day
+
+Nothing here runs before the joint Beta launch. Each step is a deliberate release action; do them in this order.
+
+1. Rename the repository: GitHub, TXMSKA/HIVEM1ND, Settings, Repository name, `ONEM1ND`; then in every clone run `git remote set-url origin https://github.com/TXMSKA/ONEM1ND.git`.
+2. Publish the package: `npm publish dist/onem1nd-1.0.0-beta.1.tgz --access public --tag beta`. Also making it `latest` is a choice for Tom to confirm first: `npm dist-tag add onem1nd@1.0.0-beta.1 latest`.
+3. Deprecate the old package: `npm deprecate hivem1nd "Renamed to onem1nd. Install with: npm i -g onem1nd"`.
+4. Tag and release: `git tag onem1nd-v1.0.0-beta.1` on the merge commit, then `git push origin onem1nd-v1.0.0-beta.1`. The Windows release workflow (`.github/workflows/release.yml`) covers this step: it builds the zip and the archive, creates the GitHub release with the changelog entry and marks it as a prerelease. Check that the release lists the installers.
+5. TXMSKA pages: the TXMSKA seat updates the name, the links and the download on the TXMSKA pages.
+6. Check afterwards: the README badges render; `https://github.com/TXMSKA/HIVEM1ND` redirects to the new URL; `npm i -g onem1nd` works on a clean machine; a machine with a 2.x mind runs `onem1nd evolve` without a downgrade error and runs the `3.0.0-onem1nd` migration once.
 
 ## Signing
 
