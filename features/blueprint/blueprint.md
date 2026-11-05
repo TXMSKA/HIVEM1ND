@@ -53,7 +53,7 @@ Comments:
 
 ## Show
 
-Inside ONEM1ND, show the person a board with `app_open { app: "blueprint", resourceId }`, or `path` (`docs/flows/boards/<id>.json`) with an optional `project`. The desktop app switches to Blueprint and opens the board; it never takes focus from another app, and a window that is not in front only flashes. The answer is `{ opened: true }`, or `{ opened: false, status: "not_running" }` when the desktop app is closed; do not start it. Outside ONEM1ND give the web link `https://blueprint.txmska.com/review/<id>`.
+Inside ONEM1ND, show the person a board with `app_open { app: "blueprint", resourceId }`, or `path` (`docs/flows/boards/<id>.json`) with an optional `project`; `path` needs the file to be inside your session's file scope, and a project name that two projects share is refused. The desktop app switches to Blueprint and opens the board; it never takes focus from another app, and a window that is not in front only flashes. The answer is `{ opened: true }`, or `{ opened: false, status: "not_running" }` when the desktop app is closed; do not start it. Outside ONEM1ND give the web link `https://blueprint.txmska.com/review/<id>`.
 
 ## Blueprint JSON format 4
 
