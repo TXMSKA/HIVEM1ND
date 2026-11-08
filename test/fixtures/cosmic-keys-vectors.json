@@ -1,0 +1,41 @@
+{
+  "description": "Fixed vectors for docs/keys.md. Every byte string is canonical padded base64 unless named Hex. Regenerate with test/sync/keys-vectors.ts; test/node/keys-vectors.test.ts keeps this file exact.",
+  "password": {
+    "algorithm": "QNT_PASSWORD_PBKDF2_SHA256_AES256GCM_V1",
+    "accountId": "00000000-0000-4000-8000-000000000001",
+    "password": "correct horse battery staple",
+    "passwordNormalization": "NFC",
+    "keyHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+    "saltHex": "101112131415161718191a1b1c1d1e1f",
+    "ivHex": "202122232425262728292a2b",
+    "iterations": 600000,
+    "additionalData": "[\"QNT_PASSWORD_PBKDF2_SHA256_AES256GCM_V1\",\"00000000-0000-4000-8000-000000000001\",\"password\",1,600000]",
+    "wrapped": "AQAJJ8AQERITFBUWFxgZGhscHR4fICEiIyQlJicoKSorIgJy+r8jmHsAMxdKUGZfNIjMDawBi6S80XYwSaKy38MihnFToNZFx49/EgaP/UWI",
+    "wrappedLength": 81,
+    "opensToKey": true
+  },
+  "approval": {
+    "algorithm": "QNT_APPROVAL_X25519_HKDF_SHA256_AES256GCM_V1",
+    "accountId": "00000000-0000-4000-8000-000000000001",
+    "id": "00000000-0000-4000-8000-0000000000aa",
+    "label": "Synthetic laptop",
+    "requester": {
+      "privateSeedHex": "303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f",
+      "public": "NOQtSvXvlKB6OoQgG4idTNGnQ8snsRtqEEOKj+uOWEc=",
+      "nonce": "UFFSU1RVVldYWVpbXF1eX2BhYmNkZWZnaGlqa2xtbm8="
+    },
+    "approver": {
+      "privateSeedHex": "707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f",
+      "public": "I7e7jJGuAIcR+xKEZ4C83x4GX4Ib3+xJ9X58fc1MSCM=",
+      "nonce": "kJGSk5SVlpeYmZqbnJ2en6ChoqOkpaanqKmqq6ytrq8="
+    },
+    "commit": "VOMUVajVRhvl5stI4ICBJnwhkddWldzSyLIDKQqy1IU=",
+    "code": "1589 3015",
+    "keyHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+    "ivHex": "c0c1c2c3c4c5c6c7c8c9cacb",
+    "additionalData": "[\"cosmic-key-approval-v1\",\"00000000-0000-4000-8000-000000000001\",\"00000000-0000-4000-8000-0000000000aa\",\"NOQtSvXvlKB6OoQgG4idTNGnQ8snsRtqEEOKj+uOWEc=\",\"I7e7jJGuAIcR+xKEZ4C83x4GX4Ib3+xJ9X58fc1MSCM=\",\"UFFSU1RVVldYWVpbXF1eX2BhYmNkZWZnaGlqa2xtbm8=\",\"kJGSk5SVlpeYmZqbnJ2en6ChoqOkpaanqKmqq6ytrq8=\"]",
+    "wrapped": "AcDBwsPExcbHyMnKy7lWy2bRdmKs/n0Voll2qEky6VK3r+jxLsKQnDNq1ftq68CX6BPKeGoJd9WKTdeUxQ==",
+    "wrappedLength": 61,
+    "opensToKey": true
+  }
+}

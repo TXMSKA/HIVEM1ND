@@ -1,0 +1,1 @@
+Copied from Quantum commit 3c4d9eb38fe98b34bc337f40987725464218e0c0 docs/keys-vectors.json, git blob 88e9e577f07050e2d0c1c487da744da859588027.
