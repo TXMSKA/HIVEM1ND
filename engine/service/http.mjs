@@ -1139,6 +1139,56 @@ function rejectUnknown(route, body) {
   if (Object.hasOwn(body, 'pattern')) boundRecord(body.pattern, 'pattern', 16_000);
   validateLibraryBody(route, body);
   if (route.handler === 'settingsMutation') validateSettingsBody(route.collection, body);
+  if (route.handler === 'relayPlus') validateRelayPlusBody(body);
+}
+
+function codePoints(value) { return [...value.normalize('NFC')].length; }
+
+function validateRelayPlusBody(body) {
+  if (!body || typeof body.action !== 'string' || !body.action) throw new CoreError(422, 'invalid_body', 'The Relay+ action is not valid.');
+  const only = (...keys) => {
+    const allowed = new Set(['action', ...keys]);
+    for (const key of Object.keys(body)) if (!allowed.has(key)) throw new CoreError(422, 'invalid_body', 'The Relay+ action is not valid.');
+  };
+  const text = (key, max) => {
+    if (typeof body[key] !== 'string' || codePoints(body[key]) < 1 || codePoints(body[key]) > max) throw new CoreError(422, 'invalid_body', 'The Relay+ action is not valid.');
+  };
+  switch (body.action) {
+    case 'status': case 'sign-in': case 'sign-out': case 'create-key': case 'request-approval':
+    case 'inspect': case 'accept': case 'approve': case 'cancel-approval': case 'cancel-sign-in': case 'check-acceptance':
+    case 'refresh-keys':
+      only();
+      return;
+    case 'unlock':
+      only('password');
+      text('password', 128);
+      return;
+    case 'recover':
+      only('phrase');
+      text('phrase', 512);
+      return;
+    case 'vault':
+      only('vaultPassword');
+      if (Object.hasOwn(body, 'vaultPassword')) text('vaultPassword', 1024);
+      return;
+    case 'inbox': case 'outbox':
+      only('after', 'limit');
+      if (Object.hasOwn(body, 'after') && (typeof body.after !== 'string' || body.after.length > 512)) throw new CoreError(422, 'invalid_body', 'The Relay+ action is not valid.');
+      if (Object.hasOwn(body, 'limit') && (!Number.isInteger(body.limit) || body.limit < 1 || body.limit > 1000)) throw new CoreError(422, 'invalid_body', 'The Relay+ action is not valid.');
+      return;
+    case 'delivered': case 'read':
+      only('messageId');
+      text('messageId', 128);
+      return;
+    case 'publish':
+      only('deviceId', 'messageId', 'ciphertext');
+      text('deviceId', 128);
+      text('messageId', 128);
+      text('ciphertext', 360000);
+      return;
+    default:
+      throw new CoreError(422, 'invalid_body', 'The Relay+ action is not valid.');
+  }
 }
 
 function validateLibraryBody(route, body) {
@@ -1230,7 +1280,7 @@ function allowedBody(route) {
     'PATCH /settings': ['look', 'language', 'sendToAgent', 'expectedRevision'],
     'POST /settings/home-network': ['enabled', 'addresses'],
     'POST /relan': ['action', 'code', 'host', 'address'],
-    'POST /relay-plus': ['action', 'deviceId', 'messageId', 'fingerprint', 'phrase', 'ciphertext', 'after', 'limit'],
+    'POST /relay-plus': ['action', 'deviceId', 'messageId', 'password', 'phrase', 'vaultPassword', 'ciphertext', 'after', 'limit'],
     'PATCH /settings/content': ['includedFeatures', 'includedKnowledge', 'preferences', 'expectedRevision'],
     'POST /settings/agents/scan': ['machine'],
     'POST /settings/agents/find': ['machine', 'client', 'path'],
@@ -1428,7 +1478,8 @@ async function invoke(route, scope) {
   if (route.handler === 'appActivity') return { status: 200, body: updateAppActivity(domain, body) };
   if (route.handler === 'relayPlus') {
     if (!options.relayPlusControl) throw new CoreError(503, 'relay_plus_unavailable', 'Relay+ is unavailable.');
-    return { status: 200, body: await options.relayPlusControl(body) };
+    try { return { status: 200, body: await options.relayPlusControl(body) }; }
+    finally { if (body) { delete body.password; delete body.phrase; delete body.vaultPassword; } }
   }
   if (route.handler === 'relan') {
     if (!options.relanControl) throw new CoreError(503, 'relan_unavailable', 'This service is not configured for ReLAN.');

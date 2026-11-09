@@ -478,12 +478,18 @@ export function checkLimits(bucket, input, now = Date.now()) {
 
 export function safeError(error, requestId) {
   const known = error instanceof CoreError;
+  const details = safeDetails(known ? error.details : null);
+  if (known && error.code === 'acceptance_required' && Array.isArray(error.details?.policies)) {
+    details.policies = error.details.policies.filter(policy => policy && ['id', 'version', 'path'].every(key =>
+      typeof policy[key] === 'string' && policy[key].length <= 512 && !/[\u0000-\u001f\u007f]/.test(policy[key])))
+      .map(({ id, version, path: policyPath }) => ({ id, version, path: policyPath }));
+  }
   return {
     error: {
       code: known && typeof error.code === 'string' ? error.code : 'internal_error',
       message: known && !leaks(error.message) ? error.message : 'The request failed.',
       requestId,
-      details: safeDetails(known ? error.details : null),
+      details,
       retryAt: error?.retryAt ?? null,
     },
   };

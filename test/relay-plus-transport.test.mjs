@@ -220,4 +220,21 @@ test('revoked aggregate feed stops cleanly without retrying', async () => {
   await feed.start();
   assert.equal(calls, 1);
   assert.equal(states[0].state, 'authentication-required');
+  assert.equal(states[0].reason, 'session-expired');
+});
+
+test('acceptance and a generic denial stop the feed without becoming offline', async () => {
+  const policies = [{ id: 'terms', version: 2, path: '/legal/terms' }];
+  const states = [];
+  const denied = [];
+  const first = createRelayPlusFeed({ client: { async response() { throw new CoreError(403, 'acceptance_required', 'Accept.', { policies }); } },
+    applyPage: async () => {}, saveCursor: async () => {}, onState: value => states.push(value) });
+  await first.start();
+  assert.equal(states[0].state, 'acceptance-required');
+  assert.equal(states[0].policies[0].id, 'terms');
+  const second = createRelayPlusFeed({ client: { async response() { throw new CoreError(403, 'forbidden', 'Denied.'); } },
+    applyPage: async () => {}, saveCursor: async () => {}, onState: value => denied.push(value) });
+  await second.start();
+  assert.equal(denied[0].state, 'forbidden');
+  assert.equal(denied.some(item => item.state === 'offline'), false);
 });

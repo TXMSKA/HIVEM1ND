@@ -12,6 +12,7 @@ import { stubAclRunner } from '../engine/service/security.mjs';
 import { composeCore } from '../engine/service/service.mjs';
 import { bootstrapConfig } from '../engine/service/install.mjs';
 import { createStore } from '../engine/service/store.mjs';
+import { CoreError } from '../engine/service/identity.mjs';
 
 async function temporary(t) {
   await mkdir('.tmp', { recursive: true });
@@ -39,12 +40,15 @@ test('Relay+ bootstrap config permits secure endpoints and rejects credentials a
   ]) assert.throws(() => bootstrapConfig({ ...base, relayPlus }), undefined, JSON.stringify(relayPlus));
 });
 
-test('Relay+ CLI validates required approval arguments and keeps recovery phrase off arguments', async () => {
+test('Relay+ CLI rejects retired approval arguments and keeps secrets off arguments', async () => {
   assert.equal(parseArgs(['service', 'install', '--origin-kind', 'relay-plus']).options.originKind, 'relay-plus');
-  assert.deepEqual(parseArgs(['relay-plus', 'approve', '--device-id', 'second', '--message-id', 'message', '--fingerprint', 'digest']).options,
-    { action: 'approve', deviceId: 'second', messageId: 'message', fingerprint: 'digest' });
-  for (const argv of [['relay-plus', 'unknown'], ['relay-plus', 'request-approval'], ['relay-plus', 'approve', '--device-id', 'second'],
-    ['relay-plus', 'recover', '--phrase', 'secret'], ['relay-plus', 'status', '--device-id', 'one', '--device-id', 'two']]) {
+  assert.equal(parseArgs(['relay-plus', 'approve']).options.action, 'approve');
+  assert.equal(parseArgs(['relay-plus', 'request-approval']).options.action, 'request-approval');
+  assert.equal(parseArgs(['sign-in', '--language', 'es']).options.language, 'es');
+  assert.equal(parseArgs(['relay-plus', 'sign-in', '--json']).command, 'sign-in');
+  for (const argv of [['relay-plus', 'unknown'], ['relay-plus', 'approve', '--fingerprint', 'digest'],
+    ['relay-plus', 'approve', '--device-id', 'second'], ['relay-plus', 'recover', '--phrase', 'secret'],
+    ['relay-plus', 'unlock', '--password', 'secret'], ['relay-plus', 'status', '--device-id', 'one', '--device-id', 'two']]) {
     assert.throws(() => parseArgs(argv));
   }
   let sent, released;
@@ -74,6 +78,8 @@ test('signed-out runtime makes no Quantum requests; PKCE sign-in requests the ex
       if (url.pathname === '/v1/bootstrap') return Response.json({ capabilities: { relayPlus: true } });
       if (url.pathname === '/v1/usage') return Response.json({ usedBytes: 0, poolBytes: 1000 });
       if (url.pathname === '/v1/keys') return Response.json({ keys: [] });
+      if (url.pathname === '/v1/key-approvers/availability') return Response.json({ available: false });
+      if (url.pathname === '/v1/legal/requirements') return Response.json({ policies: [], registrationBetaRequired: false });
       if (url.pathname === '/v1/oauth/revoke') { revoked = true; return Response.json({ success: true }); }
       throw new Error(`Unexpected contract request ${url.pathname}`);
     } });
@@ -86,13 +92,20 @@ test('signed-out runtime makes no Quantum requests; PKCE sign-in requests the ex
   callback.searchParams.set('code', 'c'.repeat(43));
   callback.searchParams.set('state', new URL(pending.url).searchParams.get('state'));
   assert.equal((await fetch(callback)).status, 200);
-  // The callback persists credentials before the runtime loads the machine's key state.
-  await new Promise(resolve => setTimeout(resolve, 50));
-  const status = await runtime.control({ action: 'status' });
+  // Status does not wait behind key work, so poll until the scheduled connect records the missing envelope.
+  let status;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    status = await runtime.control({ action: 'status' });
+    if (status.sync?.state === 'key-required') break;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
   assert.equal(status.state, 'ready');
   assert.equal(status.sync.state, 'key-required');
-  assert.equal(status.sync.code, 'recovery_phrase_setup_required');
+  assert.equal(status.sync.code, 'account_key_unavailable');
+  assert.equal(status.sync.methods.password, false);
+  assert.equal(status.sync.methods.approval, false);
   assert.doesNotMatch(JSON.stringify(status), /accessToken|refreshToken|privateKey|wrappingKey/);
+  await assert.rejects(runtime.control({ action: 'approve' }), error => error.code === 'approval_retired');
   await assert.rejects(runtime.control({ action: 'create-key' }), error => error.code === 'encryption_key_missing');
   assert.equal((await runtime.control({ action: 'sign-out' })).state, 'signed-out');
   assert.equal(revoked, true);
@@ -123,11 +136,44 @@ test('Relay+ service requires desktop authority and keeps secret requests out of
   const phone = core.credentials.issue({ audience: 'phone', capabilities: ['home.manage'] });
   assert.equal((await request({ ...caller, token: phone.token }, { ...spec, headers: { 'idempotency-key': randomUUID() } })).status, 403);
   assert.equal((await request(caller, { ...spec, headers: { 'idempotency-key': randomUUID() }, body: { action: 'recover', phrase: 'secret', unexpected: true } })).status, 400);
+  assert.equal((await request(caller, { path: '/api/v1/relay-plus', headers: { 'idempotency-key': randomUUID() }, body: { action: 'status', fingerprint: 'retired-selector' } })).status, 400);
+  assert.equal((await request(caller, { path: '/api/v1/relay-plus', headers: { 'idempotency-key': randomUUID() }, body: { action: 'request-approval', deviceId: 'old-device' } })).status, 422);
+  assert.equal((await request(caller, { path: '/api/v1/relay-plus', headers: { 'idempotency-key': randomUUID() }, body: { action: 'recover', password: 'marker-password-value' } })).status, 422);
+  assert.equal((await request(caller, { path: '/api/v1/relay-plus', headers: { 'idempotency-key': randomUUID() }, body: { action: 'unlock' } })).status, 422);
+  for (const action of ['cancel-sign-in', 'cancel-approval', 'check-acceptance', 'refresh-keys', 'inspect', 'accept', 'request-approval']) {
+    core.runtime.relayPlus.control = async body => { assert.deepEqual(Object.keys(body), ['action']); return { state: 'key-required' }; };
+    assert.equal((await request(caller, { path: '/api/v1/relay-plus', headers: { 'idempotency-key': randomUUID() }, body: { action } })).status, 200);
+  }
+  let retainedRequest;
+  core.runtime.relayPlus.control = async body => { retainedRequest = body; return { state: 'configured', stored: true }; };
+  const unlocked = await request(caller, { path: '/api/v1/relay-plus', headers: { 'idempotency-key': randomUUID() },
+    body: { action: 'unlock', password: 'marker-password-value' } });
+  assert.equal(unlocked.status, 200);
+  assert.equal(retainedRequest.password, undefined);
+  const policies = [{ id: 'terms', version: 'qa-next', path: '/terms/qa-next/' }];
+  core.runtime.relayPlus.control = async () => { throw new CoreError(403, 'acceptance_required', 'Accept the current policies.', { policies }); };
+  const consent = await request(caller, { path: '/api/v1/relay-plus', headers: { 'idempotency-key': randomUUID() }, body: { action: 'request-approval' } });
+  assert.equal(consent.status, 403);
+  assert.equal(consent.json.error.code, 'acceptance_required');
+  assert.deepEqual(consent.json.error.details.policies, policies);
+  core.runtime.relayPlus.control = async () => { throw new CoreError(401, 'unauthorized', 'Sign in to continue.', { reason: 'device-revoked' }); };
+  const revoked = await request(caller, { path: '/api/v1/relay-plus', headers: { 'idempotency-key': randomUUID() }, body: { action: 'inspect' } });
+  assert.equal(revoked.status, 401);
+  assert.equal(revoked.json.error.details.reason, 'device-revoked');
+  const retryAt = new Date(Date.now() + 7000).toISOString();
+  core.runtime.relayPlus.control = async () => { throw new CoreError(429, 'rate_limited', 'Retry later.', {}, retryAt); };
+  const limited = await request(caller, { path: '/api/v1/relay-plus', headers: { 'idempotency-key': randomUUID() }, body: { action: 'request-approval' } });
+  assert.equal(limited.status, 429);
+  assert.equal(limited.json.error.retryAt, retryAt);
   async function inspect(directory) {
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       const file = path.join(directory, entry.name);
       if (entry.isDirectory()) await inspect(file);
-      else assert.equal((await readFile(file)).includes(Buffer.from('secret recovery phrase never journaled')), false, file);
+      else {
+        const bytes = await readFile(file);
+        assert.equal(bytes.includes(Buffer.from('secret recovery phrase never journaled')), false, file);
+        assert.equal(bytes.includes(Buffer.from('marker-password-value')), false, file);
+      }
     }
   }
   await inspect(root);

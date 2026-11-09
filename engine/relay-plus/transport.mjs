@@ -2,6 +2,7 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { CoreError, canonicalJson, hashBytes, validateMachineName } from '../service/identity.mjs';
 import { decodePack, validateHead } from '../sync/pack.mjs';
+import { classifyRelayFailure } from './client.mjs';
 
 const SEGMENT = /^[A-Za-z0-9_-]{1,64}$/;
 const HEAD = /^writers\/([A-Za-z0-9_-]{1,64})\/([A-Za-z0-9_-]{1,64})\/heads\/([0-9]{1,20})\.enc$/;
@@ -30,8 +31,9 @@ export function openRelayPlusTransport({ client, computerId, machine, generation
   const request = async (route, options) => {
     try { return await client.request(route, options); }
     catch (error) {
-      if (error.code === 'relayplus_required') { writable = false; onState({ state: 'read-only', code: error.code }); }
-      else if (error.code === 'device_revoked' || error.status === 401) onState({ state: 'authentication-required', code: error.code });
+      const classified = classifyRelayFailure(error);
+      if (classified?.state === 'read-only') { writable = false; onState(classified); }
+      else if (classified) onState(classified);
       else if (['pool_exceeded', 'object_too_large', 'object_limit', 'writer_limit_exceeded'].includes(error.code)) onState({ state: 'limited', code: error.code, fields: error.fields });
       throw error;
     }
@@ -234,8 +236,13 @@ export function createRelayPlusFeed({ client, loadCursor = async () => null, sav
           recovering = true;
           continue;
         }
-        if (error.status === 401 || error.code === 'device_revoked') {
-          onState({ state: 'authentication-required', code: error.code });
+        const classified = classifyRelayFailure(error);
+        if (classified) {
+          onState(classified);
+          if (classified.state === 'read-only') {
+            await pause(Math.max(1, error.retryAfter ?? 5), signal);
+            continue;
+          }
           break;
         }
         onState({ state: 'offline', code: error.code ?? 'network_unavailable' });

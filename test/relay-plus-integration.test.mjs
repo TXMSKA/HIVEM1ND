@@ -20,13 +20,22 @@ test('local frozen Quantum account and first-device recovery contract', {
   const keys = await client.request('/v1/keys');
   assert.ok(Array.isArray(keys.keys));
   const phrase = keys.keys.find(key => key.recipient === 'phrase');
-  assert.ok(phrase, 'The disposable account must save its recovery phrase through the Cosmic site flow');
-  assert.equal(phrase.algorithm, 'QNT_PBKDF2_SHA256_AES256GCM_V1');
-  const wrapped = Buffer.from(phrase.wrapped, 'base64');
-  assert.equal(wrapped.length, 77);
-  assert.equal(wrapped[0], 1);
+  const password = keys.keys.find(key => key.recipient === 'password');
+  assert.ok(phrase || password, 'The disposable account must have a phrase envelope or a password envelope');
+  if (phrase) {
+    assert.equal(phrase.algorithm, 'QNT_PBKDF2_SHA256_AES256GCM_V1');
+    const wrapped = Buffer.from(phrase.wrapped, 'base64');
+    assert.equal(wrapped.length, 77);
+    assert.equal(wrapped[0], 1);
+  }
+  if (password) {
+    assert.equal(password.algorithm, 'QNT_PASSWORD_PBKDF2_SHA256_AES256GCM_V1');
+    const wrapped = Buffer.from(password.wrapped, 'base64');
+    assert.equal(wrapped.length, 81);
+    assert.equal(wrapped[0], 1);
+  }
   // Only the account site owns this recipient; app credentials must preserve it.
-  await assert.rejects(client.request('/v1/keys/phrase', {
+  if (phrase) await assert.rejects(client.request('/v1/keys/phrase', {
     method: 'PUT', body: { algorithm: phrase.algorithm, wrapped: phrase.wrapped },
   }), { status: 403, code: 'app_forbidden' });
   assert.deepEqual((await client.request('/v1/keys')).keys.find(key => key.recipient === 'phrase'), phrase);

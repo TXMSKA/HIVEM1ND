@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createCipheriv, pbkdf2Sync, randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { decodeCanonicalBase64, openPasswordEnvelope, PASSWORD_ALGORITHM } from '../engine/relay-plus/account-key.mjs';
+import { decodeCanonicalBase64, HANDOFF_ALGORITHM, openHandoffEnvelope, openPasswordEnvelope, PASSWORD_ALGORITHM } from '../engine/relay-plus/account-key.mjs';
 
 const vectors = JSON.parse(await readFile(new URL('./fixtures/cosmic-keys-vectors.json', import.meta.url), 'utf8'));
 const vector = vectors.password;
@@ -145,4 +145,23 @@ test('canonical base64 rejects padding, alphabet and length mistakes', () => {
   assert.equal(decodeCanonicalBase64('AAB=', 2), null, 'non-zero trailing bits are not canonical');
   assert.equal(decodeCanonicalBase64(undefined), null);
   assert.equal(decodeCanonicalBase64(Buffer.alloc(3, 255).toString('base64').replace(/\//g, '_')), null);
+});
+
+test('the setup handoff vector opens to K and refuses another account or attempt', () => {
+  const handoff = vectors.handoff;
+  assert.equal(handoff.algorithm, HANDOFF_ALGORITHM);
+  const context = { accountId: handoff.accountId, appId: handoff.appId, clientId: handoff.clientId, redirectUri: handoff.redirectUri,
+    codeChallenge: handoff.codeChallenge, state: handoff.state };
+  assert.equal(JSON.stringify(['cosmic-app-key-handoff-v1', ...Object.values(context)]), handoff.additionalData);
+  const secret = Buffer.from(handoff.secretBase64Url, 'base64url');
+  assert.equal(secret.toString('hex'), handoff.secretHex);
+  assert.equal(openHandoffEnvelope({ algorithm: handoff.algorithm, wrapped: handoff.wrapped }, secret, context).toString('hex'), handoff.keyHex);
+  for (const wrong of [handoff.wrongAccount, handoff.wrongTranscript]) {
+    assert.throws(() => openHandoffEnvelope({ algorithm: handoff.algorithm, wrapped: wrong.wrapped }, secret, context), { code: 'key_authentication_failed' });
+  }
+  assert.throws(() => openHandoffEnvelope({ algorithm: handoff.algorithm, wrapped: handoff.wrapped }, secret, { ...context, accountId: handoff.wrongAccount.accountId }), { code: 'key_authentication_failed' });
+  assert.throws(() => openHandoffEnvelope({ algorithm: handoff.algorithm, wrapped: handoff.wrapped }, secret, { ...context, state: handoff.wrongTranscript.state }), { code: 'key_authentication_failed' });
+  assert.throws(() => openHandoffEnvelope({ algorithm: 'other', wrapped: handoff.wrapped }, secret, context), { code: 'unsupported_key_format' });
+  assert.throws(() => openHandoffEnvelope({ algorithm: handoff.algorithm, wrapped: handoff.wrapped.slice(4) }, secret, context), { code: 'invalid_key_envelope' });
+  assert.throws(() => openHandoffEnvelope({ algorithm: handoff.algorithm, wrapped: handoff.wrapped }, secret.subarray(1), context), { code: 'invalid_key_envelope' });
 });

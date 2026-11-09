@@ -1,22 +1,29 @@
 ﻿import test from 'node:test';
 import assert from 'node:assert/strict';
 import { hkdfSync, randomBytes, webcrypto } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { openPasswordEnvelope } from '../engine/relay-plus/account-key.mjs';
 import { createRecoveryEnvelope, createRelayPlusKeys } from '../engine/relay-plus/keys.mjs';
 
 const phrase = Array(24).fill('acorn').join(' ');
 function fixture() {
   const keys = new Map(), states = new Map(), stores = new Map(), minds = new Map();
   const accountKeyStore = {
-    readAccountKey: async (id, { file }) => stores.get(`${file}:${id}`) ?? null,
+    readAccountKey: async (id, { file }) => { const stored = stores.get(`${file}:${id}`); return stored ? Buffer.from(stored) : null; },
     writeAccountKey: async (id, key, { file }) => stores.set(`${file}:${id}`, Buffer.from(key)),
   };
   function machine(deviceId, mindId = 'mind', overrides = {}) {
     return createRelayPlusKeys({ accountId: 'account', deviceId, mindId, accountKeyStoreFile: deviceId, accountKeyStore,
-      loadState: async () => structuredClone(states.get(deviceId)),
+      loadState: async () => structuredClone(states.get(deviceId) ?? null),
       saveState: async value => states.set(deviceId, structuredClone(value)),
       loadMindKey: async () => minds.get(`${deviceId}:${mindId}`),
       saveMindKey: async value => minds.set(`${deviceId}:${mindId}`, { ...value, key: Buffer.from(value.key) }),
-      client: { async request(path, options) { assert.equal(path, '/v1/keys'); assert.equal(options, undefined, 'ONEM1ND never writes account recipients'); return { keys: [...keys.values()] }; } },
+      client: { async request(path, options) {
+        if (path === '/v1/key-approvers/availability') return { available: false };
+        assert.equal(path, '/v1/keys');
+        assert.equal(options, undefined, 'ONEM1ND never writes account recipients');
+        return { keys: [...keys.values()] };
+      } },
       ...overrides,
     });
   }
@@ -46,15 +53,18 @@ test('phrase recovery uses site binary PBKDF2 layout and HKDF app keys', async (
   assert.ok(first.keyProvider(first.encryption.keyId));
 });
 
-test('missing phrase directs the person to the Cosmic site without writing a recipient', async () => {
+test('a missing phrase does not tell a password-less account to create one', async () => {
   const { machine, keys } = fixture(), first = machine('first');
   assert.equal(await first.unlock(), false);
-  assert.equal(first.requiredState.code, 'recovery_phrase_setup_required');
-  assert.match(first.requiredState.message, /Cosmic account site/);
-  await assert.rejects(first.recover(phrase), { code: 'recovery_phrase_setup_required' });
+  assert.equal(first.requiredState.code, 'account_key_unavailable');
+  assert.equal(first.requiredState.methods.phrase, false);
+  assert.equal(first.requiredState.methods.password, false);
+  await assert.rejects(first.recover(phrase), { code: 'account_key_unavailable' });
   keys.set('phrase', { recipient: 'phrase', ...createRecoveryEnvelope({ phrase }).envelope });
-  assert.equal(await first.unlock(), false);
-  assert.equal(first.requiredState.code, 'recovery_phrase_required');
+  await first.refresh();
+  assert.equal(first.requiredState.code, 'key_required');
+  assert.equal(first.requiredState.methods.phrase, true);
+  assert.equal(first.requiredState.methods.password, false);
 });
 
 test('shared store unlock avoids network and preserves existing ReLAN pack key', async () => {
@@ -81,39 +91,15 @@ test('sealed M1ND material is account and M1ND bound; each M1ND retains its own 
   assert.notDeepEqual(other.keyProvider(other.encryption.keyId), first.keyProvider(first.encryption.keyId));
 });
 
-test('temporary X25519 approval wraps K, confirms fingerprint and rejects replay', async () => {
-  const { machine, stores, states } = fixture(), key = randomBytes(32);
-  stores.set('first:account', key);
-  const first = machine('first'), second = machine('second');
-  await first.unlock(); await first.createMindKey();
-  const request = await second.createApprovalRequest('first');
-  assert.equal((await first.inspectApproval(request.ciphertext, 'second')).fingerprint, request.fingerprint);
-  await assert.rejects(first.approve(request.ciphertext, { senderDeviceId: 'second', fingerprint: 'wrong' }), { code: 'approval_confirmation_required' });
-  await assert.rejects(first.inspectApproval(request.ciphertext, 'impostor'), { code: 'invalid_approval' });
-  const approval = await first.approve(request.ciphertext, { senderDeviceId: 'second', fingerprint: request.fingerprint });
-  const payload = JSON.parse(approval.ciphertext);
-  assert.equal(payload.algorithm, 'QNT_X25519_HKDF_SHA256_AES256GCM_V1');
-  assert.equal(Buffer.from(payload.wrapped, 'base64').length, 93);
-  const encoded = Buffer.from(payload.wrapped, 'base64');
-  const pending = states.get('second').pending;
-  const privateKey = await webcrypto.subtle.importKey('pkcs8', Buffer.from(pending.privateKey, 'base64'), { name: 'X25519' }, false, ['deriveBits']);
-  const ephemeral = await webcrypto.subtle.importKey('raw', encoded.subarray(1, 33), { name: 'X25519' }, false, []);
-  const secret = await webcrypto.subtle.deriveBits({ name: 'X25519', public: ephemeral }, privateKey, 256);
-  const hkdf = await webcrypto.subtle.importKey('raw', secret, 'HKDF', false, ['deriveKey']);
-  const wrapping = await webcrypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: Buffer.concat([encoded.subarray(1, 33), Buffer.from(pending.publicKey, 'base64')]), info: Buffer.from(payload.algorithm) }, hkdf, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
-  const aad = `cosmic/account/account/hivem1nd/approval:${pending.id}:second`;
-  assert.deepEqual(Buffer.from(await webcrypto.subtle.decrypt({ name: 'AES-GCM', iv: encoded.subarray(33, 45), additionalData: Buffer.from(aad), tagLength: 128 }, wrapping, encoded.subarray(45))), key);
-  await assert.rejects(webcrypto.subtle.decrypt({ name: 'AES-GCM', iv: encoded.subarray(33, 45), additionalData: Buffer.from(aad.replace('/account/account/', '/account/other/')), tagLength: 128 }, wrapping, encoded.subarray(45)));
-  const tampered = Buffer.from(encoded); tampered[tampered.length - 1] ^= 1;
-  await assert.rejects(second.acceptApproval(Buffer.from(JSON.stringify({ ...payload, wrapped: tampered.toString('base64') })), 'first'), { code: 'key_authentication_failed' });
-  assert.ok(!approval.ciphertext.includes(key));
-  await assert.rejects(second.acceptApproval(approval.ciphertext, 'impostor'), { code: 'invalid_approval' });
-  await second.acceptApproval(approval.ciphertext, 'first');
-  assert.deepEqual(stores.get('second:account'), key);
-  assert.equal(states.get('second').pending, undefined);
-  await assert.rejects(second.acceptApproval(approval.ciphertext, 'first'), { code: 'invalid_approval' });
-  await second.openMindKey(first.sealMindKey());
-  assert.deepEqual(second.keyProvider(second.encryption.keyId), first.keyProvider(first.encryption.keyId));
+test('legacy pending approval state is removed and unrelated fields stay', async () => {
+  const { machine, states } = fixture();
+  states.set('first', { pending: { privateKey: 'not-resumed' }, note: 'kept' });
+  const first = machine('first');
+  assert.equal(await first.unlock(), false);
+  assert.equal(states.get('first').pending, undefined);
+  assert.equal(states.get('first').note, 'kept');
+  assert.equal(first.createApprovalRequest, undefined);
+  assert.equal(first.approve, undefined);
 });
 
 test('remote copies of retained ReLAN material do not rewrite its key file', async () => {
@@ -128,16 +114,75 @@ test('remote copies of retained ReLAN material do not rewrite its key file', asy
   await second.createMindKey();
 });
 
-test('account approval works across M1NDs without exposing their identities', async () => {
-  const { machine, stores } = fixture(), account = randomBytes(32);
-  stores.set('first:account', account);
-  const first = machine('first', 'first-mind'), second = machine('second', 'second-mind');
-  await first.unlock();
-  const request = await second.createApprovalRequest('first');
-  assert.equal(JSON.parse(request.ciphertext).mindId, undefined);
-  const approval = await first.approve(request.ciphertext, { senderDeviceId: 'second', fingerprint: request.fingerprint });
-  await second.acceptApproval(approval.ciphertext, 'first');
-  assert.deepEqual(stores.get('second:account'), account);
-  const otherAccount = machine('third', 'first-mind', { accountId: 'another-account' });
-  await assert.rejects(otherAccount.inspectApproval(request.ciphertext, 'second'), { code: 'invalid_approval' });
+test('password and phrase availability stay separate and a store hit does not fetch envelopes', async () => {
+  const { machine, keys, stores } = fixture();
+  const calls = [];
+  const quiet = machine('quiet', 'mind', { client: { request: () => assert.fail('store hit must not fetch envelopes') } });
+  stores.set('quiet:account', randomBytes(32));
+  assert.equal(await quiet.unlock(), true);
+  keys.set('password', { recipient: 'password', algorithm: 'QNT_PASSWORD_PBKDF2_SHA256_AES256GCM_V1', wrapped: 'A'.repeat(108) });
+  keys.set('phrase', { recipient: 'phrase', algorithm: 'nope', wrapped: 'QQ==' });
+  const both = machine('both', 'mind', { client: { async request(path) { calls.push(path); return path.endsWith('availability') ? { available: true } : { keys: [...keys.values()] }; } } });
+  assert.equal(await both.unlock(), false);
+  assert.equal(both.requiredState.methods.password, false);
+  assert.equal(both.requiredState.formats.password, 'unsupported');
+  assert.equal(both.requiredState.formats.phrase, 'unsupported');
+  assert.equal(both.requiredState.methods.approval, true);
+  assert.deepEqual(calls, ['/v1/keys', '/v1/key-approvers/availability']);
+  const other = randomBytes(32);
+  stores.set('other:account', other);
+  assert.equal(stores.has('quiet:account'), true);
+});
+
+const vectors = JSON.parse(await readFile(new URL('./fixtures/cosmic-keys-vectors.json', import.meta.url), 'utf8'));
+// Fixture copied from Quantum commit f999f553ca3f5f205231e317872f8add7108f75c docs/keys-vectors.json, git blob 48e19a657da657322ffeb88ace52fc222545cdbc.
+
+test('the frozen password vector opens to K and malformed envelopes never derive', async () => {
+  const password = vectors.password;
+  const key = Buffer.from(password.keyHex, 'hex');
+  const opened = await openPasswordEnvelope({ algorithm: password.algorithm, wrapped: password.wrapped }, password.password, password.accountId);
+  assert.deepEqual(opened, key);
+  let derived = 0;
+  const derive = () => { derived += 1; return Buffer.alloc(32); };
+  const envelope = { algorithm: password.algorithm, wrapped: password.wrapped };
+  await assert.rejects(openPasswordEnvelope(envelope, 'wrong horse battery staple', password.accountId), { code: 'key_authentication_failed' });
+  await assert.rejects(openPasswordEnvelope(envelope, password.password, '00000000-0000-4000-8000-000000000002'), { code: 'key_authentication_failed' });
+  await assert.rejects(openPasswordEnvelope({ ...envelope, algorithm: 'other' }, password.password, password.accountId, { derive }), { code: 'unsupported_key_format' });
+  await assert.rejects(openPasswordEnvelope({ ...envelope, wrapped: password.wrapped.slice(0, -1) }, password.password, password.accountId, { derive }), { code: 'invalid_key_envelope' });
+  const decoded = Buffer.from(password.wrapped, 'base64');
+  decoded[0] = 2;
+  await assert.rejects(openPasswordEnvelope({ ...envelope, wrapped: decoded.toString('base64') }, password.password, password.accountId, { derive }), { code: 'unsupported_key_format' });
+  decoded[0] = 1; decoded[2] ^= 0xff;
+  await assert.rejects(openPasswordEnvelope({ ...envelope, wrapped: decoded.toString('base64') }, password.password, password.accountId, { derive }), { code: 'unsupported_key_format' });
+  decoded[2] ^= 0xff;
+  decoded[decoded.length - 1] ^= 1;
+  await assert.rejects(openPasswordEnvelope({ ...envelope, wrapped: decoded.toString('base64') }, password.password, password.accountId), { code: 'key_authentication_failed' });
+  await assert.rejects(openPasswordEnvelope(envelope, '', password.accountId, { derive }), { code: 'key_authentication_failed' });
+  await assert.rejects(openPasswordEnvelope(envelope, 'a'.repeat(129), password.accountId, { derive }), { code: 'key_authentication_failed' });
+  await openPasswordEnvelope(envelope, 'a', password.accountId, { derive }).catch(error => assert.equal(error.code, 'key_authentication_failed'));
+  assert.equal(derived, 1, 'only a length-valid password reaches PBKDF2');
+  const composed = 'e\u0301';
+  let seen = null;
+  await openPasswordEnvelope(envelope, ` ${composed} `, password.accountId, { derive: bytes => { seen = Buffer.from(bytes); return Buffer.alloc(32); } }).catch(() => {});
+  assert.deepEqual(seen, Buffer.from(` ${composed.normalize('NFC')} `));
+});
+
+test('one shared-store write records a successful password open and keeps another account', async () => {
+  const { machine, keys, stores } = fixture();
+  const password = vectors.password;
+  let writes = 0;
+  const kept = randomBytes(32);
+  stores.set('other-file:other', kept);
+  keys.set('password', { recipient: 'password', algorithm: password.algorithm, wrapped: password.wrapped });
+  const first = machine('first', 'mind', { accountId: password.accountId, accountKeyStore: {
+    readAccountKey: async () => null,
+    writeAccountKey: async (_id, key) => { writes += 1; stores.set('saved', Buffer.from(key)); },
+  } });
+  await assert.rejects(first.unlockPassword('not-the-vector-secret'), { code: 'key_authentication_failed' });
+  assert.equal(writes, 0);
+  await first.unlockPassword(password.password);
+  await first.unlockPassword(password.password);
+  assert.equal(writes, 1);
+  assert.deepEqual(stores.get('saved'), Buffer.from(password.keyHex, 'hex'));
+  assert.deepEqual(stores.get('other-file:other'), kept);
 });

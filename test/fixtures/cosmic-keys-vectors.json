@@ -1,5 +1,5 @@
 {
-  "description": "Fixed vectors for docs/keys.md. Every byte string is canonical padded base64 unless named Hex. Regenerate with test/sync/keys-vectors.ts; test/node/keys-vectors.test.ts keeps this file exact.",
+  "description": "Fixed vectors for docs/keys.md. Every byte string is canonical padded base64 unless the name says Hex or Base64Url. Regenerate with test/sync/keys-vectors.ts; test/node/keys-vectors.test.ts keeps this file exact.",
   "password": {
     "algorithm": "QNT_PASSWORD_PBKDF2_SHA256_AES256GCM_V1",
     "accountId": "00000000-0000-4000-8000-000000000001",
@@ -37,5 +37,36 @@
     "wrapped": "AcDBwsPExcbHyMnKy7lWy2bRdmKs/n0Voll2qEky6VK3r+jxLsKQnDNq1ftq68CX6BPKeGoJd9WKTdeUxQ==",
     "wrappedLength": 61,
     "opensToKey": true
+  },
+  "handoff": {
+    "algorithm": "QNT_APP_KEY_HANDOFF_AES256GCM_V1",
+    "accountId": "00000000-0000-4000-8000-000000000001",
+    "appId": "horizon",
+    "clientId": null,
+    "redirectUri": "http://127.0.0.1:43111/callback",
+    "codeChallenge": "ERITFBUWFxgZGhscHR4fICEiIyQlJicoKSorLC0uLzA",
+    "state": "8PHy8_T19vf4-fr7_P3-_wABAgMEBQYHCAkKCwwNDg8",
+    "secretHex": "e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+    "secretBase64Url": "4OHi4-Tl5ufo6err7O3u7_Dx8vP09fb3-Pn6-_z9_v8",
+    "keyHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+    "ivHex": "d0d1d2d3d4d5d6d7d8d9dadb",
+    "additionalData": "[\"cosmic-app-key-handoff-v1\",\"00000000-0000-4000-8000-000000000001\",\"horizon\",null,\"http://127.0.0.1:43111/callback\",\"ERITFBUWFxgZGhscHR4fICEiIyQlJicoKSorLC0uLzA\",\"8PHy8_T19vf4-fr7_P3-_wABAgMEBQYHCAkKCwwNDg8\"]",
+    "wrapped": "AdDR0tPU1dbX2Nna26ltiyKyvPKx1vOxLvxA51AAU/fo9E5J+KZ9aosXVIRQpXkoofc/yj/ICosiGRNnQw==",
+    "wrappedLength": 61,
+    "opensToKey": true,
+    "wrongAccount": {
+      "accountId": "00000000-0000-4000-8000-000000000002",
+      "additionalData": "[\"cosmic-app-key-handoff-v1\",\"00000000-0000-4000-8000-000000000002\",\"horizon\",null,\"http://127.0.0.1:43111/callback\",\"ERITFBUWFxgZGhscHR4fICEiIyQlJicoKSorLC0uLzA\",\"8PHy8_T19vf4-fr7_P3-_wABAgMEBQYHCAkKCwwNDg8\"]",
+      "wrapped": "AdDR0tPU1dbX2Nna26ltiyKyvPKx1vOxLvxA51AAU/fo9E5J+KZ9aosXVIRQv8Bw0edBbUlKqOC/zfgfEw==",
+      "opensToKey": false,
+      "opensToOwnContext": true
+    },
+    "wrongTranscript": {
+      "state": "8fLz9PX29_j5-vv8_f7_AAECAwQFBgcICQoLDA0ODxA",
+      "additionalData": "[\"cosmic-app-key-handoff-v1\",\"00000000-0000-4000-8000-000000000001\",\"horizon\",null,\"http://127.0.0.1:43111/callback\",\"ERITFBUWFxgZGhscHR4fICEiIyQlJicoKSorLC0uLzA\",\"8fLz9PX29_j5-vv8_f7_AAECAwQFBgcICQoLDA0ODxA\"]",
+      "wrapped": "AdDR0tPU1dbX2Nna26ltiyKyvPKx1vOxLvxA51AAU/fo9E5J+KZ9aosXVIRQBwFUeVeeDFYoW1TpnJ0PXA==",
+      "opensToKey": false,
+      "opensToOwnContext": true
+    }
   }
 }

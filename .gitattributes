@@ -1,2 +1,3 @@
 # The view fixtures keep a byte order mark and CRLF on purpose, so git never converts their line endings.
 fixtures/view/** -text
+test/fixtures/cosmic-keys-vectors.json text eol=lf
