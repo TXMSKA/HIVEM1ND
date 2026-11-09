@@ -1,0 +1,286 @@
+import { writeFile, rename, rm, lstat } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
+import { resolveHome, appIdPattern, serviceEnv } from "./paths.js";
+import { privateDirectoryAsync, privateFileAsync } from "./private.js";
+import { readCapped, readFirstLine, FILE_CAP } from "./files.js";
+import { VaultClientError } from "./errors.js";
+import { isSettings } from "./settings.js";
+import { isPromptId, isReason } from "./prompts.js";
+import { installedApp } from "./app.js";
+import { recoveryKit } from "./kit.js";
+export { VaultClientError, resolveHome, readCapped, readFirstLine, FILE_CAP, installedApp, recoveryKit };
+const pause = (ms) => new Promise(done => setTimeout(done, ms));
+function cosmicStatus(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value))
+        throw new VaultClientError("unavailable");
+    const keys = Object.keys(value), state = value.state;
+    if (keys.length !== 1 || keys[0] !== "state" || (state !== "available" && state !== "locked" && state !== "none"))
+        throw new VaultClientError("unavailable");
+    return { state };
+}
+function cosmicValue(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value))
+        throw new VaultClientError("unavailable");
+    const keys = Object.keys(value), password = value.password;
+    if (keys.length !== 1 || keys[0] !== "password" || typeof password !== "string")
+        throw new VaultClientError("unavailable");
+    return { password };
+}
+async function request(record, method, route, auth, body, timeout = 15000, signal) {
+    try {
+        const response = await fetch(`http://127.0.0.1:${record.port}${route}`, { method, redirect: "error", signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout), headers: { ...(auth ? { Authorization: auth } : {}), ...(body === undefined ? {} : { "Content-Type": "application/json" }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+        const reader = response.body?.getReader();
+        if (!reader)
+            throw new VaultClientError("unavailable");
+        const parts = [];
+        let size = 0;
+        try {
+            for (;;) {
+                const next = await reader.read();
+                if (next.done)
+                    break;
+                size += next.value.length;
+                if (size > 16 * 1024 * 1024) {
+                    await reader.cancel();
+                    throw new VaultClientError("too_large");
+                }
+                parts.push(next.value);
+            }
+            const value = JSON.parse(Buffer.concat(parts).toString("utf8"));
+            if (!response.ok) {
+                const code = typeof value?.error?.code === "string" ? value.error.code : "unavailable";
+                throw new VaultClientError(code, code === "key_approval_required" && isPromptId(value?.error?.fields?.prompt) ? { prompt: value.error.fields.prompt } : undefined);
+            }
+            return value;
+        }
+        finally {
+            reader.releaseLock();
+        }
+    }
+    catch (error) {
+        if (signal?.aborted)
+            throw new VaultClientError("cancelled");
+        throw error instanceof VaultClientError ? error : new VaultClientError("unavailable");
+    }
+}
+export async function findService(home = resolveHome(), timeout = 1000) {
+    try {
+        const record = JSON.parse(await readCapped(join(home, "run", "service.json"), 4096));
+        if (record.version !== 1 || !Number.isSafeInteger(record.pid) || record.pid < 1 || !Number.isSafeInteger(record.port) || record.port < 1 || record.port > 65535 || record.serviceVersion !== "0.1.0" || typeof record.startedAt !== "string")
+            return undefined;
+        const health = await request(record, "GET", "/v1/health", undefined, undefined, timeout);
+        return health.ok && health.pid === record.pid ? record : undefined;
+    }
+    catch {
+        return undefined;
+    }
+}
+const starting = new Map();
+export async function ensureRunning(home = resolveHome(), timeout = 15000) {
+    home = resolve(home);
+    const found = await findService(home);
+    if (found)
+        return found;
+    const pending = starting.get(home);
+    if (pending)
+        return pending;
+    const operation = (async () => {
+        let install;
+        try {
+            install = JSON.parse(await readCapped(join(home, "install.json"), 16384));
+        }
+        catch {
+            throw new VaultClientError("not_installed");
+        }
+        if (install.version !== 1 || typeof install.command !== "string" || !/^(?:[A-Za-z]:[\\/]|\/)/.test(install.command) || !Array.isArray(install.args) || install.args.length > 32 || !install.args.every(arg => typeof arg === "string" && arg.length < 4096) || [install.helper, install.app].some(path => path !== undefined && (typeof path !== "string" || !/^(?:[A-Za-z]:[\\/]|\/)/.test(path))))
+            throw new VaultClientError("invalid_install");
+        const child = spawn(install.command, install.args, { shell: false, detached: true, windowsHide: true, stdio: "ignore", env: serviceEnv(home) });
+        let failed = false;
+        child.once("error", () => { failed = true; });
+        child.unref();
+        const deadline = Date.now() + timeout;
+        while (Date.now() < deadline) {
+            if (failed)
+                break;
+            const record = await findService(home);
+            if (record)
+                return record;
+            await pause(100);
+        }
+        throw new VaultClientError("unavailable");
+    })();
+    starting.set(home, operation);
+    try {
+        return await operation;
+    }
+    finally {
+        starting.delete(home);
+    }
+}
+export function fileTokenStore(home, appId) {
+    if (!appIdPattern.test(appId))
+        throw new VaultClientError("invalid");
+    const directory = join(resolve(home), "secrets", "clients"), filename = join(directory, `${appId}.token`);
+    let prepared = false;
+    const prepare = async () => { if (!prepared) {
+        await privateDirectoryAsync(directory, home);
+        prepared = true;
+    } };
+    return {
+        async get() {
+            await prepare();
+            try {
+                await lstat(filename);
+            }
+            catch (error) {
+                if (error.code === "ENOENT")
+                    return undefined;
+                throw new VaultClientError("unavailable");
+            }
+            await privateFileAsync(filename, home);
+            const token = await readCapped(filename, 43);
+            if (!/^[A-Za-z0-9_-]{43}$/.test(token))
+                throw new VaultClientError("invalid");
+            return token;
+        },
+        async set(token) {
+            if (!/^[A-Za-z0-9_-]{43}$/.test(token))
+                throw new VaultClientError("invalid");
+            await prepare();
+            const temporary = `${filename}.${randomUUID()}.tmp`;
+            try {
+                await writeFile(temporary, token, { flag: "wx", mode: 0o600 });
+                await privateFileAsync(temporary, home);
+                await rename(temporary, filename);
+            }
+            finally {
+                await rm(temporary, { force: true });
+            }
+        },
+    };
+}
+export async function connect(options) {
+    if (!appIdPattern.test(options.app.id) || options.startTimeoutMs !== undefined && (!Number.isSafeInteger(options.startTimeoutMs) || options.startTimeoutMs < 1))
+        throw new VaultClientError("invalid");
+    const home = resolve(options.home ?? resolveHome()), tokens = options.tokens ?? fileTokenStore(home, options.app.id);
+    let record = await ensureRunning(home, options.startTimeoutMs);
+    let token = await tokens.get(), granted = true, closed = false;
+    if (!token) {
+        const keyFile = join(home, "secrets", "bootstrap.key");
+        await privateFileAsync(keyFile, home);
+        const key = await readCapped(keyFile, 43);
+        if (!/^[A-Za-z0-9_-]{43}$/.test(key))
+            throw new VaultClientError("unavailable");
+        const result = await request(record, "POST", "/v1/apps/register", `Bootstrap ${key}`, options.app);
+        token = result.token;
+        await tokens.set(token);
+        granted = result.app.status === "granted";
+    }
+    async function call(method, route, body, timeout, signal) {
+        if (closed)
+            throw new VaultClientError("closed");
+        record ??= await ensureRunning(home, options.startTimeoutMs);
+        try {
+            return await request(record, method, route, `Bearer ${token}`, body, timeout, signal);
+        }
+        catch (error) {
+            if (error instanceof VaultClientError && error.code === "unavailable")
+                record = undefined;
+            throw error;
+        }
+    }
+    const session = randomUUID();
+    const present = () => call("POST", "/v1/apps/present", { session });
+    // An agent never keeps Vault open; it only proposes runs and reads their masked output.
+    const holds = options.app.kind !== "agent";
+    if (granted && holds)
+        await present();
+    const heartbeatMs = options.heartbeatMs ?? 20000;
+    if (!Number.isSafeInteger(heartbeatMs) || heartbeatMs < 1 || heartbeatMs > 20000)
+        throw new VaultClientError("invalid");
+    const timer = holds ? setInterval(() => { if (!closed)
+        void present().catch(() => undefined); }, heartbeatMs) : undefined;
+    timer?.unref();
+    const appId = (id) => { if (!appIdPattern.test(id))
+        throw new VaultClientError("invalid"); return id; };
+    const appPath = (id) => `/v1/apps/${appId(id)}`, named = (app) => app === undefined ? {} : { app: appId(app) };
+    const promptId = (id) => { if (!isPromptId(id))
+        throw new VaultClientError("invalid"); return id; };
+    // The long calls wait 25 seconds at the service, so they get more time than the usual 15.
+    const held = 35000;
+    return {
+        status: () => call("GET", "/v1/status"), create: password => call("POST", "/v1/create", { password }),
+        sync: {
+            status: () => call("GET", "/v1/sync", undefined, held), setup: folder => call("POST", "/v1/sync/setup", { folder }, 130000), join: (folder, credentials) => call("POST", "/v1/sync/join", { folder, ...credentials }, 130000),
+            quantum: {
+                signIn: (api, site) => call("POST", "/v1/sync/quantum/signin", { api, site }, held),
+                acceptance: () => call("POST", "/v1/sync/quantum/acceptance", {}, held),
+                poll: (id, signal) => call("POST", "/v1/sync/quantum/wait", { id }, held, signal),
+                async wait(id) { for (;;) {
+                    const result = await call("POST", "/v1/sync/quantum/wait", { id }, held);
+                    if ("account" in result)
+                        return result;
+                } },
+                cancelAcceptance: id => call("POST", "/v1/sync/quantum/acceptance/cancel", { id }, held),
+                account: () => call("POST", "/v1/sync/quantum/account", {}, held),
+                signOut: () => call("POST", "/v1/sync/quantum/signout", {}, held),
+            },
+            setupQuantum: () => call("POST", "/v1/sync/setup", { quantum: true }, 130000), joinQuantum: credentials => call("POST", "/v1/sync/join", { quantum: true, ...credentials }, 130000), switchToQuantum: () => call("POST", "/v1/sync/switch", {}, 130000),
+            now: () => call("POST", "/v1/sync/now", {}, 130000), conflicts: () => call("GET", "/v1/sync/conflicts"), restore: id => call("POST", "/v1/sync/conflicts/restore", { id }), dismiss: id => call("POST", "/v1/sync/conflicts/dismiss", { id }), leave: remove => call("POST", "/v1/sync/leave", { remove }, held),
+        },
+        unlock: password => call("POST", "/v1/unlock", { password }), recover: (recovery, password) => call("POST", "/v1/recover", { recovery, password }),
+        cosmic: {
+            passwordStatus: async (email) => cosmicStatus(await call("POST", "/v1/cosmic/password/status", { email })),
+            readPassword: async (email) => cosmicValue(await call("POST", "/v1/cosmic/password/read", { email })),
+        },
+        hello: { enable: password => call("POST", "/v1/unlock/hello/enable", { password }), unlock: hwnd => call("POST", "/v1/unlock/hello", { hwnd }), disable: () => call("POST", "/v1/unlock/hello/disable", {}) },
+        lock: () => call("POST", "/v1/lock", {}), present,
+        async close() { if (closed)
+            return; clearInterval(timer); try {
+            if (holds)
+                await call("POST", "/v1/apps/leave", { session });
+        }
+        finally {
+            closed = true;
+        } },
+        logins: origin => call("GET", `/v1/logins?origin=${encodeURIComponent(origin)}`),
+        listLogins: () => call("GET", "/v1/logins/all"), getLogin: id => call("GET", `/v1/logins/get?id=${encodeURIComponent(id)}`),
+        entries: { list: () => call("GET", "/v1/entries"), get: id => call("GET", `/v1/entries/get?id=${encodeURIComponent(id)}`), save: (entry, expected) => call("POST", "/v1/entries", { entry, expected }), remove: (id, expected) => call("POST", "/v1/entries/remove", { id, expected }) },
+        keys: {
+            list: () => call("GET", "/v1/keys"), read: id => call("POST", "/v1/keys/read", { id }),
+            approve: async (id, password) => call("POST", "/v1/keys/approve", { id: promptId(id), password }),
+            // Windows Hello waits for the person, up to two minutes.
+            approveWithHello: async (id, hwnd) => call("POST", "/v1/keys/approve/hello", { hwnd, id: promptId(id) }, 130000),
+            revoke: async (app, entry) => call("POST", "/v1/keys/revoke", { app: appId(app), entry }), usage: () => call("GET", "/v1/keys/usage"),
+        },
+        // A batch is up to 64 sealed chunks written and synced one by one; on a busy disk that outlasts the usual 15 seconds.
+        chunks: { put: data => call("POST", "/v1/chunks", { data }, 120000), get: (entry, ids) => call("POST", "/v1/chunks/get", { entry, ids }, 120000), remove: ids => call("POST", "/v1/chunks/remove", { ids }, 120000) },
+        environment: project => call("GET", `/v1/env?project=${encodeURIComponent(project)}`),
+        import: (format, text) => call("POST", "/v1/import", { format, text }), importEnv: (project, text) => call("POST", "/v1/import/env", { project, text }), export: password => call("POST", "/v1/export", { password }), restore: (backup, password) => call("POST", "/v1/restore", { backup, password }),
+        exportToFile: (password, path) => call("POST", "/v1/export/file", { password, path }, 600000), restoreFromFile: (path, password) => call("POST", "/v1/restore/file", { password, path }, 600000),
+        runs: {
+            submit: value => call("POST", "/v1/runs", value), list: () => call("GET", "/v1/runs"),
+            get(id, after = 0) { if (!Number.isSafeInteger(after) || after < 0)
+                throw new VaultClientError("invalid"); return call("GET", `/v1/runs/get?after=${after}&id=${encodeURIComponent(id)}`); },
+            approve: (id, password) => call("POST", "/v1/runs/approve", { id, password }),
+            // Windows Hello waits for the person, up to two minutes.
+            approveWithHello: (id, hwnd) => call("POST", "/v1/runs/approve/hello", { hwnd, id }, 130000), reject: id => call("POST", "/v1/runs/reject", { id }),
+        },
+        apps: { list: () => call("GET", "/v1/apps"), self: () => call("GET", "/v1/apps/self"), allow: id => call("POST", `${appPath(id)}/allow`, {}), revoke: id => call("POST", `${appPath(id)}/revoke`, {}) },
+        // Windows Hello waits for the person, up to two minutes.
+        permissions: {
+            importWithPassword: async (password, app) => call("POST", "/v1/apps/permissions/import", { password, ...named(app) }), importWithHello: async (hwnd, app) => call("POST", "/v1/apps/permissions/import/hello", { hwnd, ...named(app) }, 130000),
+            request: () => call("POST", "/v1/apps/permissions/import/request", {}),
+        },
+        settings: { get: () => call("GET", "/v1/settings"), async set(value) { if (!isSettings(value))
+                throw new VaultClientError("invalid"); return call("PUT", "/v1/settings", value); } },
+        prompts: {
+            list: () => call("GET", "/v1/prompts", undefined, held), dismiss: async (id) => call("POST", "/v1/prompts/dismiss", { id: promptId(id) }),
+            async unlock(reason) { if (reason !== undefined && !isReason(reason))
+                throw new VaultClientError("invalid"); return call("POST", "/v1/prompts/unlock", reason === undefined ? {} : { reason }); },
+            wait: async (id) => call("GET", `/v1/prompts/wait?id=${encodeURIComponent(promptId(id))}`, undefined, held),
+        },
+    };
+}
