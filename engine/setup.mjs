@@ -323,9 +323,13 @@ class SetupSession {
   async selectRelayPlus() {
     if (!this.relayPlusControl) throw new CoreError(401, 'sign_in_required', 'Sign in through the local service before selecting Relay+.');
     const status = await this.relayPlusControl({ action: 'status' });
+    if (status.state === 'acceptance-required' || status.sync?.state === 'acceptance-required') throw new CoreError(403,
+      'acceptance_required', 'Accept the current terms before selecting Relay+.', { policies: status.policies ?? status.sync?.policies ?? [] });
+    if (status.state === 'authentication-required' || status.sync?.state === 'authentication-required') throw new CoreError(401,
+      'sign_in_required', 'Sign in before selecting Relay+.');
     if (!status.entitled) throw new CoreError(403, 'relayplus_required', 'This account needs Relay+.');
     if (!['ready', 'configured'].includes(status.sync?.state)) throw new CoreError(409,
-      status.sync?.code ?? 'encryption_key_missing', status.sync?.message ?? 'Unlock the Cosmic account key before selecting Relay+.');
+      status.sync?.code ?? 'encryption_key_missing', 'Unlock the Cosmic account key before selecting Relay+.');
     this.answers.originKind = 'relay-plus';
     this.relayPlus = { ...this.relayPlus, enabled: true };
     await this.persistDraft();

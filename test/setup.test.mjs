@@ -268,6 +268,18 @@ test('location has Folder and disabled Relay+ without mode, sync or origin contr
  const fixture=await makeFixture(context);const session=await createSetupSession({kitPath:KIT_PATH,...fixture,hostname:'TESTBOX',env:{PATH:''},language:'en'});const step=await session.answer({});assert.deepEqual(step.fields,[{id:'mindPath',type:'text',label:'Folder',required:true}]);for(const key of ['presets','originKind','sync','installMode','agents','categories','groups'])assert.equal(step[key],undefined);assert.deepEqual(step.relayPlus,{title:'Use Relay+',badge:'Coming soon',body:'Sync your preferences on any device, phones included, through the same service as Nebula+.',disabled:true});
 });
 
+test('Relay+ selection stops on acceptance and sign-in before entitlement', async context => {
+  const fixture = await makeFixture(context);
+  const session = await createSetupSession({ kitPath: KIT_PATH, ...fixture, hostname: 'TESTBOX', env: { PATH: '' }, language: 'en' });
+  const policies = [{ id: 'terms', version: 3, path: '/legal/terms' }];
+  session.relayPlusControl = async () => ({ state: 'acceptance-required', policies, entitled: true, sync: { state: 'ready' } });
+  await assert.rejects(session.selectRelayPlus(), error => error.code === 'acceptance_required' && error.details.policies[0].id === 'terms');
+  session.relayPlusControl = async () => ({ state: 'authentication-required', reason: 'session-expired', entitled: true, sync: { state: 'ready' } });
+  await assert.rejects(session.selectRelayPlus(), { code: 'sign_in_required' });
+  const step = await session.answer({});
+  assert.equal(step.relayPlus.disabled, true);
+});
+
 test('Change reviews a folder without leaving location',async context=>{
  const fixture=await makeFixture(context);const session=await createSetupSession({kitPath:KIT_PATH,...fixture,hostname:'TESTBOX',env:{PATH:''}});await session.answer({});const chosen=path.join(fixture.homeDir,'chosen');const step=await session.answer({mindPath:chosen,changeFolder:true});assert.equal(step.id,'location');assert.equal(step.values.mindPath,chosen);assert.equal((await session.answer({mindPath:chosen})).id,'service');
 });
