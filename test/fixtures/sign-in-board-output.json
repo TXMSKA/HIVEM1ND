@@ -1,0 +1,385 @@
+{
+  "boardId": "0e1a1d00-5c05-4a11-9e7a-20261108a001",
+  "source": "C:\\Users\\ttasc\\OneDrive\\M1ND\\.blueprint\\ONEM1ND\\blueprint\\0e1a1d00-5c05-4a11-9e7a-20261108a001.json",
+  "note": "Terminal output values from that board. Tests prefer the board file when it is present.",
+  "frames": [
+    {
+      "id": "s-signin-waiting-en",
+      "title": "Sign-in started",
+      "lang": "en",
+      "pageId": "p-signin",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nOpening your browser to sign in to Cosmic...\nWaiting for you to finish in the browser.\n\nIf the browser did not open, go to:\n  https://cosmic.txmska.com/authorize/?appId=hivem1nd&...\n\nPress Ctrl+C to cancel."
+    },
+    {
+      "id": "s-signin-waiting-es",
+      "title": "Sign-in started (ES)",
+      "lang": "es",
+      "pageId": "p-signin",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nAbriendo el navegador para iniciar sesión en Cosmic...\nEsperando que se complete el inicio de sesión en el navegador.\n\nSi el navegador no se abrió, ir a:\n  https://cosmic.txmska.com/authorize/?appId=hivem1nd&...\n\nCtrl+C para cancelar."
+    },
+    {
+      "id": "s-signin-cancelled-en",
+      "title": "Cancelled or timed out",
+      "lang": "en",
+      "pageId": "p-signin",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nOpening your browser to sign in to Cosmic...\nWaiting for you to finish in the browser.\n^C\nSign-in did not finish. Nothing changed on this computer.\n\nPS C:\\Users\\alex> "
+    },
+    {
+      "id": "s-signin-cancelled-es",
+      "title": "Cancelled or timed out (ES)",
+      "lang": "es",
+      "pageId": "p-signin",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nAbriendo el navegador para iniciar sesión en Cosmic...\nEsperando que se complete el inicio de sesión en el navegador.\n^C\nEl inicio de sesión no se completó. No cambió nada en este dispositivo.\n\nPS C:\\Users\\alex> "
+    },
+    {
+      "id": "s-signin-has-key-en",
+      "title": "Signed in, key already here",
+      "lang": "en",
+      "pageId": "p-signin",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nOpening your browser to sign in to Cosmic...\nSigned in as alex@example.com\n\nONEM1ND used the key this computer already has. Nothing to type.\nRelay+ is ready.\n\nPS C:\\Users\\alex> "
+    },
+    {
+      "id": "s-signin-has-key-es",
+      "title": "Signed in, key already here (ES)",
+      "lang": "es",
+      "pageId": "p-signin",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nAbriendo el navegador para iniciar sesión en Cosmic...\nSesión iniciada como alex@example.com\n\nONEM1ND usó la clave que este dispositivo ya tiene. No hace falta escribir nada.\nRelay+ está listo.\n\nPS C:\\Users\\alex> "
+    },
+    {
+      "id": "s-signin-limit-en",
+      "title": "Computer limit reached",
+      "lang": "en",
+      "pageId": "p-signin",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nOpening your browser to sign in to Cosmic...\nThe account has reached its computer limit. Remove an old computer in Security, then retry.\n\nPS C:\\Users\\alex> "
+    },
+    {
+      "id": "s-signin-limit-es",
+      "title": "Computer limit reached (ES)",
+      "lang": "es",
+      "pageId": "p-signin",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nAbriendo el navegador para iniciar sesión en Cosmic...\nLa cuenta llegó al límite de dispositivos. Quitar un dispositivo antiguo en Seguridad y reintentar.\n\nPS C:\\Users\\alex> "
+    },
+    {
+      "id": "s-open-choices-en",
+      "title": "Every way, Vault found",
+      "lang": "en",
+      "pageId": "p-open",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nOpening your browser to sign in to Cosmic...\nSigned in as alex@example.com\n\nThis computer does not have your data key yet. Open it with:\n  1  Cosmic password\n  2  Vault (found on this computer)\n  3  Approve from a connected computer\n  4  Recovery phrase\n  5  Forgot password?\nChoice: "
+    },
+    {
+      "id": "s-open-choices-es",
+      "title": "Every way, Vault found (ES)",
+      "lang": "es",
+      "pageId": "p-open",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nAbriendo el navegador para iniciar sesión en Cosmic...\nSesión iniciada como alex@example.com\n\nEste dispositivo todavía no tiene la clave de los datos. Abrirla con:\n  1  Contraseña de Cosmic\n  2  Vault (encontrado en este dispositivo)\n  3  Aprobar desde otro dispositivo\n  4  Frase de recuperación\n  5  ¿Se olvidó la contraseña?\nOpción: "
+    },
+    {
+      "id": "s-open-choices-few-en",
+      "title": "Password only, no phrase, no Vault",
+      "lang": "en",
+      "pageId": "p-open",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nOpening your browser to sign in to Cosmic...\nSigned in as alex@example.com\n\nThis computer does not have your data key yet. Open it with:\n  1  Cosmic password\n  2  Approve from a connected computer\n  3  Forgot password?\nChoice: "
+    },
+    {
+      "id": "s-open-choices-few-es",
+      "title": "Password only, no phrase, no Vault (ES)",
+      "lang": "es",
+      "pageId": "p-open",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nAbriendo el navegador para iniciar sesión en Cosmic...\nSesión iniciada como alex@example.com\n\nEste dispositivo todavía no tiene la clave de los datos. Abrirla con:\n  1  Contraseña de Cosmic\n  2  Aprobar desde otro dispositivo\n  3  ¿Se olvidó la contraseña?\nOpción: "
+    },
+    {
+      "id": "s-open-legacy-en",
+      "title": "Older account, no password yet",
+      "lang": "en",
+      "pageId": "p-open",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nOpening your browser to sign in to Cosmic...\nSigned in as alex@example.com\n\nThis account has no Cosmic password yet. Open the data with a connected computer or the saved phrase, then set\na password.\n\n  1  Approve from a connected computer\n  2  Recovery phrase\nChoice: "
+    },
+    {
+      "id": "s-open-legacy-es",
+      "title": "Older account, no password yet (ES)",
+      "lang": "es",
+      "pageId": "p-open",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nAbriendo el navegador para iniciar sesión en Cosmic...\nSesión iniciada como alex@example.com\n\nEsta cuenta todavía no tiene una contraseña de Cosmic. Abrir los datos con un dispositivo conectado o la frase\nguardada y crear una contraseña.\n\n  1  Aprobar desde otro dispositivo\n  2  Frase de recuperación\nOpción: "
+    },
+    {
+      "id": "s-open-password-en",
+      "title": "Typing the password",
+      "lang": "en",
+      "pageId": "p-open",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nOpening your browser to sign in to Cosmic...\nSigned in as alex@example.com\n\nThis computer does not have your data key yet. Open it with:\n  1  Cosmic password\n  2  Approve from a connected computer\n  3  Forgot password?\nChoice: 1\nCosmic password: "
+    },
+    {
+      "id": "s-open-password-es",
+      "title": "Typing the password (ES)",
+      "lang": "es",
+      "pageId": "p-open",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nAbriendo el navegador para iniciar sesión en Cosmic...\nSesión iniciada como alex@example.com\n\nEste dispositivo todavía no tiene la clave de los datos. Abrirla con:\n  1  Contraseña de Cosmic\n  2  Aprobar desde otro dispositivo\n  3  ¿Se olvidó la contraseña?\nOpción: 1\nContraseña de Cosmic: "
+    },
+    {
+      "id": "s-open-password-wrong-en",
+      "title": "Password did not open it",
+      "lang": "en",
+      "pageId": "p-open",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nOpening your browser to sign in to Cosmic...\nSigned in as alex@example.com\n\nThis computer does not have your data key yet. Open it with:\n  1  Cosmic password\n  2  Approve from a connected computer\n  3  Forgot password?\nChoice: 1\nCosmic password: \nThat password did not open your data. Try again or use another way.\nCosmic password:   (leave it empty to choose another way)"
+    },
+    {
+      "id": "s-open-password-wrong-es",
+      "title": "Password did not open it (ES)",
+      "lang": "es",
+      "pageId": "p-open",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nAbriendo el navegador para iniciar sesión en Cosmic...\nSesión iniciada como alex@example.com\n\nEste dispositivo todavía no tiene la clave de los datos. Abrirla con:\n  1  Contraseña de Cosmic\n  2  Aprobar desde otro dispositivo\n  3  ¿Se olvidó la contraseña?\nOpción: 1\nContraseña de Cosmic: \nEsa contraseña no abrió los datos. Reintentar o usar otra forma.\nContraseña de Cosmic:   (dejarla vacía para elegir otra forma)"
+    },
+    {
+      "id": "s-open-done-en",
+      "title": "Data open",
+      "lang": "en",
+      "pageId": "p-open",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nOpening your browser to sign in to Cosmic...\nSigned in as alex@example.com\n\nThis computer does not have your data key yet. Open it with:\n  1  Cosmic password\n  2  Approve from a connected computer\n  3  Forgot password?\nChoice: 1\nCosmic password: \nYour data is open on this computer.\nThis computer will not ask again. The other Cosmic apps here use the same key.\nRelay+ is ready.\n\nPS C:\\Users\\alex> "
+    },
+    {
+      "id": "s-open-done-es",
+      "title": "Data open (ES)",
+      "lang": "es",
+      "pageId": "p-open",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nAbriendo el navegador para iniciar sesión en Cosmic...\nSesión iniciada como alex@example.com\n\nEste dispositivo todavía no tiene la clave de los datos. Abrirla con:\n  1  Contraseña de Cosmic\n  2  Aprobar desde otro dispositivo\n  3  ¿Se olvidó la contraseña?\nOpción: 1\nContraseña de Cosmic: \nLos datos están abiertos en este dispositivo.\nEste dispositivo no lo vuelve a pedir. Las otras apps de Cosmic de este dispositivo usan la misma clave.\nRelay+ está listo.\n\nPS C:\\Users\\alex> "
+    },
+    {
+      "id": "s-open-phrase-en",
+      "title": "Recovery phrase",
+      "lang": "en",
+      "pageId": "p-open",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nOpening your browser to sign in to Cosmic...\nSigned in as alex@example.com\n\nThis computer does not have your data key yet. Open it with:\n  1  Cosmic password\n  2  Approve from a connected computer\n  3  Recovery phrase\n  4  Forgot password?\nChoice: 3\nEnter the 24 words of the recovery phrase, in order. The phrase is created from Security.\nRecovery phrase: "
+    },
+    {
+      "id": "s-open-phrase-es",
+      "title": "Recovery phrase (ES)",
+      "lang": "es",
+      "pageId": "p-open",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nAbriendo el navegador para iniciar sesión en Cosmic...\nSesión iniciada como alex@example.com\n\nEste dispositivo todavía no tiene la clave de los datos. Abrirla con:\n  1  Contraseña de Cosmic\n  2  Aprobar desde otro dispositivo\n  3  Frase de recuperación\n  4  ¿Se olvidó la contraseña?\nOpción: 3\nIngresar las 24 palabras de la frase de recuperación, en orden. La frase se crea desde Seguridad.\nFrase de recuperación: "
+    },
+    {
+      "id": "s-open-phrase-wrong-en",
+      "title": "Phrase did not open it",
+      "lang": "en",
+      "pageId": "p-open",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nOpening your browser to sign in to Cosmic...\nSigned in as alex@example.com\n\nThis computer does not have your data key yet. Open it with:\n  1  Cosmic password\n  2  Approve from a connected computer\n  3  Recovery phrase\n  4  Forgot password?\nChoice: 3\nEnter the 24 words of the recovery phrase, in order. The phrase is created from Security.\nRecovery phrase: \nThese words did not open the data. Check them and try again.\nRecovery phrase: "
+    },
+    {
+      "id": "s-open-phrase-wrong-es",
+      "title": "Phrase did not open it (ES)",
+      "lang": "es",
+      "pageId": "p-open",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nAbriendo el navegador para iniciar sesión en Cosmic...\nSesión iniciada como alex@example.com\n\nEste dispositivo todavía no tiene la clave de los datos. Abrirla con:\n  1  Contraseña de Cosmic\n  2  Aprobar desde otro dispositivo\n  3  Frase de recuperación\n  4  ¿Se olvidó la contraseña?\nOpción: 3\nIngresar las 24 palabras de la frase de recuperación, en orden. La frase se crea desde Seguridad.\nFrase de recuperación: \nEstas palabras no abrieron los datos. Revisarlas y reintentar.\nFrase de recuperación: "
+    },
+    {
+      "id": "s-approve-waiting-en",
+      "title": "Waiting for the other computer",
+      "lang": "en",
+      "pageId": "p-approve",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nOpening your browser to sign in to Cosmic...\nSigned in as alex@example.com\n\nThis computer does not have your data key yet. Open it with:\n  1  Cosmic password\n  2  Approve from a connected computer\n  3  Recovery phrase\n  4  Forgot password?\nChoice: 2\n\nApprove from another computer\nOpen Cosmic on a computer where your data is open. A window appears there by itself, with this same code.\n\nWaiting for your other computer...\nExpires in 5:00. Press Ctrl+C to cancel the request."
+    },
+    {
+      "id": "s-approve-waiting-es",
+      "title": "Waiting for the other computer (ES)",
+      "lang": "es",
+      "pageId": "p-approve",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nAbriendo el navegador para iniciar sesión en Cosmic...\nSesión iniciada como alex@example.com\n\nEste dispositivo todavía no tiene la clave de los datos. Abrirla con:\n  1  Contraseña de Cosmic\n  2  Aprobar desde otro dispositivo\n  3  Frase de recuperación\n  4  ¿Se olvidó la contraseña?\nOpción: 2\n\nAprobar desde otro dispositivo\nAbrir Cosmic en un dispositivo con los datos abiertos. Ahí aparece una ventana sola, con este mismo código.\n\nEsperando el otro dispositivo...\nVence en 5:00. Ctrl+C para cancelar la solicitud."
+    },
+    {
+      "id": "s-approve-code-en",
+      "title": "The code",
+      "lang": "en",
+      "pageId": "p-approve",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nOpening your browser to sign in to Cosmic...\nSigned in as alex@example.com\n\nThis computer does not have your data key yet. Open it with:\n  1  Cosmic password\n  2  Approve from a connected computer\n  3  Recovery phrase\n  4  Forgot password?\nChoice: 2\n\nApprove from another computer\nOpen Cosmic on a computer where your data is open. A window appears there by itself, with this same code.\n\nCode: 4829 1173\nWaiting for your approval there...\nOnly approve a request you started yourself. The other computer must show this same code."
+    },
+    {
+      "id": "s-approve-code-es",
+      "title": "The code (ES)",
+      "lang": "es",
+      "pageId": "p-approve",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nAbriendo el navegador para iniciar sesión en Cosmic...\nSesión iniciada como alex@example.com\n\nEste dispositivo todavía no tiene la clave de los datos. Abrirla con:\n  1  Contraseña de Cosmic\n  2  Aprobar desde otro dispositivo\n  3  Frase de recuperación\n  4  ¿Se olvidó la contraseña?\nOpción: 2\n\nAprobar desde otro dispositivo\nAbrir Cosmic en un dispositivo con los datos abiertos. Ahí aparece una ventana sola, con este mismo código.\n\nCódigo: 4829 1173\nEsperando la aprobación en el otro dispositivo...\nAprobar solo una solicitud propia. El otro dispositivo debe mostrar este mismo código."
+    },
+    {
+      "id": "s-approve-approved-en",
+      "title": "Approved",
+      "lang": "en",
+      "pageId": "p-approve",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nOpening your browser to sign in to Cosmic...\nSigned in as alex@example.com\n\nThis computer does not have your data key yet. Open it with:\n  1  Cosmic password\n  2  Approve from a connected computer\n  3  Recovery phrase\n  4  Forgot password?\nChoice: 2\n\nCode: 4829 1173\nApproval received. Opening data...\nYour data is open on this computer.\nThis computer will not ask again. The other Cosmic apps here use the same key.\nRelay+ is ready.\n\nPS C:\\Users\\alex> "
+    },
+    {
+      "id": "s-approve-approved-es",
+      "title": "Approved (ES)",
+      "lang": "es",
+      "pageId": "p-approve",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nAbriendo el navegador para iniciar sesión en Cosmic...\nSesión iniciada como alex@example.com\n\nEste dispositivo todavía no tiene la clave de los datos. Abrirla con:\n  1  Contraseña de Cosmic\n  2  Aprobar desde otro dispositivo\n  3  Frase de recuperación\n  4  ¿Se olvidó la contraseña?\nOpción: 2\n\nCódigo: 4829 1173\nAprobación recibida. Abriendo los datos...\nLos datos están abiertos en este dispositivo.\nEste dispositivo no lo vuelve a pedir. Las otras apps de Cosmic de este dispositivo usan la misma clave.\nRelay+ está listo.\n\nPS C:\\Users\\alex> "
+    },
+    {
+      "id": "s-approve-rejected-en",
+      "title": "Rejected there",
+      "lang": "en",
+      "pageId": "p-approve",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nOpening your browser to sign in to Cosmic...\nSigned in as alex@example.com\n\nThis computer does not have your data key yet. Open it with:\n  1  Cosmic password\n  2  Approve from a connected computer\n  3  Recovery phrase\n  4  Forgot password?\nChoice: 2\n\nCode: 4829 1173\nWaiting for your approval there...\nThis request was rejected or expired. Start again or use your password or phrase.\n\nThis computer does not have your data key yet. Open it with:\n  1  Cosmic password\n  2  Approve from a connected computer\n  3  Recovery phrase\n  4  Forgot password?\nChoice: "
+    },
+    {
+      "id": "s-approve-rejected-es",
+      "title": "Rejected there (ES)",
+      "lang": "es",
+      "pageId": "p-approve",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nAbriendo el navegador para iniciar sesión en Cosmic...\nSesión iniciada como alex@example.com\n\nEste dispositivo todavía no tiene la clave de los datos. Abrirla con:\n  1  Contraseña de Cosmic\n  2  Aprobar desde otro dispositivo\n  3  Frase de recuperación\n  4  ¿Se olvidó la contraseña?\nOpción: 2\n\nCódigo: 4829 1173\nEsperando la aprobación en el otro dispositivo...\nLa solicitud se rechazó o venció. Empezar de nuevo o usar la contraseña o la frase.\n\nEste dispositivo todavía no tiene la clave de los datos. Abrirla con:\n  1  Contraseña de Cosmic\n  2  Aprobar desde otro dispositivo\n  3  Frase de recuperación\n  4  ¿Se olvidó la contraseña?\nOpción: "
+    },
+    {
+      "id": "s-approve-expired-en",
+      "title": "Expired",
+      "lang": "en",
+      "pageId": "p-approve",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nOpening your browser to sign in to Cosmic...\nSigned in as alex@example.com\n\nThis computer does not have your data key yet. Open it with:\n  1  Cosmic password\n  2  Approve from a connected computer\n  3  Recovery phrase\n  4  Forgot password?\nChoice: 2\n\nWaiting for your other computer...\nThis request was rejected or expired. Start again or use your password or phrase.\n\nThis computer does not have your data key yet. Open it with:\n  1  Cosmic password\n  2  Approve from a connected computer\n  3  Recovery phrase\n  4  Forgot password?\nChoice: "
+    },
+    {
+      "id": "s-approve-expired-es",
+      "title": "Expired (ES)",
+      "lang": "es",
+      "pageId": "p-approve",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nAbriendo el navegador para iniciar sesión en Cosmic...\nSesión iniciada como alex@example.com\n\nEste dispositivo todavía no tiene la clave de los datos. Abrirla con:\n  1  Contraseña de Cosmic\n  2  Aprobar desde otro dispositivo\n  3  Frase de recuperación\n  4  ¿Se olvidó la contraseña?\nOpción: 2\n\nEsperando el otro dispositivo...\nLa solicitud se rechazó o venció. Empezar de nuevo o usar la contraseña o la frase.\n\nEste dispositivo todavía no tiene la clave de los datos. Abrirla con:\n  1  Contraseña de Cosmic\n  2  Aprobar desde otro dispositivo\n  3  Frase de recuperación\n  4  ¿Se olvidó la contraseña?\nOpción: "
+    },
+    {
+      "id": "s-approve-limit-en",
+      "title": "Too many requests",
+      "lang": "en",
+      "pageId": "p-approve",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nOpening your browser to sign in to Cosmic...\nSigned in as alex@example.com\n\nThis computer does not have your data key yet. Open it with:\n  1  Cosmic password\n  2  Approve from a connected computer\n  3  Recovery phrase\n  4  Forgot password?\nChoice: 2\nToo many approval requests right now. Try again in a few minutes or use your password.\n\nThis computer does not have your data key yet. Open it with:\n  1  Cosmic password\n  2  Approve from a connected computer\n  3  Recovery phrase\n  4  Forgot password?\nChoice: "
+    },
+    {
+      "id": "s-approve-limit-es",
+      "title": "Too many requests (ES)",
+      "lang": "es",
+      "pageId": "p-approve",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nAbriendo el navegador para iniciar sesión en Cosmic...\nSesión iniciada como alex@example.com\n\nEste dispositivo todavía no tiene la clave de los datos. Abrirla con:\n  1  Contraseña de Cosmic\n  2  Aprobar desde otro dispositivo\n  3  Frase de recuperación\n  4  ¿Se olvidó la contraseña?\nOpción: 2\nHay demasiadas solicitudes de aprobación en este momento. Reintentar en unos minutos o usar la contraseña.\n\nEste dispositivo todavía no tiene la clave de los datos. Abrirla con:\n  1  Contraseña de Cosmic\n  2  Aprobar desde otro dispositivo\n  3  Frase de recuperación\n  4  ¿Se olvidó la contraseña?\nOpción: "
+    },
+    {
+      "id": "s-forgot-en",
+      "title": "Forgot password",
+      "lang": "en",
+      "pageId": "p-forgot",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nOpening your browser to sign in to Cosmic...\nSigned in as alex@example.com\n\nThis computer does not have your data key yet. Open it with:\n  1  Cosmic password\n  2  Approve from a connected computer\n  3  Recovery phrase\n  4  Forgot password?\nChoice: 4\n\nForgot your password?\nOpen your data from another computer or with your recovery phrase, then set a new password.\nOpening your browser to set a new password...\nWhen it is done, choose 1 and enter the new password.\n\nThis computer does not have your data key yet. Open it with:\n  1  Cosmic password\n  2  Approve from a connected computer\n  3  Recovery phrase\n  4  Forgot password?\nChoice: "
+    },
+    {
+      "id": "s-forgot-es",
+      "title": "Forgot password (ES)",
+      "lang": "es",
+      "pageId": "p-forgot",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nAbriendo el navegador para iniciar sesión en Cosmic...\nSesión iniciada como alex@example.com\n\nEste dispositivo todavía no tiene la clave de los datos. Abrirla con:\n  1  Contraseña de Cosmic\n  2  Aprobar desde otro dispositivo\n  3  Frase de recuperación\n  4  ¿Se olvidó la contraseña?\nOpción: 4\n\n¿Se olvidó la contraseña?\nAbrir los datos desde otro dispositivo o con la frase de recuperación y crear una contraseña nueva.\nAbriendo el navegador para crear una contraseña nueva...\nAl terminar, elegir 1 e ingresar la contraseña nueva.\n\nEste dispositivo todavía no tiene la clave de los datos. Abrirla con:\n  1  Contraseña de Cosmic\n  2  Aprobar desde otro dispositivo\n  3  Frase de recuperación\n  4  ¿Se olvidó la contraseña?\nOpción: "
+    },
+    {
+      "id": "s-forgot-locked-en",
+      "title": "Nothing left to open it",
+      "lang": "en",
+      "pageId": "p-forgot",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nOpening your browser to sign in to Cosmic...\nSigned in as alex@example.com\n\nThis computer does not have your data key yet. Open it with:\n  1  Cosmic password\n  2  Approve from a connected computer\n  3  Recovery phrase\n  4  Forgot password?\nChoice: \n^C\n\nYour encrypted data stays locked\nYou are signed in. Without the password, another computer or the recovery phrase, this data cannot be\nrecovered, even by support.\nRelay+ stays paused on this computer until the data is open.\n\nPS C:\\Users\\alex> "
+    },
+    {
+      "id": "s-forgot-locked-es",
+      "title": "Nothing left to open it (ES)",
+      "lang": "es",
+      "pageId": "p-forgot",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nAbriendo el navegador para iniciar sesión en Cosmic...\nSesión iniciada como alex@example.com\n\nEste dispositivo todavía no tiene la clave de los datos. Abrirla con:\n  1  Contraseña de Cosmic\n  2  Aprobar desde otro dispositivo\n  3  Frase de recuperación\n  4  ¿Se olvidó la contraseña?\nOpción: \n^C\n\nLos datos cifrados siguen bloqueados\nLa sesión está iniciada. Sin la contraseña, otro dispositivo o la frase de recuperación, estos datos no se\npueden recuperar, ni siquiera con ayuda de soporte.\nRelay+ queda en pausa en este dispositivo hasta que los datos estén abiertos.\n\nPS C:\\Users\\alex> "
+    },
+    {
+      "id": "s-status-ready-en",
+      "title": "Status: ready",
+      "lang": "en",
+      "pageId": "p-account",
+      "output": "PS C:\\Users\\alex> onem1nd relay-plus status\nSigned in as alex@example.com\nYour data is open on this computer.\nRelay+ is ready. Last sync 2 minutes ago.\n\nPS C:\\Users\\alex> "
+    },
+    {
+      "id": "s-status-ready-es",
+      "title": "Status: ready (ES)",
+      "lang": "es",
+      "pageId": "p-account",
+      "output": "PS C:\\Users\\alex> onem1nd relay-plus status\nSesión iniciada como alex@example.com\nLos datos están abiertos en este dispositivo.\nRelay+ está listo. Última sincronización hace 2 minutos.\n\nPS C:\\Users\\alex> "
+    },
+    {
+      "id": "s-status-signed-out-en",
+      "title": "Status: not signed in",
+      "lang": "en",
+      "pageId": "p-account",
+      "output": "PS C:\\Users\\alex> onem1nd relay-plus status\nNot signed in to Cosmic.\nEverything local keeps working without an account.\nRun: onem1nd sign-in\n\nPS C:\\Users\\alex> "
+    },
+    {
+      "id": "s-status-signed-out-es",
+      "title": "Status: not signed in (ES)",
+      "lang": "es",
+      "pageId": "p-account",
+      "output": "PS C:\\Users\\alex> onem1nd relay-plus status\nSin sesión iniciada en Cosmic.\nTodo lo local sigue funcionando sin una cuenta.\nEjecutar: onem1nd sign-in\n\nPS C:\\Users\\alex> "
+    },
+    {
+      "id": "s-status-consent-en",
+      "title": "Terms or Privacy to accept",
+      "lang": "en",
+      "pageId": "p-account",
+      "output": "PS C:\\Users\\alex> onem1nd relay-plus status\nSigned in as alex@example.com\nCosmic updated its Terms or Privacy policy. Accept them in the browser to continue.\nOpening your browser...\nRelay+ is paused until then.\n\nPS C:\\Users\\alex> "
+    },
+    {
+      "id": "s-status-consent-es",
+      "title": "Terms or Privacy to accept (ES)",
+      "lang": "es",
+      "pageId": "p-account",
+      "output": "PS C:\\Users\\alex> onem1nd relay-plus status\nSesión iniciada como alex@example.com\nCosmic actualizó los Términos o la Política de privacidad. Aceptarlos en el navegador para continuar.\nAbriendo el navegador...\nRelay+ queda en pausa hasta entonces.\n\nPS C:\\Users\\alex> "
+    },
+    {
+      "id": "s-status-ended-en",
+      "title": "Sign-in ended",
+      "lang": "en",
+      "pageId": "p-account",
+      "output": "PS C:\\Users\\alex> onem1nd relay-plus status\nSign-in has ended on this computer. Sign in again to continue.\nRun: onem1nd sign-in\n\nPS C:\\Users\\alex> "
+    },
+    {
+      "id": "s-status-ended-es",
+      "title": "Sign-in ended (ES)",
+      "lang": "es",
+      "pageId": "p-account",
+      "output": "PS C:\\Users\\alex> onem1nd relay-plus status\nLa sesión terminó en este dispositivo. Iniciar sesión de nuevo para continuar.\nEjecutar: onem1nd sign-in\n\nPS C:\\Users\\alex> "
+    },
+    {
+      "id": "s-status-key-format-en",
+      "title": "Key format not supported",
+      "lang": "en",
+      "pageId": "p-account",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nOpening your browser to sign in to Cosmic...\nSigned in as alex@example.com\n\nThis computer does not have your data key yet. Open it with:\n  1  Cosmic password\n  2  Approve from a connected computer\n  3  Forgot password?\nChoice: 1\nCosmic password: \nThis key format cannot be opened here. Update this app or use another connected computer. Existing data has\nnot been replaced.\n\nPS C:\\Users\\alex> "
+    },
+    {
+      "id": "s-status-key-format-es",
+      "title": "Key format not supported (ES)",
+      "lang": "es",
+      "pageId": "p-account",
+      "output": "PS C:\\Users\\alex> onem1nd sign-in\nAbriendo el navegador para iniciar sesión en Cosmic...\nSesión iniciada como alex@example.com\n\nEste dispositivo todavía no tiene la clave de los datos. Abrirla con:\n  1  Contraseña de Cosmic\n  2  Aprobar desde otro dispositivo\n  3  ¿Se olvidó la contraseña?\nOpción: 1\nContraseña de Cosmic: \nEste formato de clave no se puede abrir aquí. Actualizar esta app o usar otro dispositivo conectado. Los datos\nexistentes no se reemplazaron.\n\nPS C:\\Users\\alex> "
+    },
+    {
+      "id": "s-status-offline-en",
+      "title": "No connection",
+      "lang": "en",
+      "pageId": "p-account",
+      "output": "PS C:\\Users\\alex> onem1nd relay-plus status\nThe request could not be completed. Check the connection and retry.\n\nPS C:\\Users\\alex> "
+    },
+    {
+      "id": "s-status-offline-es",
+      "title": "No connection (ES)",
+      "lang": "es",
+      "pageId": "p-account",
+      "output": "PS C:\\Users\\alex> onem1nd relay-plus status\nNo se pudo completar la solicitud. Revisar la conexión y reintentar.\n\nPS C:\\Users\\alex> "
+    },
+    {
+      "id": "s-signed-out-en",
+      "title": "Sign out",
+      "lang": "en",
+      "pageId": "p-account",
+      "output": "PS C:\\Users\\alex> onem1nd relay-plus sign-out\nSigned out of Cosmic on this computer.\n\nPS C:\\Users\\alex> "
+    },
+    {
+      "id": "s-signed-out-es",
+      "title": "Sign out (ES)",
+      "lang": "es",
+      "pageId": "p-account",
+      "output": "PS C:\\Users\\alex> onem1nd relay-plus sign-out\nSesión de Cosmic cerrada en este dispositivo.\n\nPS C:\\Users\\alex> "
+    }
+  ]
+}

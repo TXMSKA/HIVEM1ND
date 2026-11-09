@@ -40,7 +40,8 @@ Usage:
   onem1nd relay <in|register|send|link|inbox|read|history|threads|status|events|reminder|delivery|mcp|hook|wake|configure|unconfigure|diagnose> [options]
   onem1nd relan <status|join <code>|host|leave> [options]
   onem1nd relan peer <add|remove> <address>[:port] [options]
-  onem1nd relay-plus <sign-in|status|sign-out|create-key|recover|inbox|outbox|request-approval|inspect|approve|accept> [options]
+  onem1nd sign-in [--language en|es] [--json]
+  onem1nd relay-plus <status|sign-out|unlock|recover|create-key|inbox|outbox|request-approval|inspect|accept> [options]
   onem1nd uninstall [--dry-run] [--remove-mind] [options]
   onem1nd service <install|uninstall|status|run|launch> [--dry-run] [options]
   onem1nd task status <project> <id> <status> [--note <text>]
@@ -99,6 +100,10 @@ Evolve options:
   --check-only          Check for a newer version without changing files
   --conflict <path>=<keep|replace|omit>
                         Resolve a file or link conflict (repeatable)
+
+Sign-in options:
+  --language <en|es>    English or Spanish terminal text
+  --json                Print one machine-readable result and do not open a browser
 
 ReLAN options:
   relan join <code> --host <address>[:port] Pair directly over a private network or tailnet
@@ -183,6 +188,7 @@ export function parseArgs(argv) {
   if (!Array.isArray(argv)) throw new CliUsageError("Arguments must be an array.");
   if (argv[0] === "relay") return parseRelayArgs(argv.slice(1));
   if (argv[0] === "relan") return parseRelanArgs(argv.slice(1));
+  if (argv[0] === "sign-in") return parseSignInArgs(argv.slice(1));
   if (argv[0] === "relay-plus") return parseRelayPlusArgs(argv.slice(1));
   if (argv[0] === "service") return parseServiceArgs(argv.slice(1));
   if (argv[0] === "task") return parseTaskArgs(argv.slice(1));
@@ -348,23 +354,59 @@ function parseRelanArgs(tokens) {
   return { command: "relan", options };
 }
 
+const RELAY_PLUS_ACTIONS = ['status', 'sign-out', 'create-key', 'recover', 'unlock', 'inbox', 'outbox', 'request-approval', 'inspect', 'accept', 'approve', 'cancel-approval', 'cancel-sign-in', 'check-acceptance', 'delivered', 'read', 'publish'];
+const MESSAGE_ACTIONS = new Set(['publish', 'delivered', 'read']);
+
+function parseSignInArgs(tokens) {
+  const options = { action: 'sign-in' };
+  const flags = new Map([['--mind-path', 'mindPath'], ['--cosmic-path', 'cosmicPath'], ['--home-dir', 'homeDir'], ['--hostname', 'hostname'], ['--language', 'language']]);
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (['--help', '-h'].includes(token)) return { command: 'sign-in', help: true };
+    if (token === '--json') {
+      if (options.json) throw new CliUsageError('--json was provided more than once.');
+      options.json = true;
+      continue;
+    }
+    if (token === '--password' || token === '--phrase' || token === '--fingerprint' || token === '--device-id' || token === '--message-id') {
+      throw new CliUsageError('Invalid sign-in option.');
+    }
+    const key = flags.get(token);
+    if (!key || !tokens[index + 1] || tokens[index + 1].startsWith('-') || Object.hasOwn(options, key)) throw new CliUsageError('Invalid sign-in option.');
+    options[key] = tokens[++index];
+  }
+  if (options.language && !['en', 'es'].includes(options.language)) throw new CliUsageError('--language must be en or es.');
+  return { command: 'sign-in', options };
+}
+
 function parseRelayPlusArgs(tokens) {
   const action = tokens[0];
   if (!action || ['--help', '-h'].includes(action)) return { command: 'relay-plus', help: true };
-  if (!['sign-in', 'status', 'sign-out', 'create-key', 'recover', 'inbox', 'outbox', 'request-approval', 'inspect', 'approve', 'accept'].includes(action)) throw new CliUsageError('Unknown relay-plus action.');
+  if (action === 'sign-in') return parseSignInArgs(tokens.slice(1));
+  if (!RELAY_PLUS_ACTIONS.includes(action)) throw new CliUsageError('Unknown relay-plus action.');
   const options = { action };
   const flags = new Map([['--mind-path', 'mindPath'], ['--cosmic-path', 'cosmicPath'], ['--home-dir', 'homeDir'],
-    ['--hostname', 'hostname'], ['--device-id', 'deviceId'], ['--message-id', 'messageId'], ['--fingerprint', 'fingerprint']]);
+    ['--hostname', 'hostname'], ['--language', 'language']]);
+  if (MESSAGE_ACTIONS.has(action)) {
+    flags.set('--device-id', 'deviceId');
+    flags.set('--message-id', 'messageId');
+  }
   for (let index = 1; index < tokens.length; index += 1) {
     const token = tokens[index];
-    if (token === '--json') { options.json = true; continue; }
+    if (token === '--json') {
+      if (options.json) throw new CliUsageError('--json was provided more than once.');
+      options.json = true;
+      continue;
+    }
+    if (token === '--password' || token === '--phrase' || token === '--fingerprint' || token === '--device-id' || token === '--message-id') {
+      const key = flags.get(token);
+      if (!key) throw new CliUsageError('Invalid relay-plus option.');
+    }
     const key = flags.get(token);
-    if (!key || !tokens[index + 1] || tokens[index + 1].startsWith('-') || Object.hasOwn(options, key)) throw new CliUsageError(`Invalid relay-plus option: ${token}`);
+    if (!key || !tokens[index + 1] || tokens[index + 1].startsWith('-') || Object.hasOwn(options, key)) throw new CliUsageError('Invalid relay-plus option.');
     options[key] = tokens[++index];
   }
-  if (['request-approval', 'inspect', 'approve', 'accept'].includes(action) && !options.deviceId) throw new CliUsageError('--device-id is required.');
-  if (['inspect', 'approve', 'accept'].includes(action) && !options.messageId) throw new CliUsageError('--message-id is required.');
-  if (action === 'approve' && !options.fingerprint) throw new CliUsageError('--fingerprint is required.');
+  if (options.language && !['en', 'es'].includes(options.language)) throw new CliUsageError('--language must be en or es.');
   return { command: 'relay-plus', options };
 }
 
@@ -1782,9 +1824,9 @@ export async function runCli(argv, dependencies = {}) {
     } else if (parsed.command === "relan") {
       const { runRelanCommand } = await import("../engine/relan/cli.mjs");
       return await runRelanCommand(parsed.options, dependencies, output);
-    } else if (parsed.command === 'relay-plus') {
+    } else if (parsed.command === 'sign-in' || parsed.command === 'relay-plus') {
       const { runRelayPlusCommand } = await import('../engine/relay-plus/cli.mjs');
-      return await runRelayPlusCommand(parsed.options, dependencies, output);
+      return await runRelayPlusCommand(parsed.options, { ...dependencies, openUrl: dependencies.openUrl ?? openLocalUrl }, output);
     } else {
       return await runLifecycle(parsed.command, parsed.options, dependencies, output);
     }
