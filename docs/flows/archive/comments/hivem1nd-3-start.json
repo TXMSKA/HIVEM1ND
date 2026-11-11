@@ -1,0 +1,198 @@
+{
+  "board": "hivem1nd-3-start",
+  "threads": [
+    {
+      "id": "t-mv7jlp28-71a199",
+      "anchor": {
+        "screen": "first-repos-found",
+        "screenTitle": "1.1 First run: Repositories found",
+        "element": "dialog",
+        "label": "4 repositories found on this machine",
+        "path": [
+          "1.1 First run: Repositories found",
+          "4 repositories found on this machine"
+        ],
+        "point": {
+          "x": 585,
+          "y": 292
+        }
+      },
+      "layer": "design",
+      "status": "resolved",
+      "messages": [
+        {
+          "author": "User",
+          "at": "2026-10-14T03:20:50.720Z",
+          "text": "Esto no está preparado muy bien si hay muchos repos y muchos environments..."
+        },
+        {
+          "author": "overmind-hivem1nd",
+          "at": "2026-10-14T03:27:35.000Z",
+          "text": "Redone for many folders and repositories: the found repositories are grouped by the folder that holds them (Web 19, Unity 6, Tools 1), with a filter, one tick per folder and the repositories inside. Each folder becomes a cluster linked to it, with its repositories as clusters inside; worktrees stay inside their repository. New screens 1.3 All clusters and 1.4 Inside a folder cluster (double click opens it, All clusters goes back)."
+        }
+      ]
+    },
+    {
+      "id": "t-mv7jnwo8-f937e7",
+      "anchor": {
+        "screen": "overseer-full",
+        "screenTitle": "3.2 The Overseer: Its context is filling",
+        "element": "context-full",
+        "label": "Context filling",
+        "path": [
+          "3.2 The Overseer: Its context is filling",
+          "Inspector",
+          "Conversation",
+          "Context filling"
+        ],
+        "point": {
+          "x": 1376,
+          "y": 408
+        }
+      },
+      "layer": "design",
+      "status": "resolved",
+      "messages": [
+        {
+          "author": "User",
+          "at": "2026-10-14T03:22:33.896Z",
+          "text": "Compact or Clear. \"Keep going\" no, poner una X arriba a la derecha"
+        },
+        {
+          "author": "overmind-hivem1nd",
+          "at": "2026-10-14T03:27:35.000Z",
+          "text": "Done: the notice offers Compact (keeps a summary) and Clear (starts empty); Keep going is gone and an X at the top right closes it."
+        }
+      ]
+    },
+    {
+      "id": "t-mv7jrdf9-05020e",
+      "anchor": {
+        "screen": "clusters-new-agent",
+        "screenTitle": "2.3 Clusters and agents: New agent",
+        "element": "field-runs-in",
+        "label": "Runs in",
+        "path": [
+          "2.3 Clusters and agents: New agent",
+          "New agent",
+          "Runs in"
+        ],
+        "point": {
+          "x": 1354,
+          "y": 246
+        }
+      },
+      "layer": "design",
+      "status": "resolved",
+      "messages": [
+        {
+          "author": "User",
+          "at": "2026-10-14T03:25:15.573Z",
+          "text": "Esto como se vería?"
+        },
+        {
+          "author": "overmind-hivem1nd",
+          "at": "2026-10-14T03:36:41.000Z",
+          "text": "Drawn in 2.4: Runs in opens one picker with three columns, agent with its remaining quota, model and effort."
+        }
+      ]
+    },
+    {
+      "id": "t-mv7jzo6e-758418",
+      "anchor": {
+        "screen": "first-overseer",
+        "screenTitle": "1.2 First run: Create your Overseer",
+        "element": "field-runs-in",
+        "label": "Runs in",
+        "path": [
+          "1.2 First run: Create your Overseer",
+          "Create your Overseer",
+          "Runs in"
+        ],
+        "point": {
+          "x": 747,
+          "y": 447
+        }
+      },
+      "layer": "design",
+      "status": "resolved",
+      "messages": [
+        {
+          "author": "User",
+          "at": "2026-10-14T03:31:42.758Z",
+          "text": "Este selector es el mismo que el de 2.4, no?"
+        },
+        {
+          "author": "overmind-hivem1nd",
+          "at": "2026-10-14T03:31:58.000Z",
+          "text": "Yes, the same one. Runs in opens the picker of 2.4 everywhere: here for the Overseer, in New agent, and in an agent's facts to change it later."
+        }
+      ]
+    },
+    {
+      "id": "t-mv7k2g3z-0dafaf",
+      "anchor": {
+        "screen": "clusters-runs-in",
+        "screenTitle": "2.4 Clusters and agents: Agent, model and effort",
+        "element": "pick-opencode",
+        "label": "OpenCode",
+        "path": [
+          "2.4 Clusters and agents: Agent, model and effort",
+          "Runs in",
+          "Agent",
+          "OpenCode"
+        ],
+        "point": {
+          "x": 942,
+          "y": 473
+        }
+      },
+      "layer": "design",
+      "status": "resolved",
+      "messages": [
+        {
+          "author": "User",
+          "at": "2026-10-14T03:33:52.271Z",
+          "text": "No muestres agentes que no se conectaron"
+        },
+        {
+          "author": "overmind-hivem1nd",
+          "at": "2026-10-14T03:36:41.000Z",
+          "text": "Done: the picker lists only the agents connected on the machine; Lyra appears when its service runs."
+        }
+      ]
+    },
+    {
+      "id": "t-mv7k2y9m-77599c",
+      "anchor": {
+        "screen": "overseer-full",
+        "screenTitle": "3.2 The Overseer: Its context is filling",
+        "element": "node-master",
+        "label": "You",
+        "path": [
+          "3.2 The Overseer: Its context is filling",
+          "Map",
+          "You"
+        ],
+        "point": {
+          "x": 699,
+          "y": 467
+        }
+      },
+      "layer": "design",
+      "status": "resolved",
+      "messages": [
+        {
+          "author": "User",
+          "at": "2026-10-14T03:34:15.802Z",
+          "text": "Is this really necessary?"
+        },
+        {
+          "author": "overmind-hivem1nd",
+          "at": "2026-10-14T03:36:41.000Z",
+          "text": "Removed: the Map has no You node; the Overseer sits at the center, and the person's preferences live in Settings."
+        }
+      ]
+    }
+  ]
+}

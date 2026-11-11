@@ -1,0 +1,4349 @@
+{
+  "formatVersion": 1,
+  "id": "onem1nd",
+  "title": "ONEM1ND 1.0",
+  "note": "The whole ONEM1ND 1.0 flow in ten rows. Built screens are photographs of the candidate; \"Approved, not built\" are the approved key moments; \"Proposed\" are drawn from the plan and need approval.",
+  "pages": [
+    {
+      "id": "p-flow",
+      "title": "ONEM1ND 1.0",
+      "objects": [
+        {
+          "id": "head-r1",
+          "name": "Row 1: Install and first open",
+          "t": "text",
+          "place": {
+            "x": 0,
+            "y": -220
+          },
+          "w": 9000,
+          "h": 130,
+          "value": "1. Install and first open",
+          "size": 96,
+          "weight": 700,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 130,
+          "sizing": "auto-width"
+        },
+        {
+          "id": "note-s-r1-p1-install-missing",
+          "name": "Note: Install, the folder does not exist",
+          "t": "text",
+          "place": {
+            "x": 0,
+            "y": 924
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Built. The one install screen. The line under the folder says what will happen: \"The folder will be created.\"",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r1-p2-install-empty",
+          "name": "Note: Install, a folder without a M1ND",
+          "t": "text",
+          "place": {
+            "x": 1600,
+            "y": 924
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Built. The folder exists and holds no M1ND: \"The M1ND files will be created in this folder.\"",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r1-p3-install-join",
+          "name": "Note: Install, a folder with a M1ND",
+          "t": "text",
+          "place": {
+            "x": 3200,
+            "y": 924
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Built. A M1ND of this version is already there: \"This computer will join the M1ND in this folder.\"",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r1-p4-install-older",
+          "name": "Note: Install, an older M1ND is refused",
+          "t": "text",
+          "place": {
+            "x": 4800,
+            "y": 924
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Built. A folder with an older M1ND cannot be used. Install stays off. The Overseer brings older minds in after the first open (row 9).",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r1-p5-install-progress",
+          "name": "Note: Install, in progress",
+          "t": "text",
+          "place": {
+            "x": 6400,
+            "y": 924
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Built. Step 2 of 2. The app opens by itself when the service is up.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r1-p6-install-failed",
+          "name": "Note: Install, the service did not start",
+          "t": "text",
+          "place": {
+            "x": 8000,
+            "y": 924
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Built. Error state with Retry. Setup resumes from this step.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r1-p7-first-open",
+          "name": "Note: First open, agent for the Overseer",
+          "t": "text",
+          "place": {
+            "x": 9600,
+            "y": 924
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Approved, not built. The only choice before writing. The agents listed are the ones found on the computer. Accounts and repositories are offered in the conversation afterwards.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "head-r2",
+          "name": "Row 2: The Overseer conversation and offers",
+          "t": "text",
+          "place": {
+            "x": 0,
+            "y": 1580
+          },
+          "w": 9000,
+          "h": 130,
+          "value": "2. The Overseer conversation and offers",
+          "size": 96,
+          "weight": 700,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 130,
+          "sizing": "auto-width"
+        },
+        {
+          "id": "note-s-r2-p1-offer",
+          "name": "Note: The Overseer offers the rest",
+          "t": "text",
+          "place": {
+            "x": 0,
+            "y": 2724
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Approved, not built. What used to be windows at first open is offered in the conversation, when it applies. One main action, Choose, Not now.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r2-p2-team",
+          "name": "Note: Built from a request",
+          "t": "text",
+          "place": {
+            "x": 1600,
+            "y": 2724
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Approved, not built. The Overseer answers a request by creating conversations. They appear on the canvas, connected.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r2-p3-older",
+          "name": "Note: A long conversation, earlier messages loading",
+          "t": "text",
+          "place": {
+            "x": 3200,
+            "y": 2724
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Built. Message bubbles name the sender. Scrolling up to the top loads the earlier messages; there is no button.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "head-r3",
+          "name": "Row 3: The shell and the canvas",
+          "t": "text",
+          "place": {
+            "x": 0,
+            "y": 3380
+          },
+          "w": 9000,
+          "h": 130,
+          "value": "3. The shell and the canvas",
+          "size": 96,
+          "weight": 700,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 130,
+          "sizing": "auto-width"
+        },
+        {
+          "id": "note-s-r3-p1-reading",
+          "name": "Note: Reading the M1ND",
+          "t": "text",
+          "place": {
+            "x": 0,
+            "y": 4524
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Built. Loading state while the first read is open.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r3-p2-read-failed",
+          "name": "Note: The M1ND cannot be read",
+          "t": "text",
+          "place": {
+            "x": 1600,
+            "y": 4524
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Built. Error state with Retry and Choose another folder.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r3-p3-empty",
+          "name": "Note: A new M1ND, nothing on the canvas",
+          "t": "text",
+          "place": {
+            "x": 3200,
+            "y": 4524
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Built. Empty state. Services that are not set up are rows in the list; the canvas says how to add the first card.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r3-p4-shell",
+          "name": "Note: The shell: list, conversation, canvas",
+          "t": "text",
+          "place": {
+            "x": 4800,
+            "y": 4524
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Built. Three columns. Near cards are 196x88 with their connections, a repository card and a note, on the dot ground. The zoom bar holds minus, the percentage, plus and Fit.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r3-p5-bar-menu",
+          "name": "Note: The bar menu",
+          "t": "text",
+          "place": {
+            "x": 6400,
+            "y": 4524
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Built. The Map bar holds the modes, the phone and the menu. Waiting, Activity and Settings are in the menu. There is no Add on the Map.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r3-p6-far",
+          "name": "Note: Zoomed out, circles",
+          "t": "text",
+          "place": {
+            "x": 8000,
+            "y": 4524
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Built. Below 70% each card becomes a circle with its name under it.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r3-p7-reconnecting",
+          "name": "Note: The service is not answering",
+          "t": "text",
+          "place": {
+            "x": 9600,
+            "y": 4524
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Built. Banner with Retry now while the app reconnects. Actions are kept and sent when the service answers.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r3-p8-hover",
+          "name": "Note: A card under the pointer",
+          "t": "text",
+          "place": {
+            "x": 11200,
+            "y": 4524
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Approved, not built. The border lights and the actions appear above the card. The rings on its edges start a connection. The drawing still shows Pause, which is hidden in 1.0 (next screen).",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r3-p9-hover-no-pause",
+          "name": "Note: A card under the pointer, Pause hidden",
+          "t": "text",
+          "place": {
+            "x": 0,
+            "y": 6024
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Proposed. Same screen without Pause, as task 072 decided for this build. Plan: task 072 answers: Pause is hidden on canvas cards in this build; plan.md B10.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r3-p10-canvas-menu",
+          "name": "Note: Right-click on the canvas",
+          "t": "text",
+          "place": {
+            "x": 1600,
+            "y": 6024
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Approved, not built. The list opens at the pointer. What is chosen is created at that point.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r3-p11-drag",
+          "name": "Note: Moving a card",
+          "t": "text",
+          "place": {
+            "x": 3200,
+            "y": 6024
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Approved, not built. The card rises while held and the place it left stays marked. Connections follow it. It settles exactly where it is dropped.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r3-p12-connect",
+          "name": "Note: Connecting two cards",
+          "t": "text",
+          "place": {
+            "x": 4800,
+            "y": 6024
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Approved, not built. Dragging from a ring draws a connection that follows the pointer; a card that can take it lights up.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r3-p13-conn-near",
+          "name": "Note: Connections, near",
+          "t": "text",
+          "place": {
+            "x": 6400,
+            "y": 6024
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Approved, not built. How a connection attaches at every angle between two cards: the side that faces the other card, spread along it, clear of other cards.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r3-p14-conn-far",
+          "name": "Note: Connections, far",
+          "t": "text",
+          "place": {
+            "x": 8000,
+            "y": 6024
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Approved, not built. The same rules for circles and for several connections on one card.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r3-p15-grouping",
+          "name": "Note: Select and group",
+          "t": "text",
+          "place": {
+            "x": 9600,
+            "y": 6024
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Approved, not built. Dragging over the empty canvas selects several cards. Group draws a named frame; Message writes to all of them.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "head-r4",
+          "name": "Row 4: Conversations, new conversation and permissions",
+          "t": "text",
+          "place": {
+            "x": 0,
+            "y": 6680
+          },
+          "w": 9000,
+          "h": 130,
+          "value": "4. Conversations, new conversation and permissions",
+          "size": 96,
+          "weight": 700,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 130,
+          "sizing": "auto-width"
+        },
+        {
+          "id": "note-s-r4-p1-new",
+          "name": "Note: New conversation",
+          "t": "text",
+          "place": {
+            "x": 0,
+            "y": 7824
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Approved, not built. Three choices, each with a default: Role, Agent, Works in.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r4-p2-new-role",
+          "name": "Note: New conversation, Role open",
+          "t": "text",
+          "place": {
+            "x": 1600,
+            "y": 7824
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Approved, not built. The list of role templates opens under its field, inside the window.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r4-p3-agent-chat",
+          "name": "Note: A conversation with an agent, as built",
+          "t": "text",
+          "place": {
+            "x": 3200,
+            "y": 7824
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Built. A click on a card or a list row opens that conversation in the middle column. Tabs: Chat, Work, Details.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r4-p4-permission-built",
+          "name": "Note: A permission request, as built today",
+          "t": "text",
+          "place": {
+            "x": 4800,
+            "y": 7824
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Built. Approve, Always for this agent and Deny as three buttons. The approved card replaces this (two screens ahead).",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r4-p5-waiting",
+          "name": "Note: Waiting on the person, as built",
+          "t": "text",
+          "place": {
+            "x": 6400,
+            "y": 7824
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Built. The Waiting list opened from the bar menu.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r4-p6-permission",
+          "name": "Note: A permission request",
+          "t": "text",
+          "place": {
+            "x": 8000,
+            "y": 7824
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Approved, not built. One card with one main action. \"Always\" is an option, not a third button. The count shows in the bar, the list row and the card.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "head-r5",
+          "name": "Row 5: Blueprint",
+          "t": "text",
+          "place": {
+            "x": 0,
+            "y": 8480
+          },
+          "w": 9000,
+          "h": 130,
+          "value": "5. Blueprint",
+          "size": 96,
+          "weight": 700,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 130,
+          "sizing": "auto-width"
+        },
+        {
+          "id": "note-s-r5-p1-blueprint-loading",
+          "name": "Note: Blueprint, opening",
+          "t": "text",
+          "place": {
+            "x": 0,
+            "y": 9624
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Built. Blueprint is the web app inside the shell. While it opens, the shell shows this state. The app itself is not drawn here: it is a separate product in the desktop host.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r5-p2-blueprint-unavailable",
+          "name": "Note: Blueprint, could not be opened",
+          "t": "text",
+          "place": {
+            "x": 1600,
+            "y": 9624
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Built. Error state with Retry. Blueprint needs the internet the first time.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "head-r6",
+          "name": "Row 6: Void",
+          "t": "text",
+          "place": {
+            "x": 0,
+            "y": 10280
+          },
+          "w": 9000,
+          "h": 130,
+          "value": "6. Void",
+          "size": 96,
+          "weight": 700,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 130,
+          "sizing": "auto-width"
+        },
+        {
+          "id": "note-s-r6-p1-void-loading",
+          "name": "Note: Void, opening",
+          "t": "text",
+          "place": {
+            "x": 0,
+            "y": 11424
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Built. Void is the web app inside the shell, like Blueprint. The app itself is not drawn here.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r6-p2-void-unavailable",
+          "name": "Note: Void, could not be opened",
+          "t": "text",
+          "place": {
+            "x": 1600,
+            "y": 11424
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Built. Error state with Retry.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "head-r7",
+          "name": "Row 7: Settings and the service",
+          "t": "text",
+          "place": {
+            "x": 0,
+            "y": 12080
+          },
+          "w": 9000,
+          "h": 130,
+          "value": "7. Settings and the service",
+          "size": 96,
+          "weight": 700,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 130,
+          "sizing": "auto-width"
+        },
+        {
+          "id": "note-s-r7-p1-settings-approved",
+          "name": "Note: Settings, Agents and accounts",
+          "t": "text",
+          "place": {
+            "x": 0,
+            "y": 13224
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Approved, not built. Sections on the left, named by what is done in them. One line per row. Service state, versions and sync folders move to Advanced.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r7-p2-settings-general",
+          "name": "Note: Settings, General, as built today",
+          "t": "text",
+          "place": {
+            "x": 1600,
+            "y": 13224
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Built. Look, language, the Relay service and the phone link. Reached from the bar menu.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r7-p3-settings-agents",
+          "name": "Note: Settings, Agents, as built today",
+          "t": "text",
+          "place": {
+            "x": 3200,
+            "y": 13224
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Built. Clients on this computer, each with its state and the changes it needs.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r7-p4-settings-review",
+          "name": "Note: Settings, review of the changes for a client",
+          "t": "text",
+          "place": {
+            "x": 4800,
+            "y": 13224
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Built. Nothing is written until the changes are applied; they can also be copied.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r7-p5-settings-projects",
+          "name": "Note: Settings, Projects, as built today",
+          "t": "text",
+          "place": {
+            "x": 6400,
+            "y": 13224
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Built. Linked folders.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r7-p6-settings-content",
+          "name": "Note: Settings, Content, as built today",
+          "t": "text",
+          "place": {
+            "x": 8000,
+            "y": 13224
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Built. Features, knowledge packs and preferences.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "head-r8",
+          "name": "Row 8: The member network and joining",
+          "t": "text",
+          "place": {
+            "x": 0,
+            "y": 13880
+          },
+          "w": 9000,
+          "h": 130,
+          "value": "8. The member network and joining",
+          "size": 96,
+          "weight": 700,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 130,
+          "sizing": "auto-width"
+        },
+        {
+          "id": "note-s-r8-p1-join-offer",
+          "name": "Note: Join offer",
+          "t": "text",
+          "place": {
+            "x": 0,
+            "y": 15024
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Proposed. On the new computer, after Start, the Overseer offers to join a M1ND found on the network.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r8-p2-join-waiting",
+          "name": "Note: Waiting for permission",
+          "t": "text",
+          "place": {
+            "x": 1600,
+            "y": 15024
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Proposed. The request waits on the other computer. No key or history is shared before an answer.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r8-p3-join-request",
+          "name": "Note: The request on the member that is asked",
+          "t": "text",
+          "place": {
+            "x": 3200,
+            "y": 15024
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Proposed. On the existing member the request is a card in the Overseer conversation, with 1 waiting in the bar. Approve or Decline.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r8-p4-join-importing",
+          "name": "Note: Approved, bringing in the M1ND",
+          "t": "text",
+          "place": {
+            "x": 4800,
+            "y": 15024
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Proposed. Only approval releases the key and the history.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r8-p5-join-done",
+          "name": "Note: Joined",
+          "t": "text",
+          "place": {
+            "x": 6400,
+            "y": 15024
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Proposed. The conversations and the canvas are the same as on the other computer.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r8-p6-join-declined",
+          "name": "Note: Declined",
+          "t": "text",
+          "place": {
+            "x": 8000,
+            "y": 15024
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Proposed. Shown on the asking computer.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r8-p7-join-cancelled",
+          "name": "Note: Cancelled on the asking computer",
+          "t": "text",
+          "place": {
+            "x": 9600,
+            "y": 15024
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Proposed. The asking computer withdrew the request.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r8-p8-join-withdrawn",
+          "name": "Note: Request withdrawn, shown on the member",
+          "t": "text",
+          "place": {
+            "x": 11200,
+            "y": 15024
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Proposed. The card disappears from the member and leaves one line.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r8-p9-join-stopped",
+          "name": "Note: Bringing in stopped, Retry",
+          "t": "text",
+          "place": {
+            "x": 0,
+            "y": 16524
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Proposed. Error state with Retry. What was brought in is kept.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r8-p10-devices-alone",
+          "name": "Note: Settings, Folder and devices, no other computer",
+          "t": "text",
+          "place": {
+            "x": 1600,
+            "y": 16524
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Proposed. Empty state of the member list.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r8-p11-devices-pending",
+          "name": "Note: Settings, Folder and devices, request pending",
+          "t": "text",
+          "place": {
+            "x": 3200,
+            "y": 16524
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Proposed. The same request, answered from Settings.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r8-p12-devices-list",
+          "name": "Note: Settings, Folder and devices",
+          "t": "text",
+          "place": {
+            "x": 4800,
+            "y": 16524
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Proposed. One list of computers, with the state of each, and the folder with Change.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "head-r9",
+          "name": "Row 9: Bringing in old minds",
+          "t": "text",
+          "place": {
+            "x": 0,
+            "y": 17180
+          },
+          "w": 9000,
+          "h": 130,
+          "value": "9. Bringing in old minds",
+          "size": 96,
+          "weight": 700,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 130,
+          "sizing": "auto-width"
+        },
+        {
+          "id": "note-s-r9-p1-intake-offer",
+          "name": "Note: The Overseer offers to bring in old minds",
+          "t": "text",
+          "place": {
+            "x": 0,
+            "y": 18324
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Proposed. After the agent choice. What was found, with sizes and counts. Nothing is read in depth or written before the yes.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r9-p2-intake-choose",
+          "name": "Note: Choosing what to bring in",
+          "t": "text",
+          "place": {
+            "x": 1600,
+            "y": 18324
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Proposed. Same card pattern as the repositories offer.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r9-p3-intake-progress",
+          "name": "Note: Bringing in, progress",
+          "t": "text",
+          "place": {
+            "x": 3200,
+            "y": 18324
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Proposed. An agent task. The originals are only read, never changed. Secrets are never read.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r9-p4-intake-done",
+          "name": "Note: Brought in, index and report",
+          "t": "text",
+          "place": {
+            "x": 4800,
+            "y": 18324
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Proposed. The index says what was brought in and from where. The report says what was left out and why.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r9-p5-intake-stopped",
+          "name": "Note: Bringing in stopped, Retry",
+          "t": "text",
+          "place": {
+            "x": 6400,
+            "y": 18324
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Proposed. Resumable. An interrupted run leaves the index consistent.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r9-p6-intake-nothing-new",
+          "name": "Note: A second run, nothing new",
+          "t": "text",
+          "place": {
+            "x": 8000,
+            "y": 18324
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Proposed. A second run brings in only what is new.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "head-r10",
+          "name": "Row 10: The phone",
+          "t": "text",
+          "place": {
+            "x": 0,
+            "y": 18980
+          },
+          "w": 9000,
+          "h": 130,
+          "value": "10. The phone",
+          "size": 96,
+          "weight": 700,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 130,
+          "sizing": "auto-width"
+        },
+        {
+          "id": "note-s-r10-p1-phone-pair",
+          "name": "Note: Phone, pairing",
+          "t": "text",
+          "place": {
+            "x": 0,
+            "y": 20124
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Built. A code typed from Settings, Open on the phone, or a QR code.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r10-p2-phone-pair-error",
+          "name": "Note: Phone, the code does not match",
+          "t": "text",
+          "place": {
+            "x": 1600,
+            "y": 20124
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Built. Error state. The tries left are shown.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r10-p3-phone-locked",
+          "name": "Note: Phone, pairing locked",
+          "t": "text",
+          "place": {
+            "x": 3200,
+            "y": 20124
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Built. Five codes did not match. Pairing stays locked for 10 minutes; a new code from the computer unlocks it at once.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r10-p4-phone-hierarchy",
+          "name": "Note: Phone, Hierarchy",
+          "t": "text",
+          "place": {
+            "x": 4800,
+            "y": 20124
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Built. The Overseer, the clusters and the services, with the count that waits. The Map is not on the phone.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r10-p5-phone-chat",
+          "name": "Note: Phone, a conversation",
+          "t": "text",
+          "place": {
+            "x": 6400,
+            "y": 20124
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Built. Messages, a permission to approve or deny, and a task to accept or send back.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r10-p6-phone-waiting",
+          "name": "Note: Phone, waiting on the person",
+          "t": "text",
+          "place": {
+            "x": 8000,
+            "y": 20124
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Built. Asks and reviews that wait on the person. Standing approvals and pushes are answered on the computer.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        },
+        {
+          "id": "note-s-r10-p7-phone-closed",
+          "name": "Note: Phone, access ended",
+          "t": "text",
+          "place": {
+            "x": 9600,
+            "y": 20124
+          },
+          "w": 1440,
+          "h": 84,
+          "value": "Built. Phone access lasts 12 hours. A new code from the computer opens it again.",
+          "size": 20,
+          "weight": 400,
+          "color": "#a7aea7",
+          "font": "Atkinson Hyperlegible",
+          "lineHeight": 28,
+          "sizing": "auto-height"
+        }
+      ],
+      "order": [
+        "s-r1-p1-install-missing",
+        "s-r1-p2-install-empty",
+        "s-r1-p3-install-join",
+        "s-r1-p4-install-older",
+        "s-r1-p5-install-progress",
+        "s-r1-p6-install-failed",
+        "s-r1-p7-first-open",
+        "s-r2-p1-offer",
+        "s-r2-p2-team",
+        "s-r2-p3-older",
+        "s-r3-p1-reading",
+        "s-r3-p2-read-failed",
+        "s-r3-p3-empty",
+        "s-r3-p4-shell",
+        "s-r3-p5-bar-menu",
+        "s-r3-p6-far",
+        "s-r3-p7-reconnecting",
+        "s-r3-p8-hover",
+        "s-r3-p9-hover-no-pause",
+        "s-r3-p10-canvas-menu",
+        "s-r3-p11-drag",
+        "s-r3-p12-connect",
+        "s-r3-p13-conn-near",
+        "s-r3-p14-conn-far",
+        "s-r3-p15-grouping",
+        "s-r4-p1-new",
+        "s-r4-p2-new-role",
+        "s-r4-p3-agent-chat",
+        "s-r4-p4-permission-built",
+        "s-r4-p5-waiting",
+        "s-r4-p6-permission",
+        "s-r5-p1-blueprint-loading",
+        "s-r5-p2-blueprint-unavailable",
+        "s-r6-p1-void-loading",
+        "s-r6-p2-void-unavailable",
+        "s-r7-p1-settings-approved",
+        "s-r7-p2-settings-general",
+        "s-r7-p3-settings-agents",
+        "s-r7-p4-settings-review",
+        "s-r7-p5-settings-projects",
+        "s-r7-p6-settings-content",
+        "s-r8-p1-join-offer",
+        "s-r8-p2-join-waiting",
+        "s-r8-p3-join-request",
+        "s-r8-p4-join-importing",
+        "s-r8-p5-join-done",
+        "s-r8-p6-join-declined",
+        "s-r8-p7-join-cancelled",
+        "s-r8-p8-join-withdrawn",
+        "s-r8-p9-join-stopped",
+        "s-r8-p10-devices-alone",
+        "s-r8-p11-devices-pending",
+        "s-r8-p12-devices-list",
+        "s-r9-p1-intake-offer",
+        "s-r9-p2-intake-choose",
+        "s-r9-p3-intake-progress",
+        "s-r9-p4-intake-done",
+        "s-r9-p5-intake-stopped",
+        "s-r9-p6-intake-nothing-new",
+        "s-r10-p1-phone-pair",
+        "s-r10-p2-phone-pair-error",
+        "s-r10-p3-phone-locked",
+        "s-r10-p4-phone-hierarchy",
+        "s-r10-p5-phone-chat",
+        "s-r10-p6-phone-waiting",
+        "s-r10-p7-phone-closed"
+      ],
+      "start": "s-r1-p1-install-missing"
+    }
+  ],
+  "screens": [
+    {
+      "id": "s-r1-p1-install-missing",
+      "title": "1.1 Install, the folder does not exist",
+      "pageId": "p-flow",
+      "x": 0,
+      "y": 0,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r1-p1-install-missing-root",
+        "name": "1.1 Install, the folder does not exist",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r1-p1-install-missing-picture",
+            "name": "Capture: Install, the folder does not exist",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/feb60786-f2e4-7680-59ad-29beaf14137d.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r1-p2-install-empty",
+      "title": "1.2 Install, a folder without a M1ND",
+      "pageId": "p-flow",
+      "x": 1600,
+      "y": 0,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r1-p2-install-empty-root",
+        "name": "1.2 Install, a folder without a M1ND",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r1-p2-install-empty-picture",
+            "name": "Capture: Install, a folder without a M1ND",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/b870d51d-8fcd-a018-62c9-8ec42a3934c7.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r1-p3-install-join",
+      "title": "1.3 Install, a folder with a M1ND",
+      "pageId": "p-flow",
+      "x": 3200,
+      "y": 0,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r1-p3-install-join-root",
+        "name": "1.3 Install, a folder with a M1ND",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r1-p3-install-join-picture",
+            "name": "Capture: Install, a folder with a M1ND",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/59ee4165-f62e-8a5e-3c4d-ff997b8edc0f.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r1-p4-install-older",
+      "title": "1.4 Install, an older M1ND is refused",
+      "pageId": "p-flow",
+      "x": 4800,
+      "y": 0,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r1-p4-install-older-root",
+        "name": "1.4 Install, an older M1ND is refused",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r1-p4-install-older-picture",
+            "name": "Capture: Install, an older M1ND is refused",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/c05033a8-4f90-242f-cbcd-ae7bea99c2f3.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r1-p5-install-progress",
+      "title": "1.5 Install, in progress",
+      "pageId": "p-flow",
+      "x": 6400,
+      "y": 0,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r1-p5-install-progress-root",
+        "name": "1.5 Install, in progress",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r1-p5-install-progress-picture",
+            "name": "Capture: Install, in progress",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/24bea3df-e029-0b4e-3df3-10355983a16c.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r1-p6-install-failed",
+      "title": "1.6 Install, the service did not start",
+      "pageId": "p-flow",
+      "x": 8000,
+      "y": 0,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r1-p6-install-failed-root",
+        "name": "1.6 Install, the service did not start",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r1-p6-install-failed-picture",
+            "name": "Capture: Install, the service did not start",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/9cb8f32e-7b0e-aa6f-731c-b95cd9896cd8.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r1-p7-first-open",
+      "title": "1.7 First open, agent for the Overseer (Approved, not built)",
+      "pageId": "p-flow",
+      "x": 9600,
+      "y": 0,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r1-p7-first-open-root",
+        "name": "1.7 First open, agent for the Overseer (Approved, not built)",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r1-p7-first-open-picture",
+            "name": "Capture: First open, agent for the Overseer",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/762cc125-a12d-ecc6-4db1-fb7cd6ee443f.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r2-p1-offer",
+      "title": "2.1 The Overseer offers the rest (Approved, not built)",
+      "pageId": "p-flow",
+      "x": 0,
+      "y": 1800,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r2-p1-offer-root",
+        "name": "2.1 The Overseer offers the rest (Approved, not built)",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r2-p1-offer-picture",
+            "name": "Capture: The Overseer offers the rest",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/186bec42-43ca-74e2-b400-cbb0187ea94d.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r2-p2-team",
+      "title": "2.2 Built from a request (Approved, not built)",
+      "pageId": "p-flow",
+      "x": 1600,
+      "y": 1800,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r2-p2-team-root",
+        "name": "2.2 Built from a request (Approved, not built)",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r2-p2-team-picture",
+            "name": "Capture: Built from a request",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/d94515fc-cd53-b78e-3de0-0f6b81a749cf.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r2-p3-older",
+      "title": "2.3 A long conversation, earlier messages loading",
+      "pageId": "p-flow",
+      "x": 3200,
+      "y": 1800,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r2-p3-older-root",
+        "name": "2.3 A long conversation, earlier messages loading",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r2-p3-older-picture",
+            "name": "Capture: A long conversation, earlier messages loading",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/ee1bbaaa-647e-88ed-b468-f136e90a3aac.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r3-p1-reading",
+      "title": "3.1 Reading the M1ND",
+      "pageId": "p-flow",
+      "x": 0,
+      "y": 3600,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r3-p1-reading-root",
+        "name": "3.1 Reading the M1ND",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r3-p1-reading-picture",
+            "name": "Capture: Reading the M1ND",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/be520183-269e-0219-80ce-e6a7df77aae6.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r3-p2-read-failed",
+      "title": "3.2 The M1ND cannot be read",
+      "pageId": "p-flow",
+      "x": 1600,
+      "y": 3600,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r3-p2-read-failed-root",
+        "name": "3.2 The M1ND cannot be read",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r3-p2-read-failed-picture",
+            "name": "Capture: The M1ND cannot be read",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/10bd32b6-7549-d181-952a-b5fce5c450c1.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r3-p3-empty",
+      "title": "3.3 A new M1ND, nothing on the canvas",
+      "pageId": "p-flow",
+      "x": 3200,
+      "y": 3600,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r3-p3-empty-root",
+        "name": "3.3 A new M1ND, nothing on the canvas",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r3-p3-empty-picture",
+            "name": "Capture: A new M1ND, nothing on the canvas",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/04f6f1cf-fb7e-ee2d-9f28-620e7fc214bc.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r3-p4-shell",
+      "title": "3.4 The shell: list, conversation, canvas",
+      "pageId": "p-flow",
+      "x": 4800,
+      "y": 3600,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r3-p4-shell-root",
+        "name": "3.4 The shell: list, conversation, canvas",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r3-p4-shell-picture",
+            "name": "Capture: The shell: list, conversation, canvas",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/f175e6e9-154f-c87c-6dfa-6bf4c8cdf7a4.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r3-p5-bar-menu",
+      "title": "3.5 The bar menu",
+      "pageId": "p-flow",
+      "x": 6400,
+      "y": 3600,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r3-p5-bar-menu-root",
+        "name": "3.5 The bar menu",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r3-p5-bar-menu-picture",
+            "name": "Capture: The bar menu",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/9dd94d88-c4a3-61e9-b930-eb073c4b19e9.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r3-p6-far",
+      "title": "3.6 Zoomed out, circles",
+      "pageId": "p-flow",
+      "x": 8000,
+      "y": 3600,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r3-p6-far-root",
+        "name": "3.6 Zoomed out, circles",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r3-p6-far-picture",
+            "name": "Capture: Zoomed out, circles",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/79a6eb9f-272d-1d48-327e-9f17bec561b9.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r3-p7-reconnecting",
+      "title": "3.7 The service is not answering",
+      "pageId": "p-flow",
+      "x": 9600,
+      "y": 3600,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r3-p7-reconnecting-root",
+        "name": "3.7 The service is not answering",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r3-p7-reconnecting-picture",
+            "name": "Capture: The service is not answering",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/46bb823a-c9e0-a692-187e-8d4ed6f29712.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r3-p8-hover",
+      "title": "3.8 A card under the pointer (Approved, not built)",
+      "pageId": "p-flow",
+      "x": 11200,
+      "y": 3600,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r3-p8-hover-root",
+        "name": "3.8 A card under the pointer (Approved, not built)",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r3-p8-hover-picture",
+            "name": "Capture: A card under the pointer",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/68f74a54-f0c7-1bd4-5013-6df227e53cf8.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r3-p9-hover-no-pause",
+      "title": "3.9 A card under the pointer, Pause hidden (Proposed)",
+      "pageId": "p-flow",
+      "x": 0,
+      "y": 5100,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r3-p9-hover-no-pause-root",
+        "name": "3.9 A card under the pointer, Pause hidden (Proposed)",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r3-p9-hover-no-pause-picture",
+            "name": "Capture: A card under the pointer, Pause hidden",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/3199be06-99e0-119d-4145-5510bd5043fe.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r3-p10-canvas-menu",
+      "title": "3.10 Right-click on the canvas (Approved, not built)",
+      "pageId": "p-flow",
+      "x": 1600,
+      "y": 5100,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r3-p10-canvas-menu-root",
+        "name": "3.10 Right-click on the canvas (Approved, not built)",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r3-p10-canvas-menu-picture",
+            "name": "Capture: Right-click on the canvas",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/d2d50f8b-d84e-8fbc-e116-1292c1a3c759.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r3-p11-drag",
+      "title": "3.11 Moving a card (Approved, not built)",
+      "pageId": "p-flow",
+      "x": 3200,
+      "y": 5100,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r3-p11-drag-root",
+        "name": "3.11 Moving a card (Approved, not built)",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r3-p11-drag-picture",
+            "name": "Capture: Moving a card",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/bac706fd-45fa-0a82-cbcc-cbf6d1c0e66c.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r3-p12-connect",
+      "title": "3.12 Connecting two cards (Approved, not built)",
+      "pageId": "p-flow",
+      "x": 4800,
+      "y": 5100,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r3-p12-connect-root",
+        "name": "3.12 Connecting two cards (Approved, not built)",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r3-p12-connect-picture",
+            "name": "Capture: Connecting two cards",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/52fab105-a19a-d33c-0aa5-b4759ccdd6ec.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r3-p13-conn-near",
+      "title": "3.13 Connections, near (Approved, not built)",
+      "pageId": "p-flow",
+      "x": 6400,
+      "y": 5100,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r3-p13-conn-near-root",
+        "name": "3.13 Connections, near (Approved, not built)",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r3-p13-conn-near-picture",
+            "name": "Capture: Connections, near",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/15e1e79e-ac51-4a69-f2d6-5a2358a283ff.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r3-p14-conn-far",
+      "title": "3.14 Connections, far (Approved, not built)",
+      "pageId": "p-flow",
+      "x": 8000,
+      "y": 5100,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r3-p14-conn-far-root",
+        "name": "3.14 Connections, far (Approved, not built)",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r3-p14-conn-far-picture",
+            "name": "Capture: Connections, far",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/abd58fea-d72c-a8e4-26b3-f3a902d6f1e8.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r3-p15-grouping",
+      "title": "3.15 Select and group (Approved, not built)",
+      "pageId": "p-flow",
+      "x": 9600,
+      "y": 5100,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r3-p15-grouping-root",
+        "name": "3.15 Select and group (Approved, not built)",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r3-p15-grouping-picture",
+            "name": "Capture: Select and group",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/3645aef4-5ef6-4e90-90ee-89681cfdac6f.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r4-p1-new",
+      "title": "4.1 New conversation (Approved, not built)",
+      "pageId": "p-flow",
+      "x": 0,
+      "y": 6900,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r4-p1-new-root",
+        "name": "4.1 New conversation (Approved, not built)",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r4-p1-new-picture",
+            "name": "Capture: New conversation",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/ac885b53-0070-b2cc-2721-72134a22e9fb.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r4-p2-new-role",
+      "title": "4.2 New conversation, Role open (Approved, not built)",
+      "pageId": "p-flow",
+      "x": 1600,
+      "y": 6900,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r4-p2-new-role-root",
+        "name": "4.2 New conversation, Role open (Approved, not built)",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r4-p2-new-role-picture",
+            "name": "Capture: New conversation, Role open",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/e2b6dbd3-5791-74d8-b2a5-eb3d2c5f6702.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r4-p3-agent-chat",
+      "title": "4.3 A conversation with an agent, as built",
+      "pageId": "p-flow",
+      "x": 3200,
+      "y": 6900,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r4-p3-agent-chat-root",
+        "name": "4.3 A conversation with an agent, as built",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r4-p3-agent-chat-picture",
+            "name": "Capture: A conversation with an agent, as built",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/f189a330-db2c-cd4a-cf32-5819d4c8f841.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r4-p4-permission-built",
+      "title": "4.4 A permission request, as built today",
+      "pageId": "p-flow",
+      "x": 4800,
+      "y": 6900,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r4-p4-permission-built-root",
+        "name": "4.4 A permission request, as built today",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r4-p4-permission-built-picture",
+            "name": "Capture: A permission request, as built today",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/fcda1d36-a1bb-d50d-a1a6-5de6da211323.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r4-p5-waiting",
+      "title": "4.5 Waiting on the person, as built",
+      "pageId": "p-flow",
+      "x": 6400,
+      "y": 6900,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r4-p5-waiting-root",
+        "name": "4.5 Waiting on the person, as built",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r4-p5-waiting-picture",
+            "name": "Capture: Waiting on the person, as built",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/79a83071-5337-f983-3494-a6ab59415306.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r4-p6-permission",
+      "title": "4.6 A permission request (Approved, not built)",
+      "pageId": "p-flow",
+      "x": 8000,
+      "y": 6900,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r4-p6-permission-root",
+        "name": "4.6 A permission request (Approved, not built)",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r4-p6-permission-picture",
+            "name": "Capture: A permission request",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/abba5a70-014b-cba7-0378-487d3822698a.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r5-p1-blueprint-loading",
+      "title": "5.1 Blueprint, opening",
+      "pageId": "p-flow",
+      "x": 0,
+      "y": 8700,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r5-p1-blueprint-loading-root",
+        "name": "5.1 Blueprint, opening",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r5-p1-blueprint-loading-picture",
+            "name": "Capture: Blueprint, opening",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/375b1ef1-1c0d-fba6-6e7f-475cba60bded.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r5-p2-blueprint-unavailable",
+      "title": "5.2 Blueprint, could not be opened",
+      "pageId": "p-flow",
+      "x": 1600,
+      "y": 8700,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r5-p2-blueprint-unavailable-root",
+        "name": "5.2 Blueprint, could not be opened",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r5-p2-blueprint-unavailable-picture",
+            "name": "Capture: Blueprint, could not be opened",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/a63737c9-7151-2116-3ed2-30462ae7ba15.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r6-p1-void-loading",
+      "title": "6.1 Void, opening",
+      "pageId": "p-flow",
+      "x": 0,
+      "y": 10500,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r6-p1-void-loading-root",
+        "name": "6.1 Void, opening",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r6-p1-void-loading-picture",
+            "name": "Capture: Void, opening",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/4037c519-b9d8-99fd-99ba-e2873b47fe06.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r6-p2-void-unavailable",
+      "title": "6.2 Void, could not be opened",
+      "pageId": "p-flow",
+      "x": 1600,
+      "y": 10500,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r6-p2-void-unavailable-root",
+        "name": "6.2 Void, could not be opened",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r6-p2-void-unavailable-picture",
+            "name": "Capture: Void, could not be opened",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/cd725853-0b38-197e-2dbf-463d61949eef.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r7-p1-settings-approved",
+      "title": "7.1 Settings, Agents and accounts (Approved, not built)",
+      "pageId": "p-flow",
+      "x": 0,
+      "y": 12300,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r7-p1-settings-approved-root",
+        "name": "7.1 Settings, Agents and accounts (Approved, not built)",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r7-p1-settings-approved-picture",
+            "name": "Capture: Settings, Agents and accounts",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/65c9d57d-b97d-bede-32b5-1a393a7c4507.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r7-p2-settings-general",
+      "title": "7.2 Settings, General, as built today",
+      "pageId": "p-flow",
+      "x": 1600,
+      "y": 12300,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r7-p2-settings-general-root",
+        "name": "7.2 Settings, General, as built today",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r7-p2-settings-general-picture",
+            "name": "Capture: Settings, General, as built today",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/89f4a2af-bad9-f585-f60b-8d7aea4b288e.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r7-p3-settings-agents",
+      "title": "7.3 Settings, Agents, as built today",
+      "pageId": "p-flow",
+      "x": 3200,
+      "y": 12300,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r7-p3-settings-agents-root",
+        "name": "7.3 Settings, Agents, as built today",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r7-p3-settings-agents-picture",
+            "name": "Capture: Settings, Agents, as built today",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/55eab753-be23-27fc-186f-4b6ceee68b2f.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r7-p4-settings-review",
+      "title": "7.4 Settings, review of the changes for a client",
+      "pageId": "p-flow",
+      "x": 4800,
+      "y": 12300,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r7-p4-settings-review-root",
+        "name": "7.4 Settings, review of the changes for a client",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r7-p4-settings-review-picture",
+            "name": "Capture: Settings, review of the changes for a client",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/f693fea6-b849-97ef-6686-ab662b01949b.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r7-p5-settings-projects",
+      "title": "7.5 Settings, Projects, as built today",
+      "pageId": "p-flow",
+      "x": 6400,
+      "y": 12300,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r7-p5-settings-projects-root",
+        "name": "7.5 Settings, Projects, as built today",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r7-p5-settings-projects-picture",
+            "name": "Capture: Settings, Projects, as built today",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/73dea0ca-a989-82ec-a84f-d05741d860dd.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r7-p6-settings-content",
+      "title": "7.6 Settings, Content, as built today",
+      "pageId": "p-flow",
+      "x": 8000,
+      "y": 12300,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r7-p6-settings-content-root",
+        "name": "7.6 Settings, Content, as built today",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r7-p6-settings-content-picture",
+            "name": "Capture: Settings, Content, as built today",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/0fccd68c-bb4c-d3b7-2860-856968ca2a2a.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r8-p1-join-offer",
+      "title": "8.1 Join offer (Proposed)",
+      "pageId": "p-flow",
+      "x": 0,
+      "y": 14100,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r8-p1-join-offer-root",
+        "name": "8.1 Join offer (Proposed)",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r8-p1-join-offer-picture",
+            "name": "Capture: Join offer",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/ac2e8471-3599-1166-869f-1f2044b6a863.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r8-p2-join-waiting",
+      "title": "8.2 Waiting for permission (Proposed)",
+      "pageId": "p-flow",
+      "x": 1600,
+      "y": 14100,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r8-p2-join-waiting-root",
+        "name": "8.2 Waiting for permission (Proposed)",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r8-p2-join-waiting-picture",
+            "name": "Capture: Waiting for permission",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/c04f70e8-dfa6-ec6a-c1e9-a8d2d36eeacc.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r8-p3-join-request",
+      "title": "8.3 The request on the member that is asked (Proposed)",
+      "pageId": "p-flow",
+      "x": 3200,
+      "y": 14100,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r8-p3-join-request-root",
+        "name": "8.3 The request on the member that is asked (Proposed)",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r8-p3-join-request-picture",
+            "name": "Capture: The request on the member that is asked",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/e3a99d4c-7113-741c-3b70-522cf684e24b.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r8-p4-join-importing",
+      "title": "8.4 Approved, bringing in the M1ND (Proposed)",
+      "pageId": "p-flow",
+      "x": 4800,
+      "y": 14100,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r8-p4-join-importing-root",
+        "name": "8.4 Approved, bringing in the M1ND (Proposed)",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r8-p4-join-importing-picture",
+            "name": "Capture: Approved, bringing in the M1ND",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/b48427b8-5b64-408e-bbbc-afc0e9980b64.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r8-p5-join-done",
+      "title": "8.5 Joined (Proposed)",
+      "pageId": "p-flow",
+      "x": 6400,
+      "y": 14100,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r8-p5-join-done-root",
+        "name": "8.5 Joined (Proposed)",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r8-p5-join-done-picture",
+            "name": "Capture: Joined",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/778281ef-88d4-f15a-2471-808993a8fea5.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r8-p6-join-declined",
+      "title": "8.6 Declined (Proposed)",
+      "pageId": "p-flow",
+      "x": 8000,
+      "y": 14100,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r8-p6-join-declined-root",
+        "name": "8.6 Declined (Proposed)",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r8-p6-join-declined-picture",
+            "name": "Capture: Declined",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/cebb6e81-8aa6-4357-9959-01ff987dedeb.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r8-p7-join-cancelled",
+      "title": "8.7 Cancelled on the asking computer (Proposed)",
+      "pageId": "p-flow",
+      "x": 9600,
+      "y": 14100,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r8-p7-join-cancelled-root",
+        "name": "8.7 Cancelled on the asking computer (Proposed)",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r8-p7-join-cancelled-picture",
+            "name": "Capture: Cancelled on the asking computer",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/f0bd7fc9-7737-f3d0-8abe-b04d059074dd.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r8-p8-join-withdrawn",
+      "title": "8.8 Request withdrawn, shown on the member (Proposed)",
+      "pageId": "p-flow",
+      "x": 11200,
+      "y": 14100,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r8-p8-join-withdrawn-root",
+        "name": "8.8 Request withdrawn, shown on the member (Proposed)",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r8-p8-join-withdrawn-picture",
+            "name": "Capture: Request withdrawn, shown on the member",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/90a2ffc1-4cf9-3190-37c5-a1cd913be8ab.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r8-p9-join-stopped",
+      "title": "8.9 Bringing in stopped, Retry (Proposed)",
+      "pageId": "p-flow",
+      "x": 0,
+      "y": 15600,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r8-p9-join-stopped-root",
+        "name": "8.9 Bringing in stopped, Retry (Proposed)",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r8-p9-join-stopped-picture",
+            "name": "Capture: Bringing in stopped, Retry",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/a8f0c7f0-91e6-e3b6-56f0-4ff4e91630e5.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r8-p10-devices-alone",
+      "title": "8.10 Settings, Folder and devices, no other computer (Proposed)",
+      "pageId": "p-flow",
+      "x": 1600,
+      "y": 15600,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r8-p10-devices-alone-root",
+        "name": "8.10 Settings, Folder and devices, no other computer (Proposed)",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r8-p10-devices-alone-picture",
+            "name": "Capture: Settings, Folder and devices, no other computer",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/744241bc-3fca-e0ab-7570-328925d2df6b.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r8-p11-devices-pending",
+      "title": "8.11 Settings, Folder and devices, request pending (Proposed)",
+      "pageId": "p-flow",
+      "x": 3200,
+      "y": 15600,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r8-p11-devices-pending-root",
+        "name": "8.11 Settings, Folder and devices, request pending (Proposed)",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r8-p11-devices-pending-picture",
+            "name": "Capture: Settings, Folder and devices, request pending",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/8ee37bd4-d2c0-7348-4108-95cfb5ec8b62.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r8-p12-devices-list",
+      "title": "8.12 Settings, Folder and devices (Proposed)",
+      "pageId": "p-flow",
+      "x": 4800,
+      "y": 15600,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r8-p12-devices-list-root",
+        "name": "8.12 Settings, Folder and devices (Proposed)",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r8-p12-devices-list-picture",
+            "name": "Capture: Settings, Folder and devices",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/f34aacdb-00d1-83f8-9eb6-787f4df9f47a.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r9-p1-intake-offer",
+      "title": "9.1 The Overseer offers to bring in old minds (Proposed)",
+      "pageId": "p-flow",
+      "x": 0,
+      "y": 17400,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r9-p1-intake-offer-root",
+        "name": "9.1 The Overseer offers to bring in old minds (Proposed)",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r9-p1-intake-offer-picture",
+            "name": "Capture: The Overseer offers to bring in old minds",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/6243fd79-fd11-e28d-b62c-2083f07e3d8d.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r9-p2-intake-choose",
+      "title": "9.2 Choosing what to bring in (Proposed)",
+      "pageId": "p-flow",
+      "x": 1600,
+      "y": 17400,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r9-p2-intake-choose-root",
+        "name": "9.2 Choosing what to bring in (Proposed)",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r9-p2-intake-choose-picture",
+            "name": "Capture: Choosing what to bring in",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/240b1cb3-36e2-26b0-51ac-2dbd2b16a8cd.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r9-p3-intake-progress",
+      "title": "9.3 Bringing in, progress (Proposed)",
+      "pageId": "p-flow",
+      "x": 3200,
+      "y": 17400,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r9-p3-intake-progress-root",
+        "name": "9.3 Bringing in, progress (Proposed)",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r9-p3-intake-progress-picture",
+            "name": "Capture: Bringing in, progress",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/683ee416-0c43-403d-8f68-17f1f3123c69.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r9-p4-intake-done",
+      "title": "9.4 Brought in, index and report (Proposed)",
+      "pageId": "p-flow",
+      "x": 4800,
+      "y": 17400,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r9-p4-intake-done-root",
+        "name": "9.4 Brought in, index and report (Proposed)",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r9-p4-intake-done-picture",
+            "name": "Capture: Brought in, index and report",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/a6f36ee8-280d-959e-fe04-1aff390f0744.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r9-p5-intake-stopped",
+      "title": "9.5 Bringing in stopped, Retry (Proposed)",
+      "pageId": "p-flow",
+      "x": 6400,
+      "y": 17400,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r9-p5-intake-stopped-root",
+        "name": "9.5 Bringing in stopped, Retry (Proposed)",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r9-p5-intake-stopped-picture",
+            "name": "Capture: Bringing in stopped, Retry",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/2d62a7b8-ffc3-0259-03f3-ceef8fe2fee3.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r9-p6-intake-nothing-new",
+      "title": "9.6 A second run, nothing new (Proposed)",
+      "pageId": "p-flow",
+      "x": 8000,
+      "y": 17400,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r9-p6-intake-nothing-new-root",
+        "name": "9.6 A second run, nothing new (Proposed)",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r9-p6-intake-nothing-new-picture",
+            "name": "Capture: A second run, nothing new",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/806a0bbd-73f1-4fb2-dfcb-02c06d1e269a.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r10-p1-phone-pair",
+      "title": "10.1 Phone, pairing",
+      "pageId": "p-flow",
+      "x": 0,
+      "y": 19200,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r10-p1-phone-pair-root",
+        "name": "10.1 Phone, pairing",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r10-p1-phone-pair-picture",
+            "name": "Capture: Phone, pairing",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/7cbb43e9-f648-4536-c2dd-1cce20b7489a.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r10-p2-phone-pair-error",
+      "title": "10.2 Phone, the code does not match",
+      "pageId": "p-flow",
+      "x": 1600,
+      "y": 19200,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r10-p2-phone-pair-error-root",
+        "name": "10.2 Phone, the code does not match",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r10-p2-phone-pair-error-picture",
+            "name": "Capture: Phone, the code does not match",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/026f252b-cc80-2ee2-7669-84e3a027bdd7.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r10-p3-phone-locked",
+      "title": "10.3 Phone, pairing locked",
+      "pageId": "p-flow",
+      "x": 3200,
+      "y": 19200,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r10-p3-phone-locked-root",
+        "name": "10.3 Phone, pairing locked",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r10-p3-phone-locked-picture",
+            "name": "Capture: Phone, pairing locked",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/29395633-a833-587d-75de-4b3347007bb8.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r10-p4-phone-hierarchy",
+      "title": "10.4 Phone, Hierarchy",
+      "pageId": "p-flow",
+      "x": 4800,
+      "y": 19200,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r10-p4-phone-hierarchy-root",
+        "name": "10.4 Phone, Hierarchy",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r10-p4-phone-hierarchy-picture",
+            "name": "Capture: Phone, Hierarchy",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/91b9128d-0824-ab03-8717-14fe0cf71460.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r10-p5-phone-chat",
+      "title": "10.5 Phone, a conversation",
+      "pageId": "p-flow",
+      "x": 6400,
+      "y": 19200,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r10-p5-phone-chat-root",
+        "name": "10.5 Phone, a conversation",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r10-p5-phone-chat-picture",
+            "name": "Capture: Phone, a conversation",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/dcc6b933-1d84-0e03-c125-71391cbc690c.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r10-p6-phone-waiting",
+      "title": "10.6 Phone, waiting on the person",
+      "pageId": "p-flow",
+      "x": 8000,
+      "y": 19200,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r10-p6-phone-waiting-root",
+        "name": "10.6 Phone, waiting on the person",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r10-p6-phone-waiting-picture",
+            "name": "Capture: Phone, waiting on the person",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/0a6fe7ce-9a67-6a4b-d242-fefb5a3638e8.png"
+          }
+        ]
+      }
+    },
+    {
+      "id": "s-r10-p7-phone-closed",
+      "title": "10.7 Phone, access ended",
+      "pageId": "p-flow",
+      "x": 9600,
+      "y": 19200,
+      "w": 1440,
+      "h": 900,
+      "root": {
+        "id": "s-r10-p7-phone-closed-root",
+        "name": "10.7 Phone, access ended",
+        "t": "box",
+        "dir": "stack",
+        "place": {
+          "x": 0,
+          "y": 0
+        },
+        "w": 1440,
+        "h": 900,
+        "fill": "#191c19",
+        "clip": true,
+        "kids": [
+          {
+            "id": "s-r10-p7-phone-closed-picture",
+            "name": "Capture: Phone, access ended",
+            "t": "image",
+            "place": {
+              "x": 0,
+              "y": 0
+            },
+            "w": 1440,
+            "h": 900,
+            "src": "assets/d7042827-4132-b691-6583-241f453336d8.png"
+          }
+        ]
+      }
+    }
+  ],
+  "links": [
+    {
+      "id": "l-001-install-missing",
+      "from": "s-r1-p1-install-missing",
+      "to": "s-r1-p5-install-progress",
+      "transition": "cut"
+    },
+    {
+      "id": "l-002-install-empty",
+      "from": "s-r1-p2-install-empty",
+      "to": "s-r1-p5-install-progress",
+      "transition": "cut"
+    },
+    {
+      "id": "l-003-install-join",
+      "from": "s-r1-p3-install-join",
+      "to": "s-r1-p5-install-progress",
+      "transition": "cut"
+    },
+    {
+      "id": "l-004-install-progress",
+      "from": "s-r1-p5-install-progress",
+      "to": "s-r1-p7-first-open",
+      "transition": "cut"
+    },
+    {
+      "id": "l-005-install-progress",
+      "from": "s-r1-p5-install-progress",
+      "to": "s-r1-p6-install-failed",
+      "transition": "cut"
+    },
+    {
+      "id": "l-006-install-failed",
+      "from": "s-r1-p6-install-failed",
+      "to": "s-r1-p5-install-progress",
+      "transition": "cut"
+    },
+    {
+      "id": "l-007-first-open",
+      "from": "s-r1-p7-first-open",
+      "to": "s-r2-p1-offer",
+      "transition": "cut"
+    },
+    {
+      "id": "l-008-first-open",
+      "from": "s-r1-p7-first-open",
+      "to": "s-r8-p1-join-offer",
+      "transition": "cut"
+    },
+    {
+      "id": "l-009-first-open",
+      "from": "s-r1-p7-first-open",
+      "to": "s-r9-p1-intake-offer",
+      "transition": "cut"
+    },
+    {
+      "id": "l-010-offer",
+      "from": "s-r2-p1-offer",
+      "to": "s-r2-p2-team",
+      "transition": "cut"
+    },
+    {
+      "id": "l-011-team",
+      "from": "s-r2-p2-team",
+      "to": "s-r2-p3-older",
+      "transition": "cut"
+    },
+    {
+      "id": "l-012-reading",
+      "from": "s-r3-p1-reading",
+      "to": "s-r3-p4-shell",
+      "transition": "cut"
+    },
+    {
+      "id": "l-013-reading",
+      "from": "s-r3-p1-reading",
+      "to": "s-r3-p2-read-failed",
+      "transition": "cut"
+    },
+    {
+      "id": "l-014-reading",
+      "from": "s-r3-p1-reading",
+      "to": "s-r3-p3-empty",
+      "transition": "cut"
+    },
+    {
+      "id": "l-015-read-failed",
+      "from": "s-r3-p2-read-failed",
+      "to": "s-r3-p1-reading",
+      "transition": "cut"
+    },
+    {
+      "id": "l-016-shell",
+      "from": "s-r3-p4-shell",
+      "to": "s-r3-p5-bar-menu",
+      "transition": "cut"
+    },
+    {
+      "id": "l-017-shell",
+      "from": "s-r3-p4-shell",
+      "to": "s-r3-p6-far",
+      "transition": "cut"
+    },
+    {
+      "id": "l-018-shell",
+      "from": "s-r3-p4-shell",
+      "to": "s-r3-p7-reconnecting",
+      "transition": "cut"
+    },
+    {
+      "id": "l-019-shell",
+      "from": "s-r3-p4-shell",
+      "to": "s-r3-p8-hover",
+      "transition": "cut"
+    },
+    {
+      "id": "l-020-reconnecting",
+      "from": "s-r3-p7-reconnecting",
+      "to": "s-r3-p4-shell",
+      "transition": "cut"
+    },
+    {
+      "id": "l-021-hover",
+      "from": "s-r3-p8-hover",
+      "to": "s-r3-p9-hover-no-pause",
+      "transition": "cut"
+    },
+    {
+      "id": "l-022-hover",
+      "from": "s-r3-p8-hover",
+      "to": "s-r3-p10-canvas-menu",
+      "transition": "cut"
+    },
+    {
+      "id": "l-023-canvas-menu",
+      "from": "s-r3-p10-canvas-menu",
+      "to": "s-r3-p11-drag",
+      "transition": "cut"
+    },
+    {
+      "id": "l-024-drag",
+      "from": "s-r3-p11-drag",
+      "to": "s-r3-p12-connect",
+      "transition": "cut"
+    },
+    {
+      "id": "l-025-connect",
+      "from": "s-r3-p12-connect",
+      "to": "s-r3-p13-conn-near",
+      "transition": "cut"
+    },
+    {
+      "id": "l-026-connect",
+      "from": "s-r3-p12-connect",
+      "to": "s-r3-p14-conn-far",
+      "transition": "cut"
+    },
+    {
+      "id": "l-027-connect",
+      "from": "s-r3-p12-connect",
+      "to": "s-r3-p15-grouping",
+      "transition": "cut"
+    },
+    {
+      "id": "l-028-new",
+      "from": "s-r4-p1-new",
+      "to": "s-r4-p2-new-role",
+      "transition": "cut"
+    },
+    {
+      "id": "l-029-new",
+      "from": "s-r4-p1-new",
+      "to": "s-r4-p3-agent-chat",
+      "transition": "cut"
+    },
+    {
+      "id": "l-030-new-role",
+      "from": "s-r4-p2-new-role",
+      "to": "s-r4-p3-agent-chat",
+      "transition": "cut"
+    },
+    {
+      "id": "l-031-agent-chat",
+      "from": "s-r4-p3-agent-chat",
+      "to": "s-r4-p4-permission-built",
+      "transition": "cut"
+    },
+    {
+      "id": "l-032-agent-chat",
+      "from": "s-r4-p3-agent-chat",
+      "to": "s-r4-p6-permission",
+      "transition": "cut"
+    },
+    {
+      "id": "l-033-permission-built",
+      "from": "s-r4-p4-permission-built",
+      "to": "s-r4-p5-waiting",
+      "transition": "cut"
+    },
+    {
+      "id": "l-034-blueprint-loading",
+      "from": "s-r5-p1-blueprint-loading",
+      "to": "s-r5-p2-blueprint-unavailable",
+      "transition": "cut"
+    },
+    {
+      "id": "l-035-blueprint-unavailable",
+      "from": "s-r5-p2-blueprint-unavailable",
+      "to": "s-r5-p1-blueprint-loading",
+      "transition": "cut"
+    },
+    {
+      "id": "l-036-void-loading",
+      "from": "s-r6-p1-void-loading",
+      "to": "s-r6-p2-void-unavailable",
+      "transition": "cut"
+    },
+    {
+      "id": "l-037-void-unavailable",
+      "from": "s-r6-p2-void-unavailable",
+      "to": "s-r6-p1-void-loading",
+      "transition": "cut"
+    },
+    {
+      "id": "l-038-settings-approved",
+      "from": "s-r7-p1-settings-approved",
+      "to": "s-r7-p2-settings-general",
+      "transition": "cut"
+    },
+    {
+      "id": "l-039-settings-general",
+      "from": "s-r7-p2-settings-general",
+      "to": "s-r7-p3-settings-agents",
+      "transition": "cut"
+    },
+    {
+      "id": "l-040-settings-agents",
+      "from": "s-r7-p3-settings-agents",
+      "to": "s-r7-p4-settings-review",
+      "transition": "cut"
+    },
+    {
+      "id": "l-041-settings-agents",
+      "from": "s-r7-p3-settings-agents",
+      "to": "s-r7-p5-settings-projects",
+      "transition": "cut"
+    },
+    {
+      "id": "l-042-settings-projects",
+      "from": "s-r7-p5-settings-projects",
+      "to": "s-r7-p6-settings-content",
+      "transition": "cut"
+    },
+    {
+      "id": "l-043-join-offer",
+      "from": "s-r8-p1-join-offer",
+      "to": "s-r8-p2-join-waiting",
+      "transition": "cut"
+    },
+    {
+      "id": "l-044-join-waiting",
+      "from": "s-r8-p2-join-waiting",
+      "to": "s-r8-p3-join-request",
+      "transition": "cut"
+    },
+    {
+      "id": "l-045-join-waiting",
+      "from": "s-r8-p2-join-waiting",
+      "to": "s-r8-p6-join-declined",
+      "transition": "cut"
+    },
+    {
+      "id": "l-046-join-waiting",
+      "from": "s-r8-p2-join-waiting",
+      "to": "s-r8-p7-join-cancelled",
+      "transition": "cut"
+    },
+    {
+      "id": "l-047-join-request",
+      "from": "s-r8-p3-join-request",
+      "to": "s-r8-p4-join-importing",
+      "transition": "cut"
+    },
+    {
+      "id": "l-048-join-importing",
+      "from": "s-r8-p4-join-importing",
+      "to": "s-r8-p5-join-done",
+      "transition": "cut"
+    },
+    {
+      "id": "l-049-join-importing",
+      "from": "s-r8-p4-join-importing",
+      "to": "s-r8-p9-join-stopped",
+      "transition": "cut"
+    },
+    {
+      "id": "l-050-join-done",
+      "from": "s-r8-p5-join-done",
+      "to": "s-r8-p12-devices-list",
+      "transition": "cut"
+    },
+    {
+      "id": "l-051-join-declined",
+      "from": "s-r8-p6-join-declined",
+      "to": "s-r8-p2-join-waiting",
+      "transition": "cut"
+    },
+    {
+      "id": "l-052-join-cancelled",
+      "from": "s-r8-p7-join-cancelled",
+      "to": "s-r8-p8-join-withdrawn",
+      "transition": "cut"
+    },
+    {
+      "id": "l-053-join-cancelled",
+      "from": "s-r8-p7-join-cancelled",
+      "to": "s-r8-p2-join-waiting",
+      "transition": "cut"
+    },
+    {
+      "id": "l-054-join-stopped",
+      "from": "s-r8-p9-join-stopped",
+      "to": "s-r8-p4-join-importing",
+      "transition": "cut"
+    },
+    {
+      "id": "l-055-devices-alone",
+      "from": "s-r8-p10-devices-alone",
+      "to": "s-r8-p11-devices-pending",
+      "transition": "cut"
+    },
+    {
+      "id": "l-056-devices-pending",
+      "from": "s-r8-p11-devices-pending",
+      "to": "s-r8-p12-devices-list",
+      "transition": "cut"
+    },
+    {
+      "id": "l-057-intake-offer",
+      "from": "s-r9-p1-intake-offer",
+      "to": "s-r9-p2-intake-choose",
+      "transition": "cut"
+    },
+    {
+      "id": "l-058-intake-offer",
+      "from": "s-r9-p1-intake-offer",
+      "to": "s-r9-p3-intake-progress",
+      "transition": "cut"
+    },
+    {
+      "id": "l-059-intake-choose",
+      "from": "s-r9-p2-intake-choose",
+      "to": "s-r9-p3-intake-progress",
+      "transition": "cut"
+    },
+    {
+      "id": "l-060-intake-progress",
+      "from": "s-r9-p3-intake-progress",
+      "to": "s-r9-p4-intake-done",
+      "transition": "cut"
+    },
+    {
+      "id": "l-061-intake-progress",
+      "from": "s-r9-p3-intake-progress",
+      "to": "s-r9-p5-intake-stopped",
+      "transition": "cut"
+    },
+    {
+      "id": "l-062-intake-done",
+      "from": "s-r9-p4-intake-done",
+      "to": "s-r9-p6-intake-nothing-new",
+      "transition": "cut"
+    },
+    {
+      "id": "l-063-intake-stopped",
+      "from": "s-r9-p5-intake-stopped",
+      "to": "s-r9-p3-intake-progress",
+      "transition": "cut"
+    },
+    {
+      "id": "l-064-phone-pair",
+      "from": "s-r10-p1-phone-pair",
+      "to": "s-r10-p4-phone-hierarchy",
+      "transition": "cut"
+    },
+    {
+      "id": "l-065-phone-pair",
+      "from": "s-r10-p1-phone-pair",
+      "to": "s-r10-p2-phone-pair-error",
+      "transition": "cut"
+    },
+    {
+      "id": "l-066-phone-pair-error",
+      "from": "s-r10-p2-phone-pair-error",
+      "to": "s-r10-p1-phone-pair",
+      "transition": "cut"
+    },
+    {
+      "id": "l-067-phone-locked",
+      "from": "s-r10-p3-phone-locked",
+      "to": "s-r10-p4-phone-hierarchy",
+      "transition": "cut"
+    },
+    {
+      "id": "l-068-phone-hierarchy",
+      "from": "s-r10-p4-phone-hierarchy",
+      "to": "s-r10-p5-phone-chat",
+      "transition": "cut"
+    },
+    {
+      "id": "l-069-phone-chat",
+      "from": "s-r10-p5-phone-chat",
+      "to": "s-r10-p6-phone-waiting",
+      "transition": "cut"
+    },
+    {
+      "id": "l-070-phone-waiting",
+      "from": "s-r10-p6-phone-waiting",
+      "to": "s-r10-p7-phone-closed",
+      "transition": "cut"
+    }
+  ],
+  "components": [],
+  "fonts": [
+    {
+      "id": "font-atkinson-hyperlegible",
+      "family": "Atkinson Hyperlegible",
+      "src": "assets/6ea1fc16-ab70-4637-be65-da3f3f5b7eff.woff2",
+      "weight": 400,
+      "style": "normal"
+    },
+    {
+      "id": "font-atkinson-hyperlegible-700",
+      "family": "Atkinson Hyperlegible",
+      "src": "assets/fd567d16-c27d-4dfa-8dd1-8844da649e69.woff2",
+      "weight": 700,
+      "style": "normal"
+    },
+    {
+      "id": "font-atkinson-hyperlegible-400-italic",
+      "family": "Atkinson Hyperlegible",
+      "src": "assets/4539d6c5-2b3a-4dc2-a491-ce1c040c5630.woff2",
+      "weight": 400,
+      "style": "italic"
+    },
+    {
+      "id": "font-atkinson-hyperlegible-700-italic",
+      "family": "Atkinson Hyperlegible",
+      "src": "assets/ae18365f-d2ad-4832-8575-cbd07dc67822.woff2",
+      "weight": 700,
+      "style": "italic"
+    }
+  ],
+  "threads": []
+}

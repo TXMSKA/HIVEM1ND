@@ -1,0 +1,73 @@
+{
+  "board": "hivem1nd-3-structure",
+  "threads": [
+    {
+      "id": "t-mv7flpao-7fadfe",
+      "anchor": {
+        "screen": "build-empty",
+        "screenTitle": "1.1 Build the structure: From zero",
+        "element": "node-overseer",
+        "label": "overseer",
+        "path": [
+          "1.1 Build the structure: From zero",
+          "Map",
+          "overseer"
+        ],
+        "point": {
+          "x": 694,
+          "y": 266
+        }
+      },
+      "layer": "design",
+      "status": "open",
+      "messages": [
+        {
+          "author": "User",
+          "at": "2026-10-14T01:28:52.567Z",
+          "text": "El Overseer está activo de entrada?"
+        },
+        {
+          "author": "overmind-hivem1nd",
+          "at": "2026-10-14T01:43:58.000Z",
+          "text": "Not today: in 3.0 it is created on the first run without a session. The proposal on the board \"HIVEM1ND 3.0: start working\" makes it exist from setup, above every project, and its session starts when you write to it (3.4)."
+        }
+      ]
+    },
+    {
+      "id": "t-mv7fm84c-3b574c",
+      "anchor": {
+        "screen": "build-new-overlord",
+        "screenTitle": "1.2 Build the structure: New Overlord",
+        "element": "dialog",
+        "label": "New unit: an Overlord",
+        "path": [
+          "1.2 Build the structure: New Overlord",
+          "New unit: an Overlord"
+        ],
+        "point": {
+          "x": 717,
+          "y": 487
+        }
+      },
+      "layer": "design",
+      "status": "open",
+      "messages": [
+        {
+          "author": "User",
+          "at": "2026-10-14T01:29:16.956Z",
+          "text": "Simplificar. Effort?"
+        },
+        {
+          "author": "User",
+          "at": "2026-10-14T01:29:39.100Z",
+          "text": "Mejorar."
+        },
+        {
+          "author": "overmind-hivem1nd",
+          "at": "2026-10-14T01:43:58.000Z",
+          "text": "Redone on the board \"HIVEM1ND 3.0: start working\": the first unit needs no form (one message in the project chat starts an Executor with the default agent, model and effort, 2.1), and Add a unit asks only two things, role and Runs in, where agent, model and effort are one list (3.1). Name, project, folders, lead and machine are inherited."
+        }
+      ]
+    }
+  ]
+}
